@@ -1,0 +1,73 @@
+# Build directories
+build/
+cmake-build*/
+out/
+.vs/
+
+# Compiled Object files
+*.o
+*.obj
+*.slo
+*.lo
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Makefile
+install_manifest.txt
+_deps/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated documentation
+docs/html/
+docs/latex/
+
+# Dependency directories
+third-party/
+vendor/
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Testing
+Testing/
+test_results/
+
+# SYCL-specific
+*.spv
+*.sycl
+
+# CUDA-specific
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
