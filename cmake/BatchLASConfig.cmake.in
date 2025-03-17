@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find dependencies based on how BatchLAS was built
+if(@BATCHLAS_ENABLE_OPENMP@)
+    find_dependency(OpenMP REQUIRED)
+endif()
+
+if(@BATCHLAS_ENABLE_CUDA@)
+    find_dependency(CUDA REQUIRED)
+    find_dependency(cuBLAS REQUIRED)
+    find_dependency(cuSOLVER REQUIRED)
+    find_dependency(cuSPARSE REQUIRED)
+endif()
+
+if(@BATCHLAS_ENABLE_SYCL@)
+    # Add your SYCL dependency finder here
+    # Example for Intel oneAPI:
+    # find_dependency(IntelDPCPP REQUIRED)
+endif()
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/BatchLASTargets.cmake")
