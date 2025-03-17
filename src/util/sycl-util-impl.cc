@@ -33,7 +33,7 @@ constexpr std::ostream& operator<<(std::ostream& os, const std::array<U,N>& arr)
 }
 
 template <typename T>
-SyclVector<T>::SyclVector(size_t size) : size_(size), capacity_(size) {
+UnifiedVector<T>::UnifiedVector(size_t size) : size_(size), capacity_(size) {
     data_ = sycl::malloc_shared<T>(size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
     if (!data_ && size > 0) {
         std::cout << "Could not allocate " + std::to_string(size) + " elements of type " + typeid(T).name() << std::endl;
@@ -42,20 +42,20 @@ SyclVector<T>::SyclVector(size_t size) : size_(size), capacity_(size) {
 }
 
 template <typename T>
-SyclVector<T>::SyclVector(size_t size, T value) : SyclVector<T>(size) {
+UnifiedVector<T>::UnifiedVector(size_t size, T value) : UnifiedVector<T>(size) {
     for(size_t i = 0; i < size; i++) data_[i] = value;
 }
 
 template <typename T>
-SyclVector<T>::SyclVector(const SyclVector<T>& other) : SyclVector<T>(other.size_) {
+UnifiedVector<T>::UnifiedVector(const UnifiedVector<T>& other) : UnifiedVector<T>(other.size_) {
     for(size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
 }
 
 template <typename T>
-SyclVector<T>::~SyclVector() {if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));}
+UnifiedVector<T>::~UnifiedVector() {if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));}
 
 template <typename T>
-void SyclVector<T>::resize(size_t new_size) {
+void UnifiedVector<T>::resize(size_t new_size) {
     if(new_size > capacity_){
         T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
         memcpy(new_data, data_, size_*sizeof(T));
@@ -67,7 +67,7 @@ void SyclVector<T>::resize(size_t new_size) {
 }
 
 template <typename T>
-void SyclVector<T>::resize(size_t new_size, T val){
+void UnifiedVector<T>::resize(size_t new_size, T val){
     if(new_size > capacity_){
         T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
         memcpy(new_data, data_, size_*sizeof(T));
@@ -80,7 +80,7 @@ void SyclVector<T>::resize(size_t new_size, T val){
 }
 
 template <typename T>
-void SyclVector<T>::resize(size_t new_size, size_t front, size_t back, size_t seg_size){
+void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t seg_size){
     if(new_size > capacity_){
         T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
         std::fill_n(new_data, new_size, T{});
@@ -100,7 +100,7 @@ void SyclVector<T>::resize(size_t new_size, size_t front, size_t back, size_t se
 }
 
 template <typename T>
-void SyclVector<T>::reserve(size_t new_capacity) {
+void UnifiedVector<T>::reserve(size_t new_capacity) {
     if(new_capacity > capacity_){
         T* new_data = sycl::malloc_shared<T>(new_capacity, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
         memcpy(new_data, data_, size_*sizeof(T));
@@ -111,7 +111,7 @@ void SyclVector<T>::reserve(size_t new_capacity) {
 }
 
 template <typename T>
-SyclVector<T>& SyclVector<T>::operator=(const SyclVector<T>& other) {
+UnifiedVector<T>& UnifiedVector<T>::operator=(const UnifiedVector<T>& other) {
     size_ = other.size_;
     //Only perform memory allocation if the new size is greater than the current capacity
     if (capacity_ < other.capacity_) {
@@ -130,7 +130,7 @@ SyclVector<T>& SyclVector<T>::operator=(const SyclVector<T>& other) {
 }
 
 template <typename U>
-std::ostream& operator<<(std::ostream& os, const SyclVector<U>& vec) {
+std::ostream& operator<<(std::ostream& os, const UnifiedVector<U>& vec) {
     os << (Span<U>)vec;
     return os;
 }
@@ -168,40 +168,40 @@ void resize_all(std::array<int,N>&& sizes, std::tuple<Args...>&& args, std::inde
 }
 
 
-template struct SyclVector<int8_t>;
-template struct SyclVector<int16_t>;
-template struct SyclVector<int32_t>;
-template struct SyclVector<int64_t>;
-template struct SyclVector<uint8_t>;
-template struct SyclVector<uint16_t>;
-template struct SyclVector<uint32_t>;
-template struct SyclVector<uint64_t>;
-template struct SyclVector<float>;
-template struct SyclVector<double>;
-template struct SyclVector<std::complex<float>>;
-template struct SyclVector<std::complex<double>>;
-template struct SyclVector<std::byte>;
-template struct SyclVector<bool>;
-template struct SyclVector<std::array<double,2>>;
-template struct SyclVector<std::array<double,3>>;
-template struct SyclVector<std::array<float,2>>;
-template struct SyclVector<std::array<float,3>>;
-template struct SyclVector<std::array<uint16_t,3>>;
-template struct SyclVector<std::array<uint32_t,3>>;
-template struct SyclVector<std::array<uint16_t,6>>;
-template struct SyclVector<std::array<uint32_t,6>>;
-template struct SyclVector<std::bitset<21>>;
-template struct SyclVector<std::bitset<3>>;
+template struct UnifiedVector<int8_t>;
+template struct UnifiedVector<int16_t>;
+template struct UnifiedVector<int32_t>;
+template struct UnifiedVector<int64_t>;
+template struct UnifiedVector<uint8_t>;
+template struct UnifiedVector<uint16_t>;
+template struct UnifiedVector<uint32_t>;
+template struct UnifiedVector<uint64_t>;
+template struct UnifiedVector<float>;
+template struct UnifiedVector<double>;
+template struct UnifiedVector<std::complex<float>>;
+template struct UnifiedVector<std::complex<double>>;
+template struct UnifiedVector<std::byte>;
+template struct UnifiedVector<bool>;
+template struct UnifiedVector<std::array<double,2>>;
+template struct UnifiedVector<std::array<double,3>>;
+template struct UnifiedVector<std::array<float,2>>;
+template struct UnifiedVector<std::array<float,3>>;
+template struct UnifiedVector<std::array<uint16_t,3>>;
+template struct UnifiedVector<std::array<uint32_t,3>>;
+template struct UnifiedVector<std::array<uint16_t,6>>;
+template struct UnifiedVector<std::array<uint32_t,6>>;
+template struct UnifiedVector<std::bitset<21>>;
+template struct UnifiedVector<std::bitset<3>>;
 
-template struct SyclVector<float*>;
-template struct SyclVector<double*>;
-template struct SyclVector<std::complex<float>*>;
-template struct SyclVector<std::complex<double>*>;
-template struct SyclVector<int*>;
-template struct SyclVector<size_t*>;
-//template struct SyclVector<NodeNeighbours<uint16_t>>;
-//template struct SyclVector<NodeNeighbours<uint32_t>>;
-//template struct SyclVector<Constants<float,uint16_t>>;
+template struct UnifiedVector<float*>;
+template struct UnifiedVector<double*>;
+template struct UnifiedVector<std::complex<float>*>;
+template struct UnifiedVector<std::complex<double>*>;
+template struct UnifiedVector<int*>;
+template struct UnifiedVector<size_t*>;
+//template struct UnifiedVector<NodeNeighbours<uint16_t>>;
+//template struct UnifiedVector<NodeNeighbours<uint32_t>>;
+//template struct UnifiedVector<Constants<float,uint16_t>>;
 
 template struct Span<int8_t>;
 template struct Span<int16_t>;
@@ -229,21 +229,21 @@ template struct Span<std::bitset<3>>;
 template struct Span<float*>;
 template struct Span<double*>;
 
-template std::ostream& operator<<(std::ostream& os, const SyclVector<float>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<double>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<uint16_t>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<uint32_t>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<int>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<size_t>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<bool>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<double,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<double,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<float,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<float,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<uint16_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<uint32_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<uint16_t,6>>& vec);
-template std::ostream& operator<<(std::ostream& os, const SyclVector<std::array<uint32_t,6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<float>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<double>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<uint16_t>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<uint32_t>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<int>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<size_t>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<bool>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double,2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double,3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float,2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float,3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t,3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t,3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t,6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t,6>>& vec);
 
 
 template std::ostream& operator<<(std::ostream& os, const Span<float>& vec);

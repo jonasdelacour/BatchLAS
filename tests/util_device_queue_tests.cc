@@ -54,36 +54,36 @@ TEST(DeviceTest, DeviceProperties) {
     }
 }
 
-TEST(SyclEventTest, Basic) {
-    SyclEvent event;
+TEST(EventTest, Basic) {
+    Event event;
     
     // Basic construction and move operations should work
     EXPECT_NO_THROW({
-        SyclEvent event2;
-        SyclEvent event3 = std::move(event2);
+        Event event2;
+        Event event3 = std::move(event2);
     });
 }
 
-TEST(SyclQueueTest, DefaultConstruction) {
+TEST(QueueTest, DefaultConstruction) {
     EXPECT_NO_THROW({
-        SyclQueue queue;
+        Queue queue;
     });
 }
 
-TEST(SyclQueueTest, DeviceConstruction) {
+TEST(QueueTest, DeviceConstruction) {
     try {
         // Get default device and create queue
         Device device = Device::default_device();
         
         EXPECT_NO_THROW({
-            SyclQueue queue(device);
+            Queue queue(device);
             EXPECT_EQ(queue.device().idx, device.idx);
             EXPECT_EQ(queue.device().type, device.type);
             EXPECT_TRUE(queue.in_order());
         });
         
         EXPECT_NO_THROW({
-            SyclQueue queue(device, false);
+            Queue queue(device, false);
             EXPECT_FALSE(queue.in_order());
         });
     } catch (const std::exception& e) {
@@ -91,23 +91,23 @@ TEST(SyclQueueTest, DeviceConstruction) {
     }
 }
 
-TEST(SyclQueueTest, MoveOperations) {
+TEST(QueueTest, MoveOperations) {
     try {
         Device device = Device::default_device();
         
-        SyclQueue queue1(device);
+        Queue queue1(device);
         
         // Test move construction
         EXPECT_NO_THROW({
-            SyclQueue queue2 = std::move(queue1);
+            Queue queue2 = std::move(queue1);
             EXPECT_EQ(queue2.device().idx, device.idx);
             EXPECT_EQ(queue2.device().type, device.type);
         });
         
         // Test move assignment
         EXPECT_NO_THROW({
-            SyclQueue queue3;
-            queue3 = SyclQueue(device);
+            Queue queue3;
+            queue3 = Queue(device);
             EXPECT_EQ(queue3.device().idx, device.idx);
             EXPECT_EQ(queue3.device().type, device.type);
         });
@@ -116,22 +116,22 @@ TEST(SyclQueueTest, MoveOperations) {
     }
 }
 
-TEST(SyclQueueTest, GetEvent) {
+TEST(QueueTest, GetEvent) {
     try {
-        SyclQueue queue(Device::default_device());
+        Queue queue(Device::default_device());
         
         EXPECT_NO_THROW({
-            SyclEvent event = queue.get_event();
+            Event event = queue.get_event();
         });
     } catch (const std::exception& e) {
         GTEST_SKIP() << "Skipping event tests due to no devices available";
     }
 }
 
-TEST(SyclQueueTest, EnqueueEvent) {
+TEST(QueueTest, EnqueueEvent) {
     try {
-        SyclQueue queue(Device::default_device());
-        SyclEvent event = queue.get_event();
+        Queue queue(Device::default_device());
+        Event event = queue.get_event();
         
         EXPECT_NO_THROW({
             queue.enqueue(event);
@@ -141,10 +141,10 @@ TEST(SyclQueueTest, EnqueueEvent) {
     }
 }
 
-TEST(SyclQueueTest, EnqueueMultipleEvents) {
+TEST(QueueTest, EnqueueMultipleEvents) {
     try {
-        SyclQueue queue(Device::default_device());
-        std::vector<SyclEvent> events;
+        Queue queue(Device::default_device());
+        std::vector<Event> events;
         
         for (int i = 0; i < 3; i++) {
             events.push_back(queue.get_event());
@@ -158,9 +158,9 @@ TEST(SyclQueueTest, EnqueueMultipleEvents) {
     }
 }
 
-TEST(SyclQueueTest, WaitAndThrow) {
+TEST(QueueTest, WaitAndThrow) {
     try {
-        SyclQueue queue(Device::default_device());
+        Queue queue(Device::default_device());
         
         EXPECT_NO_THROW({
             queue.wait();

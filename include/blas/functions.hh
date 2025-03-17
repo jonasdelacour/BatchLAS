@@ -20,10 +20,10 @@ namespace batchlas {
      * @param transA Operation to apply to A (NoTrans or Trans)
      * @param transB Operation to apply to B (NoTrans or Trans)
      * @param precision Computation precision
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
-    SyclEvent gemm(SyclQueue& ctx,
+    Event gemm(Queue& ctx,
         DenseMatView<T,BT> descrA,
         DenseMatView<T,BT> descrB,
         DenseMatView<T,BT> descrC,
@@ -45,10 +45,10 @@ namespace batchlas {
      * @param transA Operation to apply to A (NoTrans or Trans)
      * @param transB Operation to apply to B (NoTrans or Trans)
      * @param workspace Pre-allocated workspace buffer
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, Format F, BatchType BT>
-    SyclEvent spmm(SyclQueue& ctx,
+    Event spmm(Queue& ctx,
         SparseMatHandle<T, F, BT>& descrA,
         DenseMatView<T,BT> descrB,
         DenseMatView<T,BT> descrC,
@@ -72,7 +72,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, Format F, BatchType BT>
-    size_t spmm_buffer_size(SyclQueue& ctx,
+    size_t spmm_buffer_size(Queue& ctx,
         SparseMatHandle<T, F, BT>& descrA,
         DenseMatView<T,BT> descrB,
         DenseMatView<T,BT> descrC,
@@ -92,10 +92,10 @@ namespace batchlas {
      * @param transA Operation to apply to A (NoTrans or Trans)
      * @param diag Whether A is unit diagonal
      * @param alpha Scalar multiplier for B
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
-    SyclEvent trsm(SyclQueue& ctx,
+    Event trsm(Queue& ctx,
         DenseMatView<T,BT> descrA,
         DenseMatView<T,BT> descrB,
         Side side,
@@ -115,7 +115,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, BatchType BT>
-    size_t potrf_buffer_size(SyclQueue& ctx,
+    size_t potrf_buffer_size(Queue& ctx,
                         DenseMatView<T,BT> A,
                         Uplo uplo);
 
@@ -126,10 +126,10 @@ namespace batchlas {
      * @param descrA Matrix to factorize, overwritten with the result
      * @param uplo Whether to use upper or lower triangle of A
      * @param workspace Pre-allocated workspace buffer
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */ 
     template <Backend B, typename T, BatchType BT>
-    SyclEvent potrf(SyclQueue& ctx,
+    Event potrf(Queue& ctx,
             DenseMatView<T,BT> descrA,
             Uplo uplo,
             Span<std::byte> workspace);
@@ -142,10 +142,10 @@ namespace batchlas {
      * @param eigenvalues Output array for eigenvalues
      * @param uplo Whether to use upper or lower triangle of A
      * @param workspace Pre-allocated workspace buffer
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
-    SyclEvent syev(SyclQueue& ctx,
+    Event syev(Queue& ctx,
             DenseMatView<T,BT> descrA, //A is overwritten with eigenvectors
             Span<T> eigenvalues,
             Uplo uplo,
@@ -161,7 +161,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, BatchType BT>
-    size_t syev_buffer_size(SyclQueue& ctx,
+    size_t syev_buffer_size(Queue& ctx,
             DenseMatView<T,BT> A,
             Span<T> eigenvalues,
             Uplo uplo);
@@ -174,10 +174,10 @@ namespace batchlas {
      * @param transA Whether to orthogonalize columns (NoTrans) or rows (Trans)
      * @param workspace Pre-allocated workspace buffer
      * @param algo Algorithm to use for orthogonalization
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
-    SyclEvent ortho(SyclQueue& ctx,
+    Event ortho(Queue& ctx,
             DenseMatView<T,BT> A, //A is overwritten with orthogonal vectors
             Transpose transA,
             Span<std::byte> workspace,
@@ -194,10 +194,10 @@ namespace batchlas {
      * @param workspace Pre-allocated workspace buffer
      * @param algo Algorithm to use for orthogonalization
      * @param iterations Number of iterations for improved stability
-     * @return SyclEvent Event to track operation completion
+     * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
-    SyclEvent ortho(SyclQueue& ctx,
+    Event ortho(Queue& ctx,
             DenseMatView<T,BT> A, //A is overwritten with orthogonal vectors
             DenseMatView<T,BT> M, //External metric
             Transpose transA,
@@ -216,7 +216,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, BatchType BT>
-    size_t ortho_buffer_size(SyclQueue& ctx,
+    size_t ortho_buffer_size(Queue& ctx,
             DenseMatView<T,BT> A,
             Transpose transA,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
@@ -234,7 +234,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, BatchType BT>
-    size_t ortho_buffer_size(SyclQueue& ctx,
+    size_t ortho_buffer_size(Queue& ctx,
             DenseMatView<T,BT> A,
             DenseMatView<T,BT> M,
             Transpose transA,

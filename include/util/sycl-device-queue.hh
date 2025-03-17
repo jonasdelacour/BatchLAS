@@ -81,46 +81,46 @@ struct Device{
     DeviceType type = DeviceType::HOST;
 };
 
-struct SyclEventImpl;
+struct EventImpl;
 
-struct SyclEvent {
-    std::unique_ptr<SyclEventImpl> impl_;
+struct Event {
+    std::unique_ptr<EventImpl> impl_;
 
-    SyclEvent();
-    ~SyclEvent();
-    SyclEvent& operator=(SyclEventImpl&& impl);
-    SyclEvent(SyclEventImpl&& impl);
-    SyclEvent(SyclEvent&& other);
-    SyclEvent& operator=(SyclEvent&& other);
+    Event();
+    ~Event();
+    Event& operator=(EventImpl&& impl);
+    Event(EventImpl&& impl);
+    Event(Event&& other);
+    Event& operator=(Event&& other);
     void wait() const;
-    SyclEventImpl* operator->() const;
-    SyclEventImpl& operator*() const;
+    EventImpl* operator->() const;
+    EventImpl& operator*() const;
 };
 
-struct SyclQueueImpl;
+struct QueueImpl;
 
-struct SyclQueue{
+struct Queue{
 
     /*  
         Default constructor and destructor must be declared ONLY here and defined in the implementation file. 
-        This is necessary because SyclQueueImpl is an incomplete type in this header file.
+        This is necessary because QueueImpl is an incomplete type in this header file.
     */
-    SyclQueue(); 
-    ~SyclQueue();
+    Queue(); 
+    ~Queue();
 
-    SyclQueue(Device device, bool in_order = true);
-    SyclQueue(SyclQueue&& other); //= default;
-    SyclQueue& operator=(SyclQueue&& other);// = default;
-    SyclQueue(const SyclQueue& other) = delete;
-    SyclQueue& operator=(const SyclQueue& other) = delete;
+    Queue(Device device, bool in_order = true);
+    Queue(Queue&& other); //= default;
+    Queue& operator=(Queue&& other);// = default;
+    Queue(const Queue& other) = delete;
+    Queue& operator=(const Queue& other) = delete;
     // Copy constructor and assignment operator are deleted because the unique_ptr is non-copyable
 
 
-    SyclQueueImpl* operator->() const;
-    SyclQueueImpl& operator*() const;
+    QueueImpl* operator->() const;
+    QueueImpl& operator*() const;
     
-    void enqueue(SyclEvent& event);
-    SyclEvent get_event();
+    void enqueue(Event& event);
+    Event get_event();
 
     template <typename EventContainer>
     void enqueue(EventContainer& events){
@@ -132,7 +132,7 @@ struct SyclQueue{
     void wait() const;
     void wait_and_throw() const;
     
-    std::unique_ptr<SyclQueueImpl> impl_;
+    std::unique_ptr<QueueImpl> impl_;
 
     Device device() const { return device_; }
     bool in_order() const { return in_order_; }

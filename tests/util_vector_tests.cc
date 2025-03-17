@@ -2,22 +2,22 @@
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
 
-TEST(SyclVectorTest, DefaultConstruction) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, DefaultConstruction) {
+    UnifiedVector<int> vec;
     EXPECT_EQ(vec.size(), 0);
     EXPECT_EQ(vec.capacity(), 0);
     EXPECT_EQ(vec.data(), nullptr);
 }
 
-TEST(SyclVectorTest, SizeConstruction) {
-    SyclVector<int> vec(5);
+TEST(UnifiedVectorTest, SizeConstruction) {
+    UnifiedVector<int> vec(5);
     EXPECT_EQ(vec.size(), 5);
     EXPECT_GE(vec.capacity(), 5);
     EXPECT_NE(vec.data(), nullptr);
 }
 
-TEST(SyclVectorTest, SizeValueConstruction) {
-    SyclVector<int> vec(5, 42);
+TEST(UnifiedVectorTest, SizeValueConstruction) {
+    UnifiedVector<int> vec(5, 42);
     EXPECT_EQ(vec.size(), 5);
     EXPECT_GE(vec.capacity(), 5);
     
@@ -26,9 +26,9 @@ TEST(SyclVectorTest, SizeValueConstruction) {
     }
 }
 
-TEST(SyclVectorTest, CopyConstruction) {
-    SyclVector<int> original(5, 42);
-    SyclVector<int> copy(original);
+TEST(UnifiedVectorTest, CopyConstruction) {
+    UnifiedVector<int> original(5, 42);
+    UnifiedVector<int> copy(original);
     
     EXPECT_EQ(copy.size(), 5);
     for (size_t i = 0; i < copy.size(); i++) {
@@ -41,11 +41,11 @@ TEST(SyclVectorTest, CopyConstruction) {
     EXPECT_EQ(copy[0], 42);
 }
 
-TEST(SyclVectorTest, MoveConstruction) {
-    SyclVector<int> original(5, 42);
+TEST(UnifiedVectorTest, MoveConstruction) {
+    UnifiedVector<int> original(5, 42);
     int* original_data = original.data();
     
-    SyclVector<int> moved(std::move(original));
+    UnifiedVector<int> moved(std::move(original));
     
     EXPECT_EQ(moved.size(), 5);
     EXPECT_EQ(moved.data(), original_data);
@@ -55,9 +55,9 @@ TEST(SyclVectorTest, MoveConstruction) {
     EXPECT_EQ(original.data(), nullptr);
 }
 
-TEST(SyclVectorTest, CopyAssignment) {
-    SyclVector<int> original(5, 42);
-    SyclVector<int> copy;
+TEST(UnifiedVectorTest, CopyAssignment) {
+    UnifiedVector<int> original(5, 42);
+    UnifiedVector<int> copy;
     
     copy = original;
     
@@ -72,11 +72,11 @@ TEST(SyclVectorTest, CopyAssignment) {
     EXPECT_EQ(copy[0], 42);
 }
 
-TEST(SyclVectorTest, MoveAssignment) {
-    SyclVector<int> original(5, 42);
+TEST(UnifiedVectorTest, MoveAssignment) {
+    UnifiedVector<int> original(5, 42);
     int* original_data = original.data();
     
-    SyclVector<int> moved;
+    UnifiedVector<int> moved;
     moved = std::move(original);
     
     EXPECT_EQ(moved.size(), 5);
@@ -87,8 +87,8 @@ TEST(SyclVectorTest, MoveAssignment) {
     EXPECT_EQ(original.data(), nullptr);
 }
 
-TEST(SyclVectorTest, Resize) {
-    SyclVector<int> vec(3, 1);
+TEST(UnifiedVectorTest, Resize) {
+    UnifiedVector<int> vec(3, 1);
     EXPECT_EQ(vec.size(), 3);
     
     // Resize larger
@@ -107,8 +107,8 @@ TEST(SyclVectorTest, Resize) {
     }
 }
 
-TEST(SyclVectorTest, ResizeWithValue) {
-    SyclVector<int> vec(3, 1);
+TEST(UnifiedVectorTest, ResizeWithValue) {
+    UnifiedVector<int> vec(3, 1);
     
     // Resize with new value
     vec.resize(5, 42);
@@ -123,8 +123,8 @@ TEST(SyclVectorTest, ResizeWithValue) {
     }
 }
 
-TEST(SyclVectorTest, Reserve) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, Reserve) {
+    UnifiedVector<int> vec;
     vec.reserve(10);
     
     EXPECT_EQ(vec.size(), 0);
@@ -139,8 +139,8 @@ TEST(SyclVectorTest, Reserve) {
     EXPECT_GE(vec.capacity(), 10);
 }
 
-TEST(SyclVectorTest, PushBack) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, PushBack) {
+    UnifiedVector<int> vec;
     
     vec.push_back(1);
     EXPECT_EQ(vec.size(), 1);
@@ -162,8 +162,8 @@ TEST(SyclVectorTest, PushBack) {
     }
 }
 
-TEST(SyclVectorTest, PopBack) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, PopBack) {
+    UnifiedVector<int> vec;
     for (int i = 1; i <= 5; i++) {
         vec.push_back(i);
     }
@@ -181,8 +181,8 @@ TEST(SyclVectorTest, PopBack) {
     EXPECT_EQ(vec[2], 3);
 }
 
-TEST(SyclVectorTest, Clear) {
-    SyclVector<int> vec(5, 42);
+TEST(UnifiedVectorTest, Clear) {
+    UnifiedVector<int> vec(5, 42);
     size_t original_capacity = vec.capacity();
     
     vec.clear();
@@ -191,8 +191,8 @@ TEST(SyclVectorTest, Clear) {
     EXPECT_EQ(vec.capacity(), original_capacity); // Capacity unchanged
 }
 
-TEST(SyclVectorTest, IndexOperator) {
-    SyclVector<int> vec(5);
+TEST(UnifiedVectorTest, IndexOperator) {
+    UnifiedVector<int> vec(5);
     for (size_t i = 0; i < vec.size(); i++) {
         vec[i] = i * 10;
     }
@@ -202,8 +202,8 @@ TEST(SyclVectorTest, IndexOperator) {
     }
 }
 
-TEST(SyclVectorTest, AtMethod) {
-    SyclVector<int> vec(5);
+TEST(UnifiedVectorTest, AtMethod) {
+    UnifiedVector<int> vec(5);
     for (size_t i = 0; i < vec.size(); i++) {
         vec.at(i) = i * 10;
     }
@@ -213,8 +213,8 @@ TEST(SyclVectorTest, AtMethod) {
     }
 }
 
-TEST(SyclVectorTest, FrontBack) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, FrontBack) {
+    UnifiedVector<int> vec;
     for (int i = 1; i <= 5; i++) {
         vec.push_back(i);
     }
@@ -229,9 +229,9 @@ TEST(SyclVectorTest, FrontBack) {
     EXPECT_EQ(vec[4], 50);
 }
 
-TEST(SyclVectorTest, Swap) {
-    SyclVector<int> vec1(3, 10);
-    SyclVector<int> vec2(5, 20);
+TEST(UnifiedVectorTest, Swap) {
+    UnifiedVector<int> vec1(3, 10);
+    UnifiedVector<int> vec2(5, 20);
     
     vec1.swap(vec2);
     
@@ -253,8 +253,8 @@ TEST(SyclVectorTest, Swap) {
     EXPECT_EQ(vec2.size(), 5);
 }
 
-TEST(SyclVectorTest, ToSpan) {
-    SyclVector<int> vec(5, 42);
+TEST(UnifiedVectorTest, ToSpan) {
+    UnifiedVector<int> vec(5, 42);
     Span<int> span = vec.to_span();
     
     EXPECT_EQ(span.size(), 5);
@@ -265,8 +265,8 @@ TEST(SyclVectorTest, ToSpan) {
     }
 }
 
-TEST(SyclVectorTest, Subspan) {
-    SyclVector<int> vec;
+TEST(UnifiedVectorTest, Subspan) {
+    UnifiedVector<int> vec;
     for (int i = 0; i < 10; i++) {
         vec.push_back(i);
     }
@@ -297,8 +297,8 @@ TEST(SyclVectorTest, Subspan) {
     }
 }
 
-TEST(SyclVectorTest, Fill) {
-    SyclVector<int> vec(10);
+TEST(UnifiedVectorTest, Fill) {
+    UnifiedVector<int> vec(10);
     vec.fill(42);
     
     for (size_t i = 0; i < vec.size(); i++) {
@@ -306,11 +306,11 @@ TEST(SyclVectorTest, Fill) {
     }
 }
 
-TEST(SyclVectorTest, Equality) {
-    SyclVector<int> vec1(5, 10);
-    SyclVector<int> vec2(5, 10);
-    SyclVector<int> vec3(5, 20);
-    SyclVector<int> vec4(3, 10);
+TEST(UnifiedVectorTest, Equality) {
+    UnifiedVector<int> vec1(5, 10);
+    UnifiedVector<int> vec2(5, 10);
+    UnifiedVector<int> vec3(5, 20);
+    UnifiedVector<int> vec4(3, 10);
     
     EXPECT_TRUE(vec1 == vec2);
     EXPECT_FALSE(vec1 == vec3);

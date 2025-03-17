@@ -77,7 +77,7 @@ using namespace batchlas;
 
 int main() {
     // Create a context
-    auto ctx = SyclQueue(Device::default_device());
+    auto ctx = Queue(Device::default_device());
     
     // Allocate memory for matrices
     const int rows = 1000;
@@ -87,9 +87,9 @@ int main() {
     const int ld = rows; // Leading dimension
     
     // Allocate matrices on device
-    SyclVector<float> A_data(rows * k * batch_size);
-    SyclVector<float> B_data(k * cols * batch_size);
-    SyclVector<float> C_data(rows * cols * batch_size);
+    UnifiedVector<float> A_data(rows * k * batch_size);
+    UnifiedVector<float> B_data(k * cols * batch_size);
+    UnifiedVector<float> C_data(rows * cols * batch_size);
     
     // Initialize data...
     
@@ -117,7 +117,7 @@ BatchLAS provides various orthogonalization algorithms:
 
 ```cpp
 // Allocate workspace memory
-SyclVector<std::byte> workspace(ortho_buffer_size<Backend::CUDA>(
+UnifiedVector<std::byte> workspace(ortho_buffer_size<Backend::CUDA>(
     ctx, matrices, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
 
 // Orthogonalize matrices

@@ -10,7 +10,7 @@
 namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
-    SyclEvent gemm(SyclQueue& ctx,
+    Event gemm(Queue& ctx,
                    DenseMatView<T,BT> descrA,
                    DenseMatView<T,BT> descrB,
                    DenseMatView<T,BT> descrC,
@@ -54,7 +54,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, BatchType BT>
-    SyclEvent trsm(SyclQueue& ctx,
+    Event trsm(Queue& ctx,
                    DenseMatView<T,BT> descrA,
                    DenseMatView<T,BT> descrB,
                    Side side,
@@ -78,16 +78,16 @@ namespace batchlas {
 
     // Template instantiations for cuBLAS functions
     #define GEMM_INSTANTIATE(fp, BT) \
-    template SyclEvent gemm<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+    template Event gemm<Backend::CUDA, fp, BT>( \
+        Queue&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
         fp, fp, Transpose, Transpose, ComputePrecision);
 
     #define TRSM_INSTANTIATE(fp, BT) \
-    template SyclEvent trsm<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+    template Event trsm<Backend::CUDA, fp, BT>( \
+        Queue&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
         Side, Uplo, Transpose, Diag, fp);

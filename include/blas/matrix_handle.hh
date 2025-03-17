@@ -53,7 +53,7 @@ namespace batchlas {
                 Backend::NETLIB  // Always available as fallback
         }};
 
-        static constexpr Backend get(SyclQueue& ctx) {
+        static constexpr Backend get(Queue& ctx) {
             auto device = ctx.device();
             switch (device.type) {
                 case DeviceType::CPU:
@@ -94,7 +94,7 @@ namespace batchlas {
         }
 
         template <typename... Args>
-        static constexpr auto select(SyclQueue& ctx, Args&&... args) {
+        static constexpr auto select(Queue& ctx, Args&&... args) {
             constexpr size_t num_args = sizeof...(Args);
             static_assert(num_args > 0, "At least one argument must be provided");
             
@@ -149,7 +149,7 @@ namespace batchlas {
     struct DenseMatHandle<T, BatchType::Single> {
         DenseMatHandle(T* data, int rows, int cols, int ld);
         ~DenseMatHandle();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
         // Accessors...
         T* data_;
@@ -176,12 +176,12 @@ namespace batchlas {
     struct DenseMatHandle<T, BatchType::Batched> {
         DenseMatHandle(T* data, int rows, int cols, int ld, int stride, int batch_size);
         ~DenseMatHandle();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
 
         // Accessors...
         T* data_;
-        SyclVector<T*> data_ptrs_;
+        UnifiedVector<T*> data_ptrs_;
         int rows_, cols_, ld_, stride_, batch_size_;
         Layout layout_ = Layout::ColMajor; //Most backends don't support row-major dense matrices
 
@@ -219,7 +219,7 @@ namespace batchlas {
         DenseMatView<T, BatchType::Batched>& operator=(DenseMatHandle<T, BatchType::Batched>&& handle) = delete;
         
         ~DenseMatView();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
         // Accessors...
         T* data_; 
@@ -253,7 +253,7 @@ namespace batchlas {
         DenseMatView<T, BatchType::Single>& operator=(DenseMatHandle<T, BatchType::Single>&& handle) = delete;
 
         ~DenseMatView();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
 
         // Accessors...
@@ -299,7 +299,7 @@ namespace batchlas {
          */
         SparseMatHandle(T* data, int* row_offsets, int* col_indices, int nnz, int rows, int cols, Layout layout = Layout::RowMajor);
         ~SparseMatHandle();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
 
         // Raw pointers to externally owned memory
@@ -334,7 +334,7 @@ namespace batchlas {
             int nnz, int rows, int cols, int stride, int batch_size);
 
         ~SparseMatHandle();
-        void init(SyclQueue& ctx);
+        void init(Queue& ctx);
         void init_backend();
 
         // Raw pointers to externally owned memory
@@ -364,7 +364,7 @@ namespace batchlas {
         DenseVecHandle(T* data, int size, int ldc) : data_(data), size_(size), ldc_(ldc) {}
         // Accessors...
         T* data_;
-        SyclVector<T*> data_ptrs_;
+        UnifiedVector<T*> data_ptrs_;
         int size_, ldc_;
 
         private:
@@ -416,7 +416,7 @@ namespace batchlas {
     }
     
     template <template <typename, BatchType> class Handle, typename T, BatchType BT, std::enable_if_t<BT == BatchType::Batched, int> = 0>
-    auto get_ptr_arr(SyclQueue& ctx, Handle<T,BT>& handle) {
+    auto get_ptr_arr(Queue& ctx, Handle<T,BT>& handle) {
         handle.init(ctx);
         return handle.data_ptrs_.data();
     }

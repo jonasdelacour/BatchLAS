@@ -11,7 +11,7 @@
 namespace batchlas {
 
     template <Backend B, typename T, Format F, BatchType BT>
-    SyclEvent spmm(SyclQueue& ctx,
+    Event spmm(Queue& ctx,
                    SparseMatHandle<T, F, BT>& descrA,
                    DenseMatView<T,BT> descrB,
                    DenseMatView<T,BT> descrC,
@@ -45,7 +45,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, Format F, BatchType BT>
-    size_t spmm_buffer_size(SyclQueue& ctx,
+    size_t spmm_buffer_size(Queue& ctx,
                             SparseMatHandle<T, F, BT>& descrA,
                             DenseMatView<T,BT> descrB,
                             DenseMatView<T,BT> descrC,
@@ -76,8 +76,8 @@ namespace batchlas {
     }
 
     #define SPMM_INSTANTIATE(fp, F, BT) \
-    template SyclEvent spmm<Backend::CUDA, fp, F, BT>( \
-        SyclQueue&, \
+    template Event spmm<Backend::CUDA, fp, F, BT>( \
+        Queue&, \
         SparseMatHandle<fp, F, BT>&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
@@ -85,7 +85,7 @@ namespace batchlas {
     
     #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F, BT) \
     template size_t spmm_buffer_size<Backend::CUDA, fp, F, BT>( \
-        SyclQueue&, \
+        Queue&, \
         SparseMatHandle<fp, F, BT>&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \

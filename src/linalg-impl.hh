@@ -433,7 +433,7 @@ namespace batchlas{
                 return solver_handle_;
             }
 
-            void setStream(const SyclQueue& ctx) {
+            void setStream(const Queue& ctx) {
                 cudaStream_t stream = sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
                 cudaStreamSynchronize(stream);
                 cublasSetStream(blas_handle_, stream);
@@ -544,12 +544,12 @@ namespace batchlas{
     }
 
     template <typename T>
-    void DenseMatHandle<T, BatchType::Single>::init(SyclQueue& ctx){
+    void DenseMatHandle<T, BatchType::Single>::init(Queue& ctx){
         //Currently nothing to do here.
     }
 
     template <typename T>
-    void DenseMatHandle<T, BatchType::Batched>::init(SyclQueue& ctx){
+    void DenseMatHandle<T, BatchType::Batched>::init(Queue& ctx){
         //Certain algorithms require array of pointers to data rather than a single pointer + stride
         //Here we ensure that the data_ptrs_ array is correctly populated (lazily) and done so on the device provided by the context
         if(data_ptrs_.capacity() < batch_size_) data_ptrs_.resize(batch_size_);
@@ -562,12 +562,12 @@ namespace batchlas{
     }
 
     template <typename T>
-    void DenseMatView<T, BatchType::Single>::init(SyclQueue& ctx){
+    void DenseMatView<T, BatchType::Single>::init(Queue& ctx){
        //Currently nothing to do here.
     }
 
     template <typename T>
-    void DenseMatView<T, BatchType::Batched>::init(SyclQueue& ctx){
+    void DenseMatView<T, BatchType::Batched>::init(Queue& ctx){
         //Certain algorithms require array of pointers to data rather than a single pointer + stride
         //Here we ensure that the data_ptrs_ array is correctly populated (lazily) and done so on the device provided by the context
         //Allocation is done from outside to allow for persistent allocation across invocations
@@ -582,12 +582,12 @@ namespace batchlas{
     }
 
     template <typename T>
-    void SparseMatHandle<T, Format::CSR, BatchType::Batched>::init(SyclQueue& ctx) {
+    void SparseMatHandle<T, Format::CSR, BatchType::Batched>::init(Queue& ctx) {
         //Currently nothing to do here.
     }
 
     template <typename T>
-    void SparseMatHandle<T, Format::CSR, BatchType::Single>::init(SyclQueue& ctx) {
+    void SparseMatHandle<T, Format::CSR, BatchType::Single>::init(Queue& ctx) {
         //Currently nothing to do here.
     }
 

@@ -2,17 +2,17 @@
 #include <cassert>
 #include <util/sycl-span.hh>
 template <typename T>
-struct SyclVector
+struct UnifiedVector
 {   
     using value_type = T;
     using pointer = T*;
     using size_t = std::size_t;
     //Constructors implementations depend on sycl, so they are not defined here
-    SyclVector(size_t size);
-    SyclVector(size_t size, T value);
-    SyclVector(const SyclVector<T> &other);
-    SyclVector<T> &operator=(const SyclVector<T> &other);
-    ~SyclVector();
+    UnifiedVector(size_t size);
+    UnifiedVector(size_t size, T value);
+    UnifiedVector(const UnifiedVector<T> &other);
+    UnifiedVector<T> &operator=(const UnifiedVector<T> &other);
+    ~UnifiedVector();
 
     void resize(size_t new_size);
     void resize(size_t new_size, T value);
@@ -21,13 +21,13 @@ struct SyclVector
     void reserve(size_t new_capacity);
 
     //Movement semantics can be defined here
-    SyclVector() : size_(0), capacity_(0), data_(nullptr) {}
-    SyclVector(SyclVector<T> &&other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
+    UnifiedVector() : size_(0), capacity_(0), data_(nullptr) {}
+    UnifiedVector(UnifiedVector<T> &&other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
         other.size_ = 0;
         other.capacity_ = 0;
         other.data_ = nullptr;
     }
-    SyclVector<T> &operator=(SyclVector<T> &&other) {
+    UnifiedVector<T> &operator=(UnifiedVector<T> &&other) {
         if (this == &other) return *this;
         this->data_ = other.data_;
         this->size_ = other.size_;
@@ -56,7 +56,7 @@ struct SyclVector
     inline constexpr T &at(size_t index) { assert(index < size_); return data_[index]; }
     inline constexpr const T &at(size_t index) const { assert(index < size_); return data_[index]; }
 
-    inline constexpr bool operator==(const SyclVector<T> &other) const {
+    inline constexpr bool operator==(const UnifiedVector<T> &other) const {
         return Span<T>(*this) == Span<T>(other);
     }
 
@@ -80,7 +80,7 @@ struct SyclVector
     inline constexpr T pop_back() { assert(size_ > 0); return data_[--size_]; }
 
     template <typename U>
-    friend std::ostream &operator<<(std::ostream &os, const SyclVector<U> &vec);
+    friend std::ostream &operator<<(std::ostream &os, const UnifiedVector<U> &vec);
 
     inline constexpr T *begin() const { return data_; }
     inline constexpr T *end() const { return data_ + size_; }
@@ -88,7 +88,7 @@ struct SyclVector
     inline constexpr T &back() const { return data_[size_ - 1]; }
     inline constexpr T &front() const { return data_[0]; }
 
-    inline constexpr void swap(SyclVector<T> &other) {
+    inline constexpr void swap(UnifiedVector<T> &other) {
         std::swap(data_, other.data_);
         std::swap(size_, other.size_);
         std::swap(capacity_, other.capacity_);
@@ -100,6 +100,6 @@ private:
 };
 
 template <typename T>
-inline constexpr void swap(SyclVector<T> &lhs, SyclVector<T> &rhs) {
+inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
     lhs.swap(rhs);
 }

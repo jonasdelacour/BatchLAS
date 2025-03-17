@@ -24,7 +24,7 @@ struct BumpAllocator {
     }
 
     template<typename T>
-    constexpr inline static size_t allocation_size(SyclQueue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
+    constexpr inline static size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
 
     template<typename T>
     constexpr inline Span<T> allocate(const Device& device, size_t size){
@@ -44,7 +44,7 @@ struct BumpAllocator {
     }
 
     template<typename T>
-    constexpr inline Span<T> allocate(SyclQueue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
+    constexpr inline Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
     
     private:
 

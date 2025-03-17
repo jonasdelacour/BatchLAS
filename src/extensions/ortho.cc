@@ -11,7 +11,7 @@
 namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
-    SyclEvent ortho(SyclQueue& ctx,
+    Event ortho(Queue& ctx,
                     DenseMatView<T,BT> A,
                     Transpose transA,
                     Span<std::byte> workspace,
@@ -87,7 +87,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, BatchType BT>
-    size_t ortho_buffer_size(SyclQueue& ctx,
+    size_t ortho_buffer_size(Queue& ctx,
                              DenseMatView<T,BT> A,
                              Transpose transA,
                              OrthoAlgorithm algo) {
@@ -99,7 +99,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, BatchType BT>
-    SyclEvent ortho(SyclQueue& ctx,
+    Event ortho(Queue& ctx,
                     DenseMatView<T,BT> A,
                     DenseMatView<T,BT> M,
                     Transpose transA,
@@ -136,7 +136,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, BatchType BT>
-    size_t ortho_buffer_size(SyclQueue& ctx,
+    size_t ortho_buffer_size(Queue& ctx,
                              DenseMatView<T,BT> A,
                              DenseMatView<T,BT> M,
                              Transpose transA,
@@ -150,14 +150,14 @@ namespace batchlas {
     }  
 
     #define ORTHO_INSTANTIATE(fp, BT) \
-    template SyclEvent ortho<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+    template Event ortho<Backend::CUDA, fp, BT>( \
+        Queue&, \
         DenseMatView<fp, BT>, \
         Transpose, \
         Span<std::byte>, \
         OrthoAlgorithm); \
-    template SyclEvent ortho<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+    template Event ortho<Backend::CUDA, fp, BT>( \
+        Queue&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
         Transpose, \
@@ -166,12 +166,12 @@ namespace batchlas {
         OrthoAlgorithm, \
         size_t); \
     template size_t ortho_buffer_size<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+        Queue&, \
         DenseMatView<fp, BT>, \
         Transpose, \
         OrthoAlgorithm); \
     template size_t ortho_buffer_size<Backend::CUDA, fp, BT>( \
-        SyclQueue&, \
+        Queue&, \
         DenseMatView<fp, BT>, \
         DenseMatView<fp, BT>, \
         Transpose, \
