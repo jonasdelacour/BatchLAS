@@ -230,6 +230,10 @@ namespace batchlas {
         BackendDenseMatrixHandle<T>* operator->();
         BackendDenseMatrixHandle<T>& operator*();
 
+        DenseMatView<T, BatchType::Single> operator[](int i) const {
+            return DenseMatView<T, BatchType::Single>(data_ + i * stride_, rows_, cols_, ld_);
+        }
+
         private:
             std::shared_ptr<BackendDenseMatrixHandle<T>> backend_handle_;
     };
