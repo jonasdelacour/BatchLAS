@@ -24,7 +24,7 @@ namespace batchlas{
         auto [kB, n] = get_effective_dims(descrB, transB);
 
         if constexpr (BT == BatchType::Single) {
-                call_netlib<T>(
+                call_cblas<T>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     descrA.layout_, transA, transB,
                     m, n, k,
@@ -63,7 +63,7 @@ namespace batchlas{
         
         auto [kB, n] = get_effective_dims(descrB, Transpose::NoTrans);
         if constexpr (BT == BatchType::Single) {
-                call_netlib<T>(
+                call_cblas<T>(
                     cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
                     descrA.layout_, side, uplo, transA, diag,
                     n, kB,
@@ -86,6 +86,15 @@ namespace batchlas{
         return ctx.get_event();
     }
 
+    template <Backend B, typename T, BatchType BT>
+    Event potrf(Queue& ctx,
+                    DenseMatView<T,BT> descrA,
+                    Uplo uplo,
+                    Span<std::byte> workspace) {
+        /* if constexpr (BT == BatchType::Single) {
+            call_cblas<T>(
+                LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
+    */ }
 
 
     #define GEMM_INSTANTIATE(fp, BT) \

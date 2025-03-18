@@ -21,8 +21,8 @@ namespace batchlas {
         ROCSOLVER,  //Belongs to ROCM backend
         MAGMA,      //Belongs to MAGMA backend
         MKL,        //Belongs to MKL backend
-        NETLIB,     //Belongs to NETLIB backend
-        LAPACK      //Belongs to NETLIB backend
+        CBLAS,      //Belongs to NETLIB backend
+        LAPACKE     //Belongs to NETLIB backend
     };
 
     enum class BatchType {

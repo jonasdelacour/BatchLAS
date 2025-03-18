@@ -82,7 +82,7 @@ namespace batchlas{
             return static_cast<cublasSideMode_t>(
                 side == Side::Left ? CUBLAS_SIDE_LEFT : CUBLAS_SIDE_RIGHT
             );
-        } else if constexpr (B == BackendLibrary::NETLIB){
+        } else if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
             );
@@ -95,7 +95,7 @@ namespace batchlas{
             return static_cast<cublasDiagType_t>(
                 diag == Diag::NonUnit ? CUBLAS_DIAG_NON_UNIT : CUBLAS_DIAG_UNIT
             );
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
             );
@@ -108,7 +108,7 @@ namespace batchlas{
             return static_cast<cusparseOrder_t>(
                 layout == Layout::RowMajor ? CUSPARSE_ORDER_ROW : CUSPARSE_ORDER_COL
             );
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
             );
@@ -125,7 +125,7 @@ namespace batchlas{
             return static_cast<cusparseFillMode_t>(
                 uplo == Uplo::Upper ? CUSPARSE_FILL_MODE_UPPER : CUSPARSE_FILL_MODE_LOWER
             );
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
             );
@@ -142,7 +142,7 @@ namespace batchlas{
             return static_cast<cusparseOperation_t>(
                 trans == Transpose::NoTrans ? CUSPARSE_OPERATION_NON_TRANSPOSE : CUSPARSE_OPERATION_TRANSPOSE
             );
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
             );
@@ -194,7 +194,7 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex**>(ptr);
             }
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float**>(ptr);
             } else if constexpr (std::is_same_v<T, double>) {
@@ -224,7 +224,7 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex*>(ptr);
             }
-        } else if constexpr (B == BackendLibrary::NETLIB) {
+        } else if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float*>(ptr);
             } else if constexpr (std::is_same_v<T, double>) {
@@ -258,7 +258,7 @@ namespace batchlas{
     template<BackendLibrary B, typename T>
     constexpr auto float_convert(T& val) {
         static_assert(is_complex_or_floating_point<T>::value, "Type must be floating point or complex");
-        if constexpr (B == BackendLibrary::NETLIB) {
+        if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return static_cast<float>(val);
             } else if constexpr (std::is_same_v<T, double>) {
@@ -369,15 +369,15 @@ namespace batchlas{
     }
 
     template <typename T, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
-    void call_netlib(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
+    void call_cblas(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
-            std::apply(fun1, backend_convert<BackendLibrary::NETLIB>(std::forward<Args>(args)...));
+            std::apply(fun1, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,double>) {
-            std::apply(fun2, backend_convert<BackendLibrary::NETLIB>(std::forward<Args>(args)...));
+            std::apply(fun2, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,std::complex<float>>) {
-            std::apply(fun3, backend_convert<BackendLibrary::NETLIB>(std::forward<Args>(args)...));
+            std::apply(fun3, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,std::complex<double>>) {
-            std::apply(fun4, backend_convert<BackendLibrary::NETLIB>(std::forward<Args>(args)...));
+            std::apply(fun4, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
         }
     }
 
