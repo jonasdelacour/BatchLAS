@@ -35,6 +35,11 @@ namespace batchlas {
         Trans
     };
 
+    enum class JobType {
+        EigenVectors,
+        NoEigenVectors
+    };
+
     enum class Uplo {
         Upper,
         Lower
