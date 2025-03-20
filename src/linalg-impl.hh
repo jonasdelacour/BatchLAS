@@ -58,6 +58,7 @@ namespace batchlas{
     template<> struct is_linalg_enum<Transpose> : std::true_type {};
     template<> struct is_linalg_enum<Diag> : std::true_type {};
     template<> struct is_linalg_enum<Layout> : std::true_type {};
+    template<> struct is_linalg_enum<JobType> : std::true_type {};
 
     template<class T>
     struct is_complex_or_floating_point : std::is_floating_point<T> { };
@@ -90,6 +91,21 @@ namespace batchlas{
     }
 
     template<BackendLibrary B>
+    constexpr auto enum_convert(JobType job) {
+        if constexpr (B == BackendLibrary::CUSOLVER) {
+            return static_cast<cusolverEigMode_t>(
+                job == JobType::EigenVectors ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR
+            );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<char>(
+                job == JobType::EigenVectors ? 'V' : 'N'
+            );
+        } else {
+            static_assert(false, "Unsupported backend for JobType conversion");
+        }
+    }
+
+    template<BackendLibrary B>
     constexpr auto enum_convert(Diag diag) {
         if constexpr (B == BackendLibrary::CUBLAS) {
             return static_cast<cublasDiagType_t>(
@@ -98,6 +114,10 @@ namespace batchlas{
         } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
+            );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<char>(
+                diag == Diag::NonUnit ? 'N' : 'U'
             );
         }
     }
@@ -111,6 +131,10 @@ namespace batchlas{
         } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
+            );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<lapack_int>(
+                layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
         }
     }
@@ -129,6 +153,10 @@ namespace batchlas{
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
             );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<char>(
+                uplo == Uplo::Upper ? 'U' : 'L'
+            );
         }
     }
 
@@ -145,6 +173,10 @@ namespace batchlas{
         } else if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
+            );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<char>(
+                trans == Transpose::NoTrans ? 'N' : 'T'
             );
         }
     }
@@ -234,6 +266,16 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<void*>(ptr);
             }
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            if constexpr (std::is_same_v<T, float>) {
+                return reinterpret_cast<float*>(ptr);
+            } else if constexpr (std::is_same_v<T, double>) {
+                return reinterpret_cast<double*>(ptr);
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return reinterpret_cast<lapack_complex_float*>(ptr);
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                return reinterpret_cast<lapack_complex_double*>(ptr);
+            }
         } else {
             static_assert(false, "Unsupported backend or type combination");
         }
@@ -270,6 +312,19 @@ namespace batchlas{
             }
         } else {
             return val; // No conversion needed
+        }
+    }
+
+    template <typename T>
+    constexpr auto base_float_ptr_convert(T* ptr) {
+        if constexpr (std::is_same_v<T, float>) {
+            return reinterpret_cast<float*>(ptr);
+        } else if constexpr (std::is_same_v<T, double>) {
+            return reinterpret_cast<double*>(ptr);
+        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return reinterpret_cast<float*>(ptr);
+        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+            return reinterpret_cast<double*>(ptr);
         }
     }
 
@@ -368,16 +423,16 @@ namespace batchlas{
         }
     }
 
-    template <typename T, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
-    void call_cblas(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
+    template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+    void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
-            std::apply(fun1, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
+            std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,double>) {
-            std::apply(fun2, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
+            std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,std::complex<float>>) {
-            std::apply(fun3, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
+            std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
         } else if constexpr (std::is_same_v<T,std::complex<double>>) {
-            std::apply(fun4, backend_convert<BackendLibrary::CBLAS>(std::forward<Args>(args)...));
+            std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));
         }
     }
 
