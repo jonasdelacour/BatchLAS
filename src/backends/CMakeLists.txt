@@ -1,6 +1,5 @@
 set(BACKEND_SOURCES
     netlib_lapack.cc
-    openblast.cc
 )
 
 if(BATCHLAS_ENABLE_CUDA)
