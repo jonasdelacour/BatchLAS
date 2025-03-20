@@ -24,7 +24,7 @@ namespace batchlas{
         auto [kB, n] = get_effective_dims(descrB, transB);
 
         if constexpr (BT == BatchType::Single) {
-                call_cblas<T>(
+                call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     descrA.layout_, transA, transB,
                     m, n, k,
@@ -63,7 +63,7 @@ namespace batchlas{
         
         auto [kB, n] = get_effective_dims(descrB, Transpose::NoTrans);
         if constexpr (BT == BatchType::Single) {
-                call_cblas<T>(
+                call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
                     descrA.layout_, side, uplo, transA, diag,
                     n, kB,
@@ -91,10 +91,58 @@ namespace batchlas{
                     DenseMatView<T,BT> descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {
-        /* if constexpr (BT == BatchType::Single) {
-            call_cblas<T>(
+        if constexpr (BT == BatchType::Single) {
+            call_backend_nh<T, BackendLibrary::LAPACKE>(
                 LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
-    */ }
+                descrA.layout_, uplo,
+                descrA.rows_, descrA.data_, descrA.ld_);
+        } else {
+            for (int i = 0; i < get_batch_size(descrA); ++i) {
+                potrf<Backend::NETLIB>(
+                    ctx,
+                    descrA[i],
+                    uplo,
+                    workspace);
+            }
+        }
+        return ctx.get_event();    
+    }
+
+    template <Backend B, typename T, BatchType BT>
+    Event syev(Queue& ctx,
+                   DenseMatView<T,BT> descrA,
+                   Span<T> eigenvalues,
+                   JobType jobtype,
+                   Uplo uplo,
+                   Span<std::byte> workspace) {
+        if constexpr (BT == BatchType::Single) {
+            call_backend_nh<T, BackendLibrary::LAPACKE>(
+                LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
+                descrA.layout_, jobtype, uplo,
+                descrA.rows_, descrA.data_, descrA.ld_,
+                base_float_ptr_convert(eigenvalues.data()));
+        } else {
+            for (int i = 0; i < get_batch_size(descrA); ++i) {
+                syev<Backend::NETLIB>(
+                    ctx,
+                    descrA[i],
+                    eigenvalues.subspan(i*descrA.rows_),
+                    jobtype,
+                    uplo,
+                    workspace);
+            }
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T, BatchType BT>
+    size_t syev_buffer_size(Queue& ctx,
+                   DenseMatView<T,BT> descrA,
+                   Span<T> eigenvalues,
+                   JobType jobtype,
+                   Uplo uplo) {
+        return 0;
+    }
 
 
     #define GEMM_INSTANTIATE(fp, BT) \
@@ -112,9 +160,23 @@ namespace batchlas{
         DenseMatView<fp, BT>, \
         Side, Uplo, Transpose, Diag, fp);
 
+    #define POTRF_INSTANTIATE(fp, BT) \
+    template Event potrf<Backend::NETLIB, fp, BT>( \
+        Queue&, \
+        DenseMatView<fp, BT>, \
+        Uplo, Span<std::byte>);
+
+    #define SYEV_INSTANTIATE(fp, BT) \
+    template Event syev<Backend::NETLIB, fp, BT>( \
+        Queue&, \
+        DenseMatView<fp, BT>, \
+        Span<fp>, JobType, Uplo, Span<std::byte>);
+
     #define BLAS_LEVEL3_INSTANTIATE(fp, BT) \
         GEMM_INSTANTIATE(fp, BT) \
-        TRSM_INSTANTIATE(fp, BT)
+        TRSM_INSTANTIATE(fp, BT) \
+        POTRF_INSTANTIATE(fp, BT) \
+        SYEV_INSTANTIATE(fp, BT)
 
     // Macro that covers all layout and batch type combinations for a given floating-point type.
     #define BLAS_LEVEL3_INSTANTIATE_FOR_FP(fp)        \
@@ -129,6 +191,7 @@ namespace batchlas{
 
     #undef GEMM_INSTANTIATE
     #undef TRSM_INSTANTIATE
+    #undef POTRF_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE_FOR_FP
 }
