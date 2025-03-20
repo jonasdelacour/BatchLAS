@@ -386,7 +386,7 @@ endfunction()
 
 # Find CUDA libraries if CUDA is enabled (either manually or by GPU detection)
 if(BATCHLAS_ENABLE_CUDA)
-    find_package(CUDA REQUIRED)
+    enable_language(CUDA)
     find_nvidia_libs()
 endif()
 
