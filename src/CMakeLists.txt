@@ -30,7 +30,8 @@ install(TARGETS batchlas
 )
 
 set(BATCHLAS_LINK_LIBRARIES
-    lapack
+    lapacke
+    cblas
 )
 
 if(BATCHLAS_ENABLE_CUDA)
