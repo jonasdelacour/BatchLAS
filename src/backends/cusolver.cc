@@ -54,6 +54,7 @@ namespace batchlas {
     Event syev(Queue& ctx,
                    DenseMatView<T,BT> descrA,
                    Span<T> eigenvalues,
+                   JobType jobtype,
                    Uplo uplo,
                    Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
@@ -121,6 +122,7 @@ namespace batchlas {
     size_t syev_buffer_size(Queue& ctx,
                             DenseMatView<T,BT> descrA,                            
                             Span<T> eigenvalues,
+                            JobType jobtype,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
@@ -157,6 +159,7 @@ namespace batchlas {
         Queue&, \
         DenseMatView<fp, BT>, \
         Span<fp>, \
+        JobType, \
         Uplo, \
         Span<std::byte>);
 
@@ -165,6 +168,7 @@ namespace batchlas {
         Queue&, \
         DenseMatView<fp, BT>, \
         Span<fp>, \
+        JobType, \
         Uplo);
 
     #define CUSOLVER_INSTANTIATE(fp, BT) \
