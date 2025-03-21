@@ -584,6 +584,7 @@ endif()
 # Set include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    /opt/include
 )
 
 # Add library subdirectories
