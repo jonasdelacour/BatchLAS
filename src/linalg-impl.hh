@@ -248,6 +248,7 @@ namespace batchlas{
 
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(T* ptr) {
+        static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -284,6 +285,7 @@ namespace batchlas{
     // Const pointer version
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(const T* ptr) {
+        static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -359,7 +361,7 @@ namespace batchlas{
                 return std::forward<T>(arg);
             } else if constexpr (std::is_integral_v<std::remove_pointer_t<std::remove_reference_t<T>>>) {
                 return std::forward<T>(arg);
-            } else if constexpr (std::is_pointer_v<std::remove_reference_t<T>>) {
+            } else if constexpr (std::is_pointer_v<std::remove_reference_t<T>> && is_complex_or_floating_point<std::remove_pointer_t<std::remove_pointer_t<std::remove_reference_t<T>>>>::value) {
                 return ptr_convert<B>(std::forward<T>(arg));
             } else if constexpr (is_complex_or_floating_point<std::remove_reference_t<T>>::value) {
                 return float_convert<B>(std::forward<T>(arg));
