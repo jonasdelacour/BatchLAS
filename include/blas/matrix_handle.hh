@@ -6,6 +6,7 @@
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
 #include "enums.hh"
+#include <ostream>
 
 namespace batchlas {
     namespace detail {
@@ -149,7 +150,7 @@ namespace batchlas {
     struct DenseMatHandle<T, BatchType::Single> {
         DenseMatHandle(T* data, int rows, int cols, int ld);
         ~DenseMatHandle();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
         // Accessors...
         T* data_;
@@ -176,7 +177,7 @@ namespace batchlas {
     struct DenseMatHandle<T, BatchType::Batched> {
         DenseMatHandle(T* data, int rows, int cols, int ld, int stride, int batch_size);
         ~DenseMatHandle();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
 
         // Accessors...
@@ -203,6 +204,7 @@ namespace batchlas {
     // Matrix view for batched operations
     template <typename T>
     struct DenseMatView<T, BatchType::Batched> {
+        DenseMatView();
         DenseMatView(T* data, int rows, int cols, int ld, int stride, int batch_size, Span<T*> data_ptrs);
         DenseMatView(const DenseMatView<T, BatchType::Batched>& view);
         DenseMatView(DenseMatView<T, BatchType::Batched>&& view);
@@ -219,7 +221,7 @@ namespace batchlas {
         DenseMatView<T, BatchType::Batched>& operator=(DenseMatHandle<T, BatchType::Batched>&& handle) = delete;
         
         ~DenseMatView();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
         // Accessors...
         T* data_; 
@@ -241,6 +243,7 @@ namespace batchlas {
     // Matrix view for single matrix operations
     template <typename T>
     struct DenseMatView<T, BatchType::Single> {
+        DenseMatView();
         DenseMatView(T* data, int rows, int cols, int ld);
         DenseMatView(const DenseMatView<T, BatchType::Single>& view);
         DenseMatView(DenseMatView<T, BatchType::Single>&& view);
@@ -257,7 +260,7 @@ namespace batchlas {
         DenseMatView<T, BatchType::Single>& operator=(DenseMatHandle<T, BatchType::Single>&& handle) = delete;
 
         ~DenseMatView();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
 
         // Accessors...
@@ -281,6 +284,19 @@ namespace batchlas {
         }
     }
 
+    template <template <typename T, BatchType BT>
+              class HandleType,
+              typename T,
+              BatchType BT>
+              auto subview(const HandleType<T, BT>& handle, int rows, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1) {
+        if constexpr (BT == BatchType::Single) {
+            return DenseMatView<T, BT>(handle.data_, rows, cols > 0 ? cols : handle.cols_, ld > 0 ? ld : handle.ld_);
+        } else {
+            return DenseMatView<T, BT>(handle.data_, rows, cols > 0 ? cols : handle.cols_, ld > 0 ? ld : handle.ld_, stride > 0 ? stride : handle.stride_, batch_size > 0 ? batch_size : handle.batch_size_, handle.data_ptrs_);
+        }
+    }
+
+
     // Deduction guides for DenseMatView
     template <typename T>
     DenseMatView(const DenseMatHandle<T, BatchType::Single>&) -> DenseMatView<T, BatchType::Single>;
@@ -303,7 +319,7 @@ namespace batchlas {
          */
         SparseMatHandle(T* data, int* row_offsets, int* col_indices, int nnz, int rows, int cols, Layout layout = Layout::RowMajor);
         ~SparseMatHandle();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
 
         // Raw pointers to externally owned memory
@@ -338,7 +354,7 @@ namespace batchlas {
             int nnz, int rows, int cols, int stride, int batch_size);
 
         ~SparseMatHandle();
-        void init(Queue& ctx);
+        void init(Queue& ctx) const;
         void init_backend();
 
         // Raw pointers to externally owned memory
@@ -415,29 +431,57 @@ namespace batchlas {
     // Utility functions
     //Uniform accessor for data
     template <template <typename, BatchType> class Handle, typename T, BatchType BT>
-    auto get_data(Handle<T,BT>& handle) {
+    auto get_data(const Handle<T,BT>& handle) {
         return handle.data_;
     }
     
     template <template <typename, BatchType> class Handle, typename T, BatchType BT, std::enable_if_t<BT == BatchType::Batched, int> = 0>
-    auto get_ptr_arr(Queue& ctx, Handle<T,BT>& handle) {
+    auto get_ptr_arr(Queue& ctx, const Handle<T,BT>& handle) {
         handle.init(ctx);
         return handle.data_ptrs_.data();
     }
 
     //Uniform accessor for data
     template <template <typename, Format, BatchType> class Handle, typename T, Format F, BatchType BT>
-    auto get_data(Handle<T,F,BT>& handle) {
+    auto get_data(const Handle<T,F,BT>& handle) {
         return handle.data_;
     }
 
     template <template <typename, BatchType> class Handle, typename T, BatchType BT>
-    auto get_batch_size(Handle<T,BT>& handle) {
+    auto get_batch_size(const Handle<T,BT>& handle) {
         if constexpr (BT == BatchType::Batched) {
             return handle.batch_size_;
         } else {
             return 1;
         }
+    }
+
+    template <template <typename, Format, BatchType> class Handle, typename T, Format F, BatchType BT>
+    auto get_batch_size(const Handle<T,F,BT>& handle) {
+        if constexpr (BT == BatchType::Batched) {
+            return handle.batch_size_;
+        } else {
+            return 1;
+        }
+    }
+
+    template <template <typename, BatchType> class Handle, typename T, BatchType BT>
+    std::ostream& operator<<(std::ostream& os, const Handle<T,BT>& handle) {
+        os << "DenseMatHandle: " << handle.data_ << ", rows: " << handle.rows_ << ", cols: " << handle.cols_ << ", ld: " << handle.ld_;
+        if constexpr (BT == BatchType::Batched) {
+            os << ", stride: " << handle.stride_ << ", batch_size: " << handle.batch_size_;
+        }
+        os << "\n";
+        os << "Data: ";
+        for (int i = 0; i < handle.rows_; ++i) {
+            for (int j = 0; j < handle.cols_; ++j) {
+                os << handle.data_[i*handle.ld_ + j] << " ";
+            }
+            os << "\n";
+        }
+        os << "\n";
+        
+        return os;
     }
 
     namespace detail {

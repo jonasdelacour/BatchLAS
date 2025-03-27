@@ -66,16 +66,6 @@ namespace batchlas{
     template<class T>
     struct is_complex_or_floating_point<std::complex<T>> : std::is_floating_point<T> { };
 
-    template<typename T>
-    struct base_type {
-        using type = T;
-    };
-
-    template<typename T>
-    struct base_type<std::complex<T>> {
-        using type = T;
-    };
-
     // Individual enum conversions for CUDA backend
     template<BackendLibrary B>
     constexpr auto enum_convert(Side side) {
@@ -355,7 +345,7 @@ namespace batchlas{
     namespace detail {
         template <BackendLibrary B, typename T>
         constexpr auto convert_arg(T&& arg) {
-            if constexpr (is_linalg_enum<std::remove_reference_t<T>>::value) {
+            if constexpr (is_linalg_enum<std::remove_const_t<std::remove_reference_t<T>>>::value) {
                 return enum_convert<B>(std::forward<T>(arg));
             } else if constexpr (std::is_integral_v<std::remove_reference_t<T>>) {
                 return std::forward<T>(arg);
@@ -686,15 +676,17 @@ namespace batchlas{
     }
 
     template <typename T>
-    void DenseMatHandle<T, BatchType::Single>::init(Queue& ctx){
+    void DenseMatHandle<T, BatchType::Single>::init(Queue& ctx)  const{
         //Currently nothing to do here.
     }
 
     template <typename T>
-    void DenseMatHandle<T, BatchType::Batched>::init(Queue& ctx){
+    void DenseMatHandle<T, BatchType::Batched>::init(Queue& ctx) const{
         //Certain algorithms require array of pointers to data rather than a single pointer + stride
         //Here we ensure that the data_ptrs_ array is correctly populated (lazily) and done so on the device provided by the context
-        if(data_ptrs_.capacity() < batch_size_) data_ptrs_.resize(batch_size_);
+        //if(data_ptrs_.capacity() < batch_size_) data_ptrs_.resize(batch_size_);
+        assert(data_ptrs_.size() == batch_size_);
+        assert(data_ != nullptr);
         auto data_ptrs = data_ptrs_.data();
         auto data = data_;
         auto stride = stride_;
@@ -704,12 +696,12 @@ namespace batchlas{
     }
 
     template <typename T>
-    void DenseMatView<T, BatchType::Single>::init(Queue& ctx){
+    void DenseMatView<T, BatchType::Single>::init(Queue& ctx) const{
        //Currently nothing to do here.
     }
 
     template <typename T>
-    void DenseMatView<T, BatchType::Batched>::init(Queue& ctx){
+    void DenseMatView<T, BatchType::Batched>::init(Queue& ctx) const {
         //Certain algorithms require array of pointers to data rather than a single pointer + stride
         //Here we ensure that the data_ptrs_ array is correctly populated (lazily) and done so on the device provided by the context
         //Allocation is done from outside to allow for persistent allocation across invocations
@@ -724,12 +716,12 @@ namespace batchlas{
     }
 
     template <typename T>
-    void SparseMatHandle<T, Format::CSR, BatchType::Batched>::init(Queue& ctx) {
+    void SparseMatHandle<T, Format::CSR, BatchType::Batched>::init(Queue& ctx) const {
         //Currently nothing to do here.
     }
 
     template <typename T>
-    void SparseMatHandle<T, Format::CSR, BatchType::Single>::init(Queue& ctx) {
+    void SparseMatHandle<T, Format::CSR, BatchType::Single>::init(Queue& ctx) const {
         //Currently nothing to do here.
     }
 
@@ -808,8 +800,14 @@ namespace batchlas{
     DenseMatView<T, BatchType::Single>& DenseMatView<T, BatchType::Single>::operator=(const DenseMatView<T, BatchType::Single>& view) = default;
 
     template <typename T>
+    DenseMatView<T, BatchType::Single>& DenseMatView<T, BatchType::Single>::operator=(DenseMatView<T, BatchType::Single>&& view) = default;
+
+    template <typename T>
     DenseMatView<T, BatchType::Batched>& DenseMatView<T, BatchType::Batched>::operator=(const DenseMatView<T, BatchType::Batched>& view) = default;
 
+    template <typename T>
+    DenseMatView<T, BatchType::Batched>& DenseMatView<T, BatchType::Batched>::operator=(DenseMatView<T, BatchType::Batched>&& view) = default;
+    
     template <typename T>
     DenseMatView<T, BatchType::Batched>& DenseMatView<T, BatchType::Batched>::operator=(const DenseMatHandle<T, BatchType::Batched>& handle) {
         data_ = handle.data_;
@@ -909,6 +907,11 @@ namespace batchlas{
     DenseMatView<T, BatchType::Batched>::DenseMatView(const DenseMatHandle<T, BatchType::Batched>& handle) 
         : data_(handle.data_), rows_(handle.rows_), cols_(handle.cols_), ld_(handle.ld_), stride_(handle.stride_), batch_size_(handle.batch_size_), layout_(handle.layout_), data_ptrs_(handle.data_ptrs_) {}
 
+    template <typename T>
+    DenseMatView<T, BatchType::Single>::DenseMatView() = default;
+
+    template <typename T>
+    DenseMatView<T, BatchType::Batched>::DenseMatView() = default;
 
     template struct DenseMatView<float, BatchType::Single>;
     template struct DenseMatView<float, BatchType::Batched>;
@@ -927,4 +930,13 @@ namespace batchlas{
     template struct DenseMatHandle<std::complex<float>, BatchType::Batched>;
     template struct DenseMatHandle<std::complex<double>, BatchType::Single>;
     template struct DenseMatHandle<std::complex<double>, BatchType::Batched>;
+
+    template struct SparseMatHandle<float, Format::CSR, BatchType::Single>;
+    template struct SparseMatHandle<float, Format::CSR, BatchType::Batched>;
+    template struct SparseMatHandle<double, Format::CSR, BatchType::Single>;
+    template struct SparseMatHandle<double, Format::CSR, BatchType::Batched>;
+    template struct SparseMatHandle<std::complex<float>, Format::CSR, BatchType::Single>;
+    template struct SparseMatHandle<std::complex<float>, Format::CSR, BatchType::Batched>;
+    template struct SparseMatHandle<std::complex<double>, Format::CSR, BatchType::Single>;
+    template struct SparseMatHandle<std::complex<double>, Format::CSR, BatchType::Batched>;
 }
