@@ -4,8 +4,19 @@
 #include <util/sycl-span.hh>
 #include "enums.hh"
 #include "matrix_handle.hh"
+#include <numeric>
+#include <limits>
 
 namespace batchlas {
+    template<typename T>
+    struct base_type {
+        using type = T;
+    };
+
+    template<typename T>
+    struct base_type<std::complex<T>> {
+        using type = T;
+    };
     // BLAS Level 3 operations
 
     /**
@@ -24,9 +35,9 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     Event gemm(Queue& ctx,
-        DenseMatView<T,BT> descrA,
-        DenseMatView<T,BT> descrB,
-        DenseMatView<T,BT> descrC,
+        const DenseMatView<T,BT>& descrA,
+        const DenseMatView<T,BT>& descrB,
+        const DenseMatView<T,BT>& descrC,
         T alpha,
         T beta,
         Transpose transA,        
@@ -245,4 +256,35 @@ namespace batchlas {
             Transpose transM,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
             size_t iterations = 2);
+
+    template <typename T>
+    struct SyevxParams {
+        using float_type = typename base_type<T>::type;
+        OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;  // Default orthogonalization algorithm
+        size_t ortho_iterations = 2;                       // Number of orthogonalization iterations
+        size_t iterations = 100;                         // Default number of iterations
+        size_t extra_directions = 0;                    // Number of extra search directions
+        bool find_largest = true;                      // Whether to find largest eigenvalues
+        T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());                 // Absolute tolerance
+        T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());                  // Relative tolerance
+    };
+
+    template <Backend B, typename T, Format F, BatchType BT>
+    Event syevx(Queue& ctx,
+                SparseMatHandle<T, F, BT>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz = JobType::NoEigenVectors,
+                const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
+                const SyevxParams<T>& params = SyevxParams<T>());
+
+    template <Backend B, typename T, Format F, BatchType BT>
+    size_t syevx_buffer_size(Queue& ctx,
+                SparseMatHandle<T, F, BT>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz = JobType::NoEigenVectors,
+                const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
+                const SyevxParams<T>& params = SyevxParams<T>());
 }
