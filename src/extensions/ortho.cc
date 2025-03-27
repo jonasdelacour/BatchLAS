@@ -12,7 +12,7 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event ortho(Queue& ctx,
-                    DenseMatView<T,BT> A,
+                    const DenseMatView<T,BT>& A,
                     Transpose transA,
                     Span<std::byte> workspace,
                     OrthoAlgorithm algo) {
@@ -88,7 +88,7 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     size_t ortho_buffer_size(Queue& ctx,
-                             DenseMatView<T,BT> A,
+                             const DenseMatView<T,BT>& A,
                              Transpose transA,
                              OrthoAlgorithm algo) {
         size_t size = 0;
@@ -100,8 +100,8 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event ortho(Queue& ctx,
-                    DenseMatView<T,BT> A,
-                    DenseMatView<T,BT> M,
+                    const DenseMatView<T,BT>& A,
+                    const DenseMatView<T,BT>& M,
                     Transpose transA,
                     Transpose transM,
                     Span<std::byte> workspace,
@@ -115,7 +115,9 @@ namespace batchlas {
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto k = transA == Transpose::NoTrans ? A.rows_ : A.cols_;
-        assert(nA + nM <= k);
+        if(nA + nM > k){
+            throw std::runtime_error("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
+        }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
 
         auto inv_transA = transA == Transpose::Trans ? Transpose::NoTrans : Transpose::Trans;
@@ -137,8 +139,8 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     size_t ortho_buffer_size(Queue& ctx,
-                             DenseMatView<T,BT> A,
-                             DenseMatView<T,BT> M,
+                             const DenseMatView<T,BT>& A,
+                             const DenseMatView<T,BT>& M,
                              Transpose transA,
                              Transpose transM,
                              OrthoAlgorithm algo,
@@ -152,14 +154,14 @@ namespace batchlas {
     #define ORTHO_INSTANTIATE(fp, BT) \
     template Event ortho<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Transpose, \
         Span<std::byte>, \
         OrthoAlgorithm); \
     template Event ortho<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         Transpose, \
         Transpose, \
         Span<std::byte>, \
@@ -167,13 +169,13 @@ namespace batchlas {
         size_t); \
     template size_t ortho_buffer_size<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Transpose, \
         OrthoAlgorithm); \
     template size_t ortho_buffer_size<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         Transpose, \
         Transpose, \
         OrthoAlgorithm, \

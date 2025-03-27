@@ -11,9 +11,9 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event gemm(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
-                   DenseMatView<T,BT> descrB,
-                   DenseMatView<T,BT> descrC,
+                   const DenseMatView<T,BT>& descrA,
+                   const DenseMatView<T,BT>& descrB,
+                   const DenseMatView<T,BT>& descrC,
                    T alpha,
                    T beta,
                    Transpose transA,
@@ -55,8 +55,8 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event trsm(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
-                   DenseMatView<T,BT> descrB,
+                   const DenseMatView<T,BT>& descrA,
+                   const DenseMatView<T,BT>& descrB,
                    Side side,
                    Uplo uplo,
                    Transpose transA,
@@ -80,16 +80,16 @@ namespace batchlas {
     #define GEMM_INSTANTIATE(fp, BT) \
     template Event gemm<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         fp, fp, Transpose, Transpose, ComputePrecision);
 
     #define TRSM_INSTANTIATE(fp, BT) \
     template Event trsm<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         Side, Uplo, Transpose, Diag, fp);
 
     #define BLAS_LEVEL3_INSTANTIATE(fp, BT) \

@@ -18,7 +18,7 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     size_t potrf_buffer_size(Queue& ctx,
-                            DenseMatView<T,BT> A,
+                            const DenseMatView<T,BT>& A,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
@@ -35,7 +35,7 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event potrf(Queue& ctx,
-                    DenseMatView<T,BT> descrA,
+                    const DenseMatView<T,BT>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {        
         static LinalgHandle<B> handle;
@@ -58,8 +58,8 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     Event syev(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
-                   Span<T> eigenvalues,
+                   const DenseMatView<T,BT>& descrA,
+                   Span<typename base_type<T>::type> eigenvalues,
                    JobType jobtype,
                    Uplo uplo,
                    Span<std::byte> workspace) {
@@ -137,8 +137,8 @@ namespace batchlas {
 
     template <Backend B, typename T, BatchType BT>
     size_t syev_buffer_size(Queue& ctx,
-                            DenseMatView<T,BT> descrA,                            
-                            Span<T> eigenvalues,
+                            const DenseMatView<T,BT>& descrA,                            
+                            Span<typename base_type<T>::type> eigenvalues,
                             JobType jobtype,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
@@ -168,21 +168,21 @@ namespace batchlas {
     #define POTRF_INSTANTIATE(fp, BT) \
     template Event potrf<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Uplo, \
         Span<std::byte>);
     
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp, BT) \
     template size_t potrf_buffer_size<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Uplo);
 
     #define SYEV_INSTANTIATE(fp, BT) \
     template Event syev<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        Span<fp>, \
+        const DenseMatView<fp, BT>&, \
+        Span<typename base_type<fp>::type>, \ 
         JobType, \
         Uplo, \
         Span<std::byte>);
@@ -190,8 +190,8 @@ namespace batchlas {
     #define SYEV_BUFFER_SIZE_INSTANTIATE(fp, BT) \
     template size_t syev_buffer_size<Backend::CUDA, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        Span<fp>, \
+        const DenseMatView<fp, BT>&, \
+        Span<typename base_type<fp>::type>, \
         JobType, \
         Uplo);
 

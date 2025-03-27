@@ -12,9 +12,9 @@ namespace batchlas{
     
     template <Backend B, typename T, BatchType BT>
     Event gemm(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
-                   DenseMatView<T,BT> descrB,
-                   DenseMatView<T,BT> descrC,
+                   const DenseMatView<T,BT>& descrA,
+                   const DenseMatView<T,BT>& descrB,
+                   const DenseMatView<T,BT>& descrC,
                    T alpha,
                    T beta,
                    Transpose transA,
@@ -53,8 +53,8 @@ namespace batchlas{
 
     template <Backend B, typename T, BatchType BT>
     Event trsm(Queue& ctx,
-        DenseMatView<T,BT> descrA,
-        DenseMatView<T,BT> descrB,
+        const DenseMatView<T,BT>& descrA,
+        const DenseMatView<T,BT>& descrB,
         Side side,
         Uplo uplo,
         Transpose transA,
@@ -88,7 +88,7 @@ namespace batchlas{
 
     template <Backend B, typename T, BatchType BT>
     Event potrf(Queue& ctx,
-                    DenseMatView<T,BT> descrA,
+                    const DenseMatView<T,BT>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {
         if constexpr (BT == BatchType::Single) {
@@ -110,7 +110,7 @@ namespace batchlas{
 
     template <Backend B, typename T, BatchType BT>
     Event syev(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
+                   const DenseMatView<T,BT>& descrA,
                    Span<T> eigenvalues,
                    JobType jobtype,
                    Uplo uplo,
@@ -137,7 +137,7 @@ namespace batchlas{
 
     template <Backend B, typename T, BatchType BT>
     size_t syev_buffer_size(Queue& ctx,
-                   DenseMatView<T,BT> descrA,
+                   const DenseMatView<T,BT>& descrA,
                    Span<T> eigenvalues,
                    JobType jobtype,
                    Uplo uplo) {
@@ -148,28 +148,28 @@ namespace batchlas{
     #define GEMM_INSTANTIATE(fp, BT) \
     template Event gemm<Backend::NETLIB, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         fp, fp, Transpose, Transpose, ComputePrecision);
 
     #define TRSM_INSTANTIATE(fp, BT) \
     template Event trsm<Backend::NETLIB, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
+        const DenseMatView<fp, BT>&, \
         Side, Uplo, Transpose, Diag, fp);
 
     #define POTRF_INSTANTIATE(fp, BT) \
     template Event potrf<Backend::NETLIB, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Uplo, Span<std::byte>);
 
     #define SYEV_INSTANTIATE(fp, BT) \
     template Event syev<Backend::NETLIB, fp, BT>( \
         Queue&, \
-        DenseMatView<fp, BT>, \
+        const DenseMatView<fp, BT>&, \
         Span<fp>, JobType, Uplo, Span<std::byte>);
 
     #define BLAS_LEVEL3_INSTANTIATE(fp, BT) \

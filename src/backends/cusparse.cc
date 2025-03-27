@@ -13,8 +13,8 @@ namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
     Event spmm(Queue& ctx,
                    SparseMatHandle<T, F, BT>& descrA,
-                   DenseMatView<T,BT> descrB,
-                   DenseMatView<T,BT> descrC,
+                   DenseMatView<T,BT>& descrB,
+                   DenseMatView<T,BT>& descrC,
                    T alpha,
                    T beta,
                    Transpose transA,
@@ -47,8 +47,8 @@ namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
     size_t spmm_buffer_size(Queue& ctx,
                             SparseMatHandle<T, F, BT>& descrA,
-                            DenseMatView<T,BT> descrB,
-                            DenseMatView<T,BT> descrC,
+                            DenseMatView<T,BT>& descrB,
+                            DenseMatView<T,BT>& descrC,
                             T alpha,
                             T beta,
                             Transpose transA,
@@ -79,16 +79,16 @@ namespace batchlas {
     template Event spmm<Backend::CUDA, fp, F, BT>( \
         Queue&, \
         SparseMatHandle<fp, F, BT>&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        DenseMatView<fp, BT>&, \
+        DenseMatView<fp, BT>&, \
         fp, fp, Transpose, Transpose, Span<std::byte>);
     
     #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F, BT) \
     template size_t spmm_buffer_size<Backend::CUDA, fp, F, BT>( \
         Queue&, \
         SparseMatHandle<fp, F, BT>&, \
-        DenseMatView<fp, BT>, \
-        DenseMatView<fp, BT>, \
+        DenseMatView<fp, BT>&, \
+        DenseMatView<fp, BT>&, \
         fp, fp, Transpose, Transpose);
 
     #define CUSPARSE_INSTANTIATE(fp, F, BT) \

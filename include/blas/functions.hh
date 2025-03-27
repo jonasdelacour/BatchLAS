@@ -50,8 +50,8 @@ namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
     Event spmm(Queue& ctx,
         SparseMatHandle<T, F, BT>& descrA,
-        DenseMatView<T,BT> descrB,
-        DenseMatView<T,BT> descrC,
+        DenseMatView<T,BT>& descrB,
+        DenseMatView<T,BT>& descrC,
         T alpha,
         T beta,
         Transpose transA,
@@ -74,8 +74,8 @@ namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
     size_t spmm_buffer_size(Queue& ctx,
         SparseMatHandle<T, F, BT>& descrA,
-        DenseMatView<T,BT> descrB,
-        DenseMatView<T,BT> descrC,
+        DenseMatView<T,BT>& descrB,
+        DenseMatView<T,BT>& descrC,
         T alpha,
         T beta,
         Transpose transA,        
@@ -96,8 +96,8 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     Event trsm(Queue& ctx,
-        DenseMatView<T,BT> descrA,
-        DenseMatView<T,BT> descrB,
+        const DenseMatView<T,BT>& descrA,
+        const DenseMatView<T,BT>& descrB,
         Side side,
         Uplo uplo,
         Transpose transA,
@@ -116,7 +116,7 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     size_t potrf_buffer_size(Queue& ctx,
-                        DenseMatView<T,BT> A,
+                        const DenseMatView<T,BT>& A,
                         Uplo uplo);
 
     /**
@@ -130,7 +130,7 @@ namespace batchlas {
      */ 
     template <Backend B, typename T, BatchType BT>
     Event potrf(Queue& ctx,
-            DenseMatView<T,BT> descrA,
+            const DenseMatView<T,BT>& descrA,
             Uplo uplo,
             Span<std::byte> workspace);
 
@@ -140,14 +140,16 @@ namespace batchlas {
      * @param ctx Execution context/device queue
      * @param descrA Symmetric matrix, overwritten with eigenvectors
      * @param eigenvalues Output array for eigenvalues
+     * @param jobtype Job type for the operation
      * @param uplo Whether to use upper or lower triangle of A
      * @param workspace Pre-allocated workspace buffer
      * @return Event Event to track operation completion
      */
     template <Backend B, typename T, BatchType BT>
     Event syev(Queue& ctx,
-            DenseMatView<T,BT> descrA, //A is overwritten with eigenvectors
-            Span<T> eigenvalues,
+            const DenseMatView<T,BT>& descrA, //A is overwritten with eigenvectors
+            Span<typename base_type<T>::type> eigenvalues,
+            JobType jobtype,
             Uplo uplo,
             Span<std::byte> workspace);
 
@@ -157,13 +159,15 @@ namespace batchlas {
      * @param ctx Execution context/device queue
      * @param A Symmetric matrix
      * @param eigenvalues Output array for eigenvalues
+     * @param jobtype Job type for the operation
      * @param uplo Whether to use upper or lower triangle of A
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, BatchType BT>
     size_t syev_buffer_size(Queue& ctx,
-            DenseMatView<T,BT> A,
-            Span<T> eigenvalues,
+            const DenseMatView<T,BT>& A,
+            Span<typename base_type<T>::type> eigenvalues,
+            JobType jobtype,
             Uplo uplo);
 
     /**
@@ -178,7 +182,7 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     Event ortho(Queue& ctx,
-            DenseMatView<T,BT> A, //A is overwritten with orthogonal vectors
+            const DenseMatView<T,BT>& A, //A is overwritten with orthogonal vectors
             Transpose transA,
             Span<std::byte> workspace,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
@@ -198,8 +202,8 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     Event ortho(Queue& ctx,
-            DenseMatView<T,BT> A, //A is overwritten with orthogonal vectors
-            DenseMatView<T,BT> M, //External metric
+            const DenseMatView<T,BT>& A, //A is overwritten with orthogonal vectors
+            const DenseMatView<T,BT>& M, //External metric
             Transpose transA,
             Transpose transM,
             Span<std::byte> workspace,
@@ -217,7 +221,7 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     size_t ortho_buffer_size(Queue& ctx,
-            DenseMatView<T,BT> A,
+            const DenseMatView<T,BT>& A,
             Transpose transA,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
@@ -235,8 +239,8 @@ namespace batchlas {
      */
     template <Backend B, typename T, BatchType BT>
     size_t ortho_buffer_size(Queue& ctx,
-            DenseMatView<T,BT> A,
-            DenseMatView<T,BT> M,
+            const DenseMatView<T,BT>& A,
+            const DenseMatView<T,BT>& M,
             Transpose transA,
             Transpose transM,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
