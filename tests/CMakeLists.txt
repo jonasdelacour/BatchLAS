@@ -22,6 +22,7 @@ set(TEST_TARGETS
     util_vector_tests
     util_device_queue_tests
     blas_operations_tests
+    syevx_tests
 )
 
 # Create test executables
