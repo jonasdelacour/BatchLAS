@@ -248,6 +248,8 @@ template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::arr
 
 template std::ostream& operator<<(std::ostream& os, const Span<float>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<double>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::complex<float>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::complex<double>>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<uint16_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<uint32_t>& vec);
 
