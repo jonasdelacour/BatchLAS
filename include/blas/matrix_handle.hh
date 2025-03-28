@@ -351,7 +351,7 @@ namespace batchlas {
          * @param batch_size Number of matrices in batch
          */
         SparseMatHandle(T* data, int* row_offsets, int* col_indices, 
-            int nnz, int rows, int cols, int stride, int batch_size);
+            int nnz, int rows, int cols, int matrix_stride, int offset_stride, int batch_size);
 
         ~SparseMatHandle();
         void init(Queue& ctx) const;
@@ -362,7 +362,7 @@ namespace batchlas {
         int* row_offsets_;     // [batch_size * (rows + 1)] row offsets
         int* col_indices_;     // [batch_size * nnz] column indices
         
-        int nnz_, rows_, cols_, stride_, batch_size_;
+        int nnz_, rows_, cols_, matrix_stride_, offset_stride_, batch_size_;
         Layout layout_ = Layout::RowMajor;
 
         BackendSparseMatrixHandle<T, Format::CSR>* operator->();

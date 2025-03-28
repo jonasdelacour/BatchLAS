@@ -625,10 +625,10 @@ namespace batchlas{
                 #endif
             }
 
-            BackendSparseMatrixHandle(int nnz, int rows, int cols, int* row_offsets, int* col_indices, T* values, Layout layout, int stride, int batch_size) {
+            BackendSparseMatrixHandle(int nnz, int rows, int cols, int* row_offsets, int* col_indices, T* values, Layout layout, int matrix_stride, int offset_stride, int batch_size) {
                 #ifdef BATCHLAS_HAS_CUDA_BACKEND
                     cusparseCreateCsr(&descr_, rows, cols, nnz, row_offsets, col_indices, values, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<T, Backend::CUDA>::type);
-                    cusparseCsrSetStridedBatch(descr_, batch_size, stride, stride);
+                    cusparseCsrSetStridedBatch(descr_, batch_size, offset_stride, matrix_stride);
                 #endif
             }
 
@@ -651,7 +651,7 @@ namespace batchlas{
     template <typename T>
     void SparseMatHandle<T, Format::CSR, BatchType::Batched>::init_backend(){
         if(!backend_handle_){
-            backend_handle_ = std::make_unique<BackendSparseMatrixHandle<T, Format::CSR>>(nnz_, rows_, cols_, row_offsets_, col_indices_, data_, layout_, stride_, batch_size_);
+            backend_handle_ = std::make_unique<BackendSparseMatrixHandle<T, Format::CSR>>(nnz_, rows_, cols_, row_offsets_, col_indices_, data_, layout_, matrix_stride_, offset_stride_, batch_size_);
         }
     }
 
@@ -735,8 +735,8 @@ namespace batchlas{
     
         
     template <typename T>
-    SparseMatHandle<T, Format::CSR, BatchType::Batched>::SparseMatHandle(T* data, int* row_offsets, int* col_indices, int nnz, int rows, int cols, int stride, int batch_size) 
-        : data_(data), row_offsets_(row_offsets), col_indices_(col_indices), nnz_(nnz), rows_(rows), cols_(cols), stride_(stride), batch_size_(batch_size) {}
+    SparseMatHandle<T, Format::CSR, BatchType::Batched>::SparseMatHandle(T* data, int* row_offsets, int* col_indices, int nnz, int rows, int cols, int matrix_stride, int offset_stride, int batch_size) 
+        : data_(data), row_offsets_(row_offsets), col_indices_(col_indices), nnz_(nnz), rows_(rows), cols_(cols), matrix_stride_(matrix_stride), offset_stride_(offset_stride), batch_size_(batch_size) {}
         
     template <typename T>
     DenseMatHandle<T, BatchType::Single>::DenseMatHandle(T* data, int rows, int cols, int ld) 
