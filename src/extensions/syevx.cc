@@ -94,7 +94,6 @@ namespace batchlas {
                 }
             });
         });
-        ctx -> wait();
 
         //Orthonormalize initial vectors
         ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
@@ -104,11 +103,9 @@ namespace batchlas {
         gemm<B>(ctx, X, AX, XtAX, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
         //Solve the eigenvalue problem
         syev<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
-        
         //Update X and corresponding implicit update of AX
         gemm<B>(ctx, X, XtAX, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
         gemm<B>(ctx, AX, XtAX, AX_new , T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-
         ctx -> submit([&](sycl::handler& h){
             h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*block_vectors)}, sycl::range{size_t(block_vectors)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
@@ -175,6 +172,7 @@ namespace batchlas {
                     }
                 });
             });
+
 
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
 
@@ -253,8 +251,6 @@ namespace batchlas {
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
         }
-        ctx -> wait();
-        std::cout << "Residuals: " << best_residuals << std::endl;
        return ctx.get_event();
 
     }
