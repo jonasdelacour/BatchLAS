@@ -10,6 +10,10 @@
 
 namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
+    struct SyevxResidualsKernel;
+
+
+    template <Backend B, typename T, Format F, BatchType BT>
     Event syevx(Queue& ctx,
                 SparseMatHandle<T, F, BT>& A,
                 Span<typename base_type<T>::type> W, //Output eigenvalues
@@ -19,6 +23,7 @@ namespace batchlas {
                 const DenseMatView<T, BT>& V, //Output eigenvectors for jobz == JobType::EigenVectors
                 const SyevxParams<T>& params 
         ) {
+        using float_type = typename base_type<T>::type;
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
         auto block_vectors = neigs + params.extra_directions;
@@ -124,6 +129,14 @@ namespace batchlas {
         });
         swap_subspace();
         bool restart = true;
+
+        auto residual_kernel_id = sycl::get_kernel_id<SyevxResidualsKernel<B,T,F,BT>>();
+        auto residual_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx -> get_context(), {residual_kernel_id});
+        auto residual_kernel = residual_bundle.get_kernel(residual_kernel_id);
+        size_t residual_max_wg_size = residual_kernel.template get_info<sycl::info::kernel_device_specific::work_group_size>(ctx -> get_device());
+        size_t residual_wg_size = std::min(residual_max_wg_size, size_t(n));
+
+
         //Compute R = AX - X * diag(lambdas)
         for(int it = 0; it < params.iterations; it++){
             int Nvecs = restart ? block_vectors * 2 : block_vectors * 3;
@@ -132,7 +145,8 @@ namespace batchlas {
                 auto Rdata = get_data(R);
                 auto Xdata = get_data(X);
                 auto AXdata = get_data(AX);
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*n)}, sycl::range{size_t(n)}), [=](sycl::nd_item<1> item){
+                auto smem = sycl::local_accessor<float_type>(n,h);
+                h.parallel_for<SyevxResidualsKernel<B,T,F,BT>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
                     auto tid = item.get_local_linear_id();
@@ -152,14 +166,18 @@ namespace batchlas {
                         auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - eigvect_id) : eigvect_id];
                         blockR[i] = blockAX[i] - blockX[i] * eigval;
                     }
-                    using float_type = typename base_type<T>::type;
+                    
                     for (int i = 0; i < neigs; i++){
                         if constexpr (sycl::detail::is_complex<T>::value){
-                            blockresiduals[i] = sycl::sqrt((sycl::reduce_over_group(cta, (blockR[i*n + tid]).real() * (blockR[i*n + tid]).real(), sycl::plus<float_type>())));
-                            blockresiduals[i] /= sycl::sqrt(reduce_over_group(cta, blockX[i*n + tid].real()*blockX[i*n + tid].real(), sycl::plus<float_type>{})) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                            smem[tid] = blockR[i*n + tid].real() * blockR[i*n + tid].real();
+                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
+                            smem[tid] = blockX[i*n + tid].real() * blockX[i*n + tid].real();
+                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
                         } else {
-                            blockresiduals[i] = sycl::sqrt((sycl::reduce_over_group(cta, (blockR[i*n + tid]) * (blockR[i*n + tid]), sycl::plus<float_type>())));
-                            blockresiduals[i] /= sycl::sqrt(reduce_over_group(cta, blockX[i*n + tid]*blockX[i*n + tid], sycl::plus<float_type>{})) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                            smem[tid] = blockR[i*n + tid] * blockR[i*n + tid];
+                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
+                            smem[tid] = blockX[i*n + tid] * blockX[i*n + tid];
+                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
                         }
                     }
                     if (tid < neigs){
@@ -179,7 +197,7 @@ namespace batchlas {
             if (restart){
                 ctx -> submit([&](sycl::handler& h){
                     auto Sdata = get_data(S);
-                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*n)}, sycl::range{size_t(n)}), [=](sycl::nd_item<1> item){
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*128)}, sycl::range{size_t(128)}), [=](sycl::nd_item<1> item){
                         auto tid = item.get_local_linear_id();
                         auto bid = item.get_group_linear_id();
                         auto cta = item.get_group();
