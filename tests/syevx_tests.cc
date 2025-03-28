@@ -122,6 +122,7 @@ TEST_F(SyevxOperationsTest, SyevxSparseOperation) {
         rows,
         rows,
         total_nnz,
+        rows+1,
         batch_size);
 
     SyevxParams<float> params;
