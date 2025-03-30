@@ -150,7 +150,7 @@ double benchmark_syevx(Queue& ctx, size_t n, size_t batch_size, size_t neigs, do
     
     // Report results
     double time_seconds = elapsed.count();
-    std::cout << "  Time: " << time_seconds << " seconds" << std::endl;
+    std::cout << "  Execution time: " << time_seconds << " seconds" << std::endl;
     std::cout << "  Matrix generation time: " << elapsed_gen_secs << " seconds" << std::endl;
     std::cout << "  Memory allocation time: " << elapsed_mem_secs << " seconds" << std::endl;
     std::cout << "  Total time: " << (elapsed_gen_secs + elapsed_mem_secs + time_seconds) << " seconds" << std::endl;
