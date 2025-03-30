@@ -4,6 +4,10 @@ cmake-build*/
 out/
 .vs/
 
+# Output files
+scripts/plots/
+scripts/*.csv
+
 # Compiled Object files
 *.o
 *.obj
