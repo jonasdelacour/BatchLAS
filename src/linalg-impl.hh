@@ -913,6 +913,15 @@ namespace batchlas{
     template <typename T>
     DenseMatView<T, BatchType::Batched>::DenseMatView() = default;
 
+    template <typename KernelName>
+    size_t get_kernel_max_wg_size(const Queue& ctx){
+        auto kernel_id = sycl::get_kernel_id<KernelName>();
+        auto kernel_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx -> get_context(), {kernel_id});
+        auto kernel = kernel_bundle.get_kernel(kernel_id);
+        return kernel.template get_info<sycl::info::kernel_device_specific::work_group_size>(ctx -> get_device());
+    }
+
+
     template struct DenseMatView<float, BatchType::Single>;
     template struct DenseMatView<float, BatchType::Batched>;
     template struct DenseMatView<double, BatchType::Single>;
