@@ -11,6 +11,8 @@
 namespace batchlas {
     template <Backend B, typename T, Format F, BatchType BT>
     struct SyevxResidualsKernel;
+    template <Backend B, typename T, Format F, BatchType BT>
+    struct RandomInitializationKernel;
 
 
     template <Backend B, typename T, Format F, BatchType BT>
@@ -84,8 +86,10 @@ namespace batchlas {
             std::swap(AR, AR_new);
         };
 
+        auto initialization_wg_size = std::min(get_kernel_max_wg_size<RandomInitializationKernel<B,T,F,BT>>(ctx), size_t(n));
+
         ctx -> submit([&](sycl::handler& h ){
-            h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*n)}, sycl::range{size_t(n)}), [=](sycl::nd_item<1> item){
+            h.parallel_for<RandomInitializationKernel<B,T,F,BT>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*initialization_wg_size)}, sycl::range{size_t(initialization_wg_size)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 sycl::group<1> cta = item.get_group();
                 auto bid = item.get_group_linear_id();
@@ -111,30 +115,11 @@ namespace batchlas {
         //Update X and corresponding implicit update of AX
         gemm<B>(ctx, X, XtAX, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
         gemm<B>(ctx, AX, XtAX, AX_new , T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-        ctx -> submit([&](sycl::handler& h){
-            h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*block_vectors)}, sycl::range{size_t(block_vectors)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
-                sycl::group<1> cta = item.get_group();
-                auto bid = item.get_group_linear_id();
-                //Copy the right eigenvalues to the output W from lambdas
-                auto blockLambdas = lambdas.subspan(bid * (neigs + params.extra_directions), neigs + params.extra_directions);
-                auto blockW = W.subspan(bid * (neigs), neigs);
 
-                sycl::group_barrier(cta);
-                for (int i = tid; i < neigs; i+=cta.get_local_range(0)){
-                    blockW[i] = blockLambdas[params.find_largest ? (neigs + params.extra_directions - 1 - i) : i];
-                }
-                
-            });
-        });
         swap_subspace();
         bool restart = true;
 
-        auto residual_kernel_id = sycl::get_kernel_id<SyevxResidualsKernel<B,T,F,BT>>();
-        auto residual_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx -> get_context(), {residual_kernel_id});
-        auto residual_kernel = residual_bundle.get_kernel(residual_kernel_id);
-        size_t residual_max_wg_size = residual_kernel.template get_info<sycl::info::kernel_device_specific::work_group_size>(ctx -> get_device());
-        size_t residual_wg_size = std::min(residual_max_wg_size, size_t(n));
+        size_t residual_wg_size = std::min(get_kernel_max_wg_size<SyevxResidualsKernel<B,T,F,BT>>(ctx), size_t(n));
 
 
         //Compute R = AX - X * diag(lambdas)
