@@ -1,6 +1,21 @@
 cmake_minimum_required(VERSION 3.14)
 project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
 
+# Set default build type to Release if not specified
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING
+        "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
+endif()
+
+# Print the build type
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+# Define compile flags for different build types
+set(CMAKE_CXX_FLAGS_DEBUG "-g -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+
 # Include CMakeDependentOption module
 include(CMakeDependentOption)
 
@@ -236,7 +251,7 @@ function(find_nvidia_libs)
                 string(REGEX REPLACE "(.*nvhpc)/.*" "\\1" POTENTIAL_HPC_SDK_BASE "${CUDA_PATH}")
                 if(EXISTS "${POTENTIAL_HPC_SDK_BASE}")
                     set(NVIDIA_HPC_SDK_BASE "${POTENTIAL_HPC_SDK_BASE}")
-                    message(STATUS "Detected NVIDIA HPC SDK installation at: ${NVIDIA_HPC_SDK_BASE}")
+                    message(STATUS "Detected NVIDIA HPC SDK installation at: ${POTENTIAL_HPC_SDK_BASE}")
                 endif()
             endif()
             
