@@ -24,6 +24,8 @@ set(TEST_TARGETS
     blas_operations_tests
     syevx_tests
     syevx_benchmark
+    ortho_benchmark
+    gemv_operations_tests
 )
 
 # Create test executables
