@@ -6,9 +6,14 @@
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
+#include <numeric>
+#include <algorithm>
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 namespace batchlas {
+
+    template <Backend B, typename T, BatchType BT>
+    struct OrthoNormalizeVector {};
 
     template <Backend B, typename T, BatchType BT>
     Event ortho(Queue& ctx,
@@ -18,7 +23,7 @@ namespace batchlas {
                     OrthoAlgorithm algo) {
         //If transA == NoTrans we find the orthonormal basis of the column space
         //Else we find the orthonormal basis of the row space
-
+        using float_t = base_type<T>::type;
         static LinalgHandle<B> handle;
         auto batch_size = get_batch_size(A);
         handle.setStream(ctx);
@@ -81,6 +86,52 @@ namespace batchlas {
             trsm<B>(ctx, C, A, Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, T(1.0));
             chol_alg();
             chol_alg();
+        } else if (algo == OrthoAlgorithm::Householder) {
+            throw std::runtime_error("Householder is not implemented yet");
+        } else if (algo == OrthoAlgorithm::GramSchmidt) {
+            //Implemented as an iterative process:
+            //1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
+            //2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
+            //3. Normalize A[:,0 .. k-1]
+            //Repeat until all vectors are orthogonal
+            auto Ymem = pool.allocate<T>(ctx, batch_size * m);
+            auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T, BT>>(ctx), size_t(m));
+            for (int i = 0; i < k; i++){
+                //View of the first i vectors (either columns or rows of A depending on transA)
+                auto A_i = transA == Transpose::NoTrans ? create_view<T, BT>(A.data_, m, i, m, get_stride(A), get_batch_size(A), Span<T*>()) : create_view<T, BT>(A.data_, i, m, m, get_stride(A), get_batch_size(A), Span<T*>());
+                //View of the next vector (either column or row of A depending on transA)
+                auto C = create_vec<T, BT>(Ymem.data(), i, 1, i, get_batch_size(A));
+                auto A_next = create_vec<T, BT>(A.data_ + m * i, m, 1, get_stride(A), get_batch_size(A));
+                //output vector
+                if (i > 0){ //If it's the first vector we just need to normalize it
+                    gemv<B>(ctx, A_i, A_next, C, T(1.0), T(0.0), inv_trans);
+                    gemv<B>(ctx, A_i, C, A_next, T(-1.0), T(1.0), transA);
+                }
+                auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
+                //Normalize A_i
+                ctx -> submit([&](sycl::handler& h){
+                    auto Anext_ptr = get_data(A_next);
+                    auto Anext_squared = sycl::local_accessor<float_t, 1>(sycl::range<1>(m), h);
+                    h.parallel_for<OrthoNormalizeVector<B, T, BT>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), [=](sycl::nd_item<1> item){
+                        auto tid = item.get_local_linear_id();
+                        auto bid = item.get_group_linear_id();
+                        auto cta = item.get_group();
+                        auto A_local_vector = Span<T>(Anext_ptr + bid * m, m);
+                        float_t norm = float_t(0.0);
+                        for (int j = tid; j < m; j+= cta.get_local_linear_range()){
+                            Anext_squared[j] = real_part(A_local_vector[j]) * real_part(A_local_vector[j]);
+                        }
+                        
+                        norm = std::sqrt(sycl::joint_reduce(cta, Anext_squared.begin(), Anext_squared.end(), sycl::plus<float_t>()));
+
+                        for (int j = tid; j < m; j+= cta.get_local_linear_range()){
+                            A_local_vector[j] /= norm;
+                        }
+                    });
+                });
+            }
+        } else {
+            throw std::runtime_error("Unknown orthogonalization algorithm");
         }
         
         return ctx.get_event();
@@ -95,7 +146,8 @@ namespace batchlas {
         auto [m, k] = get_effective_dims(A, transA);
         return  BumpAllocator::allocation_size<std::byte>(ctx, potrf_buffer_size<B>(ctx, create_view<T, BT>(A.data_, m, k, m, m*k, get_batch_size(A), Span<T*>{}), Uplo::Lower)) + 
         2*BumpAllocator::allocation_size<T*>(ctx, get_batch_size(A)) + 
-        BumpAllocator::allocation_size<T>(ctx, k*k*get_batch_size(A));
+        BumpAllocator::allocation_size<T>(ctx, k*k*get_batch_size(A)) +
+        BumpAllocator::allocation_size<T>(ctx, m*get_batch_size(A));
     }
 
     template <Backend B, typename T, BatchType BT>
