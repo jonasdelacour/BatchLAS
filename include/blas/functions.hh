@@ -69,6 +69,33 @@ namespace batchlas {
         Transpose transB,
         Span<std::byte> workspace);
 
+
+    /**
+     * @brief Batch generalized matrix-vector multiplication: y = alpha * op(A) * x + beta * y.
+     *
+     * @tparam B The backend to use for the computation (e.g., CPU, GPU)
+     * @tparam T The data type of the matrix and vectors (e.g., float, double)
+     * @tparam BT The batch type (e.g., Strided, Array)
+     * 
+     * @param ctx The queue to execute the operation on
+     * @param descrA View of the dense matrix A
+     * @param descrX Handle to the dense vector x
+     * @param descrY Handle to the dense vector y (input/output)
+     * @param alpha Scalar multiplier for op(A) * x
+     * @param beta Scalar multiplier for y
+     * @param transA Transpose operation to apply to matrix A
+     * 
+     * @return Event object representing the completion of this operation
+     */
+    template <Backend B, typename T, BatchType BT>
+    Event gemv(Queue& ctx,
+        const DenseMatView<T,BT>& descrA,
+        const DenseVecHandle<T,BT>& descrX,
+        const DenseVecHandle<T,BT>& descrY,
+        T alpha,
+        T beta,
+        Transpose transA);
+
     /**
      * @brief Get required buffer size for spmm operation
      * 

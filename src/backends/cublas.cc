@@ -54,6 +54,30 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, BatchType BT>
+    Event gemv(Queue& ctx,
+        const DenseMatView<T,BT>& descrA,
+        const DenseVecHandle<T,BT>& descrX,
+        const DenseVecHandle<T,BT>& descrY,
+        T alpha,
+        T beta,
+        Transpose transA) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = descrA.rows_;
+        auto n = descrA.cols_;
+        auto batch_size = get_batch_size(descrA);
+        
+        if constexpr (BT == BatchType::Single) {
+            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemv, cublasDgemv, cublasCgemv, cublasZgemv,
+                handle, transA, m, n, &alpha, descrA.data_, descrA.ld_, descrX.data_, descrX.inc_, &beta, descrY.data_, descrY.inc_);
+        } else {
+            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
+                handle, transA, m, n, &alpha, descrA.data_, descrA.ld_, descrA.stride_, descrX.data_, descrX.inc_, descrX.stride_, &beta, descrY.data_, descrY.inc_, descrY.stride_, batch_size); 
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T, BatchType BT>
     Event trsm(Queue& ctx,
                    const DenseMatView<T,BT>& descrA,
                    const DenseMatView<T,BT>& descrB,
@@ -85,6 +109,14 @@ namespace batchlas {
         const DenseMatView<fp, BT>&, \
         fp, fp, Transpose, Transpose, ComputePrecision);
 
+    #define GEMV_INSTANTIATE(fp, BT) \
+    template Event gemv<Backend::CUDA, fp, BT>( \
+        Queue&, \
+        const DenseMatView<fp, BT>&, \
+        const DenseVecHandle<fp, BT>&, \
+        const DenseVecHandle<fp, BT>&, \
+        fp, fp, Transpose);
+
     #define TRSM_INSTANTIATE(fp, BT) \
     template Event trsm<Backend::CUDA, fp, BT>( \
         Queue&, \
@@ -94,6 +126,7 @@ namespace batchlas {
 
     #define BLAS_LEVEL3_INSTANTIATE(fp, BT) \
         GEMM_INSTANTIATE(fp, BT) \
+        GEMV_INSTANTIATE(fp, BT) \
         TRSM_INSTANTIATE(fp, BT)
 
     // Macro that covers all layout and batch type combinations for a given floating-point type.
