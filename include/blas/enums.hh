@@ -60,7 +60,7 @@ namespace batchlas {
         Cholesky,   //Rarely sufficient
         ShiftChol3, //More stable than Chol2
         Householder, //Most numerically stable
-        ModifiedGramSchmidt
+        GramSchmidt
     };
     
     //Some of the types are not supported by all backends, compilation errors will make this apparent
