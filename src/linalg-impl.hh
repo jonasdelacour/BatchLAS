@@ -499,9 +499,6 @@ namespace batchlas{
         }
 
         template <>
-        struct LinalgHandle<Backend::NETLIB>{};
-
-        template <>
         struct LinalgHandle<Backend::CUDA> {
             cublasHandle_t blas_handle_;
             cusparseHandle_t sparse_handle_;
@@ -575,6 +572,8 @@ namespace batchlas{
             }
         };
 
+    #endif
+
         template <typename T>
         struct BackendDenseMatrixHandle{
             #ifdef BATCHLAS_HAS_CUDA_BACKEND
@@ -639,9 +638,44 @@ namespace batchlas{
             }
         };
 
+        template <typename T>
+        struct BackendDenseVectorHandle{
+            #ifdef BATCHLAS_HAS_CUDA_BACKEND
+              cusparseDnVecDescr_t descr_ = nullptr;
+                constexpr inline operator cusparseDnVecDescr_t() const {
+                    return descr_;
+                }
+            #endif
 
-    
-    #endif
+            BackendDenseVectorHandle() = default;
+
+            BackendDenseVectorHandle(T* data, int size, int inc) {
+                #ifdef BATCHLAS_HAS_CUDA_BACKEND
+                    cusparseCreateDnVec(&descr_, size, data, BackendScalar<T, Backend::CUDA>::type);
+                #endif
+            }
+
+            ~BackendDenseVectorHandle() {
+                #ifdef BATCHLAS_HAS_CUDA_BACKEND
+                    if(descr_) cusparseDestroyDnVec(descr_);
+                #endif
+            }
+        };
+
+        // Implementation of init_backend methods for vector handles
+        template <typename T>
+        void DenseVecHandle<T, BatchType::Single>::init_backend() {
+            if (!backend_handle_) backend_handle_ = std::make_unique<BackendDenseVectorHandle<T>>(data_, size_, inc_);
+        }
+
+        template <typename T>
+        void DenseVecHandle<T, BatchType::Batched>::init_backend() {
+            if (!backend_handle_) backend_handle_ = std::make_unique<BackendDenseVectorHandle<T>>(data_, size_, inc_);
+        }
+
+
+    template <>
+    struct LinalgHandle<Backend::NETLIB>{};
 
     template <typename T>
     void SparseMatHandle<T, Format::CSR, BatchType::Single>::init_backend(){
@@ -754,6 +788,13 @@ namespace batchlas{
     DenseMatView<T, BatchType::Batched>::DenseMatView(T* data, int rows, int cols, int ld, int stride, int batch_size, Span<T*> data_ptrs) 
         : data_(data), rows_(rows), cols_(cols), ld_(ld), stride_(stride), batch_size_(batch_size), data_ptrs_(data_ptrs) {}
 
+    template <typename T>
+    DenseVecHandle<T, BatchType::Batched>::DenseVecHandle(T* data, int size, int inc, int stride, int batch_size)
+        : data_(data), size_(size), inc_(inc), stride_(stride), batch_size_(batch_size) {}
+
+    template <typename T>
+    DenseVecHandle<T, BatchType::Single>::DenseVecHandle(T* data, int size, int inc)
+        : data_(data), size_(size), inc_(inc) {}
 
     
     /* template <typename T>
@@ -844,6 +885,10 @@ namespace batchlas{
     DenseMatView<T, BatchType::Single>::~DenseMatView() = default;
     template <typename T>
     DenseMatView<T, BatchType::Batched>::~DenseMatView() = default;
+    template <typename T>
+    DenseVecHandle<T, BatchType::Single>::~DenseVecHandle() = default;
+    template <typename T>
+    DenseVecHandle<T, BatchType::Batched>::~DenseVecHandle() = default;
 
 
     template <typename T>
@@ -948,4 +993,13 @@ namespace batchlas{
     template struct SparseMatHandle<std::complex<float>, Format::CSR, BatchType::Batched>;
     template struct SparseMatHandle<std::complex<double>, Format::CSR, BatchType::Single>;
     template struct SparseMatHandle<std::complex<double>, Format::CSR, BatchType::Batched>;
+
+    template struct DenseVecHandle<float, BatchType::Single>;
+    template struct DenseVecHandle<float, BatchType::Batched>;
+    template struct DenseVecHandle<double, BatchType::Single>;
+    template struct DenseVecHandle<double, BatchType::Batched>;
+    template struct DenseVecHandle<std::complex<float>, BatchType::Single>;
+    template struct DenseVecHandle<std::complex<float>, BatchType::Batched>;
+    template struct DenseVecHandle<std::complex<double>, BatchType::Single>;
+    template struct DenseVecHandle<std::complex<double>, BatchType::Batched>;
 }

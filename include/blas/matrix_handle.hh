@@ -381,11 +381,12 @@ namespace batchlas {
 
     template <typename T>
     struct DenseVecHandle<T, BatchType::Single> {
-        DenseVecHandle(T* data, int size, int ldc) : data_(data), size_(size), ldc_(ldc) {}
+        DenseVecHandle(T* data, int size, int inc);
+        ~DenseVecHandle();
+        void init_backend();  // Added missing declaration
         // Accessors...
         T* data_;
-        UnifiedVector<T*> data_ptrs_;
-        int size_, ldc_;
+        int size_, inc_;
 
         private:
             std::unique_ptr<BackendDenseVectorHandle<T>> backend_handle_;
@@ -393,15 +394,25 @@ namespace batchlas {
 
     template <typename T>
     struct DenseVecHandle<T, BatchType::Batched> {
-        DenseVecHandle(T* data, int size, int ldc, int stride, int batch_size) 
-            : data_(data), size_(size), ldc_(ldc), stride_(stride), batch_size_(batch_size) {}
+        DenseVecHandle(T* data, int size, int inc, int stride, int batch_size);
+        ~DenseVecHandle();
+        void init_backend();  // Added missing declaration
         // Accessors...
         T* data_;
-        int size_, ldc_, stride_, batch_size_;
+        int size_, inc_, stride_, batch_size_;
 
         private:
             std::unique_ptr<BackendDenseVectorHandle<T>> backend_handle_;
     };
+
+    template <typename T, BatchType BT>
+    auto create_vec(T* data, int size, int inc = 1, int stride = 0, int batch_size = 1) {
+        if constexpr (BT == BatchType::Single) {
+            return DenseVecHandle<T, BT>(data, size, inc);
+        } else {
+            return DenseVecHandle<T, BT>(data, size, inc, stride, batch_size);
+        }
+    }
 
     template <typename T>
     struct SparseVecHandle<T, BatchType::Single> {
@@ -453,6 +464,15 @@ namespace batchlas {
             return handle.batch_size_;
         } else {
             return 1;
+        }
+    }
+
+    template <template <typename, BatchType> class Handle, typename T, BatchType BT>
+    auto get_stride(const Handle<T,BT>& handle) {
+        if constexpr (BT == BatchType::Batched) {
+            return handle.stride_;
+        } else {
+            return 0;
         }
     }
 
