@@ -188,8 +188,8 @@ void print_usage(const char* program_name) {
     std::cout << "  -s, --sizes SIZES      Comma-separated matrix sizes (default: 1024,2048,4096)" << std::endl;
     std::cout << "  -v, --vectors VECTORS  Comma-separated number of vectors (default: 16,32,64)" << std::endl;
     std::cout << "  -b, --batches BATCHES  Comma-separated batch sizes (default: 1,4,16,64)" << std::endl;
-    std::cout << "  -a, --algos ALGOS      Comma-separated algorithm IDs (default: 0,1,2,3)" << std::endl;
-    std::cout << "                         0=Cholesky, 1=Chol2, 2=ShiftChol3, 3=Householder, 4=MGS" << std::endl;
+    std::cout << "  -a, --algos ALGOS      Comma-separated algorithm IDs (default: 0,1,2,4,5)" << std::endl;
+    std::cout << "                         0=Cholesky, 1=Chol2, 2=ShiftChol3, 3=Householder, 4=CGS2, 5=SVQB" << std::endl;
     std::cout << "  -t, --transpose FLAG   Transpose flag (0=NoTrans, 1=Trans, default: 0)" << std::endl;
     std::cout << "  -o, --output FILE      Output CSV file (default: ortho_benchmark_results.csv)" << std::endl;
     std::cout << "  -w, --warmup N         Number of warmup iterations (default: 2)" << std::endl;
@@ -221,7 +221,8 @@ OrthoAlgorithm algorithm_from_id(int id) {
         case 1: return OrthoAlgorithm::Chol2;
         case 2: return OrthoAlgorithm::ShiftChol3;
         case 3: return OrthoAlgorithm::Householder;
-        case 4: return OrthoAlgorithm::GramSchmidt;
+        case 4: return OrthoAlgorithm::CGS2;
+        case 5: return OrthoAlgorithm::SVQB;
         default: return OrthoAlgorithm::Chol2;
     }
 }
@@ -233,7 +234,8 @@ std::string algorithm_to_string(OrthoAlgorithm algo) {
         case OrthoAlgorithm::Chol2: return "Chol2";
         case OrthoAlgorithm::ShiftChol3: return "ShiftChol3";
         case OrthoAlgorithm::Householder: return "Householder";
-        case OrthoAlgorithm::GramSchmidt: return "GramSchmidt";
+        case OrthoAlgorithm::CGS2: return "CGS2";
+        case OrthoAlgorithm::SVQB: return "SVQB";
         default: return "Unknown";
     }
 }
