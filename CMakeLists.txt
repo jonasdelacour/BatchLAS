@@ -30,6 +30,7 @@ option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
+option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
 
 # SYCL is mandatory for this project
 message(STATUS "SYCL support is mandatory for BatchLAS")
@@ -214,7 +215,7 @@ function(detect_sycl_gpu_architectures)
 endfunction()
 
 # Add SYCL specific compiler flags
-add_compile_options(-fsycl)
+add_compile_options(-fsycl -Wno-c++20-extensions)
 add_link_options(-fsycl)
 
 # Detect and add GPU architecture targets
@@ -611,33 +612,7 @@ if(BATCHLAS_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# Installation
-install(DIRECTORY include/ DESTINATION include)
-install(EXPORT BatchLASTargets
-        FILE BatchLASTargets.cmake
-        NAMESPACE BatchLAS::
-        DESTINATION lib/cmake/BatchLAS
-)
-
-# Create and install config version file
-include(CMakePackageConfigHelpers)
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/BatchLASConfigVersion.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-)
-
-# Configure and install config file
-configure_package_config_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BatchLASConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/BatchLASConfig.cmake
-    INSTALL_DESTINATION lib/cmake/BatchLAS
-)
-
-# Install config files
-install(
-    FILES 
-        ${CMAKE_CURRENT_BINARY_DIR}/BatchLASConfig.cmake
-        ${CMAKE_CURRENT_BINARY_DIR}/BatchLASConfigVersion.cmake
-    DESTINATION lib/cmake/BatchLAS
-)
+# Python bindings
+if(BATCHLAS_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
