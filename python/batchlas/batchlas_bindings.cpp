@@ -166,11 +166,12 @@ PYBIND11_MODULE(batchlas, m) {
         .export_values();
     
     py::enum_<batchlas::OrthoAlgorithm>(m, "OrthoAlgorithm")
-        .value("GramSchmidt", batchlas::OrthoAlgorithm::GramSchmidt)
+        .value("CGS2", batchlas::OrthoAlgorithm::CGS2)
         .value("Chol2", batchlas::OrthoAlgorithm::Chol2)
         .value("Cholesky", batchlas::OrthoAlgorithm::Cholesky)
         .value("ShiftChol3", batchlas::OrthoAlgorithm::ShiftChol3)
         .value("Householder", batchlas::OrthoAlgorithm::Householder)
+        .value("SVQB", batchlas::OrthoAlgorithm::SVQB)
         .export_values();
     
     // Create Device and Queue classes
@@ -408,7 +409,7 @@ PYBIND11_MODULE(batchlas, m) {
         
     }, "Orthonormalize matrix columns using specified algorithm",
        py::arg("queue"), py::arg("a"),
-       py::arg("algo") = batchlas::OrthoAlgorithm::GramSchmidt,
+       py::arg("algo") = batchlas::OrthoAlgorithm::Chol2,
        py::arg("backend") = batchlas::Backend::AUTO);
        
     // Add syevx function for eigenvalue computation
