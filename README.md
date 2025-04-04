@@ -1,38 +1,41 @@
 # BatchLAS - Batched Linear Algebra Subroutines
 
-BatchLAS is a high-performance library for batched linear algebra operations that supports multiple backends, including Netlib, CUDA, ROCm, MKL, and SYCL. It provides an abstraction layer over different vendor-specific libraries while maintaining high performance.
+BatchLAS is a high-performance library for batched linear algebra operations that supports multiple backends. It provides an abstraction layer over different vendor-specific libraries while maintaining high performance.
 
 ## Features
 
-- Unified API for different hardware backends (Netlib, CUDA, ROCm, MKL, SYCL)
+- Unified API for different hardware backends
 - Batched matrix operations
 - Support for dense and sparse matrices
-- High-level linear algebra routines 
-- Hardware detection and optimal backend selection
+- SYCL interoperability for cross-platform performance
 
-## Supported Dense Operations
-- Batched matrix multiplication
-- Batched matrix addition
-- Batched matrix transpose
-- Batched matrix inversion
-- Batched matrix eigenvalue decomposition (full and partial)
-- Batched matrix factorization (LU, QR, Cholesky)
+## Currently Implemented Operations
+- **Dense Matrix Operations**
+  - Basic BLAS operations (gemm, gemv, trsm)
+  - Cholesky factorization (potrf)
+  - Symmetric eigenvalue decomposition (syev)
+  - Matrix orthogonalization with multiple algorithms:
+    - Cholesky-based methods (Chol2, ShiftChol3)
+    - Classical Gram-Schmidt with reorthogonalization (CGS2)
+    - Householder
+    - SVQB
 
-## Supported Sparse Operations
-- Batched sparse matrix-vector multiplication
-- Batched sparse matrix-matrix multiplication
-- Batched sparse symmetric matrix eigendecomposition (full and partial)    
-- Batched sparse Cholesky factorization
+- **Sparse Matrix Operations**
+  - Sparse matrix-dense matrix multiplication (spmm)
+  - Sparse symmetric eigensolvers (syevx using LOBPCG algorithm)
+  - CSR format support
+
+## Working Backends
+- NVIDIA CUDA (cuBLAS, cuSOLVER, cuSPARSE)
+- CPU (CBLAS, LAPACKE)
 
 ## Requirements
 
 - C++17 compatible compiler
 - CMake 3.14 or higher
-- SYCL implementation (Intel oneAPI, DPC++)
+- SYCL implementation (Intel oneAPI DPC++)
 - Optional: CUDA toolkit for NVIDIA GPUs
-- Optional: ROCm for AMD GPUs
-- Optional: MKL for Intel CPUs/GPUs
-- Optional: Netlib for CPU
+- Optional: Netlib BLAS/LAPACK for CPU
 
 ## Installation
 
