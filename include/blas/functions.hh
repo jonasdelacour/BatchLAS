@@ -314,4 +314,20 @@ namespace batchlas {
                 JobType jobz = JobType::NoEigenVectors,
                 const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
                 const SyevxParams<T>& params = SyevxParams<T>());
+
+
+    template <Backend B, typename T, Format F, BatchType BT>
+    Event lanczos(Queue& ctx,
+        SparseMatHandle<T, F, BT>& A,
+        Span<typename base_type<T>::type> W,
+        Span<std::byte> workspace,
+        JobType jobz = JobType::NoEigenVectors,
+        const DenseMatView<T, BT>& V = DenseMatView<T, BT>());
+
+    template <Backend B, typename T, Format F, BatchType BT>
+    size_t lanczos_buffer_size(Queue& ctx,
+        SparseMatHandle<T, F, BT>& A,
+        Span<typename base_type<T>::type> W,
+        JobType jobz = JobType::NoEigenVectors,
+        const DenseMatView<T, BT>& V = DenseMatView<T, BT>());
 }
