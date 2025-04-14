@@ -485,6 +485,15 @@ namespace batchlas {
         }
     }
 
+    template <template <typename, Format, BatchType> class Handle, typename T, Format F, BatchType BT>
+    auto get_stride(const Handle<T,F,BT>& handle) {
+        if constexpr (BT == BatchType::Batched) {
+            return handle.matrix_stride_;
+        } else {
+            return 0;
+        }
+    }
+
     template <template <typename, BatchType> class Handle, typename T, BatchType BT>
     std::ostream& operator<<(std::ostream& os, const Handle<T,BT>& handle) {
         os << "DenseMatHandle: " << handle.data_ << ", rows: " << handle.rows_ << ", cols: " << handle.cols_ << ", ld: " << handle.ld_;
