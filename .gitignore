@@ -75,3 +75,7 @@ test_results/
 *.ptx
 *.cubin
 *.fatbin
+
+# Python cache files
+*.pyc
+__pycache__/
