@@ -23,6 +23,7 @@ set(TEST_TARGETS
     util_device_queue_tests
     blas_operations_tests
     syevx_tests
+    lanczos_tests
     syevx_benchmark
     ortho_benchmark
     gemv_operations_tests
