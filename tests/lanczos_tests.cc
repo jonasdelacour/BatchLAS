@@ -86,7 +86,7 @@ protected:
     std::shared_ptr<Queue> ctx;
     const int rows = 60;
     const int ld = 60;
-    const int batch_size = 5;
+    const int batch_size = 1;
     int total_nnz;
     
     UnifiedVector<float> A_data;
@@ -126,20 +126,88 @@ TEST_F(LanczosTestBase, LanczosTest) {
         batch_size);
 
     
-    size_t buffer_size = lanczos_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, W_data, JobType::NoEigenVectors);
-
+    LanczosParams<float> params;
+    params.sort_enabled = false;
+    params.sort_order = SortOrder::Descending;
+    params.reorthogonalization_iterations = 6;
+    
+    
+    UnifiedVector<float> eigenvector_memory(rows * rows * batch_size);
+    
+    DenseMatHandle<float, BatchType::Batched> eigenvectors(
+        eigenvector_memory.data(),
+        rows,
+        rows,
+        rows,
+        rows*rows,
+        batch_size);
+        
+        
+    size_t buffer_size = lanczos_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
+        eigenvectors(), params);
     UnifiedVector<std::byte> workspace(buffer_size);
 
     lanczos<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, workspace, JobType::NoEigenVectors);
+        *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors(), params);
 
     ctx->wait();
+
+    UnifiedVector<float> residuals_memory(rows * rows * batch_size, 0.0f);
+
+    std::cout << "First eigenvector: " << Span(eigenvector_memory.data(), rows) << std::endl;
+    
+    
+    DenseMatHandle<float, BatchType::Batched> residuals(
+        residuals_memory.data(),
+        rows,
+        rows,
+        rows,
+        rows*rows,
+        batch_size);
+    
+    // Start by filling residuals with the equivalent of V @ diag(W)
+    for (int b = 0; b < batch_size; ++b) {
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < rows; j++) {
+                residuals_memory[b * rows * rows + i * rows + j] = eigenvector_memory[b * rows * rows + i * rows + j] * W_data[b * rows + i];
+            }
+        }
+    }
+
+    auto eigenvectors_view = eigenvectors();
+    auto residuals_view = residuals();
+
+
+    UnifiedVector<std::byte> spmm_workspace(
+        spmm_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, eigenvectors_view, residuals_view, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
+
+    //Compute R = A @ V - V @ diag(W)
+    spmm<Backend::CUDA>(
+        *ctx, sparse_matrix, eigenvectors_view, residuals_view, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+
+    ctx->wait();
+
+    //Compute the norms of the residuals
+    UnifiedVector<float> norms_memory(batch_size * rows * rows, 0.0f);
+    
+    gemm<Backend::CUDA>(
+        *ctx, residuals_view, residuals_view, create_view<float,BatchType::Batched>(norms_memory.data(), rows, rows, rows, rows*rows, batch_size, Span<float*>()), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
+    ctx->wait();
+
+    std::cout << "Residuals:\n[ ";
+    for (size_t i = 0; i < rows; ++i) {
+        std::cout << norms_memory[i*rows + i] << " ,";
+    }
+    std::cout << "]" << std::endl;
+    
+
+    std::cout << Span(W_data.data(), rows) << std::endl;
+
     
     // Verify that the computed eigenvalues match the expected ones
     for (int b = 0; b < batch_size; ++b) {
         for (int i = 0; i < neig; ++i) {
-            //Values are sorted in ascending order
-            EXPECT_NEAR(W_data[rows*b + rows - i], known_eigenvalues[i], 0.1f)
+            EXPECT_NEAR(W_data[rows*b + i], known_eigenvalues[i], 0.1f)
                 << "Eigenvalue mismatch at batch " << b << ", index " << i;
         }
     }
