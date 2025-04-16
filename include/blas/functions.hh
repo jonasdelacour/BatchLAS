@@ -315,6 +315,16 @@ namespace batchlas {
                 const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
                 const SyevxParams<T>& params = SyevxParams<T>());
 
+    template <typename T>
+    struct LanczosParams {
+        using float_type = typename base_type<T>::type;
+        OrthoAlgorithm ortho_algorithm = OrthoAlgorithm::CGS2;      // Default orthogonalization algorithm
+        size_t ortho_iterations = 2;                                // Number of orthogonalization iterations
+        size_t reorthogonalization_iterations = 2;                  // Number of iterations before reorthogonalization, increasing this value will reduce accuracy.
+        bool sort_enabled = true;                                   // Whether to sort eigenvalues and eigenvectors
+        SortOrder sort_order = SortOrder::Ascending;                // Order of sorted eigenvalues and eigenvectors
+    };
+
 
     template <Backend B, typename T, Format F, BatchType BT>
     Event lanczos(Queue& ctx,
@@ -322,12 +332,14 @@ namespace batchlas {
         Span<typename base_type<T>::type> W,
         Span<std::byte> workspace,
         JobType jobz = JobType::NoEigenVectors,
-        const DenseMatView<T, BT>& V = DenseMatView<T, BT>());
+        const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
+        const LanczosParams<T>& params = LanczosParams<T>());
 
     template <Backend B, typename T, Format F, BatchType BT>
     size_t lanczos_buffer_size(Queue& ctx,
         SparseMatHandle<T, F, BT>& A,
         Span<typename base_type<T>::type> W,
         JobType jobz = JobType::NoEigenVectors,
-        const DenseMatView<T, BT>& V = DenseMatView<T, BT>());
+        const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
+        const LanczosParams<T>& params = LanczosParams<T>());
 }
