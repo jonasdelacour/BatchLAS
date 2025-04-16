@@ -512,6 +512,41 @@ namespace batchlas {
         
         return os;
     }
+    template <template <typename, Format, BatchType> class Handle, typename T, Format F, BatchType BT>
+    std::ostream& operator<<(std::ostream& os, const Handle<T,F,BT>& handle) {
+        os << "SparseMatHandle: " << handle.data_ << ", rows: " << handle.rows_ << ", cols: " << handle.cols_ << ", nnz: " << handle.nnz_;
+        if constexpr (BT == BatchType::Batched) {
+            os << ", stride: " << handle.matrix_stride_ << ", batch_size: " << handle.batch_size_;
+        }
+        //Print the matrix as if it was dense:
+        if constexpr (F == Format::CSR) {
+            os << "\nMatrix contents:\n";
+            std::vector<T> dense_mat(handle.rows_ * handle.cols_, T(0));
+
+            // Convert CSR to dense representation
+            for (int i = 0; i < handle.rows_; ++i) {
+                int row_start = handle.row_offsets_[i];
+                int row_end = handle.row_offsets_[i + 1];
+                
+                for (int j = row_start; j < row_end; ++j) {
+                    int col = handle.col_indices_[j];
+                    dense_mat.at(i * handle.cols_ + col) = handle.data_[j];
+                }
+            }
+
+            // Print dense representation
+            for (int i = 0; i < handle.rows_; ++i) {
+                os << "  [";
+                for (int j = 0; j < handle.cols_; ++j) {
+                    if (j > 0) os << ", ";
+                    os << dense_mat[i * handle.cols_ + j];
+                }
+                os << "]\n";
+            }
+        }
+        
+        return os;
+    }
 
     namespace detail {
         // Type trait to check for complex or floating point types
