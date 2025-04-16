@@ -54,6 +54,11 @@ namespace batchlas {
         Left,
         Right
     };
+
+    enum class SortOrder {
+        Ascending,
+        Descending
+    };
     
     enum class OrthoAlgorithm {
         Chol2,      //Default
