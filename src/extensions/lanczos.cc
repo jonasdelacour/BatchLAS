@@ -177,8 +177,8 @@ namespace batchlas {
                 Span<typename base_type<T>::type> W, //Output eigenvalues
                 Span<std::byte> workspace,
                 JobType jobz,
-                const DenseMatView<T, BT>& V //Output eigenvectors for jobz == JobType::EigenVectors
-                ) {
+                const DenseMatView<T, BT>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+                const LanczosParams<T>& params) {
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -198,9 +198,8 @@ namespace batchlas {
         auto padded_vector = create_view<T,BT>(Vmem.data(), n, 2, n, (n+1)*n, batch_size, Span<T*>());
         
         auto spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
-        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, create_view<T,BT>(Vmem.data(), n, 1, n, (n+1)*n, batch_size, Span<T*>()), 
-                                                                                    create_view<T,BT>(Vmem.data(), n, n-1, n, (n+1)*n, batch_size, Span<T*>()),
-                                                                                    Transpose::NoTrans, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
+        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, create_view<T,BT>(Vmem.data(), n, 2, n, (n+1)*n, batch_size, Span<T*>()), 
+            create_view<T,BT>(Vmem.data(), n, n-2, n, (n+1)*n, batch_size, Span<T*>()), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
 
         auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
         auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
@@ -236,20 +235,21 @@ namespace batchlas {
             });
         };
 
-        auto T_ortho = std::chrono::duration<double, std::micro>(0);
-        auto T_spmm = std::chrono::duration<double, std::micro>(0);
-        auto T_lanczos = std::chrono::duration<double, std::micro>(0);
+        auto T_ortho =      std::chrono::duration<double, std::micro>(0);
+        auto T_spmm =       std::chrono::duration<double, std::micro>(0);
+        auto T_lanczos =    std::chrono::duration<double, std::micro>(0);
 
         auto lanczos_iteration = [&](const int iterations){
             for (int it = 0; it < iterations; it++) {
-                auto basis_view = create_view<T,BT>(Vmem.data(), n, it, n, (n+1)*n, batch_size, basis_ptr_mem);
-                auto vector_view = create_view<T,BT>(Vmem.data() + it*n, n, 1, n, (n+1)*n, batch_size, vector_view_ptr_mem);
-                
                 if (it > 0) {
-                    auto Tstart = std::chrono::steady_clock::now();
-                    ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, OrthoAlgorithm::CGS2, 1);
-                    ctx->wait();
-                    T_ortho += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - Tstart);
+                    auto basis_view = create_view<T,BT>(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem);
+                    auto vector_view = create_view<T,BT>(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem);
+                    if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
+                        auto Tstart = std::chrono::steady_clock::now();
+                        ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
+                        ctx->wait();
+                        T_ortho += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - Tstart);
+                    }
                 }
 
                 auto padded_vector = create_view<T,BT>(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size, Span<T*>());
@@ -311,7 +311,6 @@ namespace batchlas {
 
         init();
         lanczos_iteration(n);
-        ctx.wait();
 
         //Allocate memory for the QR factorization
         auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
@@ -352,13 +351,20 @@ namespace batchlas {
                 T* batch_Q = Q_eigenvectors.data() + (jobz == JobType::EigenVectors ? bid * n * n : bid * n);
                 typename base_type<T>::type* batch_W = W.data() + bid * n;
 
+                //If jobz == EigenVectors, initialize the eigenvector matrix to identity
+                if (jobz == JobType::EigenVectors) {
+                    for (int i = tid; i < n*n; i += bdim) {
+                        batch_Q[i] = T(0); // Initialize to zero matrix
+                    }
+                    sycl::group_barrier(cta);
+                    for (int i = tid; i < n; i += bdim) {
+                        batch_Q[i * (n + 1)] = T(1); // Set diagonal to 1
+                    }
+                }
+
                 for( int i = tid; i < n; i += bdim) {
                     D[i] = batch_alphas[i];
                     L[i] = batch_betas[i];
-                    //U[i] = batch_betas[i];
-                    if (jobz == JobType::EigenVectors) {
-                        batch_Q[i * (n + i)] = T(1); // Initialize to identity matrix
-                    }
                 }
                 
                 sycl::group_barrier(cta);
@@ -382,6 +388,7 @@ namespace batchlas {
                         if (jobz == JobType::EigenVectors) {
                             apply_all_reflections(cta, V, k, n, batch_Q);
                         }
+                        
                         
                         GR = (k > 0 ? std::abs(L[k-1]) : 0) + (k+1 < n ? std::abs(L[k]) : 0);
                         
@@ -408,27 +415,33 @@ namespace batchlas {
                 for (int i = tid; i < n; i += bdim) {
                     batch_W[i] = real_part(D[i]);
                 }
-                
-                // If eigenvectors are requested, copy them to the output array
-                if (jobz == JobType::EigenVectors) {
-                    T* batch_V_out = const_cast<T*>(Vdata) + bid * Vstride;
-                    for (int i = 0; i < n; i++) {
-                        for (int j = 0; j < n; j++) {
-                            batch_V_out[i * Vld + j] = batch_Q[i * n + j];
-                        }
-                    }
-                }
             });
         });
         ctx->wait();
         auto elapsed_qr = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - T0).count();
+
+        //We have computed the decomposition T = Q^H * diag(W) * Q
+        //Furthermore we have A = V * T * V^H
+        //Which means means A = V * Q^H * diag(W) * Q * V^H
+        //So it follows that the eigenvectors of A are given by V * Q
+        auto T0_eigenvectors = std::chrono::steady_clock::now();
+        if (jobz == JobType::EigenVectors) {
+            gemm<B>(ctx, create_view<T,BT>(Vmem.data(), n, n, n, (n+1)*n, batch_size, Span<T*>()), 
+                        create_view<T,BT>(Q_eigenvectors.data(), n, n, n, n*n, batch_size, Span<T*>()), 
+                        V, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+        }
+        ctx->wait();
+        auto elapsed_eigenvectors = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - T0_eigenvectors).count();
         
         std::cout << "Lanczos iteration time: " << T_lanczos.count() / batch_size << " µs per matrix" << std::endl;
         std::cout << "Orthogonalization time: " << T_ortho.count() / batch_size << " µs per matrix" << std::endl;
         std::cout << "SpMV time: " << T_spmm.count() / batch_size << " µs per matrix" << std::endl;
         std::cout << "QR iteration time: " << elapsed_qr / batch_size << " µs per matrix" << std::endl;
+        std::cout << "Eigenvector time: " << elapsed_eigenvectors / batch_size << " µs per matrix" << std::endl;
+        std::cout << "Total time: " << (T_lanczos.count() + T_ortho.count() + T_spmm.count() + elapsed_qr + elapsed_eigenvectors) / batch_size << " µs per matrix" << std::endl;
 
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
+        if (params.sort_enabled){
         ctx->submit([&](sycl::handler& h) {
             // Calculate memory required for joint_sort operation
             // We need more memory for larger arrays
@@ -436,6 +449,7 @@ namespace batchlas {
                     sycl::memory_scope::work_group,  n);
             
             sycl::local_accessor<std::byte, 1> scratch(sycl::range<1>(sort_mem_size), h);
+            sycl::local_accessor<T, 1> temp_eigenvalues(n, h);
             
             // Allocate global memory for indices array used during sorting
             auto indices_mem = pool.allocate<int>(ctx, n * batch_size);
@@ -472,43 +486,45 @@ namespace batchlas {
                     
                     sycl::ext::oneapi::experimental::joint_sort(
                         group_helper, 
-                        batch_W, 
-                        batch_W + n,
-                        [batch_W, batch_indices](auto a, auto b) {
-                            // Calculate the indices from memory locations
-                            int idx_a = static_cast<int>((std::addressof(a) - batch_W));
-                            int idx_b = static_cast<int>((std::addressof(b) - batch_W));
-                            
-                            // Store index for swap
-                            int temp = batch_indices[idx_a];
-                            batch_indices[idx_a] = batch_indices[idx_b];
-                            batch_indices[idx_b] = temp;
-                            
+                        batch_indices, 
+                        batch_indices + n,
+                        [batch_W, batch_indices, params](auto idx_a, auto idx_b) {
                             // Sort by value in ascending order
-                            return a < b;
+                            if (params.sort_order == SortOrder::Descending) {
+                                return batch_W[idx_a] > batch_W[idx_b];
+                            } else {
+                                return batch_W[idx_a] < batch_W[idx_b];
+                            }
                         }
                     );
-                    
-                    
+
+                    for (int i = tid; i < n; i += item.get_local_range()[0]) {
+                        temp_eigenvalues[i] = batch_W[batch_indices[i]];
+                    }
                     sycl::group_barrier(cta);
+                    
+                    for (int i = tid; i < n; i += item.get_local_range()[0]) {
+                        batch_W[i] = temp_eigenvalues[i];
+                    }
+                    
+                    
                     
                     // Reorder eigenvectors based on the sorted indices
                     T* batch_V_out = const_cast<T*>(Vdata) + bid * Vstride;
-                    T* batch_Q = Q_eigenvectors.data() + bid * n * n;
                     
                     // Reorder the eigenvectors column by column
                     for (int i = 0; i < n; i++) {
                         // Each thread handles some rows of the eigenvector
                         for (int j = tid; j < n; j += item.get_local_range()[0]) {
                             // Store in temp buffer
-                            batch_temp_vec[j] = batch_Q[j * n + batch_indices[i]];
+                            batch_temp_vec[j] = batch_V_out[batch_indices[i] * n + j];
                         }
                         
                         sycl::group_barrier(cta);
                         
                         // Copy from temp buffer to output
                         for (int j = tid; j < n; j += item.get_local_range()[0]) {
-                            batch_V_out[j * Vld + i] = batch_temp_vec[j];
+                            batch_V_out[i * Vld + j] = batch_temp_vec[j];
                         }
                         
                         sycl::group_barrier(cta);
@@ -518,12 +534,21 @@ namespace batchlas {
                     sycl::ext::oneapi::experimental::joint_sort(
                         group_helper, 
                         batch_W, 
-                        batch_W + n
+                        batch_W + n,
+                        [params](auto a, auto b) {
+                            // Sort by value in ascending order
+                            if (params.sort_order == SortOrder::Descending) {
+                                return a > b;
+                            } else {
+                                return a < b;
+                            }
+                        }
                     );
                     
                 }
             });
-        });        
+        });
+        }
 
         return ctx.get_event();
     }
@@ -534,7 +559,8 @@ namespace batchlas {
         SparseMatHandle<T, F, BT>& A,
         Span<typename base_type<T>::type> W, //Output eigenvalues
         JobType jobz,
-        const DenseMatView<T, BT>& V //Output eigenvectors for jobz == JobType::EigenVectors
+        const DenseMatView<T, BT>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+        const LanczosParams<T>& params
     ) {
         auto n = A.rows_;
         auto batch_size = get_batch_size(A);
@@ -550,17 +576,17 @@ namespace batchlas {
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // betas
                           BumpAllocator::allocation_size<T*>(ctx, batch_size) * 3 +
                           BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans)) +
-                          BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, single_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
+                          BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, padded_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
         
         // Additional memory required for QR factorization if there is insufficient shared memory for work-group local storage
         bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= sizeof(T) * (3 * n + 3 * (n + 1));
-        if (!smem_possible) {
+
             // Allocate memory for the Householder reflection vectors and the tridiagonal matrix
-            basic_size += BumpAllocator::allocation_size<T>(ctx, 2*n*batch_size) + // Householder reflection vectors
-                          BumpAllocator::allocation_size<T>(ctx, (n+1)*batch_size) + // Diagonal of tridiagonal matrix
-                          BumpAllocator::allocation_size<T>(ctx, 2*(n+1)*batch_size) + // Upper diagonal of tridiagonal matrix
-                          BumpAllocator::allocation_size<T>(ctx, n*batch_size); // Lower diagonal of tridiagonal matrix
-        }               
+        basic_size += BumpAllocator::allocation_size<T>(ctx,    smem_possible ? (2*n*batch_size) : 0) + // Householder reflection vectors
+                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? ((n+1)*batch_size) : 0) + // Diagonal of tridiagonal matrix
+                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? (2*(n+1)*batch_size) : 0) + // Upper diagonal of tridiagonal matrix
+                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? (n*batch_size) : 0); // Lower diagonal of tridiagonal matrix
+
         // Eigenvector memory (only if needed)
         size_t eigenvectors_size = (jobz == JobType::EigenVectors) ? 
                                  BumpAllocator::allocation_size<T>(ctx, n*n*batch_size) : 
@@ -578,13 +604,15 @@ namespace batchlas {
         Span<typename base_type<fp>::type>, \
         Span<std::byte>, \
         JobType, \
-        const DenseMatView<fp, BT>&); \
+        const DenseMatView<fp, BT>&, \
+        const LanczosParams<fp>&); \
     template size_t lanczos_buffer_size<Backend::CUDA, fp, Format::CSR, BT>( \
         Queue&, \
         SparseMatHandle<fp, Format::CSR, BT>&, \
         Span<typename base_type<fp>::type>, \
         JobType, \
-        const DenseMatView<fp, BT>&); \
+        const DenseMatView<fp, BT>&, \
+        const LanczosParams<fp>&); \
     
     #define LANCZOS_INSTANTIATE_FOR_FP(fp) \
         LANCZOS_INSTANTIATE(fp, BatchType::Batched) \
