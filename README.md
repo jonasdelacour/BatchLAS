@@ -1,4 +1,6 @@
-# BatchLAS - Batched Linear Algebra Subroutines
+<div align="center">
+  <img src="BatchLAS_logo_transparent.png" alt="BatchLAS Logo" width="200">
+</div>
 
 BatchLAS is a high-performance library for batched linear algebra operations that supports multiple backends. It provides an abstraction layer over different vendor-specific libraries while maintaining high performance.
 
@@ -22,7 +24,9 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 
 - **Sparse Matrix Operations**
   - Sparse matrix-dense matrix multiplication (spmm)
-  - Sparse symmetric eigensolvers (syevx using LOBPCG algorithm)
+  - Sparse symmetric eigensolvers:
+    - Batched LOBPCG for partial eigendecomposition (finding largest or smallest eigen-pairs)
+    - Batched Lanczos algorithm for full eigendecompositions
   - CSR format support
 
 ## Working Backends
