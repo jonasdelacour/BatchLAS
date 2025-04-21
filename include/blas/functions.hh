@@ -342,4 +342,18 @@ namespace batchlas {
         JobType jobz = JobType::NoEigenVectors,
         const DenseMatView<T, BT>& V = DenseMatView<T, BT>(),
         const LanczosParams<T>& params = LanczosParams<T>());
+
+
+    template <Backend B, typename T, BatchType BT>
+    Event geqrf(Queue& ctx,
+        DenseMatView<T,BT>& A, //In place reflectors (Lower triangle of A)
+        Span<T> tau);
+
+    template <Backend B, typename T, BatchType BT>
+    Event geqrf(Queue& ctx,
+        const DenseMatView<T,BT>& A,
+        const DenseMatView<T,BT>& V, //Out of place storage for reflectors
+        Span<T> tau) {
+
+    }
 }

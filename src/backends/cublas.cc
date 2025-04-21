@@ -100,6 +100,79 @@ namespace batchlas {
         return ctx.get_event();
     }
 
+    template <Backend B, typename T, BatchType BT>
+    Event geqrf(Queue& ctx,
+        DenseMatView<T,BT>& A, //In place reflectors (Lower triangle of A)
+        Span<T> tau,
+        Span<std::byte> work_space) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = A.rows_;
+        auto n = A.cols_;
+        auto batch_size = get_batch_size(A);
+        auto pool = BumpAllocator(work_space);
+        
+        if constexpr (BT == BatchType::Single) {
+            cusolverDnParams_t params;
+            cusolverDnCreateParams(&params);
+
+            size_t device_l_work, host_l_work;
+            cusolverDnXgeqrf_bufferSize(handle, params, m, n,
+                BackendScalar<T,B>::type, A.data_, A.ld_,
+                BackendScalar<T,B>::type, tau.data(),
+                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
+
+            auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
+            auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
+            int info;
+
+            cusolverDnXgeqrf(handle, params, m, n,
+                BackendScalar<T,B>::type, A.data_, A.ld_,
+                BackendScalar<T,B>::type, tau.data(), 
+                BackendScalar<T,B>::type, device_work_space.data(), 
+                device_l_work, host_work_space.data(), host_l_work, &info);
+        } else {
+            auto tau_data = tau.data(); // Get base pointer, likely USM device or managed memory
+            auto tau_ptrs = pool.allocate<T*>(ctx, batch_size); // Allocate space for pointers, assume USM host/shared
+
+            // Use a SYCL kernel to compute the pointers in parallel
+            ctx->parallel_for(sycl::range<1>(batch_size),
+                                [=](sycl::id<1> item) {
+                size_t i = item.get(0);
+                // Calculate the pointer for the i-th batch's tau vector
+                tau_ptrs[i] = tau_data + i * n; // Using 'n' as in the original loop
+            });
+            auto info = pool.allocate<int>(ctx,batch_size);
+            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
+                handle, m, n, get_ptr_arr(ctx, A), A.ld_, tau_ptrs.data(), info.data(), batch_size);
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T, BatchType BT>
+    size_t geqrf_buffer_size(Queue& ctx,
+        const DenseMatView<T,BT>& A, //In place reflectors (Lower triangle of A)
+        Span<T> tau) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = A.rows_;
+        auto n = A.cols_;
+        auto batch_size = get_batch_size(A);
+        if constexpr (BT == BatchType::Single) {
+            size_t device_l_work, host_l_work;
+            cusolverDnParams_t params;
+            cusolverDnCreateParams(&params);
+
+            cusolverDnXgeqrf_bufferSize(handle, params, m, n,
+                BackendScalar<T,B>::type, A.data_, A.ld_,
+                BackendScalar<T,B>::type, tau.data(),
+                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
+            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work);
+        } else {
+            return BumpAllocator::allocation_size<T*>(ctx, batch_size) + BumpAllocator::allocation_size<int>(ctx, batch_size);
+        }
+    }
+
     // Template instantiations for cuBLAS functions
     #define GEMM_INSTANTIATE(fp, BT) \
     template Event gemm<Backend::CUDA, fp, BT>( \
@@ -124,10 +197,25 @@ namespace batchlas {
         const DenseMatView<fp, BT>&, \
         Side, Uplo, Transpose, Diag, fp);
 
+    #define GEQRF_INSTANTIATE(fp, BT) \
+    template Event geqrf<Backend::CUDA, fp, BT>( \
+        Queue&, \
+        DenseMatView<fp, BT>&, \
+        Span<fp>, \
+        Span<std::byte>);
+    
+        #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp, BT) \
+    template size_t geqrf_buffer_size<Backend::CUDA, fp, BT>( \
+        Queue&, \
+        const DenseMatView<fp, BT>&, \
+        Span<fp>);
+
     #define BLAS_LEVEL3_INSTANTIATE(fp, BT) \
         GEMM_INSTANTIATE(fp, BT) \
         GEMV_INSTANTIATE(fp, BT) \
-        TRSM_INSTANTIATE(fp, BT)
+        TRSM_INSTANTIATE(fp, BT) \
+        GEQRF_INSTANTIATE(fp, BT) \
+        GEQRF_BUFFER_SIZE_INSTANTIATE(fp, BT)
 
     // Macro that covers all layout and batch type combinations for a given floating-point type.
     #define BLAS_LEVEL3_INSTANTIATE_FOR_FP(fp)        \
