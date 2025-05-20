@@ -7,6 +7,8 @@ if(BATCHLAS_ENABLE_CUDA)
         cublas.cc
         cusolver.cc
         cusparse.cc
+        cublas_matrixview.cc
+        cusparse_matrixview.cc
     )
 endif()
 
