@@ -391,106 +391,159 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const 
 
 
 // Destructor
-template <typename T>
-Matrix<T, MatrixFormat::Dense>::~Matrix() {
+template <typename T, MatrixFormat MType>
+Matrix<T, MType>::~Matrix() {
     // The UnifiedVector destructors will handle memory cleanup
 }
 
 // Move constructor
-template <typename T>
-Matrix<T, MatrixFormat::Dense>::Matrix(Matrix<T, MatrixFormat::Dense>&& other) noexcept
-    : rows_(other.rows_), cols_(other.cols_), ld_(other.ld_), stride_(other.stride_),
-      batch_size_(other.batch_size_), data_(std::move(other.data_)), 
-      data_ptrs_(std::move(other.data_ptrs_)),
-      backend_handle_(std::move(other.backend_handle_)) {
-    // Reset other's state
+template <typename T, MatrixFormat MType>
+Matrix<T, MType>::Matrix(Matrix<T, MType>&& other) noexcept
+    : rows_(other.rows_), cols_(other.cols_), batch_size_(other.batch_size_),
+      data_(std::move(other.data_)), backend_handle_(std::move(other.backend_handle_)) {
+    
+    // Move format-specific members
+    if constexpr (MType == MatrixFormat::Dense) {
+        ld_ = other.ld_;
+        stride_ = other.stride_;
+        data_ptrs_ = std::move(other.data_ptrs_);
+        
+        // Reset other's state
+        other.ld_ = 0;
+        other.stride_ = 0;
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        nnz_ = other.nnz_;
+        matrix_stride_ = other.matrix_stride_;
+        offset_stride_ = other.offset_stride_;
+        row_offsets_ = std::move(other.row_offsets_);
+        col_indices_ = std::move(other.col_indices_);
+        
+        // Reset other's state
+        other.nnz_ = 0;
+        other.matrix_stride_ = 0;
+        other.offset_stride_ = 0;
+    }
+    
+    // Reset common fields
     other.rows_ = 0;
     other.cols_ = 0;
-    other.ld_ = 0;
-    other.stride_ = 0;
     other.batch_size_ = 0;
 }
 
 // Move assignment operator
-template <typename T>
-Matrix<T, MatrixFormat::Dense>& Matrix<T, MatrixFormat::Dense>::operator=(Matrix<T, MatrixFormat::Dense>&& other) noexcept {
+template <typename T, MatrixFormat MType>
+Matrix<T, MType>& Matrix<T, MType>::operator=(Matrix<T, MType>&& other) noexcept {
     if (this != &other) {
+        // Copy common fields
         rows_ = other.rows_;
         cols_ = other.cols_;
-        ld_ = other.ld_;
-        stride_ = other.stride_;
         batch_size_ = other.batch_size_;
         data_ = std::move(other.data_);
-        data_ptrs_ = std::move(other.data_ptrs_);
         backend_handle_ = std::move(other.backend_handle_);
         
-        // Reset other's state
+        // Move format-specific members
+        if constexpr (MType == MatrixFormat::Dense) {
+            ld_ = other.ld_;
+            stride_ = other.stride_;
+            data_ptrs_ = std::move(other.data_ptrs_);
+            
+            // Reset other's state
+            other.ld_ = 0;
+            other.stride_ = 0;
+        } else if constexpr (MType == MatrixFormat::CSR) {
+            nnz_ = other.nnz_;
+            matrix_stride_ = other.matrix_stride_;
+            offset_stride_ = other.offset_stride_;
+            row_offsets_ = std::move(other.row_offsets_);
+            col_indices_ = std::move(other.col_indices_);
+            
+            // Reset other's state
+            other.nnz_ = 0;
+            other.matrix_stride_ = 0;
+            other.offset_stride_ = 0;
+        }
+        
+        // Reset common fields
         other.rows_ = 0;
         other.cols_ = 0;
-        other.ld_ = 0;
-        other.stride_ = 0;
         other.batch_size_ = 0;
     }
     return *this;
 }
 
 // Create a view of the entire matrix
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::view() const {
-    return MatrixView<T, MatrixFormat::Dense>(*this);
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType> Matrix<T, MType>::view() const {
+    return MatrixView<T, MType>(*this);
 }
 
 // Create a view of a subset of the matrix
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::view(int rows, int cols, int ld, int stride) const {
-    return MatrixView<T, MatrixFormat::Dense>(*this, 0, 0, rows, cols);
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
+    if constexpr (MType == MatrixFormat::Dense) {
+        return MatrixView<T, MType>(*this, 0, 0, rows, cols);
+    } else {
+        // This implementation is simplified - in practice, extracting a submatrix from CSR format
+        // requires conversion to coordinate format, extracting the submatrix, and converting back
+        throw std::runtime_error("Submatrix views of CSR matrices not yet implemented");
+    }
 }
 
 // Fill the matrix with a specific value
-template <typename T>
-void Matrix<T, MatrixFormat::Dense>::fill(T value) {
+template <typename T, MatrixFormat MType>
+void Matrix<T, MType>::fill(T value) {
     std::fill(data_.begin(), data_.end(), value);
 }
 
 // Copy from another matrix view
-template <typename T>
-void Matrix<T, MatrixFormat::Dense>::copy_from(const MatrixView<T, MatrixFormat::Dense>& src) {
+template <typename T, MatrixFormat MType>
+void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
     if (rows_ != src.rows_ || cols_ != src.cols_ || batch_size_ != src.batch_size_) {
         throw std::runtime_error("Matrix dimensions or batch size mismatch in copy_from");
     }
     
-    for (int b = 0; b < batch_size_; ++b) {
-        for (int j = 0; j < cols_; ++j) {
-            for (int i = 0; i < rows_; ++i) {
-                // Index calculation for both matrices
-                data_[b * stride_ + j * ld_ + i] = src.data()[b * src.stride() + j * src.ld() + i];
+    if constexpr (MType == MatrixFormat::Dense) {
+        for (int b = 0; b < batch_size_; ++b) {
+            for (int j = 0; j < cols_; ++j) {
+                for (int i = 0; i < rows_; ++i) {
+                    // Index calculation for both matrices
+                    data_[b * stride_ + j * ld_ + i] = src.data()[b * src.stride() + j * src.ld() + i];
+                }
             }
         }
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        // For CSR format, just copy all data directly if structure matches
+        std::copy(src.data().begin(), src.data().end(), data_.begin());
+        std::copy(src.row_offsets().begin(), src.row_offsets().end(), row_offsets_.begin());
+        std::copy(src.col_indices().begin(), src.col_indices().end(), col_indices_.begin());
     }
 }
 
-// Initialize backend
-template <typename T>
-void Matrix<T, MatrixFormat::Dense>::init(Queue& ctx) const {
+// Initialize backend - make backend_handle_ mutable so it can be modified in const methods
+template <typename T, MatrixFormat MType>
+void Matrix<T, MType>::init(Queue& ctx) const {
     // No-op if we already have a backend handle
     if (backend_handle_) return;
-    
-    // Create a backend handle
-    auto handle = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
-    backend_handle_ = handle;
+    backend_handle_ = createBackendHandle<Backend::CUDA, T>(*this, ctx);
+    // Create a backend handle based on matrix format
+    /* if constexpr (MType == MatrixFormat::Dense) {
+        backend_handle_ = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        backend_handle_ = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
+    } */
 }
 
 // Initialize backend
-template <typename T>
-void Matrix<T, MatrixFormat::Dense>::init_backend() {
+template <typename T, MatrixFormat MType>
+void Matrix<T, MType>::init_backend() {
     // This is a legacy method - redirect to init with default queue
     Queue ctx;
     init(ctx);
 }
 
 // Operator-> to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::Dense>* Matrix<T, MatrixFormat::Dense>::operator->() {
+template <typename T, MatrixFormat MType>
+BackendMatrixHandle<T, MType>* Matrix<T, MType>::operator->() {
     if (!backend_handle_) {
         init_backend();
     }
@@ -498,8 +551,8 @@ BackendMatrixHandle<T, MatrixFormat::Dense>* Matrix<T, MatrixFormat::Dense>::ope
 }
 
 // Operator* to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::Dense>& Matrix<T, MatrixFormat::Dense>::operator*() {
+template <typename T, MatrixFormat MType>
+BackendMatrixHandle<T, MType>& Matrix<T, MType>::operator*() {
     if (!backend_handle_) {
         init_backend();
     }
