@@ -1,14 +1,15 @@
 #include "../include/blas/matrix_handle_new.hh"
-#include "linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
-#include "queue.hh"
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <random>
 #include <algorithm>
 #include <numeric>
+#include <stdexcept> // Include for std::runtime_error
+#include <vector>    // Include for std::vector used in scan
+#include "backends/matrix_handle_impl.cc"
 
 namespace batchlas {
 
@@ -17,8 +18,9 @@ namespace batchlas {
 //----------------------------------------------------------------------
 
 // Basic constructor for dense matrix (allocates uninitialized memory)
-template <typename T>
-Matrix<T, MatrixFormat::Dense>::Matrix(int rows, int cols, int batch_size)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType>::Matrix(int rows, int cols, int batch_size)
     : rows_(rows), cols_(cols), batch_size_(batch_size),
       ld_(rows), stride_(rows * cols) {
     // Allocate memory for the matrix data
@@ -34,9 +36,10 @@ Matrix<T, MatrixFormat::Dense>::Matrix(int rows, int cols, int batch_size)
 }
 
 // Constructor from existing data (copies the data)
-template <typename T>
-Matrix<T, MatrixFormat::Dense>::Matrix(const T* data, int rows, int cols, int ld, 
-                                      int stride, int batch_size)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld, 
+                        int stride, int batch_size)
     : rows_(rows), cols_(cols), ld_(ld), stride_(stride > 0 ? stride : ld * cols), 
       batch_size_(batch_size) {
     // Allocate memory and copy the data
