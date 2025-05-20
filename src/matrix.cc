@@ -630,18 +630,19 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
             // Zero elements
             data_ptr[b * n * n + i * n + j] = T(0);
         }
-    }
+    }).wait();
     
     return result;
 }
 
 // Factory method to create random matrix
-template <typename T>
-Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Random(int rows, int cols, int batch_size, unsigned int seed) {
-    Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, int batch_size, unsigned int seed) {
+    Matrix<T, MType> result(rows, cols, batch_size);
     
     std::mt19937 gen(seed);
-    std::uniform_real_distribution<typename base_type<T>::type> dist(-1.0, 1.0);
+    std::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
     
     for (size_t i = 0; i < result.data_.size(); ++i) {
         if constexpr (std::is_same_v<T, std::complex<float>> || 
@@ -658,26 +659,29 @@ Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Random(int rows, 
 }
 
 // Factory method to create zeros matrix
-template <typename T>
-Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Zeros(int rows, int cols, int batch_size) {
-    Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Zeros(int rows, int cols, int batch_size) {
+    Matrix<T, MType> result(rows, cols, batch_size);
     result.fill(T(0));
     return result;
 }
 
 // Factory method to create ones matrix
-template <typename T>
-Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Ones(int rows, int cols, int batch_size) {
-    Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Ones(int rows, int cols, int batch_size) {
+    Matrix<T, MType> result(rows, cols, batch_size);
     result.fill(T(1));
     return result;
 }
 
 // Factory method to create diagonal matrix
-template <typename T>
-Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Diagonal(const Span<T>& diag_values, int batch_size) {
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batch_size) {
     int n = diag_values.size();
-    Matrix<T, MatrixFormat::Dense> result(n, n, batch_size);
+    Matrix<T, MType> result(n, n, batch_size);
     
     // Set all elements to zero
     result.fill(T(0));
