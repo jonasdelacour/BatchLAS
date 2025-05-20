@@ -779,82 +779,109 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
 //----------------------------------------------------------------------
 
 // Constructor for dense matrix view
-template <typename T>
-MatrixView<T, MatrixFormat::Dense>::MatrixView(Span<T> data, int rows, int cols, int ld,
-                                             int stride, int batch_size)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+MatrixView<T, MType>::MatrixView(Span<T> data, int rows, int cols, int ld,
+                               int stride, int batch_size)
     : rows_(rows), cols_(cols), batch_size_(batch_size), data_(data), ld_(ld),
       stride_(stride > 0 ? stride : ld * cols) {
 }
 
-// Constructor for a submatrix view
-template <typename T>
-MatrixView<T, MatrixFormat::Dense>::MatrixView(Span<T> data, int row_offset, int col_offset,
-                                             int rows, int cols, int ld, int stride, int batch_size)
+/* // Constructor for a submatrix view
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+MatrixView<T, MType>::MatrixView(Span<T> data, int row_offset, int col_offset,
+                               int rows, int cols, int ld, int stride, int batch_size)
     : rows_(rows), cols_(cols), batch_size_(batch_size), 
       ld_(ld), stride_(stride > 0 ? stride : ld * cols) {
     // Adjust the data span to point to the start of the submatrix
     size_t offset = row_offset + col_offset * ld;
     data_ = data.subspan(offset, static_cast<size_t>(rows) * cols * batch_size);
+} */
+
+//----------------------------------------------------------------------
+// MatrixView class implementation - CSR format
+//----------------------------------------------------------------------
+
+// Constructor for CSR sparse matrix view
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+MatrixView<T, MType>::MatrixView(Span<T> data, Span<int> row_offsets, Span<int> col_indices,
+                               int nnz, int rows, int cols, int matrix_stride,
+                               int offset_stride, int batch_size)
+    : rows_(rows), cols_(cols), batch_size_(batch_size), data_(data),
+      row_offsets_(row_offsets), col_indices_(col_indices), nnz_(nnz),
+      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
+      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1) {
 }
 
-// Constructor from Matrix object
-template <typename T>
-MatrixView<T, MatrixFormat::Dense>::MatrixView(const Matrix<T, MatrixFormat::Dense>& matrix)
+//----------------------------------------------------------------------
+// Common MatrixView implementations (for both Dense and CSR)
+//----------------------------------------------------------------------
+
+// Constructor from Matrix object - fix access to private members
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
     : rows_(matrix.rows_), cols_(matrix.cols_), batch_size_(matrix.batch_size_),
-      data_(matrix.data()), ld_(matrix.ld()), stride_(matrix.stride()) {
-    // Try to reuse the backend handle
-    backend_handle_ = matrix.backend_handle();
-    
-    // If batch size > 1, set up data_ptrs_
-    if (batch_size_ > 1) {
-        data_ptrs_ = Span<T*>(matrix.data_ptrs_.data(), matrix.data_ptrs_.size());
+      data_(matrix.data()) {
+      
+    // Format-specific initializations
+    if constexpr (MType == MatrixFormat::Dense) {
+        ld_ = matrix.template ld<MType>();
+        stride_ = matrix.template stride<MType>();
+        
+        // Try to reuse the backend handle
+        backend_handle_ = matrix.backend_handle();
+        
+        // Don't try to access private data_ptrs_ directly
+        // The data pointers will be created on-demand if needed
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        row_offsets_ = matrix.template row_offsets<MType>();
+        col_indices_ = matrix.template col_indices<MType>();
+        nnz_ = matrix.template nnz<MType>();
+        matrix_stride_ = matrix.template matrix_stride<MType>();
+        offset_stride_ = matrix.template offset_stride<MType>();
+        
+        // Try to reuse the backend handle
+        backend_handle_ = matrix.backend_handle();
     }
 }
 
 // Constructor for a submatrix view from a Matrix object
-template <typename T>
-MatrixView<T, MatrixFormat::Dense>::MatrixView(
-    const Matrix<T, MatrixFormat::Dense>& matrix, int row_offset, int col_offset, int rows, int cols)
-    : rows_(rows), cols_(cols), batch_size_(matrix.batch_size_), ld_(matrix.ld()) {
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType>::MatrixView(
+    const Matrix<T, MType>& matrix, int row_offset, int col_offset, int rows, int cols)
+    : rows_(rows), cols_(cols), batch_size_(matrix.batch_size_) {
     
-    // Calculate the stride based on the source matrix
-    stride_ = matrix.stride();
-    
-    // Adjust the data span to point to the submatrix start
-    size_t offset = row_offset + col_offset * ld_;
-    data_ = matrix.data().subspan(offset);
-    
-    // We can't reuse the backend handle directly since we're viewing a submatrix
-    // The backend handle will be created on-demand when needed
-}
-
-// Create a view of a single batch item
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> MatrixView<T, MatrixFormat::Dense>::batch_item(int batch_index) const {
-    if (batch_index >= batch_size_) {
-        throw std::out_of_range("Batch index out of range");
+    if constexpr (MType == MatrixFormat::Dense) {
+        ld_ = matrix.template ld<MType>();
+        stride_ = matrix.template stride<MType>();
+        
+        // Adjust the data span to point to the submatrix start
+        size_t offset = row_offset + col_offset * ld_;
+        data_ = matrix.data().subspan(offset);
+        
+        // We can't reuse the backend handle directly since we're viewing a submatrix
+        // The backend handle will be created on-demand when needed
+    } else {
+        // For CSR matrices, submatrix views not directly supported
+        throw std::runtime_error("Submatrix views of CSR matrices not yet implemented");
     }
-    
-    // Calculate offset to the start of the batch
-    size_t offset = batch_index * stride_;
-    
-    // Create a new view with batch_size = 1
-    return MatrixView<T, MatrixFormat::Dense>(
-        data_.subspan(offset, static_cast<size_t>(rows_) * cols_),
-        rows_, cols_, ld_);
 }
 
 // Element access (for dense matrices)
-template <typename T>
-T& MatrixView<T, MatrixFormat::Dense>::at(int row, int col, int batch) {
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+T& MatrixView<T, MType>::at(int row, int col, int batch) {
     if (row < 0 || row >= rows_ || col < 0 || col >= cols_ || batch < 0 || batch >= batch_size_) {
         throw std::out_of_range("Matrix indices out of range");
     }
     return data_[batch * stride_ + col * ld_ + row];
 }
 
-template <typename T>
-const T& MatrixView<T, MatrixFormat::Dense>::at(int row, int col, int batch) const {
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     if (row < 0 || row >= rows_ || col < 0 || col >= cols_ || batch < 0 || batch >= batch_size_) {
         throw std::out_of_range("Matrix indices out of range");
     }
