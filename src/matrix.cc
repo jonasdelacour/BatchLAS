@@ -999,6 +999,28 @@ template class MatrixView<double, MatrixFormat::CSR>;
 template class MatrixView<std::complex<float>, MatrixFormat::CSR>;
 template class MatrixView<std::complex<double>, MatrixFormat::CSR>;
 
+// Dense constructor instantiations 
+template Matrix<float, MatrixFormat::Dense>::Matrix(int, int, int);
+template Matrix<double, MatrixFormat::Dense>::Matrix(int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(int, int, int);
+
+template Matrix<float, MatrixFormat::Dense>::Matrix(const float*, int, int, int, int, int);
+template Matrix<double, MatrixFormat::Dense>::Matrix(const double*, int, int, int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(const std::complex<float>*, int, int, int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(const std::complex<double>*, int, int, int, int, int);
+
+// CSR constructor instantiations
+template Matrix<float, MatrixFormat::CSR>::Matrix(int, int, int, int);
+template Matrix<double, MatrixFormat::CSR>::Matrix(int, int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::CSR>::Matrix(int, int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::CSR>::Matrix(int, int, int, int);
+
+template Matrix<float, MatrixFormat::CSR>::Matrix(const float*, const int*, const int*, int, int, int, int, int, int);
+template Matrix<double, MatrixFormat::CSR>::Matrix(const double*, const int*, const int*, int, int, int, int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::CSR>::Matrix(const std::complex<float>*, const int*, const int*, int, int, int, int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::CSR>::Matrix(const std::complex<double>*, const int*, const int*, int, int, int, int, int, int);
+
 // Static factory method instantiations
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Identity(int, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Identity(int, int);
@@ -1024,5 +1046,48 @@ template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Diagonal(const Span<double>&, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Diagonal(const Span<std::complex<float>>&, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Diagonal(const Span<std::complex<double>>&, int);
+
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_column_major() const;
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_column_major() const;
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_column_major() const;
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_column_major() const;
+
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_row_major() const;
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_row_major() const;
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_row_major() const;
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_row_major() const;
+
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Triangular(int, Uplo, float, float, int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Uplo, double, double, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<float>, std::complex<float>, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
+
+// Dense MatrixView constructors instantiations
+template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int);
+template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int);
+template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(Span<std::complex<float>>, int, int, int, int, int);
+template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(Span<std::complex<double>>, int, int, int, int, int);
+
+/* template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int, int, int);
+template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int, int, int);
+template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(Span<std::complex<float>>, int, int, int, int, int, int, int);
+template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(Span<std::complex<double>>, int, int, int, int, int, int, int); */
+
+// CSR MatrixView constructors instantiations
+template MatrixView<float, MatrixFormat::CSR>::MatrixView(Span<float>, Span<int>, Span<int>, int, int, int, int, int, int);
+template MatrixView<double, MatrixFormat::CSR>::MatrixView(Span<double>, Span<int>, Span<int>, int, int, int, int, int, int);
+template MatrixView<std::complex<float>, MatrixFormat::CSR>::MatrixView(Span<std::complex<float>>, Span<int>, Span<int>, int, int, int, int, int, int);
+template MatrixView<std::complex<double>, MatrixFormat::CSR>::MatrixView(Span<std::complex<double>>, Span<int>, Span<int>, int, int, int, int, int, int);
+
+// Dense MatrixView at() method instantiations
+template float& MatrixView<float, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+template double& MatrixView<double, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+template std::complex<float>& MatrixView<std::complex<float>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+template std::complex<double>& MatrixView<std::complex<double>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+
+template const float& MatrixView<float, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+template const double& MatrixView<double, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+template const std::complex<float>& MatrixView<std::complex<float>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+template const std::complex<double>& MatrixView<std::complex<double>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 
 } // namespace batchlas
