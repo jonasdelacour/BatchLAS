@@ -7,19 +7,21 @@
 #include "enums.hh"
 
 namespace batchlas {
+    #ifndef BASETYPE
+    #define BASETYPE
+    template<typename T>
+    struct base_type {
+        using type = T;
+    };
 
-    class Queue;
+    template<typename T>
+    struct base_type<std::complex<T>> {
+        using type = T;
+    };
 
-    // Forward declarations
-    template <typename T, MatrixFormat MType>
-    class Matrix;
-
-    template <typename T, MatrixFormat MType>
-    class MatrixView;
-
-    // Forward declare the backend handle - implementation will be in src/ folder
-    template <typename T, MatrixFormat MType>
-    class BackendMatrixHandle;
+    template<typename T>
+    using float_t = typename base_type<T>::type;
+    #endif
 
     // MatrixFormat enum to replace Format enum
     enum class MatrixFormat {
@@ -32,10 +34,24 @@ namespace batchlas {
         BLOCKED_ELL // Blocked ELLPACK
     };
 
+    // Forward declarations with default template parameters
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class Matrix;
+
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class MatrixView;
+
+    // Forward declare the backend handle - implementation will be in src/ folder
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class BackendMatrixHandle;
+
     // Matrix class - owning container for matrix data
     template <typename T, MatrixFormat MType>
     class Matrix {
     public:
+        // Make MatrixView a friend class to allow access to private members
+        friend class MatrixView<T, MType>;
+        
         // Basic constructors for dense matrix (allocate uninitialized memory)
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
@@ -79,20 +95,63 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         static Matrix<T, MType> Diagonal(const Span<T>& diag_values, int batch_size = 1);
 
+        // Create a triangular matrix with specific values
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1), 
+                                          T non_diagonal_value = T(0.5), int batch_size = 1);
+        
+        // Convert row-major to column-major format
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Matrix<T, MType> to_column_major() const;
+        
+        // Convert to a different matrix format
+        template <MatrixFormat NewMType>
+        Matrix<T, NewMType> convert_to(const T& zero_threshold = 1e-7) const;
+
+        // Create a copy with data in row-major format from column-major
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Matrix<T, MType> to_row_major() const;
+        
         // Destructor
         ~Matrix();
 
-        // Prevent copying, allow moving
-        Matrix(const Matrix&) = delete;
-        Matrix& operator=(const Matrix&) = delete;
+        // Add deep copy functionality while allowing moving
+        Matrix(const Matrix& other);
+        Matrix& operator=(const Matrix& other);
         Matrix(Matrix&&) noexcept;
         Matrix& operator=(Matrix&&) noexcept;
+        
+        // Create a deep copy
+        Matrix<T, MType> clone() const {
+            Matrix<T, MType> result(rows_, cols_, batch_size_);
+            
+            // Copy main data
+            std::copy(data_.begin(), data_.end(), result.data_.begin());
+            
+            // Copy CSR format data if applicable
+            if constexpr (MType == MatrixFormat::CSR) {
+                std::copy(row_offsets_.begin(), row_offsets_.end(), result.row_offsets_.begin());
+                std::copy(col_indices_.begin(), col_indices_.end(), result.col_indices_.begin());
+                result.nnz_ = nnz_;
+                result.matrix_stride_ = matrix_stride_;
+                result.offset_stride_ = offset_stride_;
+            }
+            
+            // Copy dense format specific data
+            result.ld_ = ld_;
+            result.stride_ = stride_;
+            
+            return result;
+        }
 
         // Create a view
         MatrixView<T, MType> view() const;
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
-        // Methods to initialize backend
+        // Methods to initialize backend - update to handle const-correctness
         void init(Queue& ctx) const;
         void init_backend();
 
@@ -166,7 +225,8 @@ namespace batchlas {
         int offset_stride_ = 0;    // Stride between offset arrays in a batch
         
         // Backend handle - shared with views of this matrix
-        std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
+        // Make mutable so it can be modified in const methods
+        mutable std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
     };
 
     // MatrixView class - non-owning view of a matrix
@@ -178,12 +238,7 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView(Span<T> data, int rows, int cols, int ld,
                   int stride = 0, int batch_size = 1);
-                  
-        // View into a subset of a dense matrix data (submatrix)
-        template <typename U = T, MatrixFormat M = MType, 
-                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        MatrixView(Span<T> data, int row_offset, int col_offset, 
-                  int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+
 
         // Constructors for CSR sparse matrix view
         template <typename U = T, MatrixFormat M = MType, 
@@ -208,7 +263,7 @@ namespace batchlas {
         // Destructor
         ~MatrixView() = default;
 
-        // Initialize backend
+        // Initialize backend - need to make backend_handle_ mutable
         void init(Queue& ctx) const;
         void init_backend();
 
@@ -224,6 +279,11 @@ namespace batchlas {
 
         // Data access
         Span<T> data() const { return data_; }
+        T* data_ptr() const { return data_.data(); }
+
+        int batch_size() const { return batch_size_; }
+        int rows() const { return rows_; }
+        int cols() const { return cols_; }
         
         // Dense matrix specific
         template <MatrixFormat M = MType, 
@@ -233,6 +293,11 @@ namespace batchlas {
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         int stride() const { return stride_; }
+
+        // Increment for dense vectors (assuming contiguous)
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        int inc() const { return 1; } // Assuming contiguous elements for vector views
 
         // CSR specific accessors
         template <MatrixFormat M = MType, 
@@ -254,6 +319,9 @@ namespace batchlas {
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
         int offset_stride() const { return offset_stride_; }
+
+        // Access pointer array for batched operations
+        Span<T*> data_ptrs() const { return data_ptrs_; }
 
         // Access to individual elements (for dense matrices)
         template <MatrixFormat M = MType, 
@@ -292,15 +360,8 @@ namespace batchlas {
         int offset_stride_ = 0;   // Stride between offset arrays in a batch
         
         // Backend handle (weak pointer to avoid circular references)
-        std::weak_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
-    };
-
-    // BackendMatrixHandle class - backend-specific implementation
-    template <typename T, MatrixFormat MType>
-    class BackendMatrixHandle {
-    public:
-        virtual ~BackendMatrixHandle();
-        // Backend-specific methods are declared here and implemented in src/backends/matrix_handle_impl.cc
+        // Make mutable so it can be modified in const methods
+        mutable std::weak_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
     };
 
     // Factory functions to create backend handles (implemented in src/backends/matrix_handle_impl.cc)
@@ -313,40 +374,40 @@ namespace batchlas {
     // Utility functions
 
     // Get batch size
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     int get_batch_size(const Matrix<T, MType>& matrix) {
         return matrix.batch_size_;
     }
 
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     int get_batch_size(const MatrixView<T, MType>& matrix_view) {
         return matrix_view.batch_size_;
     }
 
     // Get data pointer
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     T* get_data(const Matrix<T, MType>& matrix) {
         return matrix.data_;
     }
 
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     T* get_data(const MatrixView<T, MType>& matrix_view) {
         return matrix_view.data_;
     }
 
     // Create a view from raw pointers
-    template <typename T, MatrixFormat MType = MatrixFormat::Dense>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     auto create_view(T* data, int rows, int cols, int ld, int stride = 0, int batch_size = 1) {
         return MatrixView<T, MType>(data, rows, cols, ld, Layout::ColMajor, stride, batch_size);
     }
 
     // Create a view of a submatrix
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     auto subview(const Matrix<T, MType>& matrix, int rows, int cols = -1, int ld = -1, int stride = -1) {
         return matrix.view(rows, cols, ld, stride);
     }
 
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     auto subview(const MatrixView<T, MType>& matrix_view, int rows, int cols = -1, int ld = -1, int stride = -1) {
         // Implementation depends on MType
         if constexpr (MType == MatrixFormat::Dense) {
@@ -355,7 +416,6 @@ namespace batchlas {
                 rows, 
                 cols > 0 ? cols : matrix_view.cols_, 
                 ld > 0 ? ld : matrix_view.ld(),
-                matrix_view.layout_,
                 stride > 0 ? stride : matrix_view.stride(),
                 matrix_view.batch_size_);
         } else if constexpr (MType == MatrixFormat::CSR) {
@@ -365,20 +425,170 @@ namespace batchlas {
     }
 
     // Vector type definitions - simplified versions of the matrix types
+    template <typename T = float>
+    class BackendVectorHandle; // Forward declaration with default parameter
+
+    //Forward declare VectorView with default parameter
+    template <typename T = float>
+    struct VectorView;
+
+    // Vector class with batched support and stride between vectors
     template <typename T>
-    using Vector = Matrix<T, MatrixFormat::Dense>;
-    
+    struct Vector {
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+        using const_reference = const T&;
+
+        Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
+        Vector(int size, int batch_size = 1, int stride = 0)
+            : data_(stride > 0 ? stride * batch_size : size * batch_size),
+              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
+        Vector(int size, T value, int batch_size = 1, int stride = 0)
+            : data_(stride > 0 ? stride * batch_size : size * batch_size, value),
+              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
+        Vector(int size, int inc, T value, int batch_size = 1, int stride = 0)
+            : data_(stride > 0 ? stride * batch_size : size * batch_size, value),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
+        Vector(const T* data, int size, int batch_size = 1, int stride = 0)
+            : data_(stride > 0 ? stride * batch_size : size * batch_size),
+              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {
+            for (int b = 0; b < batch_size_; ++b) {
+                std::copy(data + b * size_, data + b * size_ + size_, data_.data() + b * stride_);
+            }
+        }
+
+        // Convenience vectors
+        static Vector<T> zeros(int size, int batch_size = 1, int stride = 0) {
+            return Vector<T>(size, T(0), batch_size, stride);
+        }
+        static Vector<T> ones(int size, int batch_size = 1, int stride = 0) {
+            return Vector<T>(size, T(1), batch_size, stride);
+        }
+        static Vector<T> random(int size, int batch_size = 1, int stride = 0) {
+            Vector<T> vec(size, batch_size, stride);
+            for (int b = 0; b < batch_size; ++b) {
+                for (int i = 0; i < size; ++i) {
+                    vec.at(i, b) = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
+                }
+            }
+            return vec;
+        }
+        static Vector<T> standard_basis(int size, int index, int batch_size = 1, int stride = 0) {
+            Vector<T> vec(size, T(0), batch_size, stride);
+            for (int b = 0; b < batch_size; ++b) {
+                vec.at(index, b) = T(1);
+            }
+            return vec;
+        }
+
+        Span<T> data() { return data_.to_span(); }
+        Span<const T> data() const { return data_.to_span(); }
+        T* data_ptr() { return data_.data(); }
+        const T* data_ptr() const { return data_.data(); }
+        int size() const { return size_; }
+        int inc() const { return inc_; }
+        int stride() const { return stride_; }
+        int batch_size() const { return batch_size_; }
+
+        // Access element at (i, batch)
+        T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
+        const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
+
+        // Flat indexing (for backward compatibility)
+        T& operator[](int i) { return data_[i]; }
+        const T& operator[](int i) const { return data_[i]; }
+
+        // Get a view of a single batch
+        VectorView<T> batch_item(int batch_index) const {
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_, inc_), size_, 1, inc_, stride_);
+        }
+
+        BackendVectorHandle<T>* operator->();
+        BackendVectorHandle<T>& operator*();
+        const BackendVectorHandle<T>* operator->() const;
+        const BackendVectorHandle<T>& operator*()  const;
+
+    private:
+        UnifiedVector<T> data_;
+        int size_ = 0;
+        int inc_ = 1;
+        int stride_ = 0;
+        int batch_size_ = 1;
+
+        std::shared_ptr<BackendVectorHandle<T>> backend_handle_;
+    };
+
+    // VectorView class - non-owning view of a (possibly batched) vector with stride
     template <typename T>
-    using VectorView = MatrixView<T, MatrixFormat::Dense>;
-    
-    template <typename T>
-    using SparseVector = Matrix<T, MatrixFormat::CSR>;
-    
-    template <typename T>
-    using SparseVectorView = MatrixView<T, MatrixFormat::CSR>;
+    class VectorView {
+    public:
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+        using const_reference = const T&;
+
+        VectorView() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
+        VectorView(Span<T> data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+        VectorView(UnifiedVector<T>& data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data.to_span()), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+        VectorView(T* data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data, (stride > 0 ? stride * batch_size : size * inc * batch_size), inc),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+
+        // Construct from Vector
+        VectorView(const Vector<T>& vec)
+            : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()), backend_handle_(vec.backend_handle_) {}
+
+        // Copy and move
+        VectorView(const VectorView<T>&) = default;
+        VectorView& operator=(const VectorView<T>&) = default;
+        VectorView(VectorView<T>&&) noexcept = default;
+        VectorView& operator=(VectorView<T>&&) noexcept = default;
+
+        // Data access
+        Span<T> data() const { return data_; }
+        T* data_ptr() const { return data_.data(); }
+        int size() const { return size_; }
+        int inc() const { return inc_; }
+        int stride() const { return stride_; }
+        int batch_size() const { return batch_size_; }
+
+        // Access element at (i, batch)
+        T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
+        const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
+
+        // Flat indexing (for backward compatibility)
+        T& operator[](int i) { return data_[i]; }
+        const T& operator[](int i) const { return data_[i]; }
+
+        // Subview (single batch)
+        VectorView<T> batch_item(int batch_index) const {
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_, inc_), size_, 1, inc_, stride_);
+        }
+
+        // Subview (range within a batch)
+        VectorView<T> subview(int offset, int count, int batch = 0) const {
+            return VectorView<T>(Span<T>(data_.data() + batch * stride_ + offset * inc_, count, inc_), count, 1, inc_, stride_);
+        }
+
+        BackendVectorHandle<T>* operator->();
+        BackendVectorHandle<T>& operator*();
+        const BackendVectorHandle<T>* operator->() const;
+        const BackendVectorHandle<T>& operator*() const;
+
+    private:
+        Span<T> data_;
+        int size_ = 0;
+        int inc_ = 1;
+        int stride_ = 0;
+        int batch_size_ = 1;
+        std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
+    };
 
     // Helper utility to get effective dimensions accounting for transpose
-    template <typename T, MatrixFormat MType>
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans) {
         return (trans == Transpose::NoTrans) 
                ? std::make_pair(mat.rows_, mat.cols_) 
