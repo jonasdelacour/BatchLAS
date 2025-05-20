@@ -696,143 +696,82 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
     return result;
 }
 
-//----------------------------------------------------------------------
-// Matrix class implementation - CSR format
-//----------------------------------------------------------------------
-
-// Basic constructor for CSR sparse matrix (allocates uninitialized memory)
-template <typename T>
-Matrix<T, MatrixFormat::CSR>::Matrix(int rows, int cols, int nnz, int batch_size)
-    : rows_(rows), cols_(cols), nnz_(nnz), batch_size_(batch_size),
-      matrix_stride_(nnz), offset_stride_(rows + 1) {
-    // Allocate memory
-    data_.resize(static_cast<size_t>(nnz) * batch_size);
-    row_offsets_.resize(static_cast<size_t>(rows + 1) * batch_size);
-    col_indices_.resize(static_cast<size_t>(nnz) * batch_size);
-}
-
-// Constructor from existing data (copies the data)
-template <typename T>
-Matrix<T, MatrixFormat::CSR>::Matrix(const T* values, const int* row_offsets, const int* col_indices,
-                                    int nnz, int rows, int cols, int matrix_stride, 
-                                    int offset_stride, int batch_size)
-    : rows_(rows), cols_(cols), nnz_(nnz), batch_size_(batch_size),
-      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
-      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1) {
-    // Allocate and copy data
-    data_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
-    row_offsets_.resize(static_cast<size_t>(offset_stride_) * batch_size);
-    col_indices_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
+// Implement to_column_major using SYCL
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
+    Matrix<T, MType> col_major(rows_, cols_, batch_size_);
     
-    std::copy(values, values + static_cast<size_t>(matrix_stride_) * batch_size, data_.data());
-    std::copy(row_offsets, row_offsets + static_cast<size_t>(offset_stride_) * batch_size, row_offsets_.data());
-    std::copy(col_indices, col_indices + static_cast<size_t>(matrix_stride_) * batch_size, col_indices_.data());
-}
-
-// Destructor
-template <typename T>
-Matrix<T, MatrixFormat::CSR>::~Matrix() {
-    // The UnifiedVector destructors will handle memory cleanup
-}
-
-// Move constructor
-template <typename T>
-Matrix<T, MatrixFormat::CSR>::Matrix(Matrix<T, MatrixFormat::CSR>&& other) noexcept
-    : rows_(other.rows_), cols_(other.cols_), nnz_(other.nnz_),
-      batch_size_(other.batch_size_), matrix_stride_(other.matrix_stride_),
-      offset_stride_(other.offset_stride_), data_(std::move(other.data_)),
-      row_offsets_(std::move(other.row_offsets_)), col_indices_(std::move(other.col_indices_)),
-      backend_handle_(std::move(other.backend_handle_)) {
-    // Reset other's state
-    other.rows_ = 0;
-    other.cols_ = 0;
-    other.nnz_ = 0;
-    other.batch_size_ = 0;
-    other.matrix_stride_ = 0;
-    other.offset_stride_ = 0;
-}
-
-// Move assignment operator
-template <typename T>
-Matrix<T, MatrixFormat::CSR>& Matrix<T, MatrixFormat::CSR>::operator=(Matrix<T, MatrixFormat::CSR>&& other) noexcept {
-    if (this != &other) {
-        rows_ = other.rows_;
-        cols_ = other.cols_;
-        nnz_ = other.nnz_;
-        batch_size_ = other.batch_size_;
-        matrix_stride_ = other.matrix_stride_;
-        offset_stride_ = other.offset_stride_;
-        data_ = std::move(other.data_);
-        row_offsets_ = std::move(other.row_offsets_);
-        col_indices_ = std::move(other.col_indices_);
-        backend_handle_ = std::move(other.backend_handle_);
+    // Create a queue to submit work to
+    sycl::queue q;
+    
+    // Get pointers to source and destination data
+    const T* src_ptr = data_.data();
+    T* dst_ptr = col_major.data_.data();
+    
+    // Capture dimensions for kernel
+    int rows = rows_;
+    int cols = cols_;
+    int ld = ld_;
+    int stride = stride_;
+    
+    // Calculate total number of elements
+    size_t total_elements = static_cast<size_t>(rows_) * cols_ * batch_size_;
+    
+    // Submit a kernel to convert from row-major to column-major
+    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (rows * cols);    // batch index
+        size_t remainder = flat_idx % (rows * cols);
+        size_t i = remainder / cols;            // row index
+        size_t j = remainder % cols;            // column index
         
-        // Reset other's state
-        other.rows_ = 0;
-        other.cols_ = 0;
-        other.nnz_ = 0;
-        other.batch_size_ = 0;
-        other.matrix_stride_ = 0;
-        other.offset_stride_ = 0;
-    }
-    return *this;
-}
-
-// Create a view of the entire matrix
-template <typename T>
-MatrixView<T, MatrixFormat::CSR> Matrix<T, MatrixFormat::CSR>::view() const {
-    return MatrixView<T, MatrixFormat::CSR>(*this);
-}
-
-// Create a view of a subset of the matrix
-template <typename T>
-MatrixView<T, MatrixFormat::CSR> Matrix<T, MatrixFormat::CSR>::view(int rows, int cols, int ld, int stride) const {
-    // This implementation is simplified - in practice, extracting a submatrix from CSR format
-    // requires conversion to coordinate format, extracting the submatrix, and converting back
-    throw std::runtime_error("Submatrix views of CSR matrices not yet implemented");
-}
-
-// Fill the values with a specific value (keeps structure intact)
-template <typename T>
-void Matrix<T, MatrixFormat::CSR>::fill(T value) {
-    std::fill(data_.begin(), data_.end(), value);
-}
-
-// Initialize backend
-template <typename T>
-void Matrix<T, MatrixFormat::CSR>::init(Queue& ctx) const {
-    // No-op if we already have a backend handle
-    if (backend_handle_) return;
+        // src is row-major: [b, i, j] -> b * stride + i * cols + j
+        // dst is col-major: [b, j, i] -> b * stride + j * rows + i
+        dst_ptr[b * stride + j * rows + i] = src_ptr[b * stride + i * cols + j];
+    }).wait();
     
-    // Create a backend handle
-    auto handle = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
-    backend_handle_ = handle;
+    return col_major;
 }
 
-// Initialize backend
-template <typename T>
-void Matrix<T, MatrixFormat::CSR>::init_backend() {
-    // Legacy method - redirect to init with default queue
-    Queue ctx;
-    init(ctx);
-}
-
-// Operator-> to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::CSR>* Matrix<T, MatrixFormat::CSR>::operator->() {
-    if (!backend_handle_) {
-        init_backend();
-    }
-    return backend_handle_.get();
-}
-
-// Operator* to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::CSR>& Matrix<T, MatrixFormat::CSR>::operator*() {
-    if (!backend_handle_) {
-        init_backend();
-    }
-    return *backend_handle_;
+// Implement to_row_major using SYCL
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
+    Matrix<T, MType> row_major(rows_, cols_, batch_size_);
+    
+    // Create a queue to submit work to
+    sycl::queue q;
+    
+    // Get pointers to source and destination data
+    const T* src_ptr = data_.data();
+    T* dst_ptr = row_major.data_.data();
+    
+    // Capture dimensions for kernel
+    int rows = rows_;
+    int cols = cols_;
+    int ld = ld_;
+    int stride = stride_;
+    
+    // Calculate total number of elements
+    size_t total_elements = static_cast<size_t>(rows_) * cols_ * batch_size_;
+    
+    // Submit a kernel to convert from column-major to row-major
+    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (rows * cols);    // batch index
+        size_t remainder = flat_idx % (rows * cols);
+        size_t i = remainder / cols;            // row index
+        size_t j = remainder % cols;            // column index
+        
+        // src is col-major: [b, j, i] -> b * stride + j * rows + i
+        // dst is row-major: [b, i, j] -> b * stride + i * cols + j
+        dst_ptr[b * stride + i * cols + j] = src_ptr[b * stride + j * rows + i];
+    }).wait();
+    
+    return row_major;
 }
 
 //----------------------------------------------------------------------
