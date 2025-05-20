@@ -559,16 +559,76 @@ BackendMatrixHandle<T, MType>& Matrix<T, MType>::operator*() {
     return *backend_handle_;
 }
 
-// Factory method to create identity matrix
-template <typename T>
-Matrix<T, MatrixFormat::Dense> Matrix<T, MatrixFormat::Dense>::Identity(int n, int batch_size) {
-    Matrix<T, MatrixFormat::Dense> result(n, n, batch_size);
+//----------------------------------------------------------------------
+// Matrix class static method implementations - Dense format only
+//----------------------------------------------------------------------
+
+// Factory method to create identity matrix with SYCL
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
+    Matrix<T, MType> result(n, n, batch_size);
     
-    // Set diagonal elements to 1, others to 0
-    result.fill(T(0));
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < n; ++i) {
-            result.data_[b * result.stride_ + i * result.ld_ + i] = T(1);
+    // Create a queue to submit work to
+    sycl::queue q;
+    
+    // Get pointer to the matrix data
+    T* data_ptr = result.data_.data();
+    
+    // Calculate total number of elements
+    size_t total_elements = static_cast<size_t>(n) * n * batch_size;
+    
+    // Submit a kernel to initialize the identity matrix
+    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+        
+        // Set diagonal elements to 1, others to 0
+        data_ptr[b * n * n + i * n + j] = (i == j) ? T(1) : T(0);
+    }).wait();
+    
+    return result;
+}
+
+// Factory method to create triangular matrix with specific values using SYCL
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
+                                             T non_diagonal_value, int batch_size) {
+    Matrix<T, MType> result(n, n, batch_size);
+    
+    // Create a queue to submit work to
+    sycl::queue q;
+    
+    // Get pointers to the matrix data
+    T* data_ptr = result.data_.data();
+    
+    // Calculate total number of elements
+    size_t total_elements = static_cast<size_t>(n) * n * batch_size;
+    
+    // Submit a kernel to initialize the triangular matrix
+    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+        
+        if (i == j) {
+            // Diagonal elements
+            data_ptr[b * n * n + i * n + j] = diagonal_value;
+        } else if ((uplo == Uplo::Lower && i > j) || 
+                  (uplo == Uplo::Upper && i < j)) {
+            // Lower or upper triangular elements
+            data_ptr[b * n * n + i * n + j] = non_diagonal_value;
+        } else {
+            // Zero elements
+            data_ptr[b * n * n + i * n + j] = T(0);
         }
     }
     
