@@ -888,120 +888,70 @@ const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     return data_[batch * stride_ + col * ld_ + row];
 }
 
-// Element access operator - returns view of a single batch item
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> MatrixView<T, MatrixFormat::Dense>::operator[](int i) const {
-    return batch_item(i);
-}
-
-// Initialize backend
-template <typename T>
-void MatrixView<T, MatrixFormat::Dense>::init(Queue& ctx) const {
-    // If we already have a backend handle from a strong reference, use it
-    if (!backend_handle_.expired()) return;
-    
-    // Create a new backend handle
-    auto handle = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
-    backend_handle_ = handle;
-}
-
-// Initialize backend
-template <typename T>
-void MatrixView<T, MatrixFormat::Dense>::init_backend() {
-    // Legacy method - redirect to init with default queue
-    Queue ctx;
-    init(ctx);
-}
-
-// Operator-> to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::Dense>* MatrixView<T, MatrixFormat::Dense>::operator->() {
-    if (auto handle = backend_handle_.lock()) {
-        return handle.get();
-    } else {
-        init_backend();
-        return backend_handle_.lock().get();
-    }
-}
-
-// Operator* to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::Dense>& MatrixView<T, MatrixFormat::Dense>::operator*() {
-    if (auto handle = backend_handle_.lock()) {
-        return *handle;
-    } else {
-        init_backend();
-        return *backend_handle_.lock();
-    }
-}
-
-//----------------------------------------------------------------------
-// MatrixView class implementation - CSR format
-//----------------------------------------------------------------------
-
-// Constructor for CSR sparse matrix view
-template <typename T>
-MatrixView<T, MatrixFormat::CSR>::MatrixView(Span<T> data, Span<int> row_offsets, Span<int> col_indices,
-                                           int nnz, int rows, int cols, int matrix_stride,
-                                           int offset_stride, int batch_size)
-    : rows_(rows), cols_(cols), batch_size_(batch_size), data_(data),
-      row_offsets_(row_offsets), col_indices_(col_indices), nnz_(nnz),
-      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
-      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1) {
-}
-
-// Constructor from Matrix object
-template <typename T>
-MatrixView<T, MatrixFormat::CSR>::MatrixView(const Matrix<T, MatrixFormat::CSR>& matrix)
-    : rows_(matrix.rows_), cols_(matrix.cols_), batch_size_(matrix.batch_size_),
-      data_(matrix.data()), row_offsets_(matrix.row_offsets()), 
-      col_indices_(matrix.col_indices()), nnz_(matrix.nnz()),
-      matrix_stride_(matrix.matrix_stride()), offset_stride_(matrix.offset_stride()) {
-    // Try to reuse the backend handle
-    backend_handle_ = matrix.backend_handle();
-}
-
-// Element access operator - returns view of a single batch item
-template <typename T>
-MatrixView<T, MatrixFormat::CSR> MatrixView<T, MatrixFormat::CSR>::operator[](int i) const {
-    if (i >= batch_size_) {
+// Create a view of a single batch item
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
+    if (batch_index >= batch_size_) {
         throw std::out_of_range("Batch index out of range");
     }
     
-    // Calculate offsets to the start of the batch
-    size_t val_offset = i * matrix_stride_;
-    size_t row_offset = i * offset_stride_;
-    
-    // Create a new view with batch_size = 1
-    return MatrixView<T, MatrixFormat::CSR>(
-        data_.subspan(val_offset, nnz_),
-        row_offsets_.subspan(row_offset, rows_ + 1),
-        col_indices_.subspan(val_offset, nnz_),
-        nnz_, rows_, cols_);
+    if constexpr (MType == MatrixFormat::Dense) {
+        // Calculate offset to the start of the batch
+        size_t offset = batch_index * stride_;
+        
+        // Create a new view with batch_size = 1
+        return MatrixView<T, MType>(
+            data_.subspan(offset, static_cast<size_t>(rows_) * cols_),
+            rows_, cols_, ld_);
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        // Calculate offsets to the start of the batch
+        size_t val_offset = batch_index * matrix_stride_;
+        size_t row_offset = batch_index * offset_stride_;
+        
+        // Create a new view with batch_size = 1
+        return MatrixView<T, MType>(
+            data_.subspan(val_offset, nnz_),
+            row_offsets_.subspan(row_offset, rows_ + 1),
+            col_indices_.subspan(val_offset, nnz_),
+            nnz_, rows_, cols_);
+    }
 }
 
-// Initialize backend
-template <typename T>
-void MatrixView<T, MatrixFormat::CSR>::init(Queue& ctx) const {
+// Element access operator - returns view of a single batch item
+template <typename T, MatrixFormat MType>
+MatrixView<T, MType> MatrixView<T, MType>::operator[](int i) const {
+    return batch_item(i);
+}
+
+// Initialize backend - make backend_handle_ mutable or change method to non-const
+template <typename T, MatrixFormat MType>
+void MatrixView<T, MType>::init(Queue& ctx) const {
     // If we already have a backend handle from a strong reference, use it
     if (!backend_handle_.expired()) return;
+    backend_handle_ = createBackendHandle<Backend::CUDA, T>(*this, ctx);
     
-    // Create a new backend handle
-    auto handle = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
-    backend_handle_ = handle;
+    // Create a new backend handle based on format
+    /* if constexpr (MType == MatrixFormat::Dense) {
+        auto handle = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
+        backend_handle_ = handle;  // Error here - need to make backend_handle_ mutable
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        auto handle = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
+        backend_handle_ = handle;  // Error here - need to make backend_handle_ mutable
+    } */
+
 }
 
 // Initialize backend
-template <typename T>
-void MatrixView<T, MatrixFormat::CSR>::init_backend() {
+template <typename T, MatrixFormat MType>
+void MatrixView<T, MType>::init_backend() {
     // Legacy method - redirect to init with default queue
     Queue ctx;
     init(ctx);
 }
 
 // Operator-> to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::CSR>* MatrixView<T, MatrixFormat::CSR>::operator->() {
+template <typename T, MatrixFormat MType>
+BackendMatrixHandle<T, MType>* MatrixView<T, MType>::operator->() {
     if (auto handle = backend_handle_.lock()) {
         return handle.get();
     } else {
@@ -1011,8 +961,8 @@ BackendMatrixHandle<T, MatrixFormat::CSR>* MatrixView<T, MatrixFormat::CSR>::ope
 }
 
 // Operator* to access backend handle
-template <typename T>
-BackendMatrixHandle<T, MatrixFormat::CSR>& MatrixView<T, MatrixFormat::CSR>::operator*() {
+template <typename T, MatrixFormat MType>
+BackendMatrixHandle<T, MType>& MatrixView<T, MType>::operator*() {
     if (auto handle = backend_handle_.lock()) {
         return *handle;
     } else {
