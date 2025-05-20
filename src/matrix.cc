@@ -68,6 +68,328 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
     }
 }
 
+//----------------------------------------------------------------------
+// Matrix class implementation - CSR format
+//----------------------------------------------------------------------
+
+// Basic constructor for CSR sparse matrix (allocates uninitialized memory)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+Matrix<T, MType>::Matrix(int rows, int cols, int nnz, int batch_size)
+    : rows_(rows), cols_(cols), nnz_(nnz), batch_size_(batch_size),
+      matrix_stride_(nnz), offset_stride_(rows + 1) {
+    // Allocate memory
+    data_.resize(static_cast<size_t>(nnz) * batch_size);
+    row_offsets_.resize(static_cast<size_t>(rows + 1) * batch_size);
+    col_indices_.resize(static_cast<size_t>(nnz) * batch_size);
+}
+
+// Constructor from existing data (copies the data)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col_indices,
+                        int nnz, int rows, int cols, int matrix_stride, 
+                        int offset_stride, int batch_size)
+    : rows_(rows), cols_(cols), nnz_(nnz), batch_size_(batch_size),
+      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
+      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1) {
+    // Allocate and copy data
+    data_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
+    row_offsets_.resize(static_cast<size_t>(offset_stride_) * batch_size);
+    col_indices_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
+    
+    std::copy(values, values + static_cast<size_t>(matrix_stride_) * batch_size, data_.data());
+    std::copy(row_offsets, row_offsets + static_cast<size_t>(offset_stride_) * batch_size, row_offsets_.data());
+    std::copy(col_indices, col_indices + static_cast<size_t>(matrix_stride_) * batch_size, col_indices_.data());
+}
+
+//----------------------------------------------------------------------
+// Common Matrix class implementations (for all formats)
+//----------------------------------------------------------------------
+
+// Convert to a different matrix format
+template <typename T, MatrixFormat MType>
+template <MatrixFormat NewMType>
+Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const {
+    Queue q; // Use default queue
+
+    // Handle identity conversion (same format)
+    if constexpr (MType == NewMType) {
+        return static_cast<const Matrix<T, NewMType>&>(*this);
+    }
+    // Handle Dense to CSR conversion
+    else if constexpr (MType == MatrixFormat::Dense && NewMType == MatrixFormat::CSR) {
+        // --- Dense to CSR using work-group primitives ---
+        int rows = this->rows_;
+        int cols = this->cols_;
+        int batch_size = this->batch_size_;
+        int dense_ld = this->ld();
+        int dense_stride = this->stride();
+        const T* dense_data_ptr = this->data().data();
+
+        // 1. Count NNZ per row and total NNZ using work-group reductions
+        UnifiedVector<int> row_nnz_counts_mem(batch_size * rows, 0);
+        UnifiedVector<int> batch_nnz_counts_mem(batch_size, 0);
+
+        auto row_nnz_counts = row_nnz_counts_mem.to_span();
+        auto batch_nnz_counts = batch_nnz_counts_mem.to_span();
+        
+        // Calculate best work-group size (can be tuned based on hardware)
+        const int wg_size = std::min(32, rows); 
+        
+        // First kernel: Count non-zeros per row
+        q->submit([&](sycl::handler& cgh) {
+            sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), cgh);
+                
+            cgh.parallel_for(
+                sycl::nd_range<3>(
+                    sycl::range<3>(batch_size, cols, wg_size),
+                    sycl::range<3>(1, 1, wg_size)
+                ),
+                [=](sycl::nd_item<3> item) {
+                    const size_t b = item.get_group(0);
+                    const size_t c = item.get_group(1);  // Now working on columns
+                    const size_t local_id = item.get_local_id(2);
+                    const size_t group_size = item.get_local_range(2);
+                    
+                    // Initialize local count for this thread
+                    int local_count = 0;
+                    
+                    // Process consecutive rows within the same column for better coalescing
+                    for (size_t r = local_id; r < rows; r += group_size) {
+                        // In column-major format, row elements in the same column are contiguous
+                        size_t dense_idx = b * dense_stride + c * dense_ld + r;
+                        
+                        // Use zero_threshold instead of comparing with exact zero
+                        if constexpr (std::is_same_v<T, std::complex<float>> || 
+                                      std::is_same_v<T, std::complex<double>>) {
+                            // For complex numbers, check both real and imaginary parts
+                            auto val = dense_data_ptr[dense_idx];
+                            if (std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold) {
+                                local_count++;
+                            }
+                        } else {
+                            // For real numbers
+                            if (std::abs(dense_data_ptr[dense_idx]) > zero_threshold) {
+                                local_count++;
+                            }
+                        }
+                    }
+                    
+                    // First thread in group distributes the counts to each row
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>
+                                row_counter(row_nnz_counts[b * rows + local_id]);
+                            row_counter.fetch_add(local_count);
+                }
+            );
+        }).wait();
+        
+        // Compute per-matrix (per-batch) number of non-zeros using joint_reduce
+        q->submit([&](sycl::handler& cgh) {
+            auto row_nnz_acc = row_nnz_counts.data();
+            auto batch_nnz_acc = batch_nnz_counts.data();
+            
+            cgh.parallel_for(
+            sycl::nd_range<1>(
+                sycl::range<1>(batch_size * wg_size),
+                sycl::range<1>(wg_size)
+            ),
+            [=](sycl::nd_item<1> item) {
+                const size_t b = item.get_group(0); // batch index
+                const size_t local_id = item.get_local_id(0);
+                
+                // Calculate the begin and end iterators for this batch's row counts
+                auto begin_iter = row_nnz_acc + (b * rows);
+                auto end_iter = begin_iter + rows;
+                
+                // Use joint_reduce directly on the range of row counts for this batch
+                int total_sum = sycl::joint_reduce(
+                    item.get_group(),
+                    begin_iter,
+                    end_iter,
+                    sycl::plus<int>()
+                );
+                
+                // First thread writes the result
+                if (local_id == 0) {
+                    batch_nnz_acc[b] = total_sum;
+                }
+            }
+            );
+        }).wait();
+
+        // Calculate total NNZ across all matrices
+        int total_nnz = std::reduce(batch_nnz_counts.begin(), batch_nnz_counts.end(), 0);
+        
+        // 2. Create row offsets using exclusive scan within each batch
+        Matrix<T, MatrixFormat::CSR> result(rows, cols, total_nnz, batch_size);
+        
+        // Initialize batch offset counters
+        UnifiedVector<int> batch_offsets(batch_size + 1, 0);
+        for (int b = 1; b <= batch_size; b++) {
+            batch_offsets[b] = batch_offsets[b-1] + batch_nnz_counts[b-1];
+        }
+        
+        // Second kernel: Compute row offsets using work-group scan
+        q->submit([&](sycl::handler& cgh) {
+            // Create accessor for row offsets
+            auto row_offsets_acc = sycl::accessor(result.row_offsets_.data(), 
+                                                  result.row_offsets_.size(),
+                                                  cgh,
+                                                  sycl::write_only);
+            
+            // Local memory for scans
+            sycl::local_accessor<int, 1> local_scan(rows + 1, cgh);
+                
+            cgh.parallel_for(
+                sycl::nd_range<1>(
+                    sycl::range<1>(batch_size * wg_size), 
+                    sycl::range<1>(wg_size)
+                ),
+                [=](sycl::nd_item<1> item) {
+                    const size_t b = item.get_group(0);
+                    const size_t local_id = item.get_local_id(0);
+                    const size_t group_size = item.get_local_range(0);
+                    
+                    // Load row counts into local memory
+                    if (local_id < rows) {
+                        local_scan[local_id + 1] = row_nnz_counts[b * rows + local_id];
+                    }
+                    if (local_id == 0) {
+                        local_scan[0] = 0; // Start with 0 for exclusive scan
+                    }
+                    
+                    item.barrier(sycl::access::fence_space::local_space);
+                    
+                    // Perform work-group exclusive scan
+                    // Using a simplified inclusive scan followed by shifting
+                    for (int offset = 1; offset < rows + 1; offset *= 2) {
+                        if (local_id < rows + 1 && local_id >= offset) {
+                            int temp = local_scan[local_id - offset];
+                            item.barrier(sycl::access::fence_space::local_space);
+                            local_scan[local_id] += temp;
+                        }
+                        item.barrier(sycl::access::fence_space::local_space);
+                    }
+                    
+                    // Write results to global memory, adding batch offset
+                    if (local_id < rows + 1) {
+                        row_offsets_acc[b * (rows + 1) + local_id] = local_scan[local_id] + batch_offsets[b];
+                    }
+                }
+            );
+        }).wait();
+        
+        // 3. Populate CSR values and column indices
+        q->submit([&](sycl::handler& cgh) {
+            // Create accessors
+            auto row_offsets_acc = result.row_offsets_.to_span();
+            auto col_indices_acc = result.col_indices_.to_span();
+            auto values_acc = result.data_.to_span();
+            
+            // Use atomic to track position within each row
+            UnifiedVector<int> row_counters(batch_size * rows, 0);
+            auto row_counters_acc = row_counters.to_span();
+            
+            cgh.parallel_for(
+                sycl::range<3>(batch_size, rows, cols),
+                [=](sycl::id<3> idx) {
+                    size_t b = idx[0];
+                    size_t r = idx[1];
+                    size_t c = idx[2];
+                    
+                    size_t dense_idx = b * dense_stride + c * dense_ld + r;
+                    T val = dense_data_ptr[dense_idx];
+                    
+                    // Use zero_threshold instead of comparing with exact zero
+                    bool is_nonzero = false;
+                    if constexpr (std::is_same_v<T, std::complex<float>> || 
+                                  std::is_same_v<T, std::complex<double>>) {
+                        // For complex numbers, check both real and imaginary parts
+                        is_nonzero = std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold;
+                    } else {
+                        // For real numbers
+                        is_nonzero = std::abs(val) > zero_threshold;
+                    }
+                    
+                    if (is_nonzero) {
+                        // Use atomic to get position in CSR arrays
+                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>
+                            counter(row_counters_acc[b * rows + r]);
+                        int pos = counter.fetch_add(1);
+                        
+                        // Get base offset for this row
+                        int csr_idx = row_offsets_acc[b * (rows + 1) + r] + pos;
+                        
+                        // Write value and column index
+                        col_indices_acc[csr_idx] = c;
+                        values_acc[csr_idx] = val;
+                    }
+                }
+            );
+        }).wait();
+
+        return result;
+    }
+    // Handle CSR to Dense conversion
+    else if constexpr (MType == MatrixFormat::CSR && NewMType == MatrixFormat::Dense) {
+        // --- CSR to Dense ---
+        int rows = this->rows_;
+        int cols = this->cols_;
+        int batch_size = this->batch_size_;
+        int nnz = this->nnz(); // Assuming nnz per batch item if matrix_stride == nnz
+        int csr_mat_stride = this->matrix_stride();
+        int csr_off_stride = this->offset_stride();
+
+        const T* csr_data_ptr = this->data().data();
+        const int* csr_row_offsets_ptr = this->row_offsets().data();
+        const int* csr_col_indices_ptr = this->col_indices().data();
+
+        // 1. Allocate and zero Dense matrix
+        Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
+        result.fill(T(0)); // Important: Initialize dense matrix to zero
+        
+        T* result_data_ptr = result.data().data();
+        int dense_ld = result.ld();
+        int dense_stride = result.stride();
+
+        // 2. Scatter CSR data into Dense matrix
+        q->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<2>(batch_size, rows), [=](sycl::id<2> idx) {
+                size_t b = idx[0];
+                size_t r = idx[1];
+
+                int row_start_offset_idx = b * csr_off_stride + r;
+                int row_end_offset_idx = b * csr_off_stride + r + 1;
+
+                int start_nnz = csr_row_offsets_ptr[row_start_offset_idx];
+                int end_nnz = csr_row_offsets_ptr[row_end_offset_idx];
+
+                // Adjust start/end nnz based on potential batch stride in values/indices
+                // Assuming matrix_stride applies to values and col_indices
+                int batch_val_col_base = b * csr_mat_stride; 
+
+                for (int csr_idx = start_nnz; csr_idx < end_nnz; ++csr_idx) {
+                    int c = csr_col_indices_ptr[csr_idx];
+                    T val = csr_data_ptr[csr_idx];
+
+                    // Calculate dense index (Column-Major)
+                    size_t dense_idx = b * dense_stride + c * dense_ld + r;
+                    result_data_ptr[dense_idx] = val;
+                }
+            });
+        }).wait();
+
+        return result;
+    }
+    // Handle other conversions (e.g., Dense to COO, CSR to CSC, etc.)
+    else {
+        // Throw error for unsupported or unimplemented conversions
+        throw std::runtime_error("Conversion between specified matrix formats not supported or implemented.");
+    }
+}
+
+
 // Destructor
 template <typename T>
 Matrix<T, MatrixFormat::Dense>::~Matrix() {
