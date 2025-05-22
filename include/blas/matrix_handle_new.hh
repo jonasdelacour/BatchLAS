@@ -234,18 +234,21 @@ namespace batchlas {
     class MatrixView {
     public:
         // Constructors for dense matrix view - from raw spans
+        // data_ptrs: Optional array of pointers to the start of each matrix in a batch
+        // This enables direct use of the pointers in batched operations
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView(Span<T> data, int rows, int cols, int ld,
-                  int stride = 0, int batch_size = 1);
-
+                  int stride = 0, int batch_size = 1, Span<T*> data_ptrs = Span<T*>());
 
         // Constructors for CSR sparse matrix view
+        // data_ptrs: Optional array of pointers to the start of each matrix's values in a batch
+        // This enables direct use of the pointers in batched operations
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
         MatrixView(Span<T> data, Span<int> row_offsets, Span<int> col_indices, 
                   int nnz, int rows, int cols, int matrix_stride = 0,
-                  int offset_stride = 0, int batch_size = 1);
+                  int offset_stride = 0, int batch_size = 1, Span<T*> data_ptrs = Span<T*>());
 
         // Constructors from Matrix objects - view entire matrix
         MatrixView(const Matrix<T, MType>& matrix);
