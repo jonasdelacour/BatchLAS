@@ -781,23 +781,12 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
 // Constructor for dense matrix view
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-MatrixView<T, MType>::MatrixView(Span<T> data, int rows, int cols, int ld,
-                               int stride, int batch_size, Span<T*> data_ptrs)
-    : rows_(rows), cols_(cols), batch_size_(batch_size), data_(data), ld_(ld),
-      stride_(stride > 0 ? stride : ld * cols), data_ptrs_(data_ptrs) {
-}
+MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
+                  int stride, int batch_size, T** data_ptrs) :
+                data_(data, (stride > 0 ? stride : ld * cols) * batch_size),
+                rows_(rows), cols_(cols), batch_size_(batch_size),
+                ld_(ld), stride_(stride > 0 ? stride : ld * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {}
 
-/* // Constructor for a submatrix view
-template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-MatrixView<T, MType>::MatrixView(Span<T> data, int row_offset, int col_offset,
-                               int rows, int cols, int ld, int stride, int batch_size)
-    : rows_(rows), cols_(cols), batch_size_(batch_size), 
-      ld_(ld), stride_(stride > 0 ? stride : ld * cols) {
-    // Adjust the data span to point to the start of the submatrix
-    size_t offset = row_offset + col_offset * ld;
-    data_ = data.subspan(offset, static_cast<size_t>(rows) * cols * batch_size);
-} */
 
 //----------------------------------------------------------------------
 // MatrixView class implementation - CSR format
@@ -806,14 +795,14 @@ MatrixView<T, MType>::MatrixView(Span<T> data, int row_offset, int col_offset,
 // Constructor for CSR sparse matrix view
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
-MatrixView<T, MType>::MatrixView(Span<T> data, Span<int> row_offsets, Span<int> col_indices,
-                               int nnz, int rows, int cols, int matrix_stride,
-                               int offset_stride, int batch_size, Span<T*> data_ptrs)
-    : rows_(rows), cols_(cols), batch_size_(batch_size), data_(data),
-      row_offsets_(row_offsets), col_indices_(col_indices), nnz_(nnz),
-      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
-      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1),
-      data_ptrs_(data_ptrs) {
+MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
+            int nnz, int rows, int cols, int matrix_stride,
+            int offset_stride, int batch_size, T** data_ptrs) :
+            data_(data, (matrix_stride > 0 ? matrix_stride : nnz) * batch_size),
+            col_indices_(col_indices, (matrix_stride > 0 ? matrix_stride : nnz) * batch_size),
+            row_offsets_(row_offsets, (offset_stride > 0 ? offset_stride : rows + 1) * batch_size),
+            rows_(rows), cols_(cols), batch_size_(batch_size), nnz_(nnz), matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz),
+            offset_stride_(offset_stride > 0 ? offset_stride : rows + 1), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
 }
 
 //----------------------------------------------------------------------
@@ -901,38 +890,20 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
         size_t offset = batch_index * stride_;
         
         // Create a new view with batch_size = 1
-        // If we have data_ptrs, we can create a view with a single data_ptr
-        if (!data_ptrs_.empty()) {
-            // Create a span with just the single pointer for this batch
-            return MatrixView<T, MType>(
-                data_.subspan(offset, static_cast<size_t>(rows_) * cols_),
-                rows_, cols_, ld_, stride_, 1, Span<T*>(&data_ptrs_[batch_index], 1));
-        } else {
-            return MatrixView<T, MType>(
-                data_.subspan(offset, static_cast<size_t>(rows_) * cols_),
-                rows_, cols_, ld_);
-        }
+        return MatrixView<T, MType>(
+            data_.data() + offset,
+            rows_, cols_, ld_);
     } else if constexpr (MType == MatrixFormat::CSR) {
         // Calculate offsets to the start of the batch
         size_t val_offset = batch_index * matrix_stride_;
         size_t row_offset = batch_index * offset_stride_;
         
         // Create a new view with batch_size = 1
-        // If we have data_ptrs, we can create a view with a single data_ptr
-        if (!data_ptrs_.empty()) {
-            return MatrixView<T, MType>(
-                data_.subspan(val_offset, nnz_),
-                row_offsets_.subspan(row_offset, rows_ + 1),
-                col_indices_.subspan(val_offset, nnz_),
-                nnz_, rows_, cols_, matrix_stride_, offset_stride_, 1,
-                Span<T*>(&data_ptrs_[batch_index], 1));
-        } else {
-            return MatrixView<T, MType>(
-                data_.subspan(val_offset, nnz_),
-                row_offsets_.subspan(row_offset, rows_ + 1),
-                col_indices_.subspan(val_offset, nnz_),
-                nnz_, rows_, cols_);
-        }
+        return MatrixView<T, MType>(
+            data_.data() + val_offset,
+            row_offsets_.data() + row_offset,
+            col_indices_.data() + val_offset,
+            nnz_, rows_, cols_);
     }
 }
 
@@ -958,6 +929,26 @@ void MatrixView<T, MType>::init(Queue& ctx) const {
         backend_handle_ = handle;  // Error here - need to make backend_handle_ mutable
     } */
 
+}
+
+
+template <typename T, MatrixFormat MType>
+void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx) const {
+    auto [start_ptr, stride, data_ptrs] = std::forward_as_tuple(data_.data(), stride_, data_ptrs_);
+    if (!start_ptr) { 
+        throw std::runtime_error("data_ptrs_ is null");
+    }
+    ctx->submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
+            size_t b = idx[0];
+            data_ptrs[b] = start_ptr + b * stride;
+        });
+    }).wait();
+}
+
+template <typename T, MatrixFormat MType>
+void Matrix<T, MType>::init_data_ptr_array(Queue& ctx) const {
+    this->view().data_ptrs(ctx);
 }
 
 // Initialize backend
@@ -1082,10 +1073,10 @@ template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<fl
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
 
 // Dense MatrixView constructors instantiations
-template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int, Span<float*>);
-template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int, Span<double*>);
-template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(Span<std::complex<float>>, int, int, int, int, int, Span<std::complex<float>*>);
-template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(Span<std::complex<double>>, int, int, int, int, int, Span<std::complex<double>*>);
+template MatrixView<float, MatrixFormat::Dense>::MatrixView(float*, int, int, int, int, int, float**);
+template MatrixView<double, MatrixFormat::Dense>::MatrixView(double*, int, int, int, int, int, double**);
+template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(std::complex<float>*, int, int, int, int, int, std::complex<float>**);
+template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(std::complex<double>*, int, int, int, int, int, std::complex<double>**);
 
 /* template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int, int, int);
@@ -1093,10 +1084,10 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(Span<s
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(Span<std::complex<double>>, int, int, int, int, int, int, int); */
 
 // CSR MatrixView constructors instantiations
-template MatrixView<float, MatrixFormat::CSR>::MatrixView(Span<float>, Span<int>, Span<int>, int, int, int, int, int, int, Span<float*>);
-template MatrixView<double, MatrixFormat::CSR>::MatrixView(Span<double>, Span<int>, Span<int>, int, int, int, int, int, int, Span<double*>);
-template MatrixView<std::complex<float>, MatrixFormat::CSR>::MatrixView(Span<std::complex<float>>, Span<int>, Span<int>, int, int, int, int, int, int, Span<std::complex<float>*>);
-template MatrixView<std::complex<double>, MatrixFormat::CSR>::MatrixView(Span<std::complex<double>>, Span<int>, Span<int>, int, int, int, int, int, int, Span<std::complex<double>*>);
+template MatrixView<float, MatrixFormat::CSR>::MatrixView(float*, int*, int*, int, int, int, int, int, int, float**);
+template MatrixView<double, MatrixFormat::CSR>::MatrixView(double*, int*, int*, int, int, int, int, int, int, double**);
+template MatrixView<std::complex<float>, MatrixFormat::CSR>::MatrixView(std::complex<float>*, int*, int*, int, int, int, int, int, int, std::complex<float>**);
+template MatrixView<std::complex<double>, MatrixFormat::CSR>::MatrixView(std::complex<double>*, int*, int*, int, int, int, int, int, int, std::complex<double>**);
 
 // Dense MatrixView at() method instantiations
 template float& MatrixView<float, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
