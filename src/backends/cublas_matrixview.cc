@@ -93,7 +93,7 @@ namespace batchlas {
                 handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptr(), A.ld(), B.data_ptr(), B.ld()); 
         } else {
             call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched, 
-                handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs().data(), A.ld(), B.data_ptrs().data(), B.ld(), batch_size);
+                handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs(ctx).data(), A.ld(), B.data_ptrs(ctx).data(), B.ld(), batch_size);
         }
         return ctx.get_event();
     }
@@ -134,7 +134,7 @@ namespace batchlas {
             });
             auto info = pool.allocate<int>(ctx, batch_size);
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
-                handle, m, n, A.data_ptrs().data(), A.ld(), tau_ptrs.data(), info.data(), batch_size);
+                handle, m, n, A.data_ptrs(ctx).data(), A.ld(), tau_ptrs.data(), info.data(), batch_size);
         }
         return ctx.get_event();
     }
