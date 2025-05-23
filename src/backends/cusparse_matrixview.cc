@@ -6,6 +6,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <blas/matrix_handle_new.hh>
+#include <blas/functions_matrixview.hh>
 #include "matrix_handle_impl.cc"
 #include <complex>
 
@@ -30,11 +31,6 @@ namespace batchlas {
         auto buffer_size = spmm_buffer_size<B>(ctx, A, B_mat, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
 
-        // Initialize the matrices if not already done
-        A.init(ctx);
-        B_mat.init(ctx);
-        C.init(ctx);
-        
         // Get the backend handles
         auto A_handle = A.get_backend_handle();
         auto B_handle = B_mat.get_backend_handle();
@@ -69,11 +65,6 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
-        // Initialize the matrices if not already done
-        A.init(ctx);
-        B_mat.init(ctx);
-        C.init(ctx);
-        
         // Get the backend handles
         auto A_handle = A.get_backend_handle();
         auto B_handle = B_mat.get_backend_handle();
