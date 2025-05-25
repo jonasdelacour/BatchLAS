@@ -813,7 +813,7 @@ MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
     : rows_(matrix.rows_), cols_(matrix.cols_), batch_size_(matrix.batch_size_),
-      data_(matrix.data()) {
+      data_(matrix.data()), data_ptrs_(matrix.data_ptrs_, matrix.batch_size_) {
       
     // Format-specific initializations
     if constexpr (MType == MatrixFormat::Dense) {
@@ -850,6 +850,7 @@ MatrixView<T, MType>::MatrixView(
         // Adjust the data span to point to the submatrix start
         size_t offset = row_offset + col_offset * ld_;
         data_ = matrix.data().subspan(offset);
+        data_ptrs_ = matrix.data_ptrs_.subspan(offset);
         
         // We can't reuse the backend handle directly since we're viewing a submatrix
         // The backend handle will be created on-demand when needed
@@ -934,9 +935,12 @@ void MatrixView<T, MType>::init(Queue& ctx) const {
 
 template <typename T, MatrixFormat MType>
 void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx) const {
-    auto [start_ptr, stride, data_ptrs] = std::forward_as_tuple(data_.data(), stride_, data_ptrs_);
-    if (!start_ptr) { 
-        throw std::runtime_error("data_ptrs_ is null");
+    auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, data_ptrs_);
+    if (!data_ptrs.data()) {
+        throw std::runtime_error("data_ptrs is null");
+    }
+    if (!start_ptr) {
+        throw std::runtime_error("start_ptr is null");
     }
     ctx->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
