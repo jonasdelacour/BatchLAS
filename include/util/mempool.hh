@@ -19,6 +19,7 @@ struct BumpAllocator {
 
     template<typename T>
     constexpr inline static size_t allocation_size(const Device& device, size_t size){
+        if (size == 0) return 0; // Handle zero size allocation gracefully
         std::uintptr_t total_size = size * sizeof(T);
         return (total_size + alignment<T>(device) - 1) & ~(alignment<T>(device) - 1);
     }
