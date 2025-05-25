@@ -133,9 +133,9 @@ protected:
 // Test single GEMV operation with no transpose using MatrixView
 TEST_F(GemvMatrixViewTest, SingleGemvNoTranspose) {
     // Create MatrixView and VectorView for the first batch item
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.to_span(), rows, cols, rows, 0); // Single batch item view
-    VectorView<float> x_vec(x_data.to_span(), cols, 1); // Single vector view, add ld parameter
-    VectorView<float> y_vec(y_data.to_span(), rows, 1); // Single vector view, add ld parameter
+    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 0); // Single batch item view
+    VectorView<float> x_vec(x_data.data(), cols, 1); // Single vector view, add ld parameter
+    VectorView<float> y_vec(y_data.data(), rows, 1); // Single vector view, add ld parameter
 
     float alpha = 1.0f;
     float beta = 0.0f;
@@ -160,11 +160,11 @@ TEST_F(GemvMatrixViewTest, SingleGemvWithTranspose) {
      ASSERT_EQ(rows, cols) << "Transpose test requires square matrix in this fixture setup.";
 
     // Create MatrixView and VectorView for the first batch item
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.to_span(), rows, cols, rows, 0); // Single batch item view
+    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 0); // Single batch item view
     // For A^T * x, x must have size 'rows'
-    VectorView<float> x_vec(x_data.to_span(), cols, 1); // Single vector view, size 'rows'
+    VectorView<float> x_vec(x_data.data(), rows, 1); // Single vector view, size 'rows'
     // For A^T * x, y must have size 'cols'
-    VectorView<float> y_vec(y_data.to_span(), cols, 1); // Single vector view, size 'cols'
+    VectorView<float> y_vec(y_data.data(), cols, 1); // Single vector view, size 'cols'
 
     float alpha = 2.0f;
     float beta = 0.0f;
@@ -188,10 +188,10 @@ TEST_F(GemvMatrixViewTest, SingleGemvWithTranspose) {
 // Test batched GEMV operation using MatrixView
 TEST_F(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     // Create batched MatrixView and VectorView - use constructors that match the declarations
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.to_span(), rows, cols, rows, 
+    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
                                                 rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.to_span(), cols, batch_size); // Reorder arguments to match constructor
-    VectorView<float> y_vec(y_data.to_span(), rows, batch_size); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), cols, batch_size); // Reorder arguments to match constructor
+    VectorView<float> y_vec(y_data.data(), rows, batch_size); // Reorder arguments to match constructor
 
     float alpha = 1.0f;
     float beta = 0.0f;
@@ -218,12 +218,12 @@ TEST_F(GemvMatrixViewTest, BatchedGemvWithTranspose) {
     ASSERT_EQ(rows, cols) << "Transpose test requires square matrix in this fixture setup.";
 
     // Create batched MatrixView and VectorView
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.to_span(), rows, cols, rows,
+    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows,
                                                 rows * cols, batch_size); // Fixed constructor arguments
     // For A^T * x, x must have size 'rows'
-    VectorView<float> x_vec(x_data.to_span(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
     // For A^T * x, y must have size 'cols'
-    VectorView<float> y_vec(y_data.to_span(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
+    VectorView<float> y_vec(y_data.data(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
 
     float alpha = 2.5f;
     float beta = 0.0f;
@@ -248,10 +248,10 @@ TEST_F(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 // Test both alpha and beta in batched GEMV
 TEST_F(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
     // Create batched MatrixView and VectorView
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.to_span(), rows, cols, rows, 
+    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
                                                 rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.to_span(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
-    VectorView<float> y_vec(y_data.to_span(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
+    VectorView<float> y_vec(y_data.data(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
 
     // Initialize y with some values
     for (int b = 0; b < batch_size; ++b) {
