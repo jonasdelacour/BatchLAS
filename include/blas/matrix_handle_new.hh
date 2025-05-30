@@ -1,6 +1,9 @@
 #pragma once
 #include <memory>
 #include <complex>
+#include <iostream> // Added for std::ostream, std::cout
+#include <iomanip>  // Added for std::setw, std::scientific, etc.
+#include <algorithm> // Added for std::min
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
@@ -151,6 +154,7 @@ namespace batchlas {
         MatrixView<T, MType> view() const;
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
+
         // Methods to initialize backend - update to handle const-correctness
         void init(Queue& ctx) const;
         void init_backend();
@@ -176,6 +180,11 @@ namespace batchlas {
         // Deep copy from another matrix or view
         void copy_from(const MatrixView<T, MType>& src);
         
+        // Print the matrix content
+        void print(std::ostream& os = std::cout, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            this->view().print(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
+        }
+
         // Dense matrix specific accessors
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
@@ -261,8 +270,10 @@ namespace batchlas {
         MatrixView(const Matrix<T, MType>& matrix);
         
         // Constructors from Matrix objects - view subset of matrix
+        template <typename U = T, MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView(const Matrix<T, MType>& matrix, int row_offset, int col_offset,
-                  int rows, int cols);
+                  int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
         
         // Copy and move
         MatrixView(const MatrixView&) = default;
@@ -355,6 +366,74 @@ namespace batchlas {
         // Create a new view into a single batch item
         MatrixView<T, MType> batch_item(int batch_index) const;
         
+        // Print the matrix view content to a stream
+        // Returns the ostream to allow chaining and use in operator<<
+        std::ostream& stream_formatted_to(std::ostream& os, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            std::ios_base::fmtflags original_flags = os.flags();
+            os << std::scientific << std::setprecision(4);
+
+            for (int b_idx = 0; b_idx < batch_size_; ++b_idx) {
+                if (batch_size_ > 1) {
+                    os << "Batch " << b_idx << ":\n";
+                }
+                // Assuming batch_item() returns a view with batch_size_ = 1 and correct data pointers
+                MatrixView<T, MType> current_item_view = this->batch_item(b_idx);
+
+                if constexpr (MType == MatrixFormat::Dense) {
+                    for (int r = 0; r < std::min(current_item_view.rows_, max_rows_to_print); ++r) {
+                        os << "  ";
+                        for (int c = 0; c < std::min(current_item_view.cols_, max_cols_to_print); ++c) {
+                            os << std::setw(13) << current_item_view.at(r, c, 0); // batch is 0 for current_item_view
+                        }
+                        if (current_item_view.cols_ > max_cols_to_print) {
+                            os << " ...";
+                        }
+                        os << "\n";
+                    }
+                    if (current_item_view.rows_ > max_rows_to_print) {
+                        os << "  ...\n";
+                    }
+                } else if constexpr (MType == MatrixFormat::CSR) {
+                    os << "CSR Matrix (rows: " << current_item_view.rows_ 
+                       << ", cols: " << current_item_view.cols_ 
+                       << ", nnz: " << current_item_view.nnz_ << ")\n";
+
+                    os << "  Values:      [";
+                    for (int i = 0; i < std::min(current_item_view.nnz_, max_elements_to_print_csr); ++i) {
+                        os << std::setw(13) << current_item_view.data()[i] << (i == std::min(current_item_view.nnz_, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (current_item_view.nnz_ > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+
+                    os << "  Row Offsets: [";
+                    // CSR row_offsets has size rows + 1
+                    int num_row_offsets = current_item_view.rows_ + 1;
+                    for (int i = 0; i < std::min(num_row_offsets, max_elements_to_print_csr); ++i) {
+                        os << std::setw(6) << current_item_view.row_offsets()[i] << (i == std::min(num_row_offsets, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (num_row_offsets > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+
+                    os << "  Col Indices: [";
+                    for (int i = 0; i < std::min(current_item_view.nnz_, max_elements_to_print_csr); ++i) {
+                        os << std::setw(6) << current_item_view.col_indices()[i] << (i == std::min(current_item_view.nnz_, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (current_item_view.nnz_ > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+                }
+                if (b_idx < batch_size_ - 1) {
+                    os << "\n"; // Separator between batches
+                }
+            }
+            os.flags(original_flags); // Reset stream flags
+            return os;
+        }
+
+        // Convenience print function
+        void print(std::ostream& os = std::cout, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            stream_formatted_to(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
+        }
+
     private:
         void init_data_ptr_array(Queue& ctx) const;
 
@@ -556,6 +635,18 @@ namespace batchlas {
         return (trans == Transpose::NoTrans) 
                ? std::make_pair(mat.rows_, mat.cols_) 
                : std::make_pair(mat.cols_, mat.rows_);
+    }
+
+    // Ostream operators for Matrix and MatrixView
+    template <typename T, MatrixFormat MType>
+    std::ostream& operator<<(std::ostream& os, const MatrixView<T, MType>& view) {
+        return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
+    }
+
+    template <typename T, MatrixFormat MType>
+    std::ostream& operator<<(std::ostream& os, const Matrix<T, MType>& matrix) {
+        os << matrix.view(); // Leverages MatrixView's operator<<
+        return os;
     }
 
 } // namespace batchlas
