@@ -9,6 +9,7 @@ if(BATCHLAS_ENABLE_CUDA)
         cusparse.cc
         cublas_matrixview.cc
         cusparse_matrixview.cc
+        cusolver_matrixview.cc
     )
 endif()
 
