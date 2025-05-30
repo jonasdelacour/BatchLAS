@@ -63,9 +63,9 @@ protected:
 // Test GEMM operation using identity matrix (C = A * I = A)
 TEST_F(BlasOperationsTest, GemmWithIdentityMatrix) {
     // Create matrix views with the new matrix handle format - using default template parameters
-    MatrixView A_view(A_data.to_span(), rows, cols, ld);
-    MatrixView B_view(B_data.to_span(), cols, cols, ld);
-    MatrixView C_view(C_data.to_span(), rows, cols, ld);
+    MatrixView A_view(A_data.data(), rows, cols, ld);
+    MatrixView B_view(B_data.data(), cols, cols, ld);
+    MatrixView C_view(C_data.data(), rows, cols, ld);
     
     // Perform C = A * B (which should equal A since B is identity)
     gemm<Backend::CUDA>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f,
@@ -82,9 +82,9 @@ TEST_F(BlasOperationsTest, GemmWithIdentityMatrix) {
 // Test batched GEMM operation
 TEST_F(BlasOperationsTest, BatchedGemm) {
     // Create batched matrix views - using default template parameters
-    MatrixView A_view(A_data.to_span(), rows, cols, ld, rows * cols, batch_size);
-    MatrixView B_view(B_data.to_span(), rows, cols, ld, rows * cols, batch_size);
-    MatrixView C_view(C_data.to_span(), rows, cols, ld, rows * cols, batch_size);
+    MatrixView A_view(A_data.data(), rows, cols, ld, rows * cols, batch_size);
+    MatrixView B_view(B_data.data(), rows, cols, ld, rows * cols, batch_size);
+    MatrixView C_view(C_data.data(), rows, cols, ld, rows * cols, batch_size);
     
     // Adding the ComputePrecision parameter
     gemm<Backend::CUDA>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f, 
