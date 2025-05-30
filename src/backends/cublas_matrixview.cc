@@ -5,7 +5,7 @@
 #include <util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <blas/matrix_handle_new.hh>
+#include <blas/functions_matrixview.hh>
 #include <complex>
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -88,7 +88,9 @@ namespace batchlas {
         handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(B, Transpose::NoTrans);
         auto batch_size = A.batch_size();
-        if (batch_size <= 1) {
+        trsm_validate_params(A, B, side, uplo, transA, diag);
+
+        if (batch_size == 1) {
             call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm, 
                 handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptr(), A.ld(), B.data_ptr(), B.ld()); 
         } else {
