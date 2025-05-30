@@ -25,7 +25,7 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         int size = 0;
-        if (A.batch_size() > 1) {
+        if (A.batch_size() == 1) {
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
                 handle, uplo, A.rows(), A.data_ptr(), A.ld(), &size);
             size = BumpAllocator::allocation_size<std::byte>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
@@ -44,8 +44,7 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto Lwork = potrf_buffer_size<B>(ctx, descrA, uplo) - BumpAllocator::allocation_size<int>(ctx, 1);
-        
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
             auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
             auto info = pool.allocate<int>(ctx, 1);
             auto status = call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
@@ -74,7 +73,7 @@ namespace batchlas {
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
             cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
@@ -155,7 +154,7 @@ namespace batchlas {
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
             cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
@@ -189,7 +188,7 @@ namespace batchlas {
     template Event syev<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \ 
+        Span<typename base_type<fp>::type>, \
         JobType, \
         Uplo, \
         Span<std::byte>);
