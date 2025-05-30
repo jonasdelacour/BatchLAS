@@ -34,7 +34,8 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto [m, k] = get_effective_dims(A, transA);
-        Transpose inv_trans = transA == Transpose::Trans ? Transpose::NoTrans : Transpose::Trans;
+        bool is_A_trans = transA == Transpose::Trans;
+        Transpose inv_trans = is_A_trans ? Transpose::NoTrans : Transpose::Trans;
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
         //Else if k > m && transA == Trans the rows of A are linearly dependent
@@ -55,10 +56,8 @@ namespace batchlas {
             gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
             //Compute the Cholesky Factorization of StS
             potrf<B>(ctx, C, Uplo::Lower, potrf_workspace);
-            //Compute Q = S * StS^-1 (S is overwritten with Q)
-            trsm<B>(ctx, C, A, Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, alpha);
-            //Compute the QR factorization of Q
-            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
+            //Solve X * Chol(StS) = S
+            trsm<B>(ctx, C, A, is_A_trans ? Side::Left : Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, alpha);
         };
 
         auto cgs_alg = [&](){
@@ -137,7 +136,7 @@ namespace batchlas {
             });
             //Compute the Cholesky Factorization of StS
             potrf<B>(ctx, C, Uplo::Lower, potrf_workspace);
-            trsm<B>(ctx, C, A, Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, T(1.0));
+            trsm<B>(ctx, C, A, is_A_trans ? Side::Left : Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, T(1.0));
             chol_alg();
             chol_alg();
         };
@@ -159,7 +158,7 @@ namespace batchlas {
             auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower));
             auto output_basis = pool.allocate<T>(ctx, batch_size * m * k);
             //Compute A^T * A
-            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
+            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
             //Compute D = diag(A^T * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
@@ -213,10 +212,12 @@ namespace batchlas {
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
-            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, A.stride(), batch_size);
-            gemm<B>(ctx, A, C, output_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+            //gemm<B>(ctx, is_A_trans ? C : A, is_A_trans ? A : C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
+            gemm<B>(ctx, A, C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
             //Memcpy
             ctx -> memcpy(A.data_ptr(), output_basis.data(), m * k * batch_size * sizeof(T));
+            //Explicit transpose dependent copy to A
         } else {
             throw std::runtime_error("Unknown orthogonalization algorithm");
         }
