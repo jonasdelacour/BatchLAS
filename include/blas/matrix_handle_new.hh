@@ -155,9 +155,8 @@ namespace batchlas {
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
 
-        // Methods to initialize backend - update to handle const-correctness
-        void init(Queue& ctx) const;
-        void init_backend();
+        // Methods to initialize backend
+        void init() const;
         // Initialize data pointers for batched operations
         Span<T*> data_ptrs(Queue& ctx) const {
             init_data_ptr_array(ctx);
@@ -272,7 +271,12 @@ namespace batchlas {
         // Constructors from Matrix objects - view subset of matrix
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        MatrixView(const Matrix<T, MType>& matrix, int row_offset, int col_offset,
+        MatrixView(const Matrix<T, MType>& matrix,
+                  int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
+
+        template <typename U = T, MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView(const MatrixView<T, MType>& matrix_view,
                   int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
         
         // Copy and move
@@ -285,12 +289,11 @@ namespace batchlas {
         ~MatrixView() = default;
 
         // Initialize backend - need to make backend_handle_ mutable
-        void init(Queue& ctx) const;
-        void init_backend();
+        void init() const;
 
         // Accessors
-        BackendMatrixHandle<T, MType>* operator->();
-        BackendMatrixHandle<T, MType>& operator*();
+        BackendMatrixHandle<T, MType>* operator->() const;
+        BackendMatrixHandle<T, MType>& operator*() const;
 
         // Access single matrix in batch (returns view for a single matrix)
         MatrixView<T, MType> operator[](int i) const;
@@ -356,12 +359,6 @@ namespace batchlas {
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         const T& at(int row, int col, int batch = 0) const;
-        
-        // Backend handle access
-        BackendMatrixHandle<T, MType>* get_backend_handle() const { 
-            auto ptr = backend_handle_.lock();
-            return ptr.get(); 
-        }
         
         // Create a new view into a single batch item
         MatrixView<T, MType> batch_item(int batch_index) const;
@@ -454,17 +451,17 @@ namespace batchlas {
         int matrix_stride_ = 0;   // Stride between value arrays in a batch
         int offset_stride_ = 0;   // Stride between offset arrays in a batch
         
-        // Backend handle (weak pointer to avoid circular references)
+        // Backend handle
         // Make mutable so it can be modified in const methods
-        mutable std::weak_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
+        mutable std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
     };
 
     // Factory functions to create backend handles (implemented in src/backends/matrix_handle_impl.cc)
-    template <Backend B, typename T, MatrixFormat MType>
-    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix, Queue& ctx);
+    template <typename T, MatrixFormat MType>
+    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix);
 
-    template <Backend B, typename T, MatrixFormat MType>
-    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view, Queue& ctx);
+    template <typename T, MatrixFormat MType>
+    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view);
 
     // Vector type definitions - simplified versions of the matrix types
     template <typename T = float>
