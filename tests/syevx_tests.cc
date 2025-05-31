@@ -4,6 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <blas/matrix_handle_new.hh>
+#include <blas/extensions_new.hh>
 
 
 using namespace batchlas;
@@ -143,6 +145,48 @@ TEST_F(SyevxOperationsTest, SyevxSparseOperation) {
 
     ctx->wait();
     
+    // Verify that the computed eigenvalues match the expected ones
+    for (int b = 0; b < batch_size; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            EXPECT_NEAR(W_data[b * neig + i], known_eigenvalues[i], 0.1f)
+                << "Eigenvalue mismatch at batch " << b << ", index " << i;
+        }
+    }
+}
+
+TEST_F(SyevxOperationsTest, SyevxMatrixView) {
+    const int neig = 3;
+
+    MatrixView<float, MatrixFormat::CSR> A_view(csr_values.data(),
+                                                csr_row_offsets.data(),
+                                                csr_col_indices.data(),
+                                                total_nnz,
+                                                rows,
+                                                rows,
+                                                total_nnz,
+                                                rows + 1,
+                                                batch_size);
+
+    SyevxParams<float> params;
+    params.algorithm = OrthoAlgorithm::Chol2;
+    params.iterations = 50;
+    params.extra_directions = 5;
+    params.find_largest = true;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
+
+    size_t buffer_size = syevx_buffer_size<Backend::CUDA>(
+        *ctx, A_view, W_data, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
+
+    UnifiedVector<std::byte> workspace(buffer_size);
+
+    syevx<Backend::CUDA>(
+        *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
+
+    ctx->wait();
+    std::cout << "Computed eigenvalues:" << std::endl;
+    std::cout << W_data << std::endl;
+
     // Verify that the computed eigenvalues match the expected ones
     for (int b = 0; b < batch_size; ++b) {
         for (int i = 0; i < neig; ++i) {
