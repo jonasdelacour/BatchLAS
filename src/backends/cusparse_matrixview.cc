@@ -9,6 +9,7 @@
 #include <blas/functions_matrixview.hh>
 #include "matrix_handle_impl.cc"
 #include <complex>
+#include <ios>
 
 // This file contains cuSPARSE primitives implementation using MatrixView
 namespace batchlas {
@@ -31,20 +32,15 @@ namespace batchlas {
         auto buffer_size = spmm_buffer_size<B>(ctx, A, B_mat, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
 
-        // Get the backend handles
-        auto A_handle = A.get_backend_handle();
-        auto B_handle = B_mat.get_backend_handle();
-        auto C_handle = C.get_backend_handle();
-
         cusparseSpMM(
             handle,
             enum_convert<BackendLibrary::CUSPARSE>(transA),
             enum_convert<BackendLibrary::CUSPARSE>(transB),
             &alpha,
-            *A_handle,
-            *B_handle,
+            *A,
+            *B_mat,
             &beta,
-            *C_handle,
+            *C,
             BackendScalar<T,B>::type,
             CUSPARSE_SPMM_ALG_DEFAULT,
             buffer.data()
@@ -65,22 +61,16 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
-        // Get the backend handles
-        auto A_handle = A.get_backend_handle();
-        auto B_handle = B_mat.get_backend_handle();
-        auto C_handle = C.get_backend_handle();
-        
         size_t size = 0;
-        
         cusparseSpMM_bufferSize(
             handle,
             enum_convert<BackendLibrary::CUSPARSE>(transA),
             enum_convert<BackendLibrary::CUSPARSE>(transB),
             &alpha,
-            *A_handle,
-            *B_handle,
+            *A,
+            *B_mat,
             &beta,
-            *C_handle,
+            *C,
             BackendScalar<T,B>::type,
             CUSPARSE_SPMM_ALG_DEFAULT,
             &size
