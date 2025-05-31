@@ -2,7 +2,7 @@
 #define BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
 
 #include <util/sycl-device-queue.hh>
-#include <blas/matrix_handle_new.hh>
+#include <blas/matrix.hh>
 #include <util/sycl-span.hh>
 #include <complex>
 #include <sycl/sycl.hpp>

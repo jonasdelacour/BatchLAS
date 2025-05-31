@@ -2,8 +2,8 @@
 #include <complex>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
-#include "enums.hh"
-#include "matrix_handle_new.hh"
+#include <blas/enums.hh>
+#include <blas/matrix.hh>
 #include <numeric>
 #include <limits>
 #include <cstddef>
