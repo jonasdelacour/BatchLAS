@@ -127,11 +127,6 @@ PYBIND11_MODULE(batchlas, m) {
         .value("NETLIB", batchlas::Backend::NETLIB)
         .export_values();
         
-    py::enum_<batchlas::BatchType>(m, "BatchType")
-        .value("Single", batchlas::BatchType::Single)
-        .value("Batched", batchlas::BatchType::Batched)
-        .export_values();
-        
     py::enum_<batchlas::Transpose>(m, "Transpose")
         .value("NoTrans", batchlas::Transpose::NoTrans)
         .value("Trans", batchlas::Transpose::Trans)
