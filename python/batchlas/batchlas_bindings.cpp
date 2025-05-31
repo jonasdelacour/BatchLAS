@@ -2,9 +2,10 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <batchlas.hh>
-#include <blas/functions.hh>
 #include <blas/enums.hh>
-#include <blas/matrix_handle.hh>
+#include <blas/matrix_handle_new.hh>
+#include <blas/extensions_new.hh>
+#include <blas/functions_matrixview.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
@@ -40,7 +41,7 @@ public:
     }
     
     // Get a view of the matrix for use with BatchLAS functions
-    batchlas::DenseMatView<T, batchlas::BatchType::Batched> get_view() {
+    batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> get_view() {
         // Create a handle first
         int ld = rows_;  // leading dimension (row stride for column-major)
         int stride = rows_ * cols_;  // batch stride
@@ -55,8 +56,8 @@ public:
         span_ptrs_ = Span<T*>(data_ptrs_.data(), batch_size_);
         
         // Create the matrix view
-        return batchlas::DenseMatView<T, batchlas::BatchType::Batched>(
-            data_.data(), rows_, cols_, ld, stride, batch_size_, span_ptrs_);
+        return batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>(
+            data_.data(), rows_, cols_, ld, stride, batch_size_, span_ptrs_.data());
     }
     
 private:
@@ -96,12 +97,12 @@ public:
     }
     
     // Get a handle of the vector for use with BatchLAS functions
-    batchlas::DenseVecHandle<T, batchlas::BatchType::Batched> get_handle() {
+    batchlas::VectorView<T> get_handle() {
         int incx = 1;  // Increment within each vector
         int stride = length_;  // Stride between batch elements
         
         // Create the vector handle
-        return batchlas::DenseVecHandle<T, batchlas::BatchType::Batched>(
+        return batchlas::VectorView<T>(
             data_.data(), length_, incx, stride, batch_size_);
     }
     
