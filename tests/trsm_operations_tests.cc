@@ -2,7 +2,6 @@
 #include <blas/linalg.hh>
 #include <blas/matrix_handle_new.hh>
 #include <blas/cublas_matrixview.hh>
-#include <blas/functions.hh>
 #include <blas/enums.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
