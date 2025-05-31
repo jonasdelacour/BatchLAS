@@ -5,7 +5,7 @@
 #include <util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <blas/functions_matrixview.hh>
+#include <blas/functions.hh>
 #include <complex>
 
 // This file contains cuBLAS primitives implementation using MatrixView

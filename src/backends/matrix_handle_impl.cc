@@ -1,4 +1,4 @@
-#include <blas/matrix_handle_new.hh>
+#include <blas/matrix.hh>
 #include "../linalg-impl.hh"
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>

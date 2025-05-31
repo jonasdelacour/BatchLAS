@@ -1,4 +1,3 @@
-#include "../../include/blas/linalg.hh"
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
@@ -8,9 +7,7 @@
 #include <complex>
 #include <numeric>
 #include <algorithm>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
-#include <blas/extensions_new.hh>
+#include <blas/linalg.hh>
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure

@@ -5,8 +5,7 @@
 #include <util/mempool.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
+#include <blas/linalg.hh>
 #include "matrix_handle_impl.cc"
 #include <complex>
 #include <ios>

@@ -1,4 +1,4 @@
-#include "../include/blas/matrix_handle_new.hh"
+#include <blas/matrix.hh>
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
 #include <util/mempool.hh>

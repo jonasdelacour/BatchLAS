@@ -4,6 +4,6 @@
 
 // Include the enum declarations
 #include <blas/enums.hh>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
-#include <blas/extensions_new.hh>
+#include <blas/matrix.hh>
+#include <blas/functions.hh>
+#include <blas/extensions.hh>

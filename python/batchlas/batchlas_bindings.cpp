@@ -2,10 +2,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <batchlas.hh>
-#include <blas/enums.hh>
-#include <blas/matrix_handle_new.hh>
-#include <blas/extensions_new.hh>
-#include <blas/functions_matrixview.hh>
+#include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>

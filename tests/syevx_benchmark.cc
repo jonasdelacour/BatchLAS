@@ -11,9 +11,9 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
-#include <blas/matrix_handle_new.hh>
-#include <blas/extensions_new.hh>
-#include <blas/functions_matrixview.hh>
+#include <blas/matrix.hh>
+#include <blas/extensions.hh>
+#include <blas/functions.hh>
 
 using namespace batchlas;
 

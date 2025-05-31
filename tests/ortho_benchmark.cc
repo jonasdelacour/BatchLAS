@@ -12,10 +12,7 @@
 #include <cmath>
 #include <sstream>
 #include <execution>
-#include <blas/matrix_handle_new.hh>
-#include <blas/extensions_new.hh>
-#include <blas/functions_matrixview.hh>
-
+#include <blas/linalg.hh>
 using namespace batchlas;
 
 // Function to generate a CSV header row

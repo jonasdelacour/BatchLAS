@@ -1,9 +1,7 @@
 \
 #include <gtest/gtest.h>
-#include "blas/extensions_new.hh"
-#include "blas/matrix_handle_new.hh"
-#include "blas/functions_matrixview.hh"
-#include "util/sycl-device-queue.hh"
+#include <blas/linalg.hh>
+#include <util/sycl-device-queue.hh>
 #include <complex>
 #include <vector>
 #include <iostream>

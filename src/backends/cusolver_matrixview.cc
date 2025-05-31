@@ -6,8 +6,7 @@
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
+#include <blas/linalg.hh>
 
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {

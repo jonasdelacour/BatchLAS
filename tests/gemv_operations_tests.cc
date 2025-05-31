@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
-#include <blas/matrix_handle_new.hh> // Include the new matrix handle
-#include <blas/cublas_matrixview.hh> // Include the header with MatrixView-compatible gemv
+#include <blas/matrix.hh> // Include the new matrix handle
 #include <sycl/sycl.hpp>
 #include <iostream>
 #include <vector>

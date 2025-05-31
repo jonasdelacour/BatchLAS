@@ -1,6 +1,4 @@
 //Implementation file for Lanczos algorithm
-
-#include "../../include/blas/linalg.hh"
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
@@ -10,9 +8,7 @@
 #include <complex>
 #include <oneapi/dpl/random>
 #include <oneapi/dpl/algorithm>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
-#include <blas/extensions_new.hh>
+#include <blas/linalg.hh>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>

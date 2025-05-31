@@ -7,10 +7,7 @@
 #include <complex>
 #include <lapack.h>
 #include <cblas.h>
-#include <blas/matrix_handle_new.hh>
-#include <blas/functions_matrixview.hh>
-#include <blas/extensions_new.hh>
-
+#include <blas/linalg.hh>
 namespace batchlas{
     
     template <Backend B, typename T>

@@ -1,6 +1,6 @@
 // filepath: /home/jonaslacour/BatchLAS/tests/matrix_view_tests.cc
 #include <gtest/gtest.h>
-#include <blas/matrix_handle_new.hh>
+#include <blas/linalg.hh>
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
 #include <complex>

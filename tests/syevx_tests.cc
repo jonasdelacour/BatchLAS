@@ -4,8 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <blas/matrix_handle_new.hh>
-#include <blas/extensions_new.hh>
+#include <blas/matrix.hh>
+#include <blas/extensions.hh>
 
 
 using namespace batchlas;
