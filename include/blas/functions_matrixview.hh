@@ -11,9 +11,9 @@ namespace batchlas {
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx,
-    MatrixView<T, MFormat>& A,
-    MatrixView<T, MatrixFormat::Dense>& descrB,
-    MatrixView<T, MatrixFormat::Dense>& descrC,
+    const MatrixView<T, MFormat>& A,
+    const MatrixView<T, MatrixFormat::Dense>& descrB,
+    const MatrixView<T, MatrixFormat::Dense>& descrC,
     T alpha,
     T beta,
     Transpose transA,
