@@ -279,6 +279,8 @@ namespace batchlas {
         MatrixView(const MatrixView<T, MType>& matrix_view,
                   int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
         
+        MatrixView() = default;
+
         // Copy and move
         MatrixView(const MatrixView&) = default;
         MatrixView& operator=(const MatrixView&) = default;
