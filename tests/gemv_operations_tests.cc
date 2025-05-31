@@ -190,8 +190,8 @@ TEST_F(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     // Create batched MatrixView and VectorView - use constructors that match the declarations
     MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
                                                 rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.data(), cols, batch_size); // Reorder arguments to match constructor
-    VectorView<float> y_vec(y_data.data(), rows, batch_size); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), cols, 1, cols, batch_size); // Reorder arguments to match constructor
+    VectorView<float> y_vec(y_data.data(), rows, 1, rows, batch_size); // Reorder arguments to match constructor
 
     float alpha = 1.0f;
     float beta = 0.0f;
@@ -221,9 +221,9 @@ TEST_F(GemvMatrixViewTest, BatchedGemvWithTranspose) {
     MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows,
                                                 rows * cols, batch_size); // Fixed constructor arguments
     // For A^T * x, x must have size 'rows'
-    VectorView<float> x_vec(x_data.data(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), rows, 1, rows, batch_size);
     // For A^T * x, y must have size 'cols'
-    VectorView<float> y_vec(y_data.data(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
+    VectorView<float> y_vec(y_data.data(), cols, 1, cols, batch_size);
 
     float alpha = 2.5f;
     float beta = 0.0f;
@@ -250,8 +250,8 @@ TEST_F(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
     // Create batched MatrixView and VectorView
     MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
                                                 rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.data(), cols, batch_size, 1, cols); // Reorder arguments to match constructor
-    VectorView<float> y_vec(y_data.data(), rows, batch_size, 1, rows); // Reorder arguments to match constructor
+    VectorView<float> x_vec(x_data.data(), cols, 1, cols, batch_size);
+    VectorView<float> y_vec(y_data.data(), rows, 1, rows, batch_size);
 
     // Initialize y with some values
     for (int b = 0; b < batch_size; ++b) {
