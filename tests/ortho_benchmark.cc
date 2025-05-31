@@ -12,6 +12,9 @@
 #include <cmath>
 #include <sstream>
 #include <execution>
+#include <blas/matrix_handle_new.hh>
+#include <blas/extensions_new.hh>
+#include <blas/functions_matrixview.hh>
 
 using namespace batchlas;
 
@@ -24,7 +27,7 @@ std::string generate_csv_header() {
 template <typename T>
 double measure_orthonormality_error(
     Queue& ctx, 
-    const DenseMatView<T, BatchType::Single>& A, 
+    const MatrixView<T, MatrixFormat::Dense>& A, 
     Transpose transA) {
     
     // Get dimensions
@@ -42,8 +45,8 @@ double measure_orthonormality_error(
     UnifiedVector<T> result_data(k * k, 0.0);
     
     // Create views
-    DenseMatView<T, BatchType::Single> I(identity_data.data(), k, k, k);
-    DenseMatView<T, BatchType::Single> ATA(result_data.data(), k, k, k);
+    MatrixView I(identity_data.data(), k, k, k);
+    MatrixView ATA(result_data.data(), k, k, k);
     
     // Compute A^T * A or A * A^T depending on transpose flag
     Transpose inv_trans = (transA == Transpose::NoTrans) ? Transpose::Trans : Transpose::NoTrans;
@@ -114,17 +117,13 @@ BenchmarkResult run_single_benchmark(
     
     // Create batched view
     // Use if constexpr (C++17) for compile-time conditional initialization
-    DenseMatHandle<T, BT> matrices_handle = [&]() {
-        if constexpr (BT == BatchType::Single) {
-            return DenseMatHandle<T, BT>(matrices_data.data(), rows, cols, ld);
-        } else {
-            return DenseMatHandle<T, BT>(matrices_data.data(), rows, cols, ld, ld * cols, batch_size);
-        }
+    MatrixView matrices_handle = [&]() {
+            return MatrixView(matrices_data.data(), rows, cols, ld, ld * cols, batch_size);
     }();
     
     // Allocate workspace
     UnifiedVector<std::byte> workspace(ortho_buffer_size<Backend::CUDA>(
-        ctx, matrices_handle(), transpose, algorithm));
+        ctx, matrices_handle, transpose, algorithm));
     
     // Warmup iterations
     for (int i = 0; i < warmup_iterations; ++i) {
@@ -134,7 +133,7 @@ BenchmarkResult run_single_benchmark(
         }
         
         // Run orthogonalization
-        ortho<Backend::CUDA>(ctx, matrices_handle(), transpose, workspace, algorithm);
+        ortho<Backend::CUDA>(ctx, matrices_handle, transpose, workspace, algorithm);
         ctx.wait();
     }
     
@@ -148,7 +147,7 @@ BenchmarkResult run_single_benchmark(
         }
         
         // Run orthogonalization
-        ortho<Backend::CUDA>(ctx, matrices_handle(), transpose, workspace, algorithm);
+        ortho<Backend::CUDA>(ctx, matrices_handle, transpose, workspace, algorithm);
         ctx.wait();
     }
     
@@ -159,11 +158,11 @@ BenchmarkResult run_single_benchmark(
     // Measure orthonormality error
     double error = 0.0;
     if constexpr (BT == BatchType::Single) {
-        error = measure_orthonormality_error(ctx, matrices_handle(), transpose);
+        error = measure_orthonormality_error(ctx, matrices_handle, transpose);
     } else {
         // For batched, we need to check each batch
         for (int i = 0; i < batch_size; ++i) {
-            const auto & batch_view = matrices_handle();
+            const auto & batch_view = matrices_handle;
             error += measure_orthonormality_error(ctx, batch_view[i], transpose);
         }
         error /= batch_size;
