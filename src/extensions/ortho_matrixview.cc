@@ -87,7 +87,7 @@ namespace batchlas {
                 ctx -> submit([&](sycl::handler& h){
                     auto Anext_squared = sycl::local_accessor<float_t, 1>(m, h);
                     auto A_stride = A.stride();
-                    auto Aspan = Span(A.data(), A_stride * batch_size);
+                    auto Aspan = Span(A.data_ptr(), A_stride * batch_size);
 
                     h.parallel_for<OrthoNormalizeVector<B, T>>(
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
