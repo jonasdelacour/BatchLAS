@@ -4,9 +4,9 @@ set(BACKEND_SOURCES
 
 if(BATCHLAS_ENABLE_CUDA)
     list(APPEND BACKEND_SOURCES
-        cublas_matrixview.cc
-        cusparse_matrixview.cc
-        cusolver_matrixview.cc
+        cublas.cc
+        cusparse.cc
+        cusolver.cc
     )
 endif()
 
