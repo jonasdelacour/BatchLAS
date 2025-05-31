@@ -7,7 +7,7 @@
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
-#include "enums.hh"
+#include <blas/enums.hh>
 
 namespace batchlas {
     #ifndef BASETYPE
@@ -25,17 +25,6 @@ namespace batchlas {
     template<typename T>
     using float_t = typename base_type<T>::type;
     #endif
-
-    // MatrixFormat enum to replace Format enum
-    enum class MatrixFormat {
-        Dense,
-        CSR,    // Compressed Sparse Row
-        CSC,    // Compressed Sparse Column
-        COO,    // Coordinate
-        SELL,   // Sliced ELLPACK
-        BSR,    // Blocked Sparse Row
-        BLOCKED_ELL // Blocked ELLPACK
-    };
 
     // Forward declarations with default template parameters
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
