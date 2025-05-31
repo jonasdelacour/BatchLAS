@@ -1,6 +1,7 @@
 # Define the main library target
 add_library(batchlas SHARED
     linalg-impl.hh
+    matrix.cc
 )
 
 # Add source files from subdirectories

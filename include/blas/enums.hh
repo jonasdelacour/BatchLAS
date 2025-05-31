@@ -1,6 +1,18 @@
 #pragma once
-
 namespace batchlas {
+    template<typename T>
+    struct base_type {
+        using type = T;
+    };
+
+    template<typename T>
+    struct base_type<std::complex<T>> {
+        using type = T;
+    };
+
+    template<typename T>
+    using float_t = typename base_type<T>::type;
+
     enum class Backend {
         AUTO,
         CUDA,
@@ -25,11 +37,6 @@ namespace batchlas {
         LAPACKE     //Belongs to NETLIB backend
     };
 
-    enum class BatchType {
-        Single,
-        Batched
-    };
-    
     enum class Transpose {
         NoTrans,
         Trans
@@ -80,14 +87,16 @@ namespace batchlas {
         TF32
     };
 
-    enum class Format {
-        COO,        //Coordinate
-        CSR,        //Compressed Sparse Row
-        CSC,        //Compressed Sparse Column
-        SELL,       //Sliced ELLPACK
-        BSR,        //Blocked Sparse Row
-        BLOCKED_ELL //Blocked ELLPACK
+    enum class MatrixFormat {
+        Dense,
+        CSR,    // Compressed Sparse Row
+        CSC,    // Compressed Sparse Column
+        COO,    // Coordinate
+        SELL,   // Sliced ELLPACK
+        BSR,    // Blocked Sparse Row
+        BLOCKED_ELL // Blocked ELLPACK
     };
+
 
     enum class Layout {
         RowMajor,

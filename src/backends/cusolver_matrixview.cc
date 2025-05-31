@@ -6,6 +6,8 @@
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
+#include <blas/matrix_handle_new.hh>
+#include <blas/functions_matrixview.hh>
 
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {
@@ -16,49 +18,48 @@ namespace batchlas {
         #define USE_CUSOLVER_X_API 0
     #endif
 
-    template <Backend B, typename T, BatchType BT>
+    template <Backend B, typename T>
     size_t potrf_buffer_size(Queue& ctx,
-                            const DenseMatView<T,BT>& A,
+                            const MatrixView<T,MatrixFormat::Dense>& A,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         int size = 0;
-        if constexpr (BT == BatchType::Single) {
+        if (A.batch_size() == 1) {
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
-                handle, uplo, A.rows_, get_data(A), A.ld_, &size);
+                handle, uplo, A.rows(), A.data_ptr(), A.ld(), &size);
             size = BumpAllocator::allocation_size<std::byte>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
         } else {
-            size =  BumpAllocator::allocation_size<int>(ctx, A.batch_size_);
+            size =  BumpAllocator::allocation_size<int>(ctx, A.batch_size());
         }
         return size;
     }
 
-    template <Backend B, typename T, BatchType BT>
+    template <Backend B, typename T>
     Event potrf(Queue& ctx,
-                    const DenseMatView<T,BT>& descrA,
+                    const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {        
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto Lwork = potrf_buffer_size<B>(ctx, descrA, uplo) - BumpAllocator::allocation_size<int>(ctx, 1);
-        
-        if constexpr (BT == BatchType::Single) {
+        if (descrA.batch_size() == 1) {
             auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
             auto info = pool.allocate<int>(ctx, 1);
             auto status = call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
-                handle, uplo, descrA.rows_, get_data(descrA), descrA.ld_, reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
+                handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
         } else {
-            auto info = pool.allocate<int>(ctx, descrA.batch_size_);
+            auto info = pool.allocate<int>(ctx, descrA.batch_size());
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
-                handle, uplo, descrA.rows_, get_ptr_arr(ctx, descrA), descrA.ld_, info.data(), descrA.batch_size_);
+                handle, uplo, descrA.rows(), descrA.data_ptrs(ctx).data(), descrA.ld(), info.data(), descrA.batch_size());
         }
         return ctx.get_event();
     }
 
-    template <Backend B, typename T, BatchType BT>
+    template <Backend B, typename T>
     Event syev(Queue& ctx,
-                   const DenseMatView<T,BT>& descrA,
+                   const MatrixView<T, MatrixFormat::Dense>& descrA,
                    Span<typename base_type<T>::type> eigenvalues,
                    JobType jobtype,
                    Uplo uplo,
@@ -66,37 +67,39 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        std::conditional_t<BT == BatchType::Batched && !USE_CUSOLVER_X_API, int, size_t> l_work_device = 0;
+        size_t l_work_device = 0;
         size_t l_work_host = 0;
         cusolverDnParams_t params;
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
-        if constexpr (BT == BatchType::Single){
-            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_, descrA.ld_, BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
+        if (descrA.batch_size() == 1) {
+            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
-                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_, descrA.ld_, BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host, descrA.batch_size_);
+                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host, descrA.batch_size());
             #else
+                int l_work_device_int = 0;
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
-                    handle, jobtype, uplo, descrA.rows_, descrA.data_, descrA.ld_, base_float_ptr_convert(eigenvalues.data()), &l_work_device, syevj_info, descrA.batch_size_);
+                    handle, jobtype, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_int, syevj_info, descrA.batch_size());
+                l_work_device = static_cast<size_t>(l_work_device_int);
             #endif
         }
         
         auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host);
         auto device_workspace = pool.allocate<std::byte>(ctx, l_work_device);
-                                                      
-        if constexpr (BT == BatchType::Single) {
+
+        if (descrA.batch_size() == 1) {
             int info;
             cusolverDnXsyevd(
                 handle,
                 params,
                 CUSOLVER_EIG_MODE_VECTOR,
                 enum_convert<BackendLibrary::CUSOLVER>(uplo),
-                descrA.rows_,
+                descrA.rows(),
                 BackendScalar<T,B>::type,
-                get_data(descrA),
-                descrA.ld_,
+                descrA.data_ptr(),
+                descrA.ld(),
                 BackendScalar<T,B>::type,
                 eigenvalues.data(),
                 BackendScalar<T,B>::type,
@@ -106,7 +109,7 @@ namespace batchlas {
                 l_work_host,
                 &info);
         } else {
-            auto info = pool.allocate<int>(ctx, descrA.batch_size_);
+            auto info = pool.allocate<int>(ctx, descrA.batch_size());
             #if USE_CUSOLVER_X_API
                 
             cusolverDnXsyevBatched(
@@ -114,10 +117,10 @@ namespace batchlas {
                 params,
                 CUSOLVER_EIG_MODE_VECTOR,
                 enum_convert<BackendLibrary::CUSOLVER>(uplo),
-                descrA.rows_,
+                descrA.rows(),
                 BackendScalar<T,B>::type,
-                descrA.data_,
-                descrA.ld_,
+                descrA.data_ptr(),
+                descrA.ld(),
                 BackendScalar<T,B>::type,
                 eigenvalues.data(),
                 BackendScalar<T,B>::type,
@@ -128,89 +131,87 @@ namespace batchlas {
                 info.data(),
                 descrA.batch_size_);
             #else
+            int l_work_device_int = static_cast<int>(l_work_device);
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
-                handle, jobtype, uplo, descrA.rows_, descrA.data_, descrA.ld_, base_float_ptr_convert(eigenvalues.data()), device_workspace.template as_span<T>().data(), l_work_device, info.data(), syevj_info, descrA.batch_size_);
+                handle, jobtype, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace.template as_span<T>().data(), l_work_device_int, info.data(), syevj_info, descrA.batch_size_);
             #endif
         }
         return ctx.get_event();
     }
 
-    template <Backend B, typename T, BatchType BT>
+    template <Backend B, typename T>
     size_t syev_buffer_size(Queue& ctx,
-                            const DenseMatView<T,BT>& descrA,                            
+                            const MatrixView<T,MatrixFormat::Dense>& descrA,                            
                             Span<typename base_type<T>::type> eigenvalues,
                             JobType jobtype,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
-        std::conditional_t<BT == BatchType::Batched && !USE_CUSOLVER_X_API, int, size_t> l_work_device = 0;
+        size_t l_work_device = 0;
         size_t l_work_host;
         size_t total = 0;
         cusolverDnParams_t params;
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
-        if constexpr (BT == BatchType::Single){
-            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_, descrA.ld_, BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
+        if (descrA.batch_size() == 1) {
+            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
-                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_, descrA.ld_, BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host, descrA.batch_size_);
+                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,B>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,B>::type, eigenvalues.data(), BackendScalar<T,B>::type, &l_work_device, &l_work_host, descrA.batch_size());
             #else
+                int l_work_device_int = 0;
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
-                    handle, jobtype, uplo, descrA.rows_, descrA.data_, descrA.ld_, base_float_ptr_convert(eigenvalues.data()), &l_work_device, syevj_info, descrA.batch_size_);
+                    handle, jobtype, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_int, syevj_info, descrA.batch_size());
+                l_work_device = static_cast<size_t>(l_work_device_int);
             #endif
-            total = BumpAllocator::allocation_size<int>(ctx, descrA.batch_size_);
+            total = BumpAllocator::allocation_size<int>(ctx, descrA.batch_size());
         }
 
         return BumpAllocator::allocation_size<std::byte>(ctx, l_work_host) + BumpAllocator::allocation_size<std::byte>(ctx, l_work_device) + total;
     }
 
-    #define POTRF_INSTANTIATE(fp, BT) \
-    template Event potrf<Backend::CUDA, fp, BT>( \
+    #define POTRF_INSTANTIATE(fp) \
+    template Event potrf<Backend::CUDA, fp>( \
         Queue&, \
-        const DenseMatView<fp, BT>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo, \
         Span<std::byte>);
     
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp, BT) \
-    template size_t potrf_buffer_size<Backend::CUDA, fp, BT>( \
+    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t potrf_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
-        const DenseMatView<fp, BT>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo);
 
-    #define SYEV_INSTANTIATE(fp, BT) \
-    template Event syev<Backend::CUDA, fp, BT>( \
+    #define SYEV_INSTANTIATE(fp) \
+    template Event syev<Backend::CUDA, fp>( \
         Queue&, \
-        const DenseMatView<fp, BT>&, \
-        Span<typename base_type<fp>::type>, \ 
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<fp>::type>, \
         JobType, \
         Uplo, \
         Span<std::byte>);
 
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp, BT) \
-    template size_t syev_buffer_size<Backend::CUDA, fp, BT>( \
+    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t syev_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
-        const DenseMatView<fp, BT>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<typename base_type<fp>::type>, \
         JobType, \
         Uplo);
 
-    #define CUSOLVER_INSTANTIATE(fp, BT) \
-        POTRF_INSTANTIATE(fp, BT) \
-        POTRF_BUFFER_SIZE_INSTANTIATE(fp, BT) \
-        SYEV_INSTANTIATE(fp, BT) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp, BT)
-
-    // Instantiate for all floating-point and batch type combinations
-    #define CUSOLVER_INSTANTIATE_FOR_FP(fp) \
-        CUSOLVER_INSTANTIATE(fp, BatchType::Batched) \
-        CUSOLVER_INSTANTIATE(fp, BatchType::Single)
+    #define CUSOLVER_INSTANTIATE(fp) \
+        POTRF_INSTANTIATE(fp) \
+        POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
+        SYEV_INSTANTIATE(fp) \
+        SYEV_BUFFER_SIZE_INSTANTIATE(fp)
 
     // Instantiate for the floating-point types of interest
-    CUSOLVER_INSTANTIATE_FOR_FP(float)
-    CUSOLVER_INSTANTIATE_FOR_FP(double)
-    CUSOLVER_INSTANTIATE_FOR_FP(std::complex<float>)
-    CUSOLVER_INSTANTIATE_FOR_FP(std::complex<double>)
+    CUSOLVER_INSTANTIATE(float)
+    CUSOLVER_INSTANTIATE(double)
+    CUSOLVER_INSTANTIATE(std::complex<float>)
+    CUSOLVER_INSTANTIATE(std::complex<double>)
 
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE

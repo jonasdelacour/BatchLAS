@@ -11,12 +11,15 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <blas/matrix_handle_new.hh>
+#include <blas/extensions_new.hh>
+#include <blas/functions_matrixview.hh>
 
 using namespace batchlas;
 
 // Helper function to generate sparse matrices with controlled sparsity
 template <typename T>
-SparseMatHandle<T, Format::CSR, BatchType::Batched> generate_sparse_matrices(Queue& ctx,
+auto generate_sparse_matrices(Queue& ctx,
     size_t n, size_t batch_size, double sparsity, Span<std::byte> external_memory) {
     auto pool = BumpAllocator(external_memory);
     
@@ -84,7 +87,7 @@ SparseMatHandle<T, Format::CSR, BatchType::Batched> generate_sparse_matrices(Que
 
 
     // Create the sparse matrix handle
-    return SparseMatHandle<T, Format::CSR, BatchType::Batched>(
+    return MatrixView<T, MatrixFormat::CSR>(
         values.data(), row_offsets.data(), col_indices.data(),
         total_nnz_per_matrix, n, n, total_nnz_per_matrix, (n+1), batch_size);
 }
@@ -121,8 +124,8 @@ double benchmark_syevx(Queue& ctx, size_t n, size_t batch_size, size_t neigs, do
     // Get buffer size and allocate workspace
     size_t buffer_size = syevx_buffer_size<Backend::CUDA>(
         ctx, sparse_matrix, Span<typename base_type<T>::type>(W.data(), W.size()),
-        neigs, JobType::NoEigenVectors, DenseMatView<T, BatchType::Batched>(), params);
-    
+        neigs, JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
+
     UnifiedVector<std::byte> workspace(buffer_size);
     
     // Warmup run
@@ -130,7 +133,7 @@ double benchmark_syevx(Queue& ctx, size_t n, size_t batch_size, size_t neigs, do
     syevx<Backend::CUDA>(
         ctx, sparse_matrix, Span<typename base_type<T>::type>(W.data(), W.size()),
         neigs, Span<std::byte>(workspace.data(), workspace.size()),
-        JobType::NoEigenVectors, DenseMatView<T, BatchType::Batched>(), params);
+        JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
     ctx.wait();
     auto elapsed_warmup_secs = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - T0).count();
     std::cout << "  Warmup time: " << elapsed_warmup_secs << " seconds" << std::endl;
@@ -141,8 +144,8 @@ double benchmark_syevx(Queue& ctx, size_t n, size_t batch_size, size_t neigs, do
     syevx<Backend::CUDA>(
         ctx, sparse_matrix, Span<typename base_type<T>::type>(W.data(), W.size()),
         neigs, Span<std::byte>(workspace.data(), workspace.size()),
-        JobType::NoEigenVectors, DenseMatView<T, BatchType::Batched>(), params);
-    
+        JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
+
     ctx.wait();
     
     auto end = std::chrono::high_resolution_clock::now();

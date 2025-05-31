@@ -4,6 +4,8 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <blas/matrix_handle_new.hh>
+#include <blas/extensions_new.hh>
 
 
 using namespace batchlas;
@@ -111,19 +113,18 @@ protected:
 };
 
 // Test SYEVX operation with sparse matrix
-TEST_F(SyevxOperationsTest, SyevxSparseOperation) {
+TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     const int neig = 3;
 
-    SparseMatHandle<float, Format::CSR, BatchType::Batched> sparse_matrix(
-        csr_values.data(),
-        csr_row_offsets.data(),
-        csr_col_indices.data(),
-        total_nnz,
-        rows,
-        rows,
-        total_nnz,
-        rows+1,
-        batch_size);
+    MatrixView<float, MatrixFormat::CSR> A_view(csr_values.data(),
+                                                csr_row_offsets.data(),
+                                                csr_col_indices.data(),
+                                                total_nnz,
+                                                rows,
+                                                rows,
+                                                total_nnz,
+                                                rows + 1,
+                                                batch_size);
 
     SyevxParams<float> params;
     params.algorithm = OrthoAlgorithm::Chol2;
@@ -134,15 +135,17 @@ TEST_F(SyevxOperationsTest, SyevxSparseOperation) {
     params.relative_tolerance = 1e-6f;
 
     size_t buffer_size = syevx_buffer_size<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, neig, JobType::NoEigenVectors, DenseMatView<float, BatchType::Batched>(), params);
+        *ctx, A_view, W_data, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
 
     UnifiedVector<std::byte> workspace(buffer_size);
 
     syevx<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, neig, workspace, JobType::NoEigenVectors, DenseMatView<float, BatchType::Batched>(), params);
+        *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
 
     ctx->wait();
-    
+    std::cout << "Computed eigenvalues:" << std::endl;
+    std::cout << W_data << std::endl;
+
     // Verify that the computed eigenvalues match the expected ones
     for (int b = 0; b < batch_size; ++b) {
         for (int i = 0; i < neig; ++i) {

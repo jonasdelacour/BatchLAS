@@ -10,21 +10,24 @@
 #include <complex>
 #include <oneapi/dpl/random>
 #include <oneapi/dpl/algorithm>
+#include <blas/matrix_handle_new.hh>
+#include <blas/functions_matrixview.hh>
+#include <blas/extensions_new.hh>
 
 namespace batchlas {
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     struct InitKernel {};
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     struct LanczosKernel {};
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     struct ApplyReflectionsKernel {};
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     struct QTQKernel {};
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     struct DiagonalizeKernel {};
 
     template <typename T>
@@ -171,21 +174,20 @@ namespace batchlas {
         sycl::group_barrier(cta);
     }
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     Event lanczos(Queue& ctx,
-                SparseMatHandle<T, F, BT>& A,
+                const MatrixView<T, MF>& A,
                 Span<typename base_type<T>::type> W, //Output eigenvalues
                 Span<std::byte> workspace,
                 JobType jobz,
-                const DenseMatView<T, BT>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+                const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
                 const LanczosParams<T>& params) {
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
 
-        auto batch_size = get_batch_size(A);
-        auto stride = get_stride(A);
-        auto n = A.rows_;
+        auto batch_size = A.batch_size();
+        auto n = A.rows();
 
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
         auto Vmem = pool.allocate<T>(ctx, (1+n)*n*batch_size);
@@ -194,25 +196,28 @@ namespace batchlas {
         auto betas = pool.allocate<T>(ctx, n*batch_size);
         
         //Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
-        auto padded_output = create_view<T,BT>(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size));
-        auto padded_vector = create_view<T,BT>(Vmem.data(), n, 2, n, (n+1)*n, batch_size, Span<T*>());
+        auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size);
         
-        auto spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
-        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, create_view<T,BT>(Vmem.data(), n, 2, n, (n+1)*n, batch_size, Span<T*>()), 
-            create_view<T,BT>(Vmem.data(), n, n-2, n, (n+1)*n, batch_size, Span<T*>()), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
+        Span<std::byte> spmm_buffer;
+        if constexpr (!(MF == MatrixFormat::Dense)){
+            spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
+        }
+        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size), 
+            MatrixView(Vmem.data(), n, n-2, n, (n+1)*n, batch_size), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
 
         auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
         auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
 
         
-        auto wg_init = std::min(size_t(n), get_kernel_max_wg_size<InitKernel<B, T, F, BT>>(ctx));
-        auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, F, BT>>(ctx));
+        auto wg_init = std::min(size_t(n), get_kernel_max_wg_size<InitKernel<B, T, MF>>(ctx));
+        auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, MF>>(ctx));
         
         //Initial guess
         auto init = [&](){
             ctx -> submit([&](sycl::handler& h) {
                 auto reduce_mem = sycl::local_accessor<T>(n, h);
-                h.parallel_for<InitKernel<B, T, F, BT>>(sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
+                h.parallel_for<InitKernel<B, T, MF>>(sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
                     auto tid = item.get_local_linear_id();
                     auto bdim = item.get_local_range()[0];
@@ -242,8 +247,8 @@ namespace batchlas {
         auto lanczos_iteration = [&](const int iterations){
             for (int it = 0; it < iterations; it++) {
                 if (it > 0) {
-                    auto basis_view = create_view<T,BT>(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem);
-                    auto vector_view = create_view<T,BT>(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem);
+                    auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data());
+                    auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data());
                     if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
                         auto Tstart = std::chrono::steady_clock::now();
                         ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
@@ -252,18 +257,22 @@ namespace batchlas {
                     }
                 }
 
-                auto padded_vector = create_view<T,BT>(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size, Span<T*>());
+                auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size);
                 auto spmm_start = std::chrono::steady_clock::now();
-                spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
+                if constexpr (!(MF == MatrixFormat::Dense)) {
+                    spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
+                } else {
+                    gemm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+                }
                 ctx->wait();
                 T_spmm += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - spmm_start);
                 auto lanczos_start = std::chrono::steady_clock::now();
                 ctx -> submit([&](sycl::handler& h) {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
                     auto v_current_ptr = Vmem.data() + it*n;
-                    auto v_next_ptr = padded_output.data_;
+                    auto v_next_ptr = padded_output.data_ptr();
                     auto dot_mem = sycl::local_accessor<T>(n, h);
-                    h.parallel_for<LanczosKernel<B, T, F, BT>>(sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
+                    h.parallel_for<LanczosKernel<B, T, MF>>(sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
                         auto tid = item.get_local_linear_id();
                         auto wg = item.get_local_range()[0];
@@ -325,9 +334,9 @@ namespace batchlas {
         auto T0 = std::chrono::steady_clock::now();
         // Run the QR algorithm to get eigenvalues (and eigenvectors if requested)
         ctx->submit([&](sycl::handler& h) {
-            auto Vstride = get_stride(V);
-            auto Vdata = V.data_;
-            auto Vld = V.ld_;
+            auto Vstride = V.stride();
+            auto Vdata = V.data_ptr();
+            auto Vld = V.ld();
 
             sycl::local_accessor<T, 1> D_smem(smem_possible ? n + 1 : 0, h);
             sycl::local_accessor<T, 1> L_smem(smem_possible ? n : 0, h);
@@ -426,8 +435,8 @@ namespace batchlas {
         //So it follows that the eigenvectors of A are given by V * Q
         auto T0_eigenvectors = std::chrono::steady_clock::now();
         if (jobz == JobType::EigenVectors) {
-            gemm<B>(ctx, create_view<T,BT>(Vmem.data(), n, n, n, (n+1)*n, batch_size, Span<T*>()), 
-                        create_view<T,BT>(Q_eigenvectors.data(), n, n, n, n*n, batch_size, Span<T*>()), 
+            gemm<B>(ctx, MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size), 
+                        MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size), 
                         V, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
         }
         ctx->wait();
@@ -455,9 +464,9 @@ namespace batchlas {
             auto indices_mem = pool.allocate<int>(ctx, n * batch_size);
             auto temp_vec_mem = pool.allocate<T>(ctx, n * batch_size);
             
-            auto Vstride = get_stride(V);
-            auto Vdata = V.data_;
-            auto Vld = V.ld_;
+            auto Vstride = V.stride();
+            auto Vdata = V.data_ptr();
+            auto Vld = V.ld();
 
             h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
@@ -553,31 +562,32 @@ namespace batchlas {
         return ctx.get_event();
     }
 
-    template <Backend B, typename T, Format F, BatchType BT>
+    template <Backend B, typename T, MatrixFormat MF>
     size_t lanczos_buffer_size(
         Queue& ctx,
-        SparseMatHandle<T, F, BT>& A,
+        const MatrixView<T, MF>& A,
         Span<typename base_type<T>::type> W, //Output eigenvalues
         JobType jobz,
-        const DenseMatView<T, BT>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+        const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
         const LanczosParams<T>& params
     ) {
-        auto n = A.rows_;
-        auto batch_size = get_batch_size(A);
-        auto padded_vector_view = create_view<T,BT>(V.data_, n, 2, n, (n+1)*n, batch_size, Span<T*>());
-        auto padded_output_vector_view = create_view<T,BT>(V.data_, n, 2, n, (2)*n, batch_size, Span<T*>());
-        auto single_vector_view = create_view<T,BT>(V.data_, n, 1, n, (n+1)*n, batch_size, Span<T*>());
-        auto subspace_view = create_view<T,BT>(V.data_, n, n - 1, n, (n+1)*n, batch_size, Span<T*>());
-        
+        auto n = A.rows();
+        auto batch_size = A.batch_size();
+        auto padded_vector_view = MatrixView(V.data_ptr(), n, 2, n, (n+1)*n, batch_size);
+        auto padded_output_vector_view = MatrixView(V.data_ptr(), n, 2, n, (2)*n, batch_size);
+        auto single_vector_view = MatrixView(V.data_ptr(), n, 1, n, (n+1)*n, batch_size);
+        auto subspace_view = MatrixView(V.data_ptr(), n, n - 1, n, (n+1)*n, batch_size);
+
         // Basic memory required for Lanczos iteration
         size_t basic_size = BumpAllocator::allocation_size<T>(ctx, (n+1)*n*batch_size) + 
                           BumpAllocator::allocation_size<T>(ctx, n*2*batch_size) +
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // alphas
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // betas
                           BumpAllocator::allocation_size<T*>(ctx, batch_size) * 3 +
-                          BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans)) +
                           BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, padded_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
-        
+        if constexpr (!(MF == MatrixFormat::Dense)){
+            basic_size += BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
+        }
         // Additional memory required for QR factorization if there is insufficient shared memory for work-group local storage
         bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= sizeof(T) * (3 * n + 3 * (n + 1));
 
@@ -597,26 +607,26 @@ namespace batchlas {
         return basic_size  + eigenvectors_size + sort_size;
     }
 
-    #define LANCZOS_INSTANTIATE(fp, BT) \
-    template Event lanczos<Backend::CUDA, fp, Format::CSR, BT>( \
+    #define LANCZOS_INSTANTIATE(fp, mf) \
+    template Event lanczos<Backend::CUDA, fp, mf>( \
         Queue&, \
-        SparseMatHandle<fp, Format::CSR, BT>&, \
+        const MatrixView<fp, mf>&, \
         Span<typename base_type<fp>::type>, \
         Span<std::byte>, \
         JobType, \
-        const DenseMatView<fp, BT>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
-    template size_t lanczos_buffer_size<Backend::CUDA, fp, Format::CSR, BT>( \
+    template size_t lanczos_buffer_size<Backend::CUDA, fp, mf>( \
         Queue&, \
-        SparseMatHandle<fp, Format::CSR, BT>&, \
+        const MatrixView<fp, mf>&, \
         Span<typename base_type<fp>::type>, \
         JobType, \
-        const DenseMatView<fp, BT>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
     
     #define LANCZOS_INSTANTIATE_FOR_FP(fp) \
-        LANCZOS_INSTANTIATE(fp, BatchType::Batched) \
-        LANCZOS_INSTANTIATE(fp, BatchType::Single) 
+        LANCZOS_INSTANTIATE(fp, MatrixFormat::CSR) \
+        LANCZOS_INSTANTIATE(fp, MatrixFormat::Dense)
 
     LANCZOS_INSTANTIATE_FOR_FP(float)
     LANCZOS_INSTANTIATE_FOR_FP(double)

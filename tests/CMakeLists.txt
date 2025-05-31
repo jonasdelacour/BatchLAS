@@ -27,6 +27,10 @@ set(TEST_TARGETS
     syevx_benchmark
     ortho_benchmark
     gemv_operations_tests
+    matrix_tests
+    matrix_view_tests
+    trsm_operations_tests
+    ortho_tests
 )
 
 # Create test executables

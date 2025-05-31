@@ -1,7 +1,7 @@
 set(EXTENSIONS_SOURCES
-    ortho.cc
-    syevx.cc
-    lanczos.cc
+    ortho_matrixview.cc
+    syevx_matrixview.cc
+    lanczos_matrixview.cc
 )
 
 target_sources(batchlas PRIVATE ${EXTENSIONS_SOURCES})
