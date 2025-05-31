@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
+#include <blas/matrix_handle_new.hh>
+#include <blas/functions_matrixview.hh>
+#include <blas/extensions_new.hh>
 #include <sycl/sycl.hpp>
 #include <iostream>
 #include <vector>
@@ -114,7 +117,7 @@ protected:
 TEST_F(LanczosTestBase, LanczosTest) {
     const int neig = 3;
 
-    SparseMatHandle<float, Format::CSR, BatchType::Batched> sparse_matrix(
+    MatrixView<float, MatrixFormat::CSR> sparse_matrix(
         csr_values.data(),
         csr_row_offsets.data(),
         csr_col_indices.data(),
@@ -129,12 +132,13 @@ TEST_F(LanczosTestBase, LanczosTest) {
     LanczosParams<float> params;
     params.sort_enabled = false;
     params.sort_order = SortOrder::Descending;
-    params.reorthogonalization_iterations = 6;
+    params.reorthogonalization_iterations = 2;
+    params.ortho_algorithm = OrthoAlgorithm::CGS2;
     
     
     UnifiedVector<float> eigenvector_memory(rows * rows * batch_size);
     
-    DenseMatHandle<float, BatchType::Batched> eigenvectors(
+    MatrixView eigenvectors(
         eigenvector_memory.data(),
         rows,
         rows,
@@ -144,20 +148,20 @@ TEST_F(LanczosTestBase, LanczosTest) {
         
         
     size_t buffer_size = lanczos_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
-        eigenvectors(), params);
+        eigenvectors, params);
     UnifiedVector<std::byte> workspace(buffer_size);
 
     lanczos<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors(), params);
+        *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors, params);
 
     ctx->wait();
 
     UnifiedVector<float> residuals_memory(rows * rows * batch_size, 0.0f);
 
     std::cout << "First eigenvector: " << Span(eigenvector_memory.data(), rows) << std::endl;
-    
-    
-    DenseMatHandle<float, BatchType::Batched> residuals(
+
+
+    MatrixView residuals(
         residuals_memory.data(),
         rows,
         rows,
@@ -174,16 +178,12 @@ TEST_F(LanczosTestBase, LanczosTest) {
         }
     }
 
-    auto eigenvectors_view = eigenvectors();
-    auto residuals_view = residuals();
-
-
     UnifiedVector<std::byte> spmm_workspace(
-        spmm_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, eigenvectors_view, residuals_view, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
 
     //Compute R = A @ V - V @ diag(W)
     spmm<Backend::CUDA>(
-        *ctx, sparse_matrix, eigenvectors_view, residuals_view, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+        *ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
 
     ctx->wait();
 
@@ -191,7 +191,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
     UnifiedVector<float> norms_memory(batch_size * rows * rows, 0.0f);
     
     gemm<Backend::CUDA>(
-        *ctx, residuals_view, residuals_view, create_view<float,BatchType::Batched>(norms_memory.data(), rows, rows, rows, rows*rows, batch_size, Span<float*>()), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
+        *ctx, residuals, residuals, MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
     ctx->wait();
 
     std::cout << "Residuals:\n[ ";
