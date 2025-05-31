@@ -521,31 +521,17 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
 
 // Initialize backend - make backend_handle_ mutable so it can be modified in const methods
 template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::init(Queue& ctx) const {
+void Matrix<T, MType>::init() const {
     // No-op if we already have a backend handle
     if (backend_handle_) return;
-    backend_handle_ = createBackendHandle<Backend::CUDA, T>(*this, ctx);
-    // Create a backend handle based on matrix format
-    /* if constexpr (MType == MatrixFormat::Dense) {
-        backend_handle_ = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
-    } else if constexpr (MType == MatrixFormat::CSR) {
-        backend_handle_ = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
-    } */
-}
-
-// Initialize backend
-template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::init_backend() {
-    // This is a legacy method - redirect to init with default queue
-    Queue ctx;
-    init(ctx);
+    backend_handle_ = createBackendHandle(*this);
 }
 
 // Operator-> to access backend handle
 template <typename T, MatrixFormat MType>
 BackendMatrixHandle<T, MType>* Matrix<T, MType>::operator->() {
     if (!backend_handle_) {
-        init_backend();
+        init();
     }
     return backend_handle_.get();
 }
@@ -554,7 +540,7 @@ BackendMatrixHandle<T, MType>* Matrix<T, MType>::operator->() {
 template <typename T, MatrixFormat MType>
 BackendMatrixHandle<T, MType>& Matrix<T, MType>::operator*() {
     if (!backend_handle_) {
-        init_backend();
+        init();
     }
     return *backend_handle_;
 }
@@ -841,14 +827,19 @@ MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 MatrixView<T, MType>::MatrixView(
-    const Matrix<T, MType>& matrix, int row_offset, int col_offset, int rows, int cols, int ld, int stride, int batch_size) : 
-    MatrixView<T, MType>(&(matrix.view().at(row_offset, col_offset, 0)), 
+    const MatrixView<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : 
+    MatrixView<T, MType>(matrix.data_ptr(),
                         rows > 0 ? rows : matrix.rows_, 
                         cols > 0 ? cols : matrix.cols_, 
                         ld > 0 ? ld : matrix.ld_, 
                         stride > 0 ? stride : matrix.stride_,
                         batch_size > 0 ? batch_size : matrix.batch_size_,
                         matrix.data_ptrs_.data()) {}
+
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+MatrixView<T, MType>::MatrixView(
+    const Matrix<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : MatrixView<T, MType>(matrix.view(), rows, cols, ld, stride, batch_size) {}
 
 
 // Element access (for dense matrices)
@@ -907,20 +898,9 @@ MatrixView<T, MType> MatrixView<T, MType>::operator[](int i) const {
 
 // Initialize backend - make backend_handle_ mutable or change method to non-const
 template <typename T, MatrixFormat MType>
-void MatrixView<T, MType>::init(Queue& ctx) const {
-    // If we already have a backend handle from a strong reference, use it
-    if (!backend_handle_.expired()) return;
-    backend_handle_ = createBackendHandle<Backend::CUDA, T>(*this, ctx);
-    
-    // Create a new backend handle based on format
-    /* if constexpr (MType == MatrixFormat::Dense) {
-        auto handle = createDenseBackendHandle<Backend::CUDA, T>(*this, ctx);
-        backend_handle_ = handle;  // Error here - need to make backend_handle_ mutable
-    } else if constexpr (MType == MatrixFormat::CSR) {
-        auto handle = createCSRBackendHandle<Backend::CUDA, T>(*this, ctx);
-        backend_handle_ = handle;  // Error here - need to make backend_handle_ mutable
-    } */
-
+void MatrixView<T, MType>::init() const {
+    if (backend_handle_) return;
+    backend_handle_ = createBackendHandle(*this);
 }
 
 
@@ -946,34 +926,22 @@ void Matrix<T, MType>::init_data_ptr_array(Queue& ctx) const {
     this->view().data_ptrs(ctx);
 }
 
-// Initialize backend
-template <typename T, MatrixFormat MType>
-void MatrixView<T, MType>::init_backend() {
-    // Legacy method - redirect to init with default queue
-    Queue ctx;
-    init(ctx);
-}
-
 // Operator-> to access backend handle
 template <typename T, MatrixFormat MType>
-BackendMatrixHandle<T, MType>* MatrixView<T, MType>::operator->() {
-    if (auto handle = backend_handle_.lock()) {
-        return handle.get();
-    } else {
-        init_backend();
-        return backend_handle_.lock().get();
+BackendMatrixHandle<T, MType>* MatrixView<T, MType>::operator->() const{
+    if (!backend_handle_) {
+        init();
     }
+    return backend_handle_.get();
 }
 
 // Operator* to access backend handle
 template <typename T, MatrixFormat MType>
-BackendMatrixHandle<T, MType>& MatrixView<T, MType>::operator*() {
-    if (auto handle = backend_handle_.lock()) {
-        return *handle;
-    } else {
-        init_backend();
-        return *backend_handle_.lock();
+BackendMatrixHandle<T, MType>& MatrixView<T, MType>::operator*() const {
+    if (!backend_handle_) {
+        init();
     }
+    return *backend_handle_;
 }
 
 //----------------------------------------------------------------------
@@ -1074,13 +1042,23 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(std::c
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(std::complex<double>*, int, int, int, int, int, std::complex<double>**);
 
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
-    const Matrix<float, MatrixFormat::Dense>&, int, int, int, int, int, int, int);
+    const Matrix<float, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(
-    const Matrix<double, MatrixFormat::Dense>&, int, int, int, int, int, int, int);
+    const Matrix<double, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::complex<float>, MatrixFormat::Dense>&, int, int, int, int, int, int, int);
+    const Matrix<std::complex<float>, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int, int, int);
+    const Matrix<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int);
+
+
+template MatrixView<float, MatrixFormat::Dense>::MatrixView(
+    const MatrixView<float, MatrixFormat::Dense>&, int, int, int, int, int);
+template MatrixView<double, MatrixFormat::Dense>::MatrixView(
+    const MatrixView<double, MatrixFormat::Dense>&, int, int, int, int, int);
+template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
+    const MatrixView<std::complex<float>, MatrixFormat::Dense>&, int, int, int, int, int);
+template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
+    const MatrixView<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int);
 
 /* template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int, int, int);
