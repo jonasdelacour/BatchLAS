@@ -88,7 +88,7 @@ struct BenchmarkResult {
 };
 
 // Function to run benchmark for a specific configuration
-template <typename T, BatchType BT>
+template <typename T>
 BenchmarkResult run_single_benchmark(
     Queue& ctx,
     int matrix_size,
@@ -157,7 +157,7 @@ BenchmarkResult run_single_benchmark(
     
     // Measure orthonormality error
     double error = 0.0;
-    if constexpr (BT == BatchType::Single) {
+    if (batch_size == 1) {
         error = measure_orthonormality_error(ctx, matrices_handle, transpose);
     } else {
         // For batched, we need to check each batch
@@ -364,11 +364,11 @@ int main(int argc, char** argv) {
                     // Run the benchmark
                     BenchmarkResult result;
                     if (batch == 1) {
-                        result = run_single_benchmark<float, BatchType::Single>(
+                        result = run_single_benchmark<float>(
                             *ctx, size, vecs, batch, algorithm, transpose,
                             warmup_iterations, timing_iterations);
                     } else {
-                        result = run_single_benchmark<float, BatchType::Batched>(
+                        result = run_single_benchmark<float>(
                             *ctx, size, vecs, batch, algorithm, transpose,
                             warmup_iterations, timing_iterations);
                     }
