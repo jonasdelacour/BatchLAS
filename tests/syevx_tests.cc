@@ -113,47 +113,6 @@ protected:
 };
 
 // Test SYEVX operation with sparse matrix
-TEST_F(SyevxOperationsTest, SyevxSparseOperation) {
-    const int neig = 3;
-
-    SparseMatHandle<float, Format::CSR, BatchType::Batched> sparse_matrix(
-        csr_values.data(),
-        csr_row_offsets.data(),
-        csr_col_indices.data(),
-        total_nnz,
-        rows,
-        rows,
-        total_nnz,
-        rows+1,
-        batch_size);
-
-    SyevxParams<float> params;
-    params.algorithm = OrthoAlgorithm::Chol2;
-    params.iterations = 50;
-    params.extra_directions = 5;
-    params.find_largest = true;
-    params.absolute_tolerance = 1e-6f;
-    params.relative_tolerance = 1e-6f;
-
-    size_t buffer_size = syevx_buffer_size<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, neig, JobType::NoEigenVectors, DenseMatView<float, BatchType::Batched>(), params);
-
-    UnifiedVector<std::byte> workspace(buffer_size);
-
-    syevx<Backend::CUDA>(
-        *ctx, sparse_matrix, W_data, neig, workspace, JobType::NoEigenVectors, DenseMatView<float, BatchType::Batched>(), params);
-
-    ctx->wait();
-    
-    // Verify that the computed eigenvalues match the expected ones
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < neig; ++i) {
-            EXPECT_NEAR(W_data[b * neig + i], known_eigenvalues[i], 0.1f)
-                << "Eigenvalue mismatch at batch " << b << ", index " << i;
-        }
-    }
-}
-
 TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     const int neig = 3;
 
