@@ -9,7 +9,7 @@
 #include <numeric>
 #include <stdexcept> // Include for std::runtime_error
 #include <vector>    // Include for std::vector used in scan
-#include "backends/matrix_handle_impl.cc"
+#include "backends/backend_handle.cc"
 
 namespace batchlas {
 
