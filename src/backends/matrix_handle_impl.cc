@@ -66,16 +66,16 @@ struct BackendMatrixHandle {
     #endif
 };
 
-template <Backend B, typename T, MatrixFormat MType>
-std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view, Queue& ctx) {
+template <typename T, MatrixFormat MType>
+std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view) {
     // Create a new BackendMatrixHandle object
     auto handle = std::make_shared<BackendMatrixHandle<T, MType>>(view);
     return handle;
 }
 
-template <Backend B, typename T, MatrixFormat MType>
-std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix, Queue& ctx) {
-    return createBackendHandle<B, T, MType>(matrix.view(), ctx);
+template <typename T, MatrixFormat MType>
+std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix) {
+    return createBackendHandle<T, MType>(matrix.view());
 }
 
 
@@ -90,13 +90,13 @@ template struct BackendMatrixHandle<std::complex<float>, MatrixFormat::CSR>;
 template struct BackendMatrixHandle<std::complex<double>, MatrixFormat::Dense>;
 template struct BackendMatrixHandle<std::complex<double>, MatrixFormat::CSR>;
 
-template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::Dense>> createBackendHandle<Backend::CUDA, float, MatrixFormat::Dense>(const Matrix<float, MatrixFormat::Dense>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::CSR>> createBackendHandle<Backend::CUDA, float, MatrixFormat::CSR>(const Matrix<float, MatrixFormat::CSR>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::Dense>> createBackendHandle<Backend::CUDA, double, MatrixFormat::Dense>(const Matrix<double, MatrixFormat::Dense>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::CSR>> createBackendHandle<Backend::CUDA, double, MatrixFormat::CSR>(const Matrix<double, MatrixFormat::CSR>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::Dense>> createBackendHandle<Backend::CUDA, std::complex<float>, MatrixFormat::Dense>(const Matrix<std::complex<float>, MatrixFormat::Dense>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::CSR>> createBackendHandle<Backend::CUDA, std::complex<float>, MatrixFormat::CSR>(const Matrix<std::complex<float>, MatrixFormat::CSR>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::Dense>> createBackendHandle<Backend::CUDA, std::complex<double>, MatrixFormat::Dense>(const Matrix<std::complex<double>, MatrixFormat::Dense>& matrix, Queue& ctx);
-template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::CSR>> createBackendHandle<Backend::CUDA, std::complex<double>, MatrixFormat::CSR>(const Matrix<std::complex<double>, MatrixFormat::CSR>& matrix, Queue& ctx);
+template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::Dense>> createBackendHandle<float, MatrixFormat::Dense>(const Matrix<float, MatrixFormat::Dense>& matrix);
+template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::CSR>> createBackendHandle<float, MatrixFormat::CSR>(const Matrix<float, MatrixFormat::CSR>& matrix);
+template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::Dense>> createBackendHandle<double, MatrixFormat::Dense>(const Matrix<double, MatrixFormat::Dense>& matrix);
+template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::CSR>> createBackendHandle<double, MatrixFormat::CSR>(const Matrix<double, MatrixFormat::CSR>& matrix);
+template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::Dense>> createBackendHandle<std::complex<float>, MatrixFormat::Dense>(const Matrix<std::complex<float>, MatrixFormat::Dense>& matrix);
+template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::CSR>> createBackendHandle<std::complex<float>, MatrixFormat::CSR>(const Matrix<std::complex<float>, MatrixFormat::CSR>& matrix);
+template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::Dense>> createBackendHandle<std::complex<double>, MatrixFormat::Dense>(const Matrix<std::complex<double>, MatrixFormat::Dense>& matrix);
+template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::CSR>> createBackendHandle<std::complex<double>, MatrixFormat::CSR>(const Matrix<std::complex<double>, MatrixFormat::CSR>& matrix);
 
 }
