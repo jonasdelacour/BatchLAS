@@ -480,22 +480,12 @@ namespace batchlas {
         using const_reference = const T&;
 
         Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
-        Vector(int size, int batch_size = 1, int stride = 0)
+        Vector(int size, int inc = 1, int stride = 0, int batch_size = 1)
             : data_(stride > 0 ? stride * batch_size : size * batch_size),
-              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
-        Vector(int size, T value, int batch_size = 1, int stride = 0)
-            : data_(stride > 0 ? stride * batch_size : size * batch_size, value),
-              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
-        Vector(int size, int inc, T value, int batch_size = 1, int stride = 0)
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
+        Vector(int size, T value, int inc = 1, int stride = 0, int batch_size = 1)
             : data_(stride > 0 ? stride * batch_size : size * batch_size, value),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
-        Vector(const T* data, int size, int batch_size = 1, int stride = 0)
-            : data_(stride > 0 ? stride * batch_size : size * batch_size),
-              size_(size), inc_(1), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {
-            for (int b = 0; b < batch_size_; ++b) {
-                std::copy(data + b * size_, data + b * size_ + size_, data_.data() + b * stride_);
-            }
-        }
 
         // Convenience vectors
         static Vector<T> zeros(int size, int batch_size = 1, int stride = 0) {
@@ -568,11 +558,11 @@ namespace batchlas {
         using const_reference = const T&;
 
         VectorView() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
-        VectorView(Span<T> data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+        VectorView(Span<T> data, int size, int inc = 1, int stride = 0, int batch_size = 1)
             : data_(data), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
-        VectorView(UnifiedVector<T>& data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+        VectorView(UnifiedVector<T>& data, int size, int inc = 1, int stride = 0, int batch_size = 1)
             : data_(data.to_span()), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
-        VectorView(T* data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+        VectorView(T* data, int size, int inc = 1, int stride = 0, int batch_size = 1)
             : data_(data, (stride > 0 ? stride * batch_size : size * inc * batch_size)),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
 
