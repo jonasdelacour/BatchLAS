@@ -187,12 +187,6 @@ namespace batchlas {
         auto pool = BumpAllocator(workspace);
 
         auto batch_size = A.batch_size();
-        int stride;
-        if constexpr (MF == MatrixFormat::Dense) {
-            stride = A.stride();
-        } else {
-            stride = A.matrix_stride();
-        }
         auto n = A.rows();
 
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
@@ -527,7 +521,7 @@ namespace batchlas {
                     // Reorder eigenvectors based on the sorted indices
                     T* batch_V_out = const_cast<T*>(Vdata) + bid * Vstride;
                     
-                    // Reorder the ld() column by column
+                    // Reorder the eigenvectors column by column
                     for (int i = 0; i < n; i++) {
                         // Each thread handles some rows of the eigenvector
                         for (int j = tid; j < n; j += item.get_local_range()[0]) {
