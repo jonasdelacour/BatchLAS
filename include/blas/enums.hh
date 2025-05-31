@@ -1,6 +1,18 @@
 #pragma once
-
 namespace batchlas {
+    template<typename T>
+    struct base_type {
+        using type = T;
+    };
+
+    template<typename T>
+    struct base_type<std::complex<T>> {
+        using type = T;
+    };
+
+    template<typename T>
+    using float_t = typename base_type<T>::type;
+
     enum class Backend {
         AUTO,
         CUDA,

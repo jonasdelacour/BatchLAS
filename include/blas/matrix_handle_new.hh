@@ -10,22 +10,6 @@
 #include <blas/enums.hh>
 
 namespace batchlas {
-    #ifndef BASETYPE
-    #define BASETYPE
-    template<typename T>
-    struct base_type {
-        using type = T;
-    };
-
-    template<typename T>
-    struct base_type<std::complex<T>> {
-        using type = T;
-    };
-
-    template<typename T>
-    using float_t = typename base_type<T>::type;
-    #endif
-
     // Forward declarations with default template parameters
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class Matrix;
