@@ -99,10 +99,11 @@ namespace batchlas {
 
     enum class NormType {
         Frobenius, //Most commonly used
-        Inf,
-        MinusInf,
-        Nuclear
-    }
+        One,       //Maximum absolute column sum
+        Inf,       //Maximum absolute row sum
+        Max,       //Maximum absolute value
+        Nuclear,  //Nuclear norm
+    };
 
     enum class Layout {
         RowMajor,
