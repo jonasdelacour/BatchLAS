@@ -8,7 +8,7 @@ namespace batchlas
 
     // Memory passed from outside
     template <typename T, MatrixFormat MF>
-    void norm(Queue &ctx,
+    Event norm(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
               const Span<T> norms);
@@ -21,7 +21,7 @@ namespace batchlas
 
     // Memory passed from outside
     template <typename T, MatrixFormat MF>
-    void cond(Queue &ctx,
+    Event cond(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
               const Span<T> conds);
