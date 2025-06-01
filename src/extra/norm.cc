@@ -1,5 +1,6 @@
 #include <blas/extra.hh>
 #include <cstddef>
+#include "../linalg-impl.hh"
 #include "../queue.hh"
 
 namespace batchlas
@@ -17,7 +18,7 @@ namespace batchlas
             auto [data, batch_size, rows, cols, ld, stride] = 
                 std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
 
-            auto wgs = std::min(rows * cols, get_kernel_max_wg_size<NormKernel<T, MF>>(ctx));
+            auto wgs = std::min(size_t(rows * cols), get_kernel_max_wg_size<NormKernel<T, MF>>(ctx));
             auto local_mem = sycl::local_accessor<T>(norm_type == NormType::One ? cols :
                                                      norm_type == NormType::Inf ? rows : 0, cgh);
             // Use a parallel_for to compute the norms
@@ -36,7 +37,7 @@ namespace batchlas
                         auto row = j / cols;
                         temp += data_span[col * ld + row] * data_span[col * ld + row];
                     }
-                    norm = sycl::sqrt(sycl::reduce_over_group(cta, temp));
+                    norm = sycl::sqrt(sycl::reduce_over_group(cta, temp, sycl::plus<T>()));
                 } else if (norm_type == NormType::One) {
                     // Initialize local memory with zeros for column sums
                     if (local_idx < cols) {
@@ -56,7 +57,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
-                    norm = sycl::reduce_over_group(cta, local_mem.begin(), local_mem.end(), T(0), sycl::maximum<T>());
+                    norm = sycl::joint_reduce(cta, local_mem.begin(), local_mem.end(), T(0), sycl::maximum<T>());
                 } else if (norm_type == NormType::Inf) {
                     // Initialize local memory with zeros for row sums
                     if (local_idx < rows) {
@@ -76,7 +77,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum row sum (the Inf norm)
-                    norm = sycl::reduce_over_group(cta, local_mem.begin(), local_mem.end(), T(0), sycl::maximum<T>());
+                    norm = sycl::joint_reduce(cta, local_mem.begin(), local_mem.end(), T(0), sycl::maximum<T>());
                 } else if (norm_type == NormType::Max) {
                     // Find the maximum absolute value in the matrix
                     for (int j = local_idx; j < rows * cols; j += local_size) {
@@ -84,7 +85,7 @@ namespace batchlas
                         auto row = j % cols;
                         temp = sycl::fmax(sycl::fabs(data_span[col * ld + row]), temp);
                     }
-                    norm = sycl::reduce_over_group(cta, norm);
+                    norm = sycl::reduce_over_group(cta, temp, sycl::maximum<T>());
                 }
 
                 norms[batch_idx] = norm;
@@ -110,7 +111,24 @@ namespace batchlas
     {
         // Allocate memory for the results
         UnifiedVector<T> norms(A.batch_size());
-        norm_impl(ctx, A, norm_type, norms);
+        norm_impl(ctx, A, norm_type, norms.to_span());
         return norms;
     }
+
+    #define NORM_INSTANTIATE(fp, fmt) \
+    template Event norm<fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType,\
+        const Span<fp>);\
+    template UnifiedVector<fp> norm<fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType);
+
+    NORM_INSTANTIATE(float, MatrixFormat::Dense)
+    NORM_INSTANTIATE(double, MatrixFormat::Dense)
+    //NORM_INSTANTIATE(std::complex<float>, MatrixFormat::Dense)
+    //NORM_INSTANTIATE(std::complex<double>, MatrixFormat::Dense)
+
 } // namespace batchlas
