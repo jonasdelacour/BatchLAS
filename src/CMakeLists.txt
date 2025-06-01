@@ -9,6 +9,7 @@ add_subdirectory(backends)
 add_subdirectory(blas)
 add_subdirectory(extensions)
 add_subdirectory(util)
+add_subdirectory(extra)
 
 if(BATCHLAS_ENABLE_SYCL)
     add_subdirectory(sycl)
