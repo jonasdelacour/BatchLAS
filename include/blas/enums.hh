@@ -97,6 +97,12 @@ namespace batchlas {
         BLOCKED_ELL // Blocked ELLPACK
     };
 
+    enum class NormType {
+        Frobenius, //Most commonly used
+        Inf,
+        MinusInf,
+        Nuclear
+    }
 
     enum class Layout {
         RowMajor,
