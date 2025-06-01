@@ -25,8 +25,8 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 - **Sparse Matrix Operations**
   - Sparse matrix-dense matrix multiplication (spmm)
   - Sparse symmetric eigensolvers:
-    - Batched LOBPCG for partial eigendecomposition (finding largest or smallest eigen-pairs)
-    - Batched Lanczos algorithm for full eigendecompositions
+    - Batched LOBPCG for partial eigendecomposition (finding largest or smallest eigen-pairs, provided via the `syevx` implementation, supports sparse and dense matrices)
+    - Batched Lanczos algorithm for full eigendecompositions (supports sparse and dense matrices)
   - CSR format support
 
 ## Working Backends
@@ -40,6 +40,7 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 - SYCL implementation (Intel oneAPI DPC++)
 - Optional: CUDA toolkit for NVIDIA GPUs
 - Optional: Netlib BLAS/LAPACK for CPU
+- Optional: Python 3.x (for Python bindings)
 
 ## Installation
 
@@ -63,7 +64,8 @@ cmake .. \
   -DBATCHLAS_BUILD_TESTS=ON \
   -DBATCHLAS_BUILD_EXAMPLES=ON \
   -DBATCHLAS_ENABLE_CUDA=ON \
-  -DBATCHLAS_ENABLE_OPENMP=ON
+  -DBATCHLAS_ENABLE_OPENMP=ON \
+  -DBATCHLAS_BUILD_PYTHON=ON
 ```
 
 Available options:
@@ -72,6 +74,7 @@ Available options:
 - `BATCHLAS_BUILD_DOCS`: Build documentation (default: OFF)
 - `BATCHLAS_ENABLE_CUDA`: Enable CUDA support (default: OFF)
 - `BATCHLAS_ENABLE_OPENMP`: Enable OpenMP support (default: OFF)
+- `BATCHLAS_BUILD_PYTHON`: Build Python bindings (default: ON)
 
 ## Quick Start
 
@@ -86,28 +89,23 @@ int main() {
     // Create a context
     auto ctx = Queue(Device::default_device());
     
-    // Allocate memory for matrices
+    // Define matrix dimensions
     const int rows = 1000;
     const int cols = 1000;
     const int k = 1000;
     const int batch_size = 10;
-    const int ld = rows; // Leading dimension
     
-    // Allocate matrices on device
-    UnifiedVector<float> A_data(rows * k * batch_size);
-    UnifiedVector<float> B_data(k * cols * batch_size);
-    UnifiedVector<float> C_data(rows * cols * batch_size);
+    // Create matrices using factory methods
+    auto A = Matrix<float>::Random(rows, k, batch_size);
+    auto B = Matrix<float>::Random(k, cols, batch_size);
+    auto C = Matrix<float>::Zeros(rows, cols, batch_size);
     
-    // Initialize data...
+    // Initialize data (if needed, Random already initializes)
+    // A.fill(1.0f); // Example: fill A with 1.0f
+    // B.fill(2.0f); // Example: fill B with 2.0f
     
-    // Create matrix handles
-    DenseMatHandle<float, BatchType::Batched> A(A_data.data(), rows, k, ld, rows*k, batch_size);
-    DenseMatHandle<float, BatchType::Batched> B(B_data.data(), k, cols, k, k*cols, batch_size);
-    DenseMatHandle<float, BatchType::Batched> C(C_data.data(), rows, cols, ld, rows*cols, batch_size);
-    
-    
-    // Perform batched matrix multiplication
-    gemm<Backend::AUTO>(ctx, A(), B(), C(), 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    // Perform batched matrix multiplication using views of the matrices
+    gemm<Backend::AUTO>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     
     // Wait for completion
     ctx.wait();
@@ -124,11 +122,11 @@ BatchLAS provides various orthogonalization algorithms:
 
 ```cpp
 // Allocate workspace memory
-UnifiedVector<std::byte> workspace(ortho_buffer_size<Backend::CUDA>(
+UnifiedVector<std::byte> workspace(ortho_buffer_size<Backend::AUTO>(
     ctx, matrices, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
 
 // Orthogonalize matrices
-ortho<Backend::CUDA>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::ShiftChol3);
+ortho<Backend::AUTO>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::ShiftChol3);
 ```
 
 ## Testing
@@ -146,9 +144,8 @@ BatchLAS automatically selects the most suitable backend for your hardware, but 
 
 ```cpp
 // Use CUDA backend explicitly on NVIDIA hardware
-gemm<Backend::CUDA>(ctx, A(), B(), C(), alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
+gemm<Backend::CUDA>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
 ```
-
 
 ## License
 
