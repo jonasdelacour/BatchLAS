@@ -164,6 +164,90 @@ namespace batchlas {
         }
     }
 
+    template <Backend Back, typename T>
+    Event getrs(Queue& ctx,
+        const MatrixView<T,MatrixFormat::Dense>& A,
+        const MatrixView<T,MatrixFormat::Dense>& B,
+        Transpose transA,
+        Span<int> pivots,
+        Span<std::byte> work_space) {
+            static LinalgHandle<Back> handle;
+            handle.setStream(ctx);
+            auto n = A.rows();
+            auto nrhs = B.cols();
+            auto batch_size = A.batch_size();
+            auto pool = BumpAllocator(work_space);
+            if (batch_size <= 1) {
+                auto info = pool.allocate<int>(ctx, 1);
+                cusolverDnParams_t params;
+                cusolverDnCreateParams(&params);
+                cusolverDnXgetrs(handle, params, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
+                    BackendScalar<T,Back>::type, A.data_ptr(), A.ld(),
+                    pivots.data(),
+                    BackendScalar<T,Back>::type, B.data_ptr(), B.ld(),
+                    info.data());
+            } else {
+                int info;
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
+                    handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
+                    A.data_ptrs(ctx).data(), A.ld(), pivots.data(),
+                    B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
+            }
+            return ctx.get_event();
+        }
+    
+    template <Backend B, typename T>
+    size_t getrs_buffer_size(Queue& ctx,
+        const MatrixView<T,MatrixFormat::Dense>& A,
+        const MatrixView<T,MatrixFormat::Dense>& B,
+        Transpose transA) {
+            return BumpAllocator::allocation_size<int>(ctx, A.batch_size() == 1 ? 1 : 0); //batched getrs just uses a single host integer.
+        }
+
+    template <Backend B, typename T>
+    Event getrf(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        Span<int> pivots) {
+            static LinalgHandle<B> handle;
+            handle.setStream(ctx);
+            auto n = A.rows();
+            auto batch_size = A.batch_size();
+            int info;
+            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
+                handle, n,
+                A.data_ptrs(ctx).data(), A.ld(), pivots.data(), &info, batch_size);
+        }
+
+    template <Backend B, typename T>
+    Event getri(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
+        Span<int> pivots,
+        Span<std::byte> work_space) {
+            static LinalgHandle<B> handle;
+            handle.setStream(ctx);
+            auto n = A.rows();
+            auto batch_size = A.batch_size();
+            auto pool = BumpAllocator(work_space);
+            auto info_arr = pool.allocate<int>(ctx, batch_size);
+            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
+                handle, n,
+                A.data_ptrs(ctx).data(), A.ld(), pivots.data(),
+                C.data_ptrs(ctx).data(), C.ld(), info_arr.data(), batch_size);
+            return ctx.get_event();
+            
+        }
+
+    template <Backend B, typename T>
+    size_t getri_buffer_size(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A) {
+            static LinalgHandle<B> handle;
+            handle.setStream(ctx);
+            auto n = A.rows();
+            auto batch_size = A.batch_size();
+            return BumpAllocator::allocation_size<int>(ctx, batch_size);
+        }
+
     // Template instantiations for cuBLAS functions (MatrixView version)
     #define GEMM_INSTANTIATE(fp) \
     template Event gemm<Backend::CUDA, fp>( \
@@ -201,12 +285,49 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>);
 
-    #define BLAS_LEVEL3_INSTANTIATE(fp) \
-        GEMM_INSTANTIATE(fp) \
-        GEMV_INSTANTIATE(fp) \
-        TRSM_INSTANTIATE(fp) \
-        GEQRF_INSTANTIATE(fp) \
-        GEQRF_BUFFER_SIZE_INSTANTIATE(fp)
+    #define GETRS_INSTANTIATE(fp) \
+    template Event getrs<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Transpose, \
+        Span<int>, \
+        Span<std::byte>);
+
+    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t getrs_buffer_size<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Transpose);
+    #define GETRF_INSTANTIATE(fp) \
+    template Event getrf<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<int>);
+    #define GETRI_INSTANTIATE(fp) \
+    template Event getri<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<int>, \
+        Span<std::byte>);
+    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t getri_buffer_size<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&);
+
+    #define BLAS_LEVEL3_INSTANTIATE(fp)\
+        GEMM_INSTANTIATE(fp)\
+        GEMV_INSTANTIATE(fp)\
+        TRSM_INSTANTIATE(fp)\
+        GEQRF_INSTANTIATE(fp)\
+        GEQRF_BUFFER_SIZE_INSTANTIATE(fp)\
+        GETRS_INSTANTIATE(fp)\
+        GETRS_BUFFER_SIZE_INSTANTIATE(fp)\
+        GETRF_INSTANTIATE(fp)\
+        GETRI_INSTANTIATE(fp)\
+        GETRI_BUFFER_SIZE_INSTANTIATE(fp)
+
 
     BLAS_LEVEL3_INSTANTIATE(float)
     BLAS_LEVEL3_INSTANTIATE(double)
@@ -218,5 +339,7 @@ namespace batchlas {
     #undef TRSM_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
+    #undef GETRS_INSTANTIATE
+    #undef GETRF_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
 }
