@@ -128,7 +128,7 @@ Event getrs(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
            const MatrixView<T, MatrixFormat::Dense>& B,
            Transpose transA,
-           Span<int> pivots,
+           Span<int64_t> pivots,
            Span<std::byte> work_space);
 
 template <Backend Back, typename T>
@@ -140,13 +140,13 @@ size_t getrs_buffer_size(Queue& ctx,
 template <Backend Back, typename T>
 Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<int> pivots);
+            Span<int64_t> pivots);
 
 template <Backend B, typename T>
 Event getri(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
-            Span<int> pivots,
+            Span<int64_t> pivots,
             Span<std::byte> work_space);
 
 template <Backend B, typename T>
