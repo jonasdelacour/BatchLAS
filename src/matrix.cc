@@ -556,7 +556,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     
     // Create a queue to submit work to
-    sycl::queue q;
+    Queue q;
     
     // Get pointer to the matrix data
     T* data_ptr = result.data_.data();
@@ -565,7 +565,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
     
     // Submit a kernel to initialize the identity matrix
-    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         // Calculate 3D coordinates from flat index
         size_t flat_idx = idx[0];
         size_t b = flat_idx / (n * n);          // batch index
@@ -588,8 +588,8 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
     Matrix<T, MType> result(n, n, batch_size);
     
     // Create a queue to submit work to
-    sycl::queue q;
-    
+    Queue q;
+
     // Get pointers to the matrix data
     T* data_ptr = result.data_.data();
     
@@ -597,7 +597,7 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
     
     // Submit a kernel to initialize the triangular matrix
-    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         // Calculate 3D coordinates from flat index
         size_t flat_idx = idx[0];
         size_t b = flat_idx / (n * n);          // batch index
@@ -887,6 +887,18 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
             row_offsets_.data() + row_offset,
             col_indices_.data() + val_offset,
             nnz_, rows_, cols_);
+    }
+}
+
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>& other,
+                                                     T* data,
+                                                     T** data_ptrs) {
+    Queue q(Device::default_device());
+    q -> memcpy(data, other.data_.data(), other.data_.size() * sizeof(T));
+    if (data_ptrs) {
+        q -> memcpy(data_ptrs, other.data_ptrs_.data(), other.data_ptrs_.size() * sizeof(T*));
     }
 }
 
