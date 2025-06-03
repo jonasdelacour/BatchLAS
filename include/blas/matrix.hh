@@ -77,6 +77,11 @@ namespace batchlas {
         static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1), 
                                           T non_diagonal_value = T(0.5), int batch_size = 1);
         
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        static Matrix<T, MType> TriDiagToeplitz(int n, T diag = T(1), 
+                                                T sub_diag = T(-0.5), T super_diag = T(0.5), int batch_size = 1);
+        
         // Convert row-major to column-major format
         template <typename U = T, MatrixFormat M = MType, 
                 typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
@@ -253,6 +258,20 @@ namespace batchlas {
                   int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
         
         MatrixView() = default;
+
+        template <typename U = T, MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
+                                                T* data, //storage for the new view
+                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
+                                                );
+        
+        template <typename U = T, MatrixFormat M = MType,
+                    typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
+        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
+                                                T* data, int* row_offsets, int* col_indices, //storage for the new view
+                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
+                                                );
 
         // Copy and move
         MatrixView(const MatrixView&) = default;
