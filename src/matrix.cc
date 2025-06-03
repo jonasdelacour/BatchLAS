@@ -682,6 +682,43 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
     return result;
 }
 
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T sub, T super, T diag, int batch_size) {
+    Matrix<T, MType> result(n, n, batch_size);
+    
+    // Create a queue to submit work to
+    Queue q;
+    
+    // Get pointer to the matrix data
+    T* data_ptr = result.data_.data();
+    
+    // Calculate total number of elements
+    size_t total_elements = static_cast<size_t>(n) * n * batch_size;
+    
+    // Submit a kernel to initialize the tridiagonal Toeplitz matrix
+    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+        
+        if (i == j) {
+            data_ptr[b * n * n + i * n + j] = diag; // Diagonal element
+        } else if (i == j - 1) {
+            data_ptr[b * n * n + i * n + j] = super; // Super-diagonal element
+        } else if (i == j + 1) {
+            data_ptr[b * n * n + i * n + j] = sub;   // Sub-diagonal element
+        } else {
+            data_ptr[b * n * n + i * n + j] = T(0);   // Zero elsewhere
+        }
+    }).wait();
+    
+    return result;
+}
+
 // Implement to_column_major using SYCL
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
