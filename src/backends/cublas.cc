@@ -169,7 +169,7 @@ namespace batchlas {
         const MatrixView<T,MatrixFormat::Dense>& A,
         const MatrixView<T,MatrixFormat::Dense>& B,
         Transpose transA,
-        Span<int> pivots,
+        Span<int64_t> pivots,
         Span<std::byte> work_space) {
             static LinalgHandle<Back> handle;
             handle.setStream(ctx);
@@ -188,15 +188,16 @@ namespace batchlas {
                     info.data());
             } else {
                 int info;
+                auto reinterpreted_pivots = pivots .as_span<int>();
                 call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
                     handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    A.data_ptrs(ctx).data(), A.ld(), pivots.data(),
+                    A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
                     B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
             }
             return ctx.get_event();
         }
     
-    template <Backend B, typename T>
+    template <Backend Back, typename T>
     size_t getrs_buffer_size(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
         const MatrixView<T,MatrixFormat::Dense>& B,
@@ -207,22 +208,23 @@ namespace batchlas {
     template <Backend B, typename T>
     Event getrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
-        Span<int> pivots) {
+        Span<int64_t> pivots) {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
             int info;
+            auto reinterpreted_pivots = pivots.as_span<int>();
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
                 handle, n,
-                A.data_ptrs(ctx).data(), A.ld(), pivots.data(), &info, batch_size);
+                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(), &info, batch_size);
         }
 
     template <Backend B, typename T>
     Event getri(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
         const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
-        Span<int> pivots,
+        Span<int64_t> pivots,
         Span<std::byte> work_space) {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
@@ -230,9 +232,10 @@ namespace batchlas {
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
             auto info_arr = pool.allocate<int>(ctx, batch_size);
+            auto reinterpreted_pivots = pivots.as_span<int>();
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
                 handle, n,
-                A.data_ptrs(ctx).data(), A.ld(), pivots.data(),
+                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
                 C.data_ptrs(ctx).data(), C.ld(), info_arr.data(), batch_size);
             return ctx.get_event();
             
@@ -291,25 +294,26 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Transpose, \
-        Span<int>, \
+        Span<int64_t>, \
         Span<std::byte>);
 
     #define GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t getrs_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Transpose);
     #define GETRF_INSTANTIATE(fp) \
     template Event getrf<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<int>);
+        Span<int64_t>);
     #define GETRI_INSTANTIATE(fp) \
     template Event getri<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<int>, \
+        Span<int64_t>, \
         Span<std::byte>);
     #define GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t getri_buffer_size<Backend::CUDA, fp>( \
