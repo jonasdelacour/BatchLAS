@@ -19,15 +19,20 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
 
-    // Memory passed from outside
-    template <typename T, MatrixFormat MF>
+    //Memory passed from outside
+    template <Backend B, typename T, MatrixFormat MF>
     Event cond(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
-              const Span<T> conds);
+              const Span<T> conds,
+              const Span<std::byte> workspace);
 
-    // Convenience function which allocates and returns the results stored in an array.
-    template <typename T, MatrixFormat MF>
+    size_t cond_buffer_size(Queue &ctx,
+                            const MatrixView<float, MatrixFormat::Dense> &A,
+                            const NormType norm_type);
+
+    //Convenience function which allocates memory internally
+    template <Backend B, typename T, MatrixFormat MF>
     UnifiedVector<T> cond(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
