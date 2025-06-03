@@ -32,7 +32,7 @@ EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
 
 
-Queue::Queue() : device_({0, DeviceType::CPU}), in_order_(true) {
+Queue::Queue() : device_(Device::default_device()), in_order_(true) {
     impl_ = std::make_unique<QueueImpl>(device_, in_order_);
 }
 
