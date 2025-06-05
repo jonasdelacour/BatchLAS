@@ -20,17 +20,18 @@ namespace batchlas
                                                                         pool.allocate<T*>(ctx, A.batch_size()).data());
                                                                         
                         auto getri_workspace = pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, Acopy));
+                        auto getrf_workspace = pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, Acopy));
                         auto A_norms = pool.allocate<T>(ctx, A.batch_size());
                         auto A_inv_norms = pool.allocate<T>(ctx, A.batch_size());
+                        getrf<B>(ctx, Acopy, pivots, getrf_workspace);
+                        getri<B>(ctx, Acopy, Ainv, pivots, getri_workspace);
                         
-                        getrf<B>(ctx, Acopy, pivots);
-                        getri<B>(ctx, Acopy, Ainv, pivots, workspace);
-                        
-                        norm<B>(ctx, Ainv, norm_type, A_inv_norms);
-                        norm<B>(ctx, A, norm_type, A_norms);
+                        norm(ctx, Ainv, norm_type, A_inv_norms);
+                        norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
                             conds[i] = A_inv_norms[i] * A_norms[i];
                         });
+                        return ctx.get_event();
                     }
 
     // Memory passed from outside
@@ -41,8 +42,7 @@ namespace batchlas
                 const Span<T> conds,
                 const Span<std::byte> workspace)
     {
-        cond_impl<B>(ctx, A, norm_type, conds, workspace);
-        return ctx.get_event();
+        return cond_impl<B>(ctx, A, norm_type, conds, workspace);
     }
 
     template <Backend B, typename T, MatrixFormat MF>
@@ -51,6 +51,7 @@ namespace batchlas
                             const NormType norm_type)
     {
         return  BumpAllocator::allocation_size<std::byte>(ctx, getri_buffer_size<B>(ctx, A)) +
+                BumpAllocator::allocation_size<std::byte>(ctx, getrf_buffer_size<B>(ctx, A)) +
                 BumpAllocator::allocation_size<T>(ctx, A.batch_size()) * 2 + // For norms
                 BumpAllocator::allocation_size<T>(ctx, A.data().size()) * 2 + // For Ainv and Acopy
                 BumpAllocator::allocation_size<int64_t>(ctx, A.batch_size() * A.rows()) + // For pivots
@@ -66,8 +67,27 @@ namespace batchlas
     {
         UnifiedVector<T> conds(A.batch_size());
         UnifiedVector<std::byte> workspace(cond_buffer_size<B>(ctx, A, norm_type));
-        cond_impl<B>(ctx, A, norm_type, conds, workspace);
+        cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.to_span()).wait();
         return conds;
     }
+
+    #define COND_INSTANTIATE(fp, fmt) \
+    template Event cond<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType,\
+        const Span<fp>,\
+        const Span<std::byte>);\
+    template UnifiedVector<fp> cond<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType);\
+    template size_t cond_buffer_size<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType);
+    
+    COND_INSTANTIATE(float, MatrixFormat::Dense)
+    COND_INSTANTIATE(double, MatrixFormat::Dense)
 
 } // namespace batchlas
