@@ -162,6 +162,10 @@ namespace batchlas {
             this->view().print(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
         }
 
+        int rows() const { return rows_; }
+        int cols() const { return cols_; }
+        int batch_size() const { return batch_size_; }
+
         // Dense matrix specific accessors
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
