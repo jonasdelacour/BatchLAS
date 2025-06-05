@@ -213,6 +213,55 @@ TEST_F(LanczosTestBase, LanczosTest) {
     }
 }
 
+TEST(LanczosTestBase, ToeplitzEigenpairs) {
+    constexpr int n = 6;
+    constexpr int batch = 1;
+
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 2.0f, -1.0f, -1.0f, batch);
+    auto csr = dense.convert_to<MatrixFormat::CSR>();
+    MatrixView A_view(csr);
+
+    UnifiedVector<float> W(n * batch);
+    UnifiedVector<float> eigenvec_mem(n * n * batch);
+    MatrixView eigenvectors(eigenvec_mem.data(), n, n, n, n * n, batch);
+
+    LanczosParams<float> params;
+    params.sort_enabled = true;
+    params.sort_order = SortOrder::Descending;
+
+    size_t buf_size = lanczos_buffer_size<Backend::CUDA>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors, params);
+    UnifiedVector<std::byte> workspace(buf_size);
+
+    lanczos<Backend::CUDA>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors, params);
+    ctx->wait();
+
+    // expected eigenvalues for Toeplitz matrix
+    std::vector<float> expected(n);
+    for (int k = 1; k <= n; ++k) {
+        expected[k-1] = 2.0f - 2.0f * std::cos(k * M_PI / (n + 1));
+    }
+    std::sort(expected.begin(), expected.end(), std::greater<float>());
+
+    for (int i = 0; i < n; ++i) {
+        EXPECT_NEAR(W[i], expected[i], 1e-3f);
+    }
+
+    // verify eigenvectors A*v = lambda*v
+    const float* Adata = dense.data().data();
+    for (int j = 0; j < n; ++j) {
+        float norm = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            float Av = 0.0f;
+            for (int k = 0; k < n; ++k) {
+                Av += Adata[i * n + k] * eigenvec_mem[k * n + j];
+            }
+            float diff = Av - W[j] * eigenvec_mem[i * n + j];
+            norm += diff * diff;
+        }
+        EXPECT_LT(std::sqrt(norm), 1e-2f);
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
