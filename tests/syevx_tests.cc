@@ -155,6 +155,54 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     }
 }
 
+TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
+    constexpr int n = 6;
+    constexpr int batch = 1;
+    const int neig = n;
+
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 2.0f, -1.0f, -1.0f, batch);
+    auto csr = dense.convert_to<MatrixFormat::CSR>();
+    MatrixView A_view(csr);
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+
+    SyevxParams<float> params;
+    params.iterations = 50;
+    params.find_largest = true;
+
+    size_t buf_size = syevx_buffer_size<Backend::CUDA>(*ctx, A_view, W, neig, JobType::EigenVectors, MatrixView(V), params);
+    UnifiedVector<std::byte> workspace(buf_size);
+
+    syevx<Backend::CUDA>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, MatrixView(V), params);
+    ctx->wait();
+
+    std::vector<float> expected(n);
+    for (int k = 1; k <= n; ++k) {
+        expected[k-1] = 2.0f - 2.0f * std::cos(k * M_PI / (n + 1));
+    }
+    std::sort(expected.begin(), expected.end(), std::greater<float>());
+
+    for (int i = 0; i < neig; ++i) {
+        EXPECT_NEAR(W[i], expected[i], 1e-3f);
+    }
+
+    const float* Adata = dense.data().data();
+    const float* vecs = V.data().data();
+    for (int j = 0; j < neig; ++j) {
+        float norm = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            float Av = 0.0f;
+            for (int k = 0; k < n; ++k) {
+                Av += Adata[i * n + k] * vecs[k * neig + j];
+            }
+            float diff = Av - W[j] * vecs[i * neig + j];
+            norm += diff * diff;
+        }
+        EXPECT_LT(std::sqrt(norm), 1e-2f);
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
