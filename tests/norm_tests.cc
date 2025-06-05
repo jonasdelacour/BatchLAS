@@ -134,207 +134,139 @@ protected:
             return 1e-10;
         }
     }
+
+    // Small helper to map NormType to a string for readable failure messages
+    static const char* norm_name(NormType t) {
+        switch (t) {
+            case NormType::Frobenius: return "Frobenius";
+            case NormType::One:       return "One";
+            case NormType::Inf:       return "Inf";
+            case NormType::Max:       return "Max";
+        }
+        return "";
+    }
+
+    // Convenience array with all norm types
+    static constexpr std::array<NormType, 4> all_norms = {
+        NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max
+    };
+
+    // Run norm for all types and compare against the provided expected function
+    template <typename ExpectedFn>
+    void check_all_norms(const Matrix<T, MatrixFormat::Dense>& mat,
+                         ExpectedFn&& expected_fn) {
+        using real_t = typename base_type<T>::type;
+        UnifiedVector<real_t> result(mat.batch_size());
+
+        for (auto ntype : all_norms) {
+            norm(*ctx, mat.view(), ntype, result.to_span());
+            ctx->wait();
+
+            for (int b = 0; b < mat.batch_size(); ++b) {
+                auto expected = expected_fn(ntype, b);
+                EXPECT_NEAR(result[b], expected, tolerance())
+                    << "Batch " << b << " " << norm_name(ntype) << " norm mismatch";
+            }
+        }
+    }
+
+    // Check that all norms are strictly positive
+    void check_all_norms_positive(const Matrix<T, MatrixFormat::Dense>& mat) {
+        using real_t = typename base_type<T>::type;
+        UnifiedVector<real_t> result(mat.batch_size());
+
+        for (auto ntype : all_norms) {
+            norm(*ctx, mat.view(), ntype, result.to_span());
+            ctx->wait();
+
+            for (int b = 0; b < mat.batch_size(); ++b) {
+                EXPECT_GT(result[b], real_t(0))
+                    << "Batch " << b << " " << norm_name(ntype)
+                    << " norm should be positive";
+            }
+        }
+    }
 };
 
 // Typed tests for different scalar types
 using TestTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(NormTest, TestTypes);
 
-// Test Frobenius norm with random matrix
-TYPED_TEST(NormTest, FrobeniusNormRandom) {
+// Test all norm types with a random matrix
+TYPED_TEST(NormTest, RandomMatrixAllNorms) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int rows = 5, cols = 4, batch_size = 2;
-    
+
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 123);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    norm<T, MatrixFormat::Dense>(*this->ctx, mat, NormType::Frobenius, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        auto expected = this->expected_frobenius_norm(mat, b);
-        auto computed = result[b];
-        EXPECT_NEAR(computed, expected, this->tolerance()) 
-            << "Batch " << b << " Frobenius norm mismatch";
-    }
-}
 
-// Test One norm with random matrix
-TYPED_TEST(NormTest, OneNormRandom) {
-    using T = TypeParam;
-    using real_t = typename base_type<T>::type;
-    const int rows = 4, cols = 5, batch_size = 1;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 456);
-    auto result = UnifiedVector<real_t>(batch_size);
+    auto expected_fn = [this, &mat](NormType ntype, int b) {
+        switch (ntype) {
+            case NormType::Frobenius: return this->expected_frobenius_norm(mat, b);
+            case NormType::One:       return this->expected_one_norm(mat, b);
+            case NormType::Inf:       return this->expected_inf_norm(mat, b);
+            case NormType::Max:       return this->expected_max_norm(mat, b);
+        }
+        return typename base_type<T>::type(0);
+    };
 
-    norm(*this->ctx, mat.view(), NormType::One, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        auto expected = this->expected_one_norm(mat, b);
-        auto computed = result[b];
-        EXPECT_NEAR(computed, expected, this->tolerance()) 
-            << "Batch " << b << " One norm mismatch";
-    }
-}
-
-// Test Infinity norm with random matrix
-TYPED_TEST(NormTest, InfNormRandom) {
-    using T = TypeParam;
-    using real_t = typename base_type<T>::type;
-    const int rows = 6, cols = 3, batch_size = 2;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 789);
-    auto result = UnifiedVector<real_t>(batch_size);
-
-    norm(*this->ctx, mat.view(), NormType::Inf, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        auto expected = this->expected_inf_norm(mat, b);
-        auto computed = result[b];
-        EXPECT_NEAR(computed, expected, this->tolerance()) 
-            << "Batch " << b << " Inf norm mismatch";
-    }
-}
-
-// Test Max norm with random matrix
-TYPED_TEST(NormTest, MaxNormRandom) {
-    using T = TypeParam;
-    using real_t = typename base_type<T>::type;
-    const int rows = 4, cols = 4, batch_size = 2;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 321);
-    auto result = UnifiedVector<real_t>(batch_size);
-
-    norm(*this->ctx, mat.view(), NormType::Max, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        auto expected = this->expected_max_norm(mat, b);
-        auto computed = result[b];
-        EXPECT_NEAR(computed, expected, this->tolerance())
-            << "Batch " << b << " Max norm mismatch";
-    }
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Test with Identity matrix
 TYPED_TEST(NormTest, NormsIdentityMatrix) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int n = 5, batch_size = 2;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
-    auto result = UnifiedVector<real_t>(batch_size);
 
-    // Frobenius norm of identity matrix should be sqrt(n)
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], std::sqrt(static_cast<real_t>(n)), this->tolerance())
-            << "Identity Frobenius norm should be sqrt(n)";
-    }
-    
-    // One norm of identity matrix should be 1
-    norm(*this->ctx, mat.view(), NormType::One, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(1), this->tolerance())
-            << "Identity One norm should be 1";
-    }
-    
-    // Inf norm of identity matrix should be 1
-    norm(*this->ctx, mat.view(), NormType::Inf, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(1), this->tolerance())
-            << "Identity Inf norm should be 1";
-    }
-    
-    // Max norm of identity matrix should be 1
-    norm(*this->ctx, mat.view(), NormType::Max, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(1), this->tolerance())
-            << "Identity Max norm should be 1";
-    }
+    auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
+
+    auto expected_fn = [n](NormType ntype, int) {
+        using real_t = typename base_type<T>::type;
+        switch (ntype) {
+            case NormType::Frobenius: return std::sqrt(static_cast<real_t>(n));
+            case NormType::One:
+            case NormType::Inf:
+            case NormType::Max: return real_t(1);
+        }
+        return real_t(0);
+    };
+
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Test with Zero matrix
 TYPED_TEST(NormTest, NormsZeroMatrix) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int rows = 4, cols = 3, batch_size = 2;
-    
+
     auto mat = Matrix<T, MatrixFormat::Dense>::Zeros(rows, cols, batch_size);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // All norms of zero matrix should be 0
-    std::vector<NormType> norm_types = {
-        NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max
+
+    auto expected_fn = [](NormType, int) {
+        using real_t = typename base_type<T>::type;
+        return real_t(0);
     };
-    
-    for (auto norm_type : norm_types) {
-        norm(*this->ctx, mat.view(), norm_type, result.to_span());
-        this->ctx->wait();
-        
-        for (int b = 0; b < batch_size; ++b) {
-            EXPECT_NEAR(result[b], real_t(0), this->tolerance())
-                << "Zero matrix norm should be 0";
-        }
-    }
+
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Test with Ones matrix
 TYPED_TEST(NormTest, NormsOnesMatrix) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int rows = 3, cols = 4, batch_size = 2;
-    
+
     auto mat = Matrix<T, MatrixFormat::Dense>::Ones(rows, cols, batch_size);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // Frobenius norm of ones matrix should be sqrt(rows * cols)
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], std::sqrt(static_cast<real_t>(rows * cols)), this->tolerance())
-            << "Ones Frobenius norm should be sqrt(rows * cols)";
-    }
-    
-    // One norm of ones matrix should be rows (max column sum)
-    norm(*this->ctx, mat.view(), NormType::One, result.to_span());
-    this->ctx->wait();
 
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], static_cast<real_t>(rows), this->tolerance())
-            << "Ones One norm should be rows";
-    }
-    
-    // Inf norm of ones matrix should be cols (max row sum)
-    norm(*this->ctx, mat.view(), NormType::Inf, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], static_cast<real_t>(cols), this->tolerance())
-            << "Ones Inf norm should be cols";
-    }
-    
-    // Max norm of ones matrix should be 1
-    norm(*this->ctx, mat.view(), NormType::Max, result.to_span());
-    this->ctx->wait();
+    auto expected_fn = [rows, cols](NormType ntype, int) {
+        using real_t = typename base_type<T>::type;
+        switch (ntype) {
+            case NormType::Frobenius: return std::sqrt(static_cast<real_t>(rows * cols));
+            case NormType::One:       return static_cast<real_t>(rows);
+            case NormType::Inf:       return static_cast<real_t>(cols);
+            case NormType::Max:       return real_t(1);
+        }
+        return real_t(0);
+    };
 
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(1), this->tolerance())
-            << "Ones Max norm should be 1";
-    }
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Test with diagonal matrix
@@ -342,62 +274,38 @@ TYPED_TEST(NormTest, NormsDiagonalMatrix) {
     using T = TypeParam;
     using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
-    
+
     // Create diagonal matrix with values [1, 2, 3, 4]
     UnifiedVector<T> diag_vals(n);
     for (int i = 0; i < n; ++i) {
-        if constexpr (std::is_same_v<T, std::complex<float>> || 
+        if constexpr (std::is_same_v<T, std::complex<float>> ||
                      std::is_same_v<T, std::complex<double>>) {
             diag_vals[i] = T(static_cast<real_t>(i + 1), static_cast<real_t>(0));
         } else {
             diag_vals[i] = static_cast<T>(i + 1);
         }
     }
-    
+
     auto mat = Matrix<T, MatrixFormat::Dense>::Diagonal(diag_vals.to_span(), batch_size);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // Frobenius norm should be sqrt(1^2 + 2^2 + 3^2 + 4^2) = sqrt(30)
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
-    this->ctx->wait();
-    
     real_t expected_frob = std::sqrt(real_t(1 + 4 + 9 + 16));
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], expected_frob, this->tolerance())
-            << "Diagonal Frobenius norm mismatch";
-    }
-    
-    // One and Inf norms should be 4 (max diagonal element)
-    norm(*this->ctx, mat.view(), NormType::One, result.to_span());
-    this->ctx->wait();
-    
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(4), this->tolerance())
-            << "Diagonal One norm should be max diagonal element";
-    }
 
-    norm(*this->ctx, mat.view(), NormType::Inf, result.to_span());
-    this->ctx->wait();
+    auto expected_fn = [expected_frob](NormType ntype, int) {
+        using r_t = typename base_type<T>::type;
+        switch (ntype) {
+            case NormType::Frobenius: return expected_frob;
+            case NormType::One:
+            case NormType::Inf:
+            case NormType::Max: return r_t(4);
+        }
+        return r_t(0);
+    };
 
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(4), this->tolerance())
-            << "Diagonal Inf norm should be max diagonal element";
-    }
-    
-    // Max norm should be 4
-    norm(*this->ctx, mat.view(), NormType::Max, result.to_span());
-    this->ctx->wait();
-
-    for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(result[b], real_t(4), this->tolerance())
-            << "Diagonal Max norm should be max diagonal element";
-    }
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Test with triangular matrix
 TYPED_TEST(NormTest, NormsTriangularMatrix) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
     
     // Create upper triangular matrix with diagonal=2, off-diagonal=1
@@ -412,45 +320,18 @@ TYPED_TEST(NormTest, NormsTriangularMatrix) {
     }
     
     auto mat = Matrix<T, MatrixFormat::Dense>::Triangular(n, Uplo::Upper, diag_val, off_diag_val, batch_size);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // Test that norms are computed (exact values depend on structure)
-    std::vector<NormType> norm_types = {
-        NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max
-    };
-    
-    for (auto norm_type : norm_types) {
-        norm(*this->ctx, mat.view(), norm_type, result.to_span());
-        this->ctx->wait();
-        
-        for (int b = 0; b < batch_size; ++b) {
-            EXPECT_GT(result[b], real_t(0))
-                << "Triangular matrix norm should be positive";
-        }
-    }
+
+    this->check_all_norms_positive(mat);
 }
 
 // Test single matrix (batch_size = 1)
 TYPED_TEST(NormTest, SingleMatrixNorms) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int rows = 100, cols = 100, batch_size = 1;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 555);
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // Test all norm types for single matrix
-    std::vector<NormType> norm_types = {
-        NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max
-    };
-    
-    for (auto norm_type : norm_types) {
-        norm(*this->ctx, mat.view(), norm_type, result.to_span());
-        this->ctx->wait();
 
-        EXPECT_GT(result[0], real_t(0))
-            << "Single matrix norm should be positive for random matrix";
-    }
+    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 555);
+
+    this->check_all_norms_positive(mat);
 }
 
 // Test large batch size
@@ -493,7 +374,6 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
 // Test norm consistency (compare with manual calculation)
 TYPED_TEST(NormTest, NormConsistency) {
     using T = TypeParam;
-    using real_t = typename base_type<T>::type;
     const int rows = 2, cols = 2, batch_size = 1;
     
     // Create a known matrix
@@ -513,35 +393,18 @@ TYPED_TEST(NormTest, NormConsistency) {
         data[3] = T(4);  // (1,1)
     }
     
-    auto result = UnifiedVector<real_t>(batch_size);
-    
-    // Test Frobenius norm: sqrt(1^2 + 2^2 + 3^2 + 4^2) = sqrt(30)
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
-    this->ctx->wait();
+    auto expected_fn = [](NormType ntype, int) {
+        using real_t = typename base_type<T>::type;
+        switch (ntype) {
+            case NormType::Frobenius: return std::sqrt(real_t(30));
+            case NormType::One:       return real_t(7);
+            case NormType::Inf:       return real_t(6);
+            case NormType::Max:       return real_t(4);
+        }
+        return real_t(0);
+    };
 
-    EXPECT_NEAR(result[0], std::sqrt(real_t(30)), this->tolerance())
-        << "Frobenius norm of known matrix should be sqrt(30)";
-    
-    // Test One norm: max(|1|+|2|, |3|+|4|) = max(3, 7) = 7
-    norm(*this->ctx, mat.view(), NormType::One, result.to_span());
-    this->ctx->wait();
-
-    EXPECT_NEAR(result[0], real_t(7), this->tolerance())
-        << "One norm of known matrix should be 7";
-    
-    // Test Inf norm: max(|1|+|3|, |2|+|4|) = max(4, 6) = 6
-    norm(*this->ctx, mat.view(), NormType::Inf, result.to_span());
-    this->ctx->wait();
-
-    EXPECT_NEAR(result[0], real_t(6), this->tolerance())
-        << "Inf norm of known matrix should be 6";
-    
-    // Test Max norm: max(|1|, |2|, |3|, |4|) = 4
-    norm(*this->ctx, mat.view(), NormType::Max, result.to_span());
-    this->ctx->wait();
-
-    EXPECT_NEAR(result[0], real_t(4), this->tolerance())
-        << "Max norm of known matrix should be 4";
+    this->check_all_norms(mat, expected_fn);
 }
 
 // Performance/stress test with larger matrices
