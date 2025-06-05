@@ -67,13 +67,20 @@ TYPED_TEST(CondTest, IdentityMatrix) {
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
 
-    for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
+    for (auto nt : {NormType::One, NormType::Inf, NormType::Max}) {
         auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_NEAR(conds[b], static_cast<typename CondTest<T>::real_t>(1), this->tolerance())
                 << "Batch " << b;
         }
+    }
+
+    auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), NormType::Frobenius);
+    this->ctx->wait();
+    for (int b = 0; b < batch_size; ++b) {
+        EXPECT_NEAR(conds[b], n, this->tolerance()) // Frobenius norm of identity is sqrt(n) so ||I|| * ||I^-1|| = sqrt(n) * sqrt(n) = n
+            << "Batch " << b;
     }
 }
 
