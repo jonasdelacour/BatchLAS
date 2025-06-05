@@ -932,11 +932,14 @@ template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat:
 MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>& other,
                                                      T* data,
                                                      T** data_ptrs) {
+    MatrixView<T, MType> result(data, other.rows_, other.cols_, other.ld_, other.stride_, other.batch_size_, data_ptrs);
     Queue q(Device::default_device());
     q -> memcpy(data, other.data_.data(), other.data_.size() * sizeof(T));
     if (data_ptrs) {
         q -> memcpy(data_ptrs, other.data_ptrs_.data(), other.data_ptrs_.size() * sizeof(T*));
     }
+    q -> wait();
+    return result;
 }
 
 // Element access operator - returns view of a single batch item
@@ -1083,6 +1086,18 @@ template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Uplo, double, double, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<float>, std::complex<float>, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
+
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(int, float, float, float, int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<float>, std::complex<float>, std::complex<float>, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<double>, std::complex<double>, std::complex<double>, int);
+
+//----------------------------------------------------------------------
+// Deep copy instantiations
+template MatrixView<float, MatrixFormat::Dense> MatrixView<float, MatrixFormat::Dense>::deep_copy(const MatrixView<float, MatrixFormat::Dense>&, float*, float**);
+template MatrixView<double, MatrixFormat::Dense> MatrixView<double, MatrixFormat::Dense>::deep_copy(const MatrixView<double, MatrixFormat::Dense>&, double*, double**);
+template MatrixView<std::complex<float>, MatrixFormat::Dense> MatrixView<std::complex<float>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>*, std::complex<float>**);
+template MatrixView<std::complex<double>, MatrixFormat::Dense> MatrixView<std::complex<double>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>*, std::complex<double>**);
 
 // Dense MatrixView constructors instantiations
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(float*, int, int, int, int, int, float**);
