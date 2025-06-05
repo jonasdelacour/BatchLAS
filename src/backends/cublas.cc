@@ -208,16 +208,25 @@ namespace batchlas {
     template <Backend B, typename T>
     Event getrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
-        Span<int64_t> pivots) {
+        Span<int64_t> pivots,
+        Span<std::byte> work_space) {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
-            int info;
+            auto pool = BumpAllocator(work_space);
+            auto info = pool.allocate<int>(ctx, batch_size);
             auto reinterpreted_pivots = pivots.as_span<int>();
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
                 handle, n,
-                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(), &info, batch_size);
+                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(), info.data(), batch_size);
+            return ctx.get_event();
+        }
+
+    template <Backend B, typename T>
+    size_t getrf_buffer_size(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A) {
+            return BumpAllocator::allocation_size<int>(ctx, A.batch_size()); //batched getrf just uses a single host integer.
         }
 
     template <Backend B, typename T>
@@ -307,7 +316,12 @@ namespace batchlas {
     template Event getrf<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<int64_t>);
+        Span<int64_t>,\
+        Span<std::byte>);
+    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t getrf_buffer_size<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&);
     #define GETRI_INSTANTIATE(fp) \
     template Event getri<Backend::CUDA, fp>( \
         Queue&, \
@@ -329,6 +343,7 @@ namespace batchlas {
         GETRS_INSTANTIATE(fp)\
         GETRS_BUFFER_SIZE_INSTANTIATE(fp)\
         GETRF_INSTANTIATE(fp)\
+        GETRF_BUFFER_SIZE_INSTANTIATE(fp)\
         GETRI_INSTANTIATE(fp)\
         GETRI_BUFFER_SIZE_INSTANTIATE(fp)
 

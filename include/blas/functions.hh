@@ -137,10 +137,15 @@ size_t getrs_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          Transpose transA);
 
-template <Backend Back, typename T>
+template <Backend B, typename T>
 Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<int64_t> pivots);
+            Span<int64_t> pivots,
+            Span<std::byte> work_space);
+
+template <Backend B, typename T>
+size_t getrf_buffer_size(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A);
 
 template <Backend B, typename T>
 Event getri(Queue& ctx,
