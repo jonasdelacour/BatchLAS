@@ -33,8 +33,8 @@ namespace batchlas
                 auto data_span = Span<T>(data + batch_idx * stride, cols * ld);
                 if (norm_type == NormType::Frobenius) {
                     for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j % cols;
-                        auto row = j / cols;
+                        auto col = j / rows;
+                        auto row = j % rows;
                         temp += data_span[col * ld + row] * data_span[col * ld + row];
                     }
                     norm = sycl::sqrt(sycl::reduce_over_group(cta, temp, sycl::plus<T>()));
@@ -48,7 +48,7 @@ namespace batchlas
                     // Sum absolute values for each column across all rows
                     for (int j = local_idx; j < rows * cols; j += local_size) {
                         auto col = j / rows;
-                        auto row = j % cols;
+                        auto row = j % rows;
                         sycl::atomic_ref<T, sycl::memory_order::relaxed,
                                         sycl::memory_scope::work_group>
                             atomic_local_mem(local_mem[col]);
@@ -90,7 +90,7 @@ namespace batchlas
 
                 norms[batch_idx] = norm;
             });
-        });
+        }); 
 
         return ctx.get_event();
     }
@@ -101,7 +101,7 @@ namespace batchlas
               const NormType norm_type,
               const Span<T> norms)
     {
-        norm_impl(ctx, A, norm_type, norms);
+        return norm_impl(ctx, A, norm_type, norms);
     }
 
     template <typename T, MatrixFormat MF>
