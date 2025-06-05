@@ -32,6 +32,7 @@ set(TEST_TARGETS
     trsm_operations_tests
     ortho_tests
     norm_tests
+    cond_tests
 )
 
 # Create test executables
