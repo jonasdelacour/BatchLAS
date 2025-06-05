@@ -31,6 +31,7 @@ set(TEST_TARGETS
     matrix_view_tests
     trsm_operations_tests
     ortho_tests
+    norm_tests
 )
 
 # Create test executables
