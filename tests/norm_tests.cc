@@ -306,6 +306,7 @@ TYPED_TEST(NormTest, NormsDiagonalMatrix) {
 // Test with triangular matrix
 TYPED_TEST(NormTest, NormsTriangularMatrix) {
     using T = TypeParam;
+    using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
     
     // Create upper triangular matrix with diagonal=2, off-diagonal=1
@@ -374,6 +375,7 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
 // Test norm consistency (compare with manual calculation)
 TYPED_TEST(NormTest, NormConsistency) {
     using T = TypeParam;
+    using real_t = typename base_type<T>::type;
     const int rows = 2, cols = 2, batch_size = 1;
     
     // Create a known matrix
