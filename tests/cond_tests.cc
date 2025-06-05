@@ -68,7 +68,7 @@ TYPED_TEST(CondTest, IdentityMatrix) {
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
 
     for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
-        auto conds = cond<Backend::NETLIB>(*this->ctx, mat.view(), nt);
+        auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_NEAR(conds[b], static_cast<typename CondTest<T>::real_t>(1), this->tolerance())
@@ -93,7 +93,7 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
 
     for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
         real_t expected = CondTest<T>::expected_cond_diagonal(diag, nt);
-        auto conds = cond<Backend::NETLIB>(*this->ctx, mat.view(), nt);
+        auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_NEAR(conds[b], expected, this->tolerance())
