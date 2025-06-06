@@ -239,13 +239,13 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const 
                 [=](sycl::nd_item<1> item) {
                     size_t idx_val = item.get_global_id(0);
                     size_t bix = item.get_group(0);
-                    sycl::joint_exclusive_scan(
+                    sycl::joint_inclusive_scan(
                         item.get_group(),
                         row_nnz_acc + bix * rows,
                         row_nnz_acc + bix * rows + rows,
-                        row_offsets_acc + bix * (rows + 1),
-                        0,
-                        sycl::plus<int>()
+                        row_offsets_acc + bix * (rows + 1) + 1,
+                        sycl::plus<int>(),
+                        0
                     );
                 }
             );
@@ -600,12 +600,13 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
 // Factory method to create random matrix
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, int batch_size, unsigned int seed) {
+Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
     
     std::mt19937 gen(seed);
     std::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
     
+    // First generate random values for all elements
     for (size_t i = 0; i < result.data_.size(); ++i) {
         if constexpr (std::is_same_v<T, std::complex<float>> || 
                       std::is_same_v<T, std::complex<double>>) {
@@ -617,6 +618,39 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, int batch_size, un
         }
     }
     
+    // If hermitian flag is set, enforce Hermitian property
+    if (hermitian) {
+        // Matrices must be square for Hermitian
+        if (rows != cols) {
+            throw std::runtime_error("Hermitian matrices must be square");
+        }
+
+        for (int b = 0; b < batch_size; ++b) {
+            for (int i = 0; i < rows; ++i) {
+                for (int j = i + 1; j < cols; ++j) {
+                    // Get indices for element (i,j) and its conjugate transpose position (j,i)
+                    size_t idx1 = b * result.stride_ + j * result.ld_ + i;  // (i,j) in column-major
+                    size_t idx2 = b * result.stride_ + i * result.ld_ + j;  // (j,i) in column-major
+                    
+                    // Set A(j,i) = conj(A(i,j)) to ensure hermitian property
+                    if constexpr (std::is_same_v<T, std::complex<float>> || 
+                                 std::is_same_v<T, std::complex<double>>) {
+                        result.data_[idx2] = std::conj(result.data_[idx1]);
+                    } else {
+                        // For real types, just copy the value (conjugate of real is the same value)
+                        result.data_[idx2] = result.data_[idx1];
+                    }
+                }
+                
+                // Make the diagonal elements real
+                if constexpr (std::is_same_v<T, std::complex<float>> || 
+                             std::is_same_v<T, std::complex<double>>) {
+                    size_t diag_idx = b * result.stride_ + i * result.ld_ + i;
+                    result.data_[diag_idx] = T(std::real(result.data_[diag_idx]), 0);
+                }
+            }
+        }
+    }
     return result;
 }
 
@@ -1028,10 +1062,10 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Identity(int, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Identity(int, int);
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Zeros(int, int, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Zeros(int, int, int);
