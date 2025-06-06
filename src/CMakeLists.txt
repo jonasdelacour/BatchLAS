@@ -62,6 +62,7 @@ target_link_libraries(batchlas
     PUBLIC 
     # Specify any additional libraries here
     ${BATCHLAS_LINK_LIBRARIES}
+    tbb # Intel Threading Building Blocks, needed for oneapi parallel primitives
 )
 
 # Create namespaced alias
