@@ -6,28 +6,33 @@
 using namespace batchlas;
 
 TEST(InverseTest, InverseIdentityCheck) {
-    auto ctx = std::make_shared<Queue>(Device::default_device());
+    Queue ctx(Device::default_device());
 
-    Matrix<float, MatrixFormat::Dense> A(2,2,1);
+    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(40, 40, false, 2);
     auto Adata = A.data();
-    Adata[0] = 4.0f; Adata[1] = 2.0f; // column 0
-    Adata[2] = 7.0f; Adata[3] = 6.0f; // column 1
+    
+    Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
+    UnifiedVector<std::byte> ws(inv_buffer_size<Backend::CUDA>(ctx, A.view()));
+    inv<Backend::CUDA>(ctx, A.view(), Ainverse.view(), ws);
+    ctx.wait();
 
-    Matrix<float, MatrixFormat::Dense> Ainverse(2,2,1);
-    UnifiedVector<std::byte> ws(inv_buffer_size<Backend::CUDA>(*ctx, A.view()));
-    inv<Backend::CUDA>(*ctx, A.view(), Ainverse.view(), ws);
-    ctx->wait();
-
-    Matrix<float, MatrixFormat::Dense> result(2,2,1);
-    gemm<Backend::CUDA>(*ctx, A.view(), Ainverse.view(), result.view(), 1.0f, 0.0f,
+    Matrix<float, MatrixFormat::Dense> result(40,40,2);
+    gemm<Backend::CUDA>(ctx, A.view(), Ainverse.view(), result.view(), 1.0f, 0.0f,
                         Transpose::NoTrans, Transpose::NoTrans);
-    ctx->wait();
+    ctx.wait();
 
     auto r = result.data();
-    EXPECT_NEAR(r[0], 1.0f, 1e-3f);
-    EXPECT_NEAR(r[1], 0.0f, 1e-3f);
-    EXPECT_NEAR(r[2], 0.0f, 1e-3f);
-    EXPECT_NEAR(r[3], 1.0f, 1e-3f);
+    for (int b = 0; b < result.batch_size(); ++b) {
+        for (int i = 0; i < result.rows(); ++i) {
+            for (int j = 0; j < result.cols(); ++j) {
+                if (i == j) {
+                    EXPECT_NEAR(r[b * result.stride() + i * result.ld() + j], 1.0f, 1e-4);
+                } else {
+                    EXPECT_NEAR(r[b * result.stride() + i * result.ld() + j], 0.0f, 1e-4);
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv) {
