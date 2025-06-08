@@ -197,7 +197,7 @@ TYPED_TEST(NormTest, RandomMatrixAllNorms) {
     using T = TypeParam;
     const int rows = 5, cols = 4, batch_size = 2;
 
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 123);
+    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 123);
 
     auto expected_fn = [this, &mat](NormType ntype, int b) {
         switch (ntype) {
@@ -330,7 +330,7 @@ TYPED_TEST(NormTest, SingleMatrixNorms) {
     using T = TypeParam;
     const int rows = 100, cols = 100, batch_size = 1;
 
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 555);
+    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 555);
 
     this->check_all_norms_positive(mat);
 }
@@ -340,8 +340,8 @@ TYPED_TEST(NormTest, LargeBatchNorms) {
     using T = TypeParam;
     using real_t = typename base_type<T>::type;
     const int rows = 3, cols = 3, batch_size = 10;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 777);
+
+    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 777);
     auto result = UnifiedVector<real_t>(batch_size);
     
     norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
@@ -361,7 +361,7 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
     std::vector<std::pair<int, int>> sizes = {{1, 1}, {2, 3}, {5, 2}, {10, 10}};
     
     for (auto [rows, cols] : sizes) {
-        auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, 1, 888);
+        auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, 1, 888);
         auto result = UnifiedVector<real_t>(1);
         
         norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
@@ -414,8 +414,8 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
     using T = TypeParam;
     using real_t = typename base_type<T>::type;
     const int rows = 100, cols = 100, batch_size = 5;
-    
-    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, batch_size, 1111);
+
+    auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 1111);
     auto result = UnifiedVector<real_t>(batch_size);
     
     auto start = std::chrono::high_resolution_clock::now();
