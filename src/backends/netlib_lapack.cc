@@ -23,7 +23,7 @@ namespace batchlas{
         auto [m, k] = get_effective_dims(descrA, transA);
         auto [kB, n] = get_effective_dims(descrB, transB);
 
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     Layout::ColMajor, transA, transB,
@@ -62,7 +62,7 @@ namespace batchlas{
         T alpha) {
         
         auto [kB, n] = get_effective_dims(descrB, Transpose::NoTrans);
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
                     Layout::ColMajor, side, uplo, transA, diag,
@@ -91,7 +91,7 @@ namespace batchlas{
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
             call_backend_nh<T, BackendLibrary::LAPACKE>(
                 LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
                 Layout::ColMajor, uplo,
@@ -115,7 +115,7 @@ namespace batchlas{
                    JobType jobtype,
                    Uplo uplo,
                    Span<std::byte> workspace) {
-        if (descrA.batch_size() > 1) {
+        if (descrA.batch_size() == 1) {
             call_backend_nh<T, BackendLibrary::LAPACKE>(
                 LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                 Layout::ColMajor, jobtype, uplo,
