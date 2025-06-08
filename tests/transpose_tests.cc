@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
-
+#include <blas/extra.hh>
 using namespace batchlas;
 
 template <typename T>
@@ -27,7 +27,7 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
     constexpr int k = 4;
     constexpr int batch_size = 2;
 
-    Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, batch_size);
+    Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, false, batch_size);
     size_t ws = ortho_buffer_size<Backend::CUDA, T>(*this->ctx, A.view(), Transpose::NoTrans);
     UnifiedVector<std::byte> workspace(ws);
     ortho<Backend::CUDA, T>(*this->ctx, A.view(), Transpose::NoTrans, workspace.to_span());
