@@ -134,12 +134,14 @@ function(detect_sycl_gpu_architectures)
     foreach(ARCH_MATCH ${ARCH_MATCHES})
         string(REGEX REPLACE "Architecture: ([^\n]+)" "\\1" ARCH_FLAG "${ARCH_MATCH}")
         string(STRIP "${ARCH_FLAG}" ARCH_FLAG)
-        
-        # Check if this architecture flag is already in our list
-        list(FIND GPU_ARCH_FLAGS "${ARCH_FLAG}" ARCH_INDEX)
-        if(ARCH_INDEX EQUAL -1)
-            list(APPEND GPU_ARCH_FLAGS "${ARCH_FLAG}")
-            message(STATUS "Detected GPU architecture: ${ARCH_FLAG}")
+
+        # Only keep GPU architecture names (avoid CPU architectures like intel_cpu_spr)
+        if(ARCH_FLAG MATCHES "_gpu_")
+            list(FIND GPU_ARCH_FLAGS "${ARCH_FLAG}" ARCH_INDEX)
+            if(ARCH_INDEX EQUAL -1)
+                list(APPEND GPU_ARCH_FLAGS "${ARCH_FLAG}")
+                message(STATUS "Detected GPU architecture: ${ARCH_FLAG}")
+            endif()
         endif()
     endforeach()
     
