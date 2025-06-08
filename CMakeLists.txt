@@ -44,16 +44,19 @@ if(SYCL_LS)
   set(SYCL_DIR ${SYCL_BIN_DIR}/../)
   find_program(DPCPP_COMPILER NAMES ${SYCL_BIN_DIR}/icpx ${SYCL_BIN_DIR}/clang++)
 
-  cmake_dependent_option(ENABLE_SYCL "Build SYCL GPU code" ON "DPCPP_COMPILER" OFF)  
-  
+  cmake_dependent_option(ENABLE_SYCL "Build SYCL GPU code" ON "DPCPP_COMPILER" OFF)
+
   if(DPCPP_COMPILER)
     message("Found dpc++ compiler: ${DPCPP_COMPILER}")
     set(CMAKE_CXX_COMPILER ${DPCPP_COMPILER})
   else()
     message("Could not find dpc++ compiler")
   endif()
-  
+
 endif()
+
+# List of SYCL targets detected by the helper functions
+set(BATCHLAS_SYCL_TARGETS "")
 
 
 # Set the Intel oneAPI DPC++ compiler
@@ -131,26 +134,27 @@ function(detect_sycl_gpu_architectures)
     foreach(ARCH_MATCH ${ARCH_MATCHES})
         string(REGEX REPLACE "Architecture: ([^\n]+)" "\\1" ARCH_FLAG "${ARCH_MATCH}")
         string(STRIP "${ARCH_FLAG}" ARCH_FLAG)
-        
-        # Check if this architecture flag is already in our list
-        list(FIND GPU_ARCH_FLAGS "${ARCH_FLAG}" ARCH_INDEX)
-        if(ARCH_INDEX EQUAL -1)
-            list(APPEND GPU_ARCH_FLAGS "${ARCH_FLAG}")
-            message(STATUS "Detected GPU architecture: ${ARCH_FLAG}")
+
+        # Only keep GPU architecture names (avoid CPU architectures like intel_cpu_spr)
+        if(ARCH_FLAG MATCHES "_gpu_")
+            list(FIND GPU_ARCH_FLAGS "${ARCH_FLAG}" ARCH_INDEX)
+            if(ARCH_INDEX EQUAL -1)
+                list(APPEND GPU_ARCH_FLAGS "${ARCH_FLAG}")
+                message(STATUS "Detected GPU architecture: ${ARCH_FLAG}")
+            endif()
         endif()
     endforeach()
     
-    # Add appropriate compiler and linker flags
+    # Store detected architectures for later
     if(GPU_ARCH_FLAGS)
-        # Add architecture-specific target flags
-        foreach(ARCH ${GPU_ARCH_FLAGS})
-            add_compile_options(-fsycl-targets=${ARCH})
-            add_link_options(-fsycl-targets=${ARCH})
-        endforeach()
+        list(APPEND BATCHLAS_SYCL_TARGETS ${GPU_ARCH_FLAGS})
         message(STATUS "Added targets to SYCL compilation: ${GPU_ARCH_FLAGS}")
     else()
         message(STATUS "No specific GPU architectures detected, using default JIT compilation")
     endif()
+
+    # Propagate list of targets to parent scope
+    set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
     
     # Add vendor-specific flags
     if(HAS_NVIDIA_GPU)
@@ -214,12 +218,52 @@ function(detect_sycl_gpu_architectures)
     endif()
 endfunction()
 
+# Detect whether a SYCL CPU device exists and, if so, add a CPU target
+function(detect_sycl_cpu_target)
+    if(NOT SYCL_LS)
+        message(STATUS "sycl-ls not found, skipping CPU target detection")
+        return()
+    endif()
+
+    execute_process(
+        COMMAND ${SYCL_LS}
+        OUTPUT_VARIABLE SYCL_LS_CPU_OUTPUT
+        ERROR_VARIABLE SYCL_LS_CPU_ERROR
+        RESULT_VARIABLE SYCL_LS_CPU_RESULT
+    )
+
+    if(NOT SYCL_LS_CPU_RESULT EQUAL 0)
+        message(WARNING "Failed to execute sycl-ls: ${SYCL_LS_CPU_ERROR}")
+        return()
+    endif()
+
+    if(SYCL_LS_CPU_OUTPUT MATCHES "\[.+:cpu\]")
+        message(STATUS "Detected SYCL CPU device, adding spir64_x86_64 target")
+        list(APPEND BATCHLAS_SYCL_TARGETS spir64_x86_64)
+        set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+    else()
+        message(STATUS "No SYCL CPU device detected")
+    endif()
+endfunction()
+
 # Add SYCL specific compiler flags
 add_compile_options(-fsycl -Wno-c++20-extensions)
 add_link_options(-fsycl)
 
 # Detect and add GPU architecture targets
 detect_sycl_gpu_architectures()
+
+# Detect CPU target if available
+detect_sycl_cpu_target()
+
+# Add all detected targets in a single -fsycl-targets option
+list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
+if(BATCHLAS_SYCL_TARGETS)
+    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
+    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
+endif()
 
 # This ensures proper integration with Intel's SYCL implementation
 message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
