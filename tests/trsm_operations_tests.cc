@@ -8,34 +8,70 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <type_traits>
 
 using namespace batchlas;
 
+template <typename T, batchlas::Backend B>
+struct TestConfig {
+    using ScalarType = T;
+    static constexpr batchlas::Backend BackendVal = B;
+};
+
+using TrsmTestTypes = ::testing::Types<
+    TestConfig<float, batchlas::Backend::NETLIB>,
+    TestConfig<double, batchlas::Backend::NETLIB>,
+    TestConfig<float, batchlas::Backend::CUDA>,
+    TestConfig<double, batchlas::Backend::CUDA>>;
+
 // Template test fixture for TRSM operations
-template<typename T>
+template<typename Config>
 class TrsmOperationsTest : public ::testing::Test {
 protected:
+    using ScalarType = typename Config::ScalarType;
+    static constexpr batchlas::Backend BackendType = Config::BackendVal;
     void SetUp() override {
-        // Create a SYCL queue
-        ctx = std::make_shared<Queue>(Device::default_device());
+        // Create a SYCL queue based on BackendType
+        if constexpr (BackendType == batchlas::Backend::CUDA) {
+            try {
+                ctx = std::make_shared<Queue>("gpu");
+                if (!(ctx->device().type == DeviceType::GPU)) {
+                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
+                }
+            } catch (const sycl::exception& e) {
+                if (e.code() == sycl::errc::runtime || e.code() == sycl::errc::feature_not_supported) {
+                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
+                } else {
+                    throw;
+                }
+            } catch (const std::exception& e) {
+                GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
+            }
+        } else {
+            ctx = std::make_shared<Queue>("cpu");
+        }
+        if (!ctx) {
+            GTEST_FAIL() << "Queue context is null after setup.";
+            return;
+        }
         
         // Initialize test matrices
         // Create a lower triangular matrix for A
-        A_data = UnifiedVector<T>(rows * cols * batch_size);
+        A_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
         // Create a dense matrix for B
-        B_data_original = UnifiedVector<T>(rows * cols * batch_size);
-        B_data = UnifiedVector<T>(rows * cols * batch_size);
+        B_data_original = UnifiedVector<ScalarType>(rows * cols * batch_size);
+        B_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
         
         // Initialize matrix A as a lower triangular matrix with ones on the diagonal
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
                     if (i == j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<T>(1.0); // Diagonal elements
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(1.0); // Diagonal elements
                     } else if (i > j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<T>(0.5); // Lower triangular elements
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.5); // Lower triangular elements
                     } else {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<T>(0.0); // Upper triangular elements (zeros)
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.0); // Upper triangular elements (zeros)
                     }
                 }
             }
@@ -43,12 +79,12 @@ protected:
         
         // Initialize matrix B with some test values
         std::mt19937 rng(42); // Fixed seed for reproducibility
-        std::uniform_real_distribution<T> dist(static_cast<T>(1.0), static_cast<T>(10.0));
+        std::uniform_real_distribution<ScalarType> dist(static_cast<ScalarType>(1.0), static_cast<ScalarType>(10.0));
         
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
-                    T val = dist(rng);
+                    ScalarType val = dist(rng);
                     B_data_original[b * rows * cols + i * cols + j] = val;
                     B_data[b * rows * cols + i * cols + j] = val; // Create a copy to be modified
                 }
@@ -63,7 +99,7 @@ protected:
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
                 int idx = batch_idx * rows * cols + i * cols + j;
-                if (std::abs(B_data[idx] - B_data_original[idx]) > static_cast<T>(1e-6)) {
+                if (std::abs(B_data[idx] - B_data_original[idx]) > static_cast<ScalarType>(1e-6)) {
                     anyChanges = true;
                 }
             }
@@ -77,8 +113,8 @@ protected:
         bool allMatch = true;
         for (int i = 0; i < rows; ++i) {
             for (int j = 0; j < cols; ++j) {
-                T expected = B_data_original[batch_idx * rows * cols + i * cols + j];
-                T calculated = static_cast<T>(0.0);
+                ScalarType expected = B_data_original[batch_idx * rows * cols + i * cols + j];
+                ScalarType calculated = static_cast<ScalarType>(0.0);
                 
                 // Calculate the result of A*X or A^T*X for this position
                 for (int k = 0; k < cols; ++k) {
@@ -89,7 +125,7 @@ protected:
                 }
                 
                 // Use a reasonable tolerance for floating point comparisons
-                T tolerance = std::is_same_v<T, float> ? static_cast<T>(1e-2) : static_cast<T>(1e-6);
+                ScalarType tolerance = std::is_same_v<ScalarType, float> ? static_cast<ScalarType>(1e-2) : static_cast<ScalarType>(1e-6);
                 if (std::abs(calculated - expected) > tolerance) {
                     allMatch = false;
                     break;
@@ -103,8 +139,8 @@ protected:
     // Helper method to perform TRSM test
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         // Create matrices using convenience factory methods
-        auto A_matrix = Matrix<T, MatrixFormat::Dense>::Triangular(rows, uplo, static_cast<T>(1.0), static_cast<T>(0.5), test_batch_size);
-        auto B_matrix = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, test_batch_size);
+        auto A_matrix = Matrix<ScalarType, MatrixFormat::Dense>::Triangular(rows, uplo, static_cast<ScalarType>(1.0), static_cast<ScalarType>(0.5), test_batch_size);
+        auto B_matrix = Matrix<ScalarType, MatrixFormat::Dense>::Random(rows, cols, false, test_batch_size);
         
         // Keep original B for verification
         auto B_original = B_matrix.clone();
@@ -119,17 +155,17 @@ protected:
             auto B_view = B_colmajor.view();
             
             try {
-                trsm<Backend::CUDA>(
-                    *ctx, 
-                    A_view, 
-                    B_view, 
+                trsm<BackendType>(
+                    *(this->ctx),
+                    A_view,
+                    B_view,
                     Side::Left,
                     uplo,
                     trans,
                     Diag::NonUnit,
                     alpha
                 );
-                ctx->wait();
+                this->ctx->wait();
             } catch(const std::exception& e) {
                 FAIL() << "TRSM operation failed with exception: " << e.what();
             }
@@ -143,10 +179,10 @@ protected:
                 auto B_view = B_parent_view.batch_item(b);
                 
                 try {
-                    trsm<Backend::CUDA>(
-                        *ctx, 
-                        A_view, 
-                        B_view, 
+                    trsm<BackendType>(
+                        *(this->ctx),
+                        A_view,
+                        B_view,
                         Side::Left,
                         uplo,
                         trans,
@@ -157,7 +193,7 @@ protected:
                     FAIL() << "TRSM operation failed for batch " << b << " with exception: " << e.what();
                 }
             }
-            ctx->wait();
+            this->ctx->wait();
         }
         
         // Convert result back to row-major for verification
@@ -185,16 +221,15 @@ protected:
     const int cols = 8;
     const int ld = 8;
     const int batch_size = 3;
-    const T alpha = static_cast<T>(1.0); // Scale factor for B
-    
-    UnifiedVector<T> A_data;        // Triangular matrix
-    UnifiedVector<T> B_data;        // Right-hand side matrix, will be overwritten with solution X
-    UnifiedVector<T> B_data_original; // Original B values before solving
+    const ScalarType alpha = static_cast<ScalarType>(1.0); // Scale factor for B
+
+    UnifiedVector<ScalarType> A_data;        // Triangular matrix
+    UnifiedVector<ScalarType> B_data;        // Right-hand side matrix, will be overwritten with solution X
+    UnifiedVector<ScalarType> B_data_original; // Original B values before solving
 };
 
 // Type definitions for testing
-using TestTypes = ::testing::Types<float, double>;
-TYPED_TEST_SUITE(TrsmOperationsTest, TestTypes);
+TYPED_TEST_SUITE(TrsmOperationsTest, TrsmTestTypes);
 
 // Test TRSM operation with a lower triangular matrix (no transpose)
 TYPED_TEST(TrsmOperationsTest, LowerTriangularSolveNoTrans) {
