@@ -76,7 +76,7 @@ TEST(MatrixDenseTest, StaticFactoryMethods) {
         }
     }
     // Random (just check size and value range)
-    auto rnd = Matrix<float, MatrixFormat::Dense>::Random(n, n, batch, 123);
+    auto rnd = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 123);
     EXPECT_EQ(rnd.data().size(), n * n * batch);
     for (auto v : rnd.data()) {
         EXPECT_GE(v, -1.0f);

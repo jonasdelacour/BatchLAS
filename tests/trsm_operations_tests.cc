@@ -104,7 +104,7 @@ protected:
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         // Create matrices using convenience factory methods
         auto A_matrix = Matrix<T, MatrixFormat::Dense>::Triangular(rows, uplo, static_cast<T>(1.0), static_cast<T>(0.5), test_batch_size);
-        auto B_matrix = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, test_batch_size);
+        auto B_matrix = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, test_batch_size);
         
         // Keep original B for verification
         auto B_original = B_matrix.clone();

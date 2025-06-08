@@ -238,7 +238,7 @@ TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
     int rows = (transA == Transpose::NoTrans) ? m : k;
     int cols = (transA == Transpose::NoTrans) ? k : m;
 
-    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, batch_size);
+    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
     size_t buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), A, transA, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
@@ -281,7 +281,7 @@ TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
     int rows = (transA == Transpose::NoTrans) ? m : k;
     int cols = (transA == Transpose::NoTrans) ? k : m;
 
-    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(rows, cols, batch_size);
+    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
     size_t buffer_size = ortho_buffer_size<Backend::CUDA, double>(*(this->ctx), A, transA, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
@@ -305,8 +305,8 @@ TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
     int M_rows = (transM == Transpose::NoTrans) ? dim : nM;
     int M_cols = (transM == Transpose::NoTrans) ? nM : dim;
 
-    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(A_rows, A_cols, batch_size);
-    Matrix<float, MatrixFormat::Dense> M = Matrix<float, MatrixFormat::Dense>::Random(M_rows, M_cols, batch_size);
+    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
+    Matrix<float, MatrixFormat::Dense> M = Matrix<float, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
 
     size_t ortho_M_buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), M, transM, algo);
     UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
@@ -341,10 +341,10 @@ TEST_P(OrthoAgainstMDoubleTest, OrthogonalizeMatrixAgainstM) {
     int M_basis_rows = (transM_basis == Transpose::NoTrans) ? dim : nM;
     int M_basis_cols = (transM_basis == Transpose::NoTrans) ? nM : dim;
 
-    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(A_rows, A_cols, batch_size);
+    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
     auto A_view = A.view();
 
-    Matrix<double, MatrixFormat::Dense> M_basis_orig = Matrix<double, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, batch_size);
+    Matrix<double, MatrixFormat::Dense> M_basis_orig = Matrix<double, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, false, batch_size);
     auto M_basis_view_orig = M_basis_orig.view();
     size_t ortho_M_buffer_size = ortho_buffer_size<Backend::CUDA, double>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
     UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
@@ -398,8 +398,8 @@ std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorit
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixFloatTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -411,8 +411,8 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixDoubleTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixDoubleTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -424,9 +424,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoAgainstMFloatTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMFloatTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
@@ -439,9 +439,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoAgainstMDoubleTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMDoubleTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);

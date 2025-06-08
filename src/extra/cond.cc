@@ -22,11 +22,12 @@ namespace batchlas
 
                         inv<B>(ctx, A, Ainv, inv_workspace);
                         
-                        norm<B>(ctx, Ainv, norm_type, A_inv_norms);
-                        norm<B>(ctx, A, norm_type, A_norms);
+                        norm(ctx, Ainv, norm_type, A_inv_norms);
+                        norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
                             conds[i] = A_inv_norms[i] * A_norms[i];
                         });
+                        return ctx.get_event();
                     }
 
     // Memory passed from outside
@@ -37,8 +38,7 @@ namespace batchlas
                 const Span<T> conds,
                 const Span<std::byte> workspace)
     {
-        cond_impl<B>(ctx, A, norm_type, conds, workspace);
-        return ctx.get_event();
+        return cond_impl<B>(ctx, A, norm_type, conds, workspace);
     }
 
     template <Backend B, typename T, MatrixFormat MF>
@@ -61,9 +61,28 @@ namespace batchlas
     {
         UnifiedVector<T> conds(A.batch_size());
         UnifiedVector<std::byte> workspace(cond_buffer_size<B>(ctx, A, norm_type));
-        cond_impl<B>(ctx, A, norm_type, conds, workspace);
+        cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.to_span()).wait();
         return conds;
     }
+
+    #define COND_INSTANTIATE(fp, fmt) \
+    template Event cond<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType,\
+        const Span<fp>,\
+        const Span<std::byte>);\
+    template UnifiedVector<fp> cond<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType);\
+    template size_t cond_buffer_size<Backend::CUDA, fp, fmt>(\
+        Queue&,\
+        const MatrixView<fp, fmt>&,\
+        const NormType);
+    
+    COND_INSTANTIATE(float, MatrixFormat::Dense)
+    COND_INSTANTIATE(double, MatrixFormat::Dense)
 
 } // namespace batchlas
 

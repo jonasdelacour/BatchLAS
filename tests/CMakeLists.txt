@@ -33,6 +33,7 @@ set(TEST_TARGETS
     ortho_tests
     inverse_tests
     norm_tests
+    cond_tests
 )
 
 # Create test executables

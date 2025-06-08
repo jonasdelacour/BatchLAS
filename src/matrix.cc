@@ -3,6 +3,8 @@
 #include <util/sycl-span.hh>
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
+#include <oneapi/dpl/algorithm>
+#include <oneapi/dpl/execution>
 #include <complex>
 #include <random>
 #include <algorithm>
@@ -152,34 +154,33 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const 
                     const size_t local_id = item.get_local_id(2);
                     const size_t group_size = item.get_local_range(2);
                     
-                    // Initialize local count for this thread
-                    int local_count = 0;
                     
                     // Process consecutive rows within the same column for better coalescing
                     for (size_t r = local_id; r < rows; r += group_size) {
                         // In column-major format, row elements in the same column are contiguous
                         size_t dense_idx = b * dense_stride + c * dense_ld + r;
-                        
+                        bool is_nonzero = false;
                         // Use zero_threshold instead of comparing with exact zero
                         if constexpr (std::is_same_v<T, std::complex<float>> || 
                                       std::is_same_v<T, std::complex<double>>) {
                             // For complex numbers, check both real and imaginary parts
                             auto val = dense_data_ptr[dense_idx];
                             if (std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold) {
-                                local_count++;
+                                is_nonzero = true;
                             }
                         } else {
                             // For real numbers
                             if (std::abs(dense_data_ptr[dense_idx]) > zero_threshold) {
-                                local_count++;
+                                is_nonzero = true;
                             }
                         }
+
+                        if (is_nonzero) {
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>
+                                row_counter(row_nnz_counts[b * rows + r]);
+                            row_counter.fetch_add(1);
+                        }
                     }
-                    
-                    // First thread in group distributes the counts to each row
-                    sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>
-                                row_counter(row_nnz_counts[b * rows + local_id]);
-                            row_counter.fetch_add(local_count);
                 }
             );
         }).wait();
@@ -217,113 +218,88 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const 
             }
             );
         }).wait();
-
-        // Calculate total NNZ across all matrices
-        int total_nnz = std::reduce(batch_nnz_counts.begin(), batch_nnz_counts.end(), 0);
-        
+        int max_nnz = oneapi::dpl::reduce(oneapi::dpl::execution::par_unseq, batch_nnz_counts.begin(), batch_nnz_counts.end(), 0, sycl::maximum<int>());
         // 2. Create row offsets using exclusive scan within each batch
-        Matrix<T, MatrixFormat::CSR> result(rows, cols, total_nnz, batch_size);
-        
+        Matrix<T, MatrixFormat::CSR> result(rows, cols, max_nnz, batch_size);
+
         // Initialize batch offset counters
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
-        for (int b = 1; b <= batch_size; b++) {
-            batch_offsets[b] = batch_offsets[b-1] + batch_nnz_counts[b-1];
-        }
+
+        oneapi::dpl::exclusive_scan(oneapi::dpl::execution::par_unseq, batch_offsets.begin(), batch_offsets.end(), batch_offsets.begin(), 0);
         
         // Second kernel: Compute row offsets using work-group scan
-        q->submit([&](sycl::handler& cgh) {
-            // Create accessor for row offsets
-            auto row_offsets_acc = sycl::accessor(result.row_offsets_.data(), 
-                                                  result.row_offsets_.size(),
-                                                  cgh,
-                                                  sycl::write_only);
-            
-            // Local memory for scans
-            sycl::local_accessor<int, 1> local_scan(rows + 1, cgh);
-                
+        q -> submit ([&](sycl::handler& cgh) {
+            auto row_offsets_acc = result.row_offsets().data();
+            auto row_nnz_acc = row_nnz_counts.data();
+            auto batch_offsets_acc = batch_offsets.data();
+            auto wgs = std::min(rows + 1, 128); // Work-group size for scan
             cgh.parallel_for(
-                sycl::nd_range<1>(
-                    sycl::range<1>(batch_size * wg_size), 
-                    sycl::range<1>(wg_size)
-                ),
+                sycl::nd_range<1>(batch_size * wgs, 
+                                 wgs),
                 [=](sycl::nd_item<1> item) {
-                    const size_t b = item.get_group(0);
-                    const size_t local_id = item.get_local_id(0);
-                    const size_t group_size = item.get_local_range(0);
-                    
-                    // Load row counts into local memory
-                    if (local_id < rows) {
-                        local_scan[local_id + 1] = row_nnz_counts[b * rows + local_id];
-                    }
-                    if (local_id == 0) {
-                        local_scan[0] = 0; // Start with 0 for exclusive scan
-                    }
-                    
-                    item.barrier(sycl::access::fence_space::local_space);
-                    
-                    // Perform work-group exclusive scan
-                    // Using a simplified inclusive scan followed by shifting
-                    for (int offset = 1; offset < rows + 1; offset *= 2) {
-                        if (local_id < rows + 1 && local_id >= offset) {
-                            int temp = local_scan[local_id - offset];
-                            item.barrier(sycl::access::fence_space::local_space);
-                            local_scan[local_id] += temp;
-                        }
-                        item.barrier(sycl::access::fence_space::local_space);
-                    }
-                    
-                    // Write results to global memory, adding batch offset
-                    if (local_id < rows + 1) {
-                        row_offsets_acc[b * (rows + 1) + local_id] = local_scan[local_id] + batch_offsets[b];
-                    }
+                    size_t idx_val = item.get_global_id(0);
+                    size_t bix = item.get_group(0);
+                    sycl::joint_inclusive_scan(
+                        item.get_group(),
+                        row_nnz_acc + bix * rows,
+                        row_nnz_acc + bix * rows + rows,
+                        row_offsets_acc + bix * (rows + 1) + 1,
+                        sycl::plus<int>(),
+                        0
+                    );
                 }
             );
         }).wait();
         
         // 3. Populate CSR values and column indices
+        UnifiedVector<int> row_counters(batch_size * rows, 0);
         q->submit([&](sycl::handler& cgh) {
             // Create accessors
-            auto row_offsets_acc = result.row_offsets_.to_span();
-            auto col_indices_acc = result.col_indices_.to_span();
-            auto values_acc = result.data_.to_span();
-            
+            auto row_offsets_acc = result.row_offsets();
+            auto col_indices_acc = result.col_indices();
+            auto values_acc = result.data();
+            auto dense_acc = this->data();
+
             // Use atomic to track position within each row
-            UnifiedVector<int> row_counters(batch_size * rows, 0);
             auto row_counters_acc = row_counters.to_span();
-            
+            auto wgs = std::min(rows , 128); // Work-group size for counting non-zeros
             cgh.parallel_for(
-                sycl::range<3>(batch_size, rows, cols),
-                [=](sycl::id<3> idx) {
-                    size_t b = idx[0];
-                    size_t r = idx[1];
-                    size_t c = idx[2];
+                sycl::nd_range<1>(batch_size * wgs, wgs),
+                [=](sycl::nd_item<1> item) {
+                    size_t local_id = item.get_local_linear_id();
+                    size_t b = item.get_group(0); // batch index
                     
-                    size_t dense_idx = b * dense_stride + c * dense_ld + r;
-                    T val = dense_data_ptr[dense_idx];
-                    
-                    // Use zero_threshold instead of comparing with exact zero
-                    bool is_nonzero = false;
-                    if constexpr (std::is_same_v<T, std::complex<float>> || 
-                                  std::is_same_v<T, std::complex<double>>) {
-                        // For complex numbers, check both real and imaginary parts
-                        is_nonzero = std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold;
-                    } else {
-                        // For real numbers
-                        is_nonzero = std::abs(val) > zero_threshold;
-                    }
-                    
-                    if (is_nonzero) {
-                        // Use atomic to get position in CSR arrays
-                        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>
-                            counter(row_counters_acc[b * rows + r]);
-                        int pos = counter.fetch_add(1);
+                    for (size_t id = local_id; id < rows*cols; id += item.get_local_range(0)) {
+                        size_t r = id / rows; // Row index
+                        size_t c = id % rows; // Column index
                         
-                        // Get base offset for this row
-                        int csr_idx = row_offsets_acc[b * (rows + 1) + r] + pos;
+                        // Calculate dense index (Column-Major)
+                        size_t dense_idx = b * dense_stride + c * dense_ld + r;
+                        T val = dense_acc[dense_idx];
+
+                        // Use zero_threshold instead of comparing with exact zero
+                        bool is_nonzero = false;
+                        if constexpr (std::is_same_v<T, std::complex<float>> || 
+                                    std::is_same_v<T, std::complex<double>>) {
+                            // For complex numbers, check both real and imaginary parts
+                            is_nonzero = std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold;
+                        } else {
+                            // For real numbers
+                            is_nonzero = std::abs(val) > zero_threshold;
+                        }
                         
-                        // Write value and column index
-                        col_indices_acc[csr_idx] = c;
-                        values_acc[csr_idx] = val;
+                        if (is_nonzero) {
+                            // Use atomic to get position in CSR arrays
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group>
+                                counter(row_counters_acc[b * rows + r]);
+                            int pos = counter.fetch_add(1);
+                            // Get base offset for this row
+                            int csr_idx = row_offsets_acc[b * (rows + 1) + r] + pos;
+                      
+                            // Write value and column index
+                            col_indices_acc[b*max_nnz + csr_idx] = c;
+                            values_acc[b*max_nnz + csr_idx] = val;
+                        }
                     }
                 }
             );
@@ -624,12 +600,13 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
 // Factory method to create random matrix
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, int batch_size, unsigned int seed) {
+Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
     
     std::mt19937 gen(seed);
     std::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
     
+    // First generate random values for all elements
     for (size_t i = 0; i < result.data_.size(); ++i) {
         if constexpr (std::is_same_v<T, std::complex<float>> || 
                       std::is_same_v<T, std::complex<double>>) {
@@ -641,6 +618,39 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, int batch_size, un
         }
     }
     
+    // If hermitian flag is set, enforce Hermitian property
+    if (hermitian) {
+        // Matrices must be square for Hermitian
+        if (rows != cols) {
+            throw std::runtime_error("Hermitian matrices must be square");
+        }
+
+        for (int b = 0; b < batch_size; ++b) {
+            for (int i = 0; i < rows; ++i) {
+                for (int j = i + 1; j < cols; ++j) {
+                    // Get indices for element (i,j) and its conjugate transpose position (j,i)
+                    size_t idx1 = b * result.stride_ + j * result.ld_ + i;  // (i,j) in column-major
+                    size_t idx2 = b * result.stride_ + i * result.ld_ + j;  // (j,i) in column-major
+                    
+                    // Set A(j,i) = conj(A(i,j)) to ensure hermitian property
+                    if constexpr (std::is_same_v<T, std::complex<float>> || 
+                                 std::is_same_v<T, std::complex<double>>) {
+                        result.data_[idx2] = std::conj(result.data_[idx1]);
+                    } else {
+                        // For real types, just copy the value (conjugate of real is the same value)
+                        result.data_[idx2] = result.data_[idx1];
+                    }
+                }
+                
+                // Make the diagonal elements real
+                if constexpr (std::is_same_v<T, std::complex<float>> || 
+                             std::is_same_v<T, std::complex<double>>) {
+                    size_t diag_idx = b * result.stride_ + i * result.ld_ + i;
+                    result.data_[diag_idx] = T(std::real(result.data_[diag_idx]), 0);
+                }
+            }
+        }
+    }
     return result;
 }
 
@@ -684,7 +694,7 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T sub, T super, T diag, int batch_size) {
+Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     
     // Create a queue to submit work to
@@ -699,20 +709,20 @@ Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T sub, T super, T diag
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
     q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
+        int64_t flat_idx = idx[0];
+        int64_t b = flat_idx / (n * n);          // batch index
+        int64_t remainder = flat_idx % (n * n);
+        int64_t i = remainder % n;               // row index
+        int64_t j = remainder / n;               // column index
         
         if (i == j) {
-            data_ptr[b * n * n + i * n + j] = diag; // Diagonal element
+            data_ptr[b * n * n + j * n + i] = diag; // Diagonal element
         } else if (i == j - 1) {
-            data_ptr[b * n * n + i * n + j] = super; // Super-diagonal element
+            data_ptr[b * n * n + j * n + i] = super; // Super-diagonal element
         } else if (i == j + 1) {
-            data_ptr[b * n * n + i * n + j] = sub;   // Sub-diagonal element
+            data_ptr[b * n * n + j * n + i] = sub;   // Sub-diagonal element
         } else {
-            data_ptr[b * n * n + i * n + j] = T(0);   // Zero elsewhere
+            data_ptr[b * n * n + j * n + i] = T(0);   // Zero elsewhere
         }
     }).wait();
     
@@ -932,11 +942,14 @@ template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat:
 MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>& other,
                                                      T* data,
                                                      T** data_ptrs) {
+    MatrixView<T, MType> result(data, other.rows_, other.cols_, other.ld_, other.stride_, other.batch_size_, data_ptrs);
     Queue q(Device::default_device());
     q -> memcpy(data, other.data_.data(), other.data_.size() * sizeof(T));
     if (data_ptrs) {
         q -> memcpy(data_ptrs, other.data_ptrs_.data(), other.data_ptrs_.size() * sizeof(T*));
     }
+    q -> wait();
+    return result;
 }
 
 // Element access operator - returns view of a single batch item
@@ -1049,10 +1062,10 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Identity(int, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Identity(int, int);
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, int, unsigned int);
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Zeros(int, int, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Zeros(int, int, int);
@@ -1083,6 +1096,22 @@ template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Uplo, double, double, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<float>, std::complex<float>, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
+
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(int, float, float, float, int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<float>, std::complex<float>, std::complex<float>, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<double>, std::complex<double>, std::complex<double>, int);
+//----------------------------------------------------------------------
+// Matrix conversion instantiations
+template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
+template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
+
+//----------------------------------------------------------------------
+// Deep copy instantiations
+template MatrixView<float, MatrixFormat::Dense> MatrixView<float, MatrixFormat::Dense>::deep_copy(const MatrixView<float, MatrixFormat::Dense>&, float*, float**);
+template MatrixView<double, MatrixFormat::Dense> MatrixView<double, MatrixFormat::Dense>::deep_copy(const MatrixView<double, MatrixFormat::Dense>&, double*, double**);
+template MatrixView<std::complex<float>, MatrixFormat::Dense> MatrixView<std::complex<float>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>*, std::complex<float>**);
+template MatrixView<std::complex<double>, MatrixFormat::Dense> MatrixView<std::complex<double>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>*, std::complex<double>**);
 
 // Dense MatrixView constructors instantiations
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(float*, int, int, int, int, int, float**);
