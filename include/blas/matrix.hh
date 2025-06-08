@@ -592,7 +592,7 @@ namespace batchlas {
 
         // Subview (single batch)
         VectorView<T> batch_item(int batch_index) const {
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_, inc_), size_, 1, inc_, stride_);
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_), size_, inc_, stride_, 1);
         }
 
         // Subview (range within a batch)
