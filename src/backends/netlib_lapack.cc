@@ -10,7 +10,7 @@
 #include <blas/linalg.hh>
 namespace batchlas{
 
-    template <Backend B, typename T, MatrixFormat MFormat>
+    template <Backend Back, typename T, MatrixFormat MFormat>
     Event spmm(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
@@ -55,7 +55,7 @@ namespace batchlas{
         return ctx.get_event();
     }
 
-    template <Backend B, typename T, MatrixFormat MFormat>
+    template <Backend Back, typename T, MatrixFormat MFormat>
     size_t spmm_buffer_size(Queue& ctx,
                             const MatrixView<T, MFormat>& A,
                             const MatrixView<T, MatrixFormat::Dense>& B,
@@ -239,7 +239,7 @@ namespace batchlas{
         return ctx.get_event();
     }
 
-    template <Backend B, typename T>
+    template <Backend Back, typename T>
     Event getrs(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,
@@ -265,7 +265,7 @@ namespace batchlas{
         return ctx.get_event();
     }
 
-    template <Backend B, typename T>
+    template <Backend Back, typename T>
     size_t getrs_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
