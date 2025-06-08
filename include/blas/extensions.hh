@@ -206,4 +206,40 @@ namespace batchlas {
         JobType jobz = JobType::NoEigenVectors,
         const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
         const LanczosParams<T>& params = LanczosParams<T>());
+    /**
+     * @brief Computes the explicit inverse of a dense matrix
+     *
+     * @param ctx Execution context/device queue
+     * @param A Input matrix to invert
+     * @param Ainv Output matrix storing the inverse
+     * @param workspace Pre-allocated workspace buffer
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T>
+    Event inv(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& Ainv,
+        Span<std::byte> workspace);
+
+    /**
+     * @brief Get required workspace size for matrix inversion
+     *
+     * @param ctx Execution context/device queue
+     * @param A Matrix to invert
+     * @return size_t Required workspace size in bytes
+     */
+    template <Backend B, typename T>
+    size_t inv_buffer_size(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A);
+
+    /**
+     * @brief Convenience overload allocating output matrix internally
+     *
+     * @param ctx Execution context/device queue
+     * @param A Matrix to invert
+     * @return Matrix<T, MatrixFormat::Dense> Inverted matrix
+     */
+    template <Backend B, typename T>
+    Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A);
 }

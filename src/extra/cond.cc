@@ -1,5 +1,6 @@
 #include <blas/extra.hh>
 #include <blas/functions.hh>
+#include <blas/extensions.hh>
 #include <util/mempool.hh>
 #include "../queue.hh"
 namespace batchlas
@@ -11,20 +12,15 @@ namespace batchlas
                     const Span<T> conds,
                     const Span<std::byte> workspace){
                         auto pool = BumpAllocator(workspace);
-                        auto pivots = pool.allocate<int64_t>(ctx, A.batch_size()*A.rows());
-                        auto Acopy = MatrixView<T, MatrixFormat::Dense>::deep_copy(A, pool.allocate<T>(ctx, A.data().size()).data(),
-                                                                                    pool.allocate<T*>(ctx, A.batch_size()).data());
-
                         auto Ainv = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, A.data().size()).data(),
-                                                                        A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                                                        pool.allocate<T*>(ctx, A.batch_size()).data());
-                                                                        
-                        auto getri_workspace = pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, Acopy));
+                                                                     A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
+                                                                     pool.allocate<T*>(ctx, A.batch_size()).data());
+
+                        auto inv_workspace = pool.allocate<std::byte>(ctx, inv_buffer_size<B>(ctx, A));
                         auto A_norms = pool.allocate<T>(ctx, A.batch_size());
                         auto A_inv_norms = pool.allocate<T>(ctx, A.batch_size());
-                        
-                        getrf<B>(ctx, Acopy, pivots);
-                        getri<B>(ctx, Acopy, Ainv, pivots, workspace);
+
+                        inv<B>(ctx, A, Ainv, inv_workspace);
                         
                         norm<B>(ctx, Ainv, norm_type, A_inv_norms);
                         norm<B>(ctx, A, norm_type, A_norms);
@@ -50,11 +46,10 @@ namespace batchlas
                             const MatrixView<T, MF> &A,
                             const NormType norm_type)
     {
-        return  BumpAllocator::allocation_size<std::byte>(ctx, getri_buffer_size<B>(ctx, A)) +
+        return  BumpAllocator::allocation_size<std::byte>(ctx, inv_buffer_size<B>(ctx, A)) +
                 BumpAllocator::allocation_size<T>(ctx, A.batch_size()) * 2 + // For norms
-                BumpAllocator::allocation_size<T>(ctx, A.data().size()) * 2 + // For Ainv and Acopy
-                BumpAllocator::allocation_size<int64_t>(ctx, A.batch_size() * A.rows()) + // For pivots
-                BumpAllocator::allocation_size<T*>(ctx, A.batch_size()) * 2 + // For data_ptrs
+                BumpAllocator::allocation_size<T>(ctx, A.data().size()) + // For Ainv
+                BumpAllocator::allocation_size<T*>(ctx, A.batch_size()) + // For data_ptrs
                 BumpAllocator::allocation_size<T>(ctx, A.batch_size()); // For conds
     }
 
@@ -71,3 +66,4 @@ namespace batchlas
     }
 
 } // namespace batchlas
+
