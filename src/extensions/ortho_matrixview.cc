@@ -15,6 +15,9 @@ namespace batchlas {
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};
+    
+    template <Backend B, typename T>
+    struct StridedCopyKernel {};
 
     template <Backend B, typename T>
     Event ortho(Queue& ctx,
@@ -213,7 +216,19 @@ namespace batchlas {
             //gemm<B>(ctx, is_A_trans ? C : A, is_A_trans ? A : C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
             gemm<B>(ctx, A, C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
             //Memcpy
-            ctx -> memcpy(A.data_ptr(), output_basis.data(), m * k * batch_size * sizeof(T));
+            //ctx -> memcpy(A.data_ptr(), output_basis.data(), m * k * batch_size * sizeof(T));
+            auto A_stride = A.stride();
+            auto A_ld = A.ld();
+            auto Adata = A.data();
+            auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
+            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
+                auto batch_idx = item.get_group().get_id(0);
+                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
+                    auto i = linear_ix % m;
+                    auto j = linear_ix / m;
+                    Adata[batch_idx * A_stride + j * A_ld + i] = output_basis[batch_idx * m * k + j*m + i];
+                }
+            });
             //Explicit transpose dependent copy to A
         } else {
             throw std::runtime_error("Unknown orthogonalization algorithm");
