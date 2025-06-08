@@ -214,12 +214,45 @@ function(detect_sycl_gpu_architectures)
     endif()
 endfunction()
 
+# Detect available SYCL CPU devices and add a generic CPU target so that
+# CPU queues can JIT compile kernels when only GPU targets were detected.
+function(detect_sycl_cpu_target)
+    if(NOT SYCL_LS)
+        message(STATUS "sycl-ls not found, skipping CPU target detection")
+        return()
+    endif()
+
+    message(STATUS "Checking for SYCL CPU devices using sycl-ls...")
+    execute_process(
+        COMMAND ${SYCL_LS}
+        OUTPUT_VARIABLE SYCL_LS_CPU_OUTPUT
+        ERROR_VARIABLE SYCL_LS_CPU_ERROR
+        RESULT_VARIABLE SYCL_LS_CPU_RESULT
+    )
+
+    if(NOT SYCL_LS_CPU_RESULT EQUAL 0)
+        message(WARNING "Failed to execute sycl-ls: ${SYCL_LS_CPU_ERROR}")
+        return()
+    endif()
+
+    if(SYCL_LS_CPU_OUTPUT MATCHES "\[.*:cpu\]")
+        message(STATUS "Detected CPU SYCL device, adding spir64_x86_64 target")
+        add_compile_options(-fsycl-targets=spir64_x86_64)
+        add_link_options(-fsycl-targets=spir64_x86_64)
+    else()
+        message(STATUS "No CPU SYCL device detected. Skipping CPU target")
+    endif()
+endfunction()
+
 # Add SYCL specific compiler flags
 add_compile_options(-fsycl -Wno-c++20-extensions)
 add_link_options(-fsycl)
 
 # Detect and add GPU architecture targets
 detect_sycl_gpu_architectures()
+
+# Add a CPU device image when a SYCL CPU device is available
+detect_sycl_cpu_target()
 
 # This ensures proper integration with Intel's SYCL implementation
 message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
