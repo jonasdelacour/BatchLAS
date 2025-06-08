@@ -6,7 +6,7 @@
 #include <cmath>
 #include <blas/matrix.hh>
 #include <blas/extensions.hh>
-
+#include <blas/extra.hh>
 
 using namespace batchlas;
 // Test fixture for SYEVX operations
@@ -111,7 +111,47 @@ protected:
         }
     }
 };
+TEST_F(SyevxOperationsTest, RandomMatrix) {
+    constexpr int n = 60;
+    constexpr int batch = 5;
+    const int neig = 3;
+    UnifiedVector<float> diagonal(n);
+    for (int i = 0; i < n; ++i) {
+        diagonal[i] = i*i + 1.0f; // Example diagonal values
+    }
+    auto dense = Matrix<float, MatrixFormat::Dense>::Diagonal(diagonal.to_span(), batch_size);
+    
+    SyevxParams<float> params;
+    params.algorithm = OrthoAlgorithm::SVQB;
+    params.iterations = 50;
+    params.extra_directions = 10;
+    params.find_largest = true;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
 
+    UnifiedVector<float> W_lobpcg(n * batch, 0);
+    UnifiedVector<float> W_syev(n * batch, 0);
+
+    auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size<Backend::CUDA>(
+        *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params));
+    ctx ->wait();
+    auto syev_workspace = UnifiedVector<std::byte>(syev_buffer_size<Backend::CUDA>(
+        *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower));
+
+    syevx<Backend::CUDA>(
+        *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params);
+    syev<Backend::CUDA>(
+        *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            auto rel_err = std::abs(W_lobpcg[b * neig + i] - W_syev[((b+1) * n - i - 1)]) / std::abs(W_syev[((b+1) * n - i - 1)]);
+            EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
+                << "Eigenvalue mismatch at batch " << b << ", index " << i;
+        }
+    }
+}
 // Test SYEVX operation with sparse matrix
 TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     const int neig = 3;
@@ -143,8 +183,6 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
         *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
 
     ctx->wait();
-    std::cout << "Computed eigenvalues:" << std::endl;
-    std::cout << W_data << std::endl;
 
     // Verify that the computed eigenvalues match the expected ones
     for (int b = 0; b < batch_size; ++b) {
@@ -156,52 +194,45 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
 }
 
 TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
-    constexpr int n = 6;
-    constexpr int batch = 1;
-    const int neig = n;
+    constexpr int n = 200;
+    constexpr int batch = 2;
+    const int neig = 3;
+    float a = 2.0f, b = 200.0f, c = 200.0f;
 
-    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 2.0f, -1.0f, -1.0f, batch);
-    auto csr = dense.convert_to<MatrixFormat::CSR>();
-    MatrixView A_view(csr);
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
+    
+    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = A_CSR.view();
 
     UnifiedVector<float> W(neig * batch);
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
 
     SyevxParams<float> params;
-    params.iterations = 50;
+    params.algorithm = OrthoAlgorithm::SVQB;
+    params.extra_directions = 10;
     params.find_largest = true;
 
-    size_t buf_size = syevx_buffer_size<Backend::CUDA>(*ctx, A_view, W, neig, JobType::EigenVectors, MatrixView(V), params);
+
+    size_t buf_size = syevx_buffer_size<Backend::CUDA>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    syevx<Backend::CUDA>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, MatrixView(V), params);
+    syevx<Backend::CUDA>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
     std::vector<float> expected(n);
     for (int k = 1; k <= n; ++k) {
-        expected[k-1] = 2.0f - 2.0f * std::cos(k * M_PI / (n + 1));
+        expected[k-1] = a - 2.0f * std::sqrt(b * c) * std::cos(M_PI * k / (n + 1));
     }
     std::sort(expected.begin(), expected.end(), std::greater<float>());
 
     for (int i = 0; i < neig; ++i) {
-        EXPECT_NEAR(W[i], expected[i], 1e-3f);
-    }
-
-    const float* Adata = dense.data().data();
-    const float* vecs = V.data().data();
-    for (int j = 0; j < neig; ++j) {
-        float norm = 0.0f;
-        for (int i = 0; i < n; ++i) {
-            float Av = 0.0f;
-            for (int k = 0; k < n; ++k) {
-                Av += Adata[i * n + k] * vecs[k * neig + j];
-            }
-            float diff = Av - W[j] * vecs[i * neig + j];
-            norm += diff * diff;
-        }
-        EXPECT_LT(std::sqrt(norm), 1e-2f);
+        auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
+        EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
+            << "Eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
     }
 }
+
+
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

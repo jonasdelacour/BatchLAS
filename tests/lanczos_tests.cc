@@ -127,7 +127,9 @@ TEST_F(LanczosTestBase, LanczosTest) {
         total_nnz,
         rows+1,
         batch_size);
-
+    
+    std::cout << "Sparse Matrix (CSR format):\n";
+    sparse_matrix.print(std::cout, 60, 60, 60);
     
     LanczosParams<float> params;
     params.sort_enabled = false;
@@ -213,52 +215,85 @@ TEST_F(LanczosTestBase, LanczosTest) {
     }
 }
 
-TEST(LanczosTestBase, ToeplitzEigenpairs) {
-    constexpr int n = 6;
-    constexpr int batch = 1;
-
-    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 2.0f, -1.0f, -1.0f, batch);
-    auto csr = dense.convert_to<MatrixFormat::CSR>();
-    MatrixView A_view(csr);
+TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
+    constexpr int n = 40;
+    constexpr int batch = 2;
+    float a = 2.0f, b = -5.0f, c = -5.0f;
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
+    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = A_CSR.view();
 
     UnifiedVector<float> W(n * batch);
-    UnifiedVector<float> eigenvec_mem(n * n * batch);
-    MatrixView eigenvectors(eigenvec_mem.data(), n, n, n, n * n, batch);
+    Matrix eigenvectors(n, n, batch);
+    auto eigenvectors_view = eigenvectors.view();
 
     LanczosParams<float> params;
-    params.sort_enabled = true;
-    params.sort_order = SortOrder::Descending;
+    params.reorthogonalization_iterations = 2;
+    params.ortho_algorithm = OrthoAlgorithm::CGS2;
 
-    size_t buf_size = lanczos_buffer_size<Backend::CUDA>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors, params);
+    size_t buf_size = lanczos_buffer_size<Backend::CUDA>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    lanczos<Backend::CUDA>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors, params);
+    lanczos<Backend::CUDA>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
     ctx->wait();
 
     // expected eigenvalues for Toeplitz matrix
     std::vector<float> expected(n);
     for (int k = 1; k <= n; ++k) {
-        expected[k-1] = 2.0f - 2.0f * std::cos(k * M_PI / (n + 1));
+        expected[k-1] = a - 2.0f * std::sqrt(b * c) * std::cos(k * M_PI / (n + 1));
     }
     std::sort(expected.begin(), expected.end(), std::greater<float>());
 
-    for (int i = 0; i < n; ++i) {
-        EXPECT_NEAR(W[i], expected[i], 1e-3f);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(W[b * n + i], expected[i], 1e-3f);
+        }
     }
+    
+    std::cout << W << std::endl;
+    std::cout << Span(expected.data(), expected.size()) << std::endl;
 
     // verify eigenvectors A*v = lambda*v
-    const float* Adata = dense.data().data();
-    for (int j = 0; j < n; ++j) {
-        float norm = 0.0f;
-        for (int i = 0; i < n; ++i) {
-            float Av = 0.0f;
-            for (int k = 0; k < n; ++k) {
-                Av += Adata[i * n + k] * eigenvec_mem[k * n + j];
+    // Create workspace for residuals
+    Matrix<float> residuals(n, n, batch);
+    auto residuals_view = residuals.view();
+    
+    // Create a copy of eigenvectors with eigenvalues applied
+    Matrix<float> scaled_eigenvectors(n, n, batch);
+    auto scaled_eigenvectors_view = scaled_eigenvectors.view();
+
+
+    // Scale eigenvectors by eigenvalues: scaled_v = v * λ
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                scaled_eigenvectors_view.at(i,j,b) = eigenvectors_view.at(i,j,b) * W[b * n + j];
             }
-            float diff = Av - W[j] * eigenvec_mem[i * n + j];
-            norm += diff * diff;
         }
-        EXPECT_LT(std::sqrt(norm), 1e-2f);
+    }
+    auto spmm_workspace = UnifiedVector<std::byte>(
+        spmm_buffer_size<Backend::CUDA>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
+    // Compute residuals = A*v - v*λ
+    std::cout << "Computing residuals..." << std::endl;
+    spmm<Backend::CUDA>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, 
+                        Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+    gemm<Backend::CUDA>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f, 
+                        Transpose::NoTrans, Transpose::NoTrans);
+    ctx->wait();
+
+    
+    // Compute the norm of each residual column
+    UnifiedVector<float> norms(n * batch, 0.0f);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            float norm = 0.0f;
+            for (int i = 0; i < n; ++i) {
+                float val = residuals_view.at(i,j,b);
+                norm += val * val;
+            }
+            norms[b*n + j] = std::sqrt(norm);
+            EXPECT_LT(norms[b*n + j], 1e-2f);
+        }
     }
 }
 
