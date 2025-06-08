@@ -18,7 +18,8 @@ namespace batchlas {
             pool.allocate<T*>(ctx, A.batch_size()).data());
         auto pivots = pool.allocate<int64_t>(ctx, A.rows()*A.batch_size());
         auto getri_ws = pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, Acopy));
-        getrf<B>(ctx, Acopy, pivots);
+        auto getrf_ws = pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, Acopy));
+        getrf<B>(ctx, Acopy, pivots, getrf_ws);
         getri<B>(ctx, Acopy, Ainv, pivots, getri_ws);
         return ctx.get_event();
     }
@@ -29,7 +30,8 @@ namespace batchlas {
         return  BumpAllocator::allocation_size<T>(ctx, A.data().size()) +
                 BumpAllocator::allocation_size<T*>(ctx, A.batch_size()) +
                 BumpAllocator::allocation_size<int64_t>(ctx, A.rows()*A.batch_size()) +
-                BumpAllocator::allocation_size<std::byte>(ctx, getri_buffer_size<B>(ctx, A));
+                BumpAllocator::allocation_size<std::byte>(ctx, getri_buffer_size<B>(ctx, A)) +
+                BumpAllocator::allocation_size<std::byte>(ctx, getrf_buffer_size<B>(ctx, A));
     }
 
     template <Backend B, typename T>
