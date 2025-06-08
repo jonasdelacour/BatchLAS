@@ -37,4 +37,15 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
 
+    // Batched matrix transpose into preallocated output
+    template <typename T, MatrixFormat MF>
+    Event transpose(Queue &ctx,
+                    const MatrixView<T, MF> &A,
+                    const MatrixView<T, MF> &B);
+
+    // Convenience overload allocating the output matrix
+    template <typename T, MatrixFormat MF>
+    Matrix<T, MF> transpose(Queue &ctx,
+                            const MatrixView<T, MF> &A);
+
 }
