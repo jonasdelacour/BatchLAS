@@ -6,42 +6,87 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <type_traits> // Required for std::is_same_v
 
 using namespace batchlas;
 
-// Test fixture for GEMV operations using MatrixView/VectorView
+// Configuration struct for parameterized tests
+template <typename T, batchlas::Backend B>
+struct TestConfig {
+    using ScalarType = T;
+    static constexpr batchlas::Backend BackendVal = B;
+};
+
+// Define the types to be tested
+using MyTypes = ::testing::Types<
+    TestConfig<float, batchlas::Backend::NETLIB>,
+    TestConfig<double, batchlas::Backend::NETLIB>,
+    TestConfig<float, batchlas::Backend::CUDA>,
+    TestConfig<double, batchlas::Backend::CUDA>
+>;
+
+// Test fixture for GEMV operations using MatrixView/VectorView, now templated
+template <typename Config>
 class GemvMatrixViewTest : public ::testing::Test {
 protected:
+    using ScalarType = typename Config::ScalarType;
+    static constexpr batchlas::Backend BackendType = Config::BackendVal;
+
     void SetUp() override {
-        // Create a SYCL queue
-        ctx = std::make_shared<Queue>(Device::default_device());
+        // Create a SYCL queue based on BackendType
+        if constexpr (BackendType == batchlas::Backend::CUDA) {
+            try {
+                this->ctx = std::make_shared<Queue>("gpu");
+                // Check if a GPU device was actually obtained
+                if (!(this->ctx->device().type == DeviceType::GPU)) {
+                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
+                }
+            } catch (const sycl::exception& e) {
+                // Common errors indicating no GPU or CUDA setup issues
+                if (e.code() == sycl::errc::runtime || 
+                    e.code() == sycl::errc::feature_not_supported) {
+                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
+                } else {
+                    throw; // Re-throw unexpected SYCL exceptions
+                }
+            } catch (const std::exception& e) { // Catch other potential errors from Queue constructor
+                 GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
+            }
+        } else { // For NETLIB, use CPU
+            this->ctx = std::make_shared<Queue>("cpu");
+        }
+        if (!this->ctx) { // Should be caught by GTEST_SKIP or an exception, but as a fallback
+            GTEST_FAIL() << "Queue context is null after setup.";
+            return; // Avoid further execution if ctx is null
+        }
+
 
         // Initialize test matrices and vectors
-        A_data = UnifiedVector<float>(rows * cols * batch_size);
-        x_data = UnifiedVector<float>(std::max(rows, cols) * batch_size); // Use max for transpose case
-        y_data = UnifiedVector<float>(rows * batch_size, 0.0f);
-        y_expected = UnifiedVector<float>(rows * batch_size, 0.0f);
+        this->A_data = UnifiedVector<ScalarType>(this->rows * this->cols * this->batch_size);
+        this->x_data = UnifiedVector<ScalarType>(std::max(this->rows, this->cols) * this->batch_size); // Use max for transpose case
+        this->y_data = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
+        this->y_expected = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
 
         // Initialize matrix with deterministic values (Column Major for BLAS)
-        for (int b = 0; b < batch_size; ++b) {
-            for (int j = 0; j < cols; ++j) { // Column index
-                for (int i = 0; i < rows; ++i) { // Row index
-                    A_data[b * rows * cols + j * rows + i] = static_cast<float>(i + j * rows + 1 + b * 100); // Example init
+        for (int b = 0; b < this->batch_size; ++b) {
+            for (int j = 0; j < this->cols; ++j) { // Column index
+                for (int i = 0; i < this->rows; ++i) { // Row index
+                    this->A_data[b * this->rows * this->cols + j * this->rows + i] = static_cast<ScalarType>(i + j * this->rows + 1 + b * 100);
                 }
             }
         }
 
         // Initialize x vector with sequential values
-        for (int b = 0; b < batch_size; ++b) {
-            int vec_dim = cols; // Dimension for NoTrans
+        for (int b = 0; b < this->batch_size; ++b) {
+            int vec_dim = this->cols; // Dimension for NoTrans
             for (int j = 0; j < vec_dim; ++j) {
-                x_data[b * std::max(rows, cols) + j] = static_cast<float>(j + 1 + b * 10);
+                this->x_data[b * std::max(this->rows, this->cols) + j] = static_cast<ScalarType>(j + 1 + b * 10);
             }
         }
          // Initialize y vector (if needed, e.g., for beta != 0)
-        for (int b = 0; b < batch_size; ++b) {
-             for (int i = 0; i < rows; ++i) {
-                 y_data[b * rows + i] = 0.0f; // Initialize y to zero for simplicity first
+        for (int b = 0; b < this->batch_size; ++b) {
+             for (int i = 0; i < this->rows; ++i) {
+                 this->y_data[b * this->rows + i] = static_cast<ScalarType>(0.0); // Initialize y to zero for simplicity first
              }
         }
     }
@@ -50,232 +95,213 @@ protected:
     }
 
     // Helper function to compute expected y = alpha*A*x + beta*y
-    void computeExpectedGemv(float alpha, float beta, Transpose transA) {
-        for (int b = 0; b < batch_size; ++b) {
-            const float* A_batch = A_data.data() + b * rows * cols;
-            const float* x_batch = x_data.data() + b * std::max(rows, cols);
-            float* y_batch_expected = y_expected.data() + b * rows;
-            const float* y_batch_initial = y_data.data() + b * rows; // Initial y for beta calculation
+    void computeExpectedGemv(ScalarType alpha, ScalarType beta, Transpose transA) {
+        for (int b = 0; b < this->batch_size; ++b) {
+            const ScalarType* A_batch = this->A_data.data() + b * this->rows * this->cols;
+            const ScalarType* x_batch = this->x_data.data() + b * std::max(this->rows, this->cols);
+            ScalarType* y_batch_expected = this->y_expected.data() + b * this->rows;
+            const ScalarType* y_batch_initial = this->y_data.data() + b * this->rows; // Initial y for beta calculation
 
             if (transA == Transpose::NoTrans) {
-                 // y = alpha * A * x + beta * y
-                 // A is rows x cols, x is cols x 1, y is rows x 1
-                for (int i = 0; i < rows; ++i) {
-                    float sum = 0.0f;
-                    for (int j = 0; j < cols; ++j) {
-                        // A is column-major: A[i + j * rows]
-                        sum += A_batch[i + j * rows] * x_batch[j];
+                for (int i = 0; i < this->rows; ++i) {
+                    ScalarType sum = static_cast<ScalarType>(0.0);
+                    for (int j = 0; j < this->cols; ++j) {
+                        sum += A_batch[i + j * this->rows] * x_batch[j];
                     }
                     y_batch_expected[i] = alpha * sum + beta * y_batch_initial[i];
                 }
-            } else { // Transpose::Trans or Transpose::ConjTrans (same for real numbers)
-                 // y = alpha * A^T * x + beta * y
-                 // A^T is cols x rows, x is rows x 1, y is cols x 1
-                 // Note: The output vector y should have size 'cols' in this case.
-                 // Let's adjust the test setup or assume y always has size 'rows' and x size 'rows' for Transpose case.
-                 // Re-initializing y_expected and y_data for transpose case if needed.
-                 // For simplicity, let's assume the test setup ensures correct dimensions.
-                 // If A is rows x cols, A^T is cols x rows.
-                 // If x has size 'rows', then y must have size 'cols'.
-                 // Let's stick to the original setup where y has size 'rows'.
-                 // This implies x must have size 'rows' for the transpose case.
-                 // We need to adjust the x_data initialization or the test logic.
-
-                 // Let's assume the test setup is correct: A is rows x cols, x is rows x 1, y is cols x 1
-                 // We need a y_expected_transposed vector of size cols.
-                 // This complicates the fixture. Let's keep y size as 'rows' and assume x size matches.
-                 // If A is rows x cols, x is cols x 1, y is rows x 1 (NoTrans)
-                 // If A is rows x cols, x is rows x 1, y is cols x 1 (Trans) -> y needs size cols.
-
-                 // Let's redefine the test slightly:
-                 // NoTrans: A(rows, cols), x(cols), y(rows)
-                 // Trans:   A(rows, cols), x(rows), y(cols)
-                 // We need separate y vectors/expected vectors or adjust dimensions dynamically.
-
-                 // --- Simplified approach: Assume square matrices for simplicity ---
-                 // If rows == cols, then dimensions match for both cases.
-                 // Let's modify the fixture to use square matrices for now.
-                 // ASSERT_EQ(rows, cols); // Add this assertion in tests needing transpose
-
-                if (rows != cols) {
-                    // Skip transpose test if not square for simplicity in this fixture setup
+            } else { 
+                if (this->rows != this->cols) {
                     GTEST_SKIP() << "Transpose test skipped for non-square matrix in this fixture setup.";
                     return;
                 }
 
-                for (int j = 0; j < cols; ++j) { // Output index for transpose case
-                    float sum = 0.0f;
-                    for (int i = 0; i < rows; ++i) { // Inner loop over rows
-                         // A is column-major: A[i + j * rows]
-                        sum += A_batch[i + j * rows] * x_batch[i]; // x index corresponds to row index of A
+                for (int j = 0; j < this->cols; ++j) { 
+                    ScalarType sum = static_cast<ScalarType>(0.0);
+                    for (int i = 0; i < this->rows; ++i) { 
+                        sum += A_batch[i + j * this->rows] * x_batch[i]; 
                     }
-                     // Assuming y_expected has size 'rows' (matching NoTrans case)
-                     // This calculation is for y of size 'cols'. We need to store it correctly.
-                     // Let's calculate into a temporary buffer if y_expected must remain size 'rows'.
-                     // Or, assert rows == cols.
                     y_batch_expected[j] = alpha * sum + beta * y_batch_initial[j];
                 }
             }
         }
     }
 
+    ScalarType get_tolerance() {
+        if constexpr (std::is_same_v<ScalarType, float>) {
+            return 1e-4f;
+        } else {
+            return 1e-7;
+        }
+    }
+    ScalarType get_rel_error_floor() {
+        if constexpr (std::is_same_v<ScalarType, float>) {
+            return 1e-6f;
+        } else {
+            return 1e-9;
+        }
+    }
+
+
     std::shared_ptr<Queue> ctx;
-    const int rows = 10; // Make rows == cols for easier transpose testing in this fixture
+    const int rows = 10; 
     const int cols = 10;
     const int batch_size = 5;
-    UnifiedVector<float> A_data;
-    UnifiedVector<float> x_data; // Size needs to accommodate both rows and cols if not square
-    UnifiedVector<float> y_data; // Size 'rows' for NoTrans, 'cols' for Trans
-    UnifiedVector<float> y_expected; // Size 'rows' for NoTrans, 'cols' for Trans
+    UnifiedVector<ScalarType> A_data;
+    UnifiedVector<ScalarType> x_data; 
+    UnifiedVector<ScalarType> y_data; 
+    UnifiedVector<ScalarType> y_expected; 
 };
 
+TYPED_TEST_SUITE(GemvMatrixViewTest, MyTypes);
+
 // Test single GEMV operation with no transpose using MatrixView
-TEST_F(GemvMatrixViewTest, SingleGemvNoTranspose) {
-    // Create MatrixView and VectorView for the first batch item
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 0); // Single batch item view
-    VectorView<float> x_vec(x_data.data(), cols, 1); // Single vector view, add ld parameter
-    VectorView<float> y_vec(y_data.data(), rows, 1); // Single vector view, add ld parameter
+TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
 
-    float alpha = 1.0f;
-    float beta = 0.0f;
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1); 
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1); 
 
-    // Compute expected result for the first batch item
-    computeExpectedGemv(alpha, beta, Transpose::NoTrans); // Computes for all batches, we check batch 0
+    ScalarType alpha = static_cast<ScalarType>(1.0);
+    ScalarType beta = static_cast<ScalarType>(0.0);
 
-    // Perform y = alpha*A*x + beta*y
-    gemv<Backend::CUDA>(*ctx, A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    ctx->wait();
+    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
 
-    // Verify result for the first batch item
-    for (int i = 0; i < rows; ++i) {
-        EXPECT_NEAR(y_data[i], y_expected[i], 1e-4f) // Increased tolerance slightly
+    this->ctx->wait();
+    
+    ScalarType tol = this->get_tolerance();
+    for (int i = 0; i < this->rows; ++i) {
+        EXPECT_NEAR(this->y_data[i], this->y_expected[i], tol) 
             << "Mismatch at index " << i;
     }
 }
 
 // Test single GEMV operation with transpose using MatrixView
-TEST_F(GemvMatrixViewTest, SingleGemvWithTranspose) {
-     ASSERT_EQ(rows, cols) << "Transpose test requires square matrix in this fixture setup.";
+TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
 
-    // Create MatrixView and VectorView for the first batch item
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 0); // Single batch item view
-    // For A^T * x, x must have size 'rows'
-    VectorView<float> x_vec(x_data.data(), rows, 1); // Single vector view, size 'rows'
-    // For A^T * x, y must have size 'cols'
-    VectorView<float> y_vec(y_data.data(), cols, 1); // Single vector view, size 'cols'
+    ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
-    float alpha = 2.0f;
-    float beta = 0.0f;
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1); 
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1); 
 
-    // Compute expected result for the first batch item
-    computeExpectedGemv(alpha, beta, Transpose::Trans); // Computes for all batches, we check batch 0
+    ScalarType alpha = static_cast<ScalarType>(2.0);
+    ScalarType beta = static_cast<ScalarType>(0.0);
 
-    // Perform y = alpha*A^T*x + beta*y
-    gemv<Backend::CUDA>(*ctx, A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
+    this->computeExpectedGemv(alpha, beta, Transpose::Trans); 
 
-    ctx->wait();
+    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
 
-    // Verify result for the first batch item (output y has size 'cols')
-    for (int i = 0; i < cols; ++i) {
-        EXPECT_NEAR(y_data[i], y_expected[i], 1e-4f)
+    this->ctx->wait();
+
+    ScalarType tol = this->get_tolerance();
+    for (int i = 0; i < this->cols; ++i) {
+        EXPECT_NEAR(this->y_data[i], this->y_expected[i], tol)
         << "Mismatch with transpose at index " << i;
     }
 }
 
 
 // Test batched GEMV operation using MatrixView
-TEST_F(GemvMatrixViewTest, BatchedGemvNoTranspose) {
-    // Create batched MatrixView and VectorView - use constructors that match the declarations
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
-                                                rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.data(), cols, 1, cols, batch_size); // Reorder arguments to match constructor
-    VectorView<float> y_vec(y_data.data(), rows, 1, rows, batch_size); // Reorder arguments to match constructor
+TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
 
-    float alpha = 1.0f;
-    float beta = 0.0f;
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
+                                                this->rows * this->cols, this->batch_size); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1, this->cols, this->batch_size); 
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1, this->rows, this->batch_size); 
 
-    // Compute expected result (y = alpha * A * x + beta * y) for all batches
-    computeExpectedGemv(alpha, beta, Transpose::NoTrans);
+    ScalarType alpha = static_cast<ScalarType>(1.0);
+    ScalarType beta = static_cast<ScalarType>(0.0);
 
-    // Perform batched gemv
-    gemv<Backend::CUDA>(*ctx, A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans);
 
-    ctx->wait();
+    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
 
-    // Verify result for each batch
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < rows; ++i) {
-            EXPECT_NEAR(y_data[b * rows + i], y_expected[b * rows + i], 1e-4f)
+    this->ctx->wait();
+
+    ScalarType tol = this->get_tolerance();
+    ScalarType floor_val = this->get_rel_error_floor();
+    for (int b = 0; b < this->batch_size; ++b) {
+        for (int i = 0; i < this->rows; ++i) {
+            auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
+            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
                 << "Mismatch at batch " << b << ", index " << i;
         }
     }
 }
 
 // Test batched GEMV operation with transpose using MatrixView
-TEST_F(GemvMatrixViewTest, BatchedGemvWithTranspose) {
-    ASSERT_EQ(rows, cols) << "Transpose test requires square matrix in this fixture setup.";
+TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
 
-    // Create batched MatrixView and VectorView
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows,
-                                                rows * cols, batch_size); // Fixed constructor arguments
-    // For A^T * x, x must have size 'rows'
-    VectorView<float> x_vec(x_data.data(), rows, 1, rows, batch_size);
-    // For A^T * x, y must have size 'cols'
-    VectorView<float> y_vec(y_data.data(), cols, 1, cols, batch_size);
+    ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
-    float alpha = 2.5f;
-    float beta = 0.0f;
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows,
+                                                this->rows * this->cols, this->batch_size); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1, this->rows, this->batch_size);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1, this->cols, this->batch_size);
 
-    // Compute expected result (y = alpha * A^T * x + beta * y) for all batches
-    computeExpectedGemv(alpha, beta, Transpose::Trans);
+    ScalarType alpha = static_cast<ScalarType>(2.5);
+    ScalarType beta = static_cast<ScalarType>(0.0);
 
-    // Perform batched gemv with transpose
-    gemv<Backend::CUDA>(*ctx, A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
+    this->computeExpectedGemv(alpha, beta, Transpose::Trans);
 
-    ctx->wait();
+    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
 
-    // Verify result for each batch (output y has size 'cols')
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < cols; ++i) { // Iterate up to cols
-            EXPECT_NEAR(y_data[b * cols + i], y_expected[b * cols + i], 1e-4f)
+    this->ctx->wait();
+
+    ScalarType tol = this->get_tolerance();
+    ScalarType floor_val = this->get_rel_error_floor();
+    for (int b = 0; b < this->batch_size; ++b) {
+        for (int i = 0; i < this->cols; ++i) { 
+            auto rel_error = std::abs(this->y_data[b * this->cols + i] - this->y_expected[b * this->cols + i]) / std::max(std::abs(this->y_expected[b * this->cols + i]), floor_val);
+            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
                 << "Mismatch with transpose at batch " << b << ", index " << i;
         }
     }
 }
 
 // Test both alpha and beta in batched GEMV
-TEST_F(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
-    // Create batched MatrixView and VectorView
-    MatrixView<float, MatrixFormat::Dense> A_view(A_data.data(), rows, cols, rows, 
-                                                rows * cols, batch_size); // Fixed constructor arguments
-    VectorView<float> x_vec(x_data.data(), cols, 1, cols, batch_size);
-    VectorView<float> y_vec(y_data.data(), rows, 1, rows, batch_size);
+TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
 
-    // Initialize y with some values
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < rows; ++i) {
-            y_data[b * rows + i] = static_cast<float>(b * 1.0f + i * 0.1f);
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
+                                                this->rows * this->cols, this->batch_size); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1, this->cols, this->batch_size);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1, this->rows, this->batch_size);
+
+    for (int b = 0; b < this->batch_size; ++b) {
+        for (int i = 0; i < this->rows; ++i) {
+            this->y_data[b * this->rows + i] = static_cast<ScalarType>(b * 1.0 + i * 0.1);
         }
     }
-     // Copy initial y to expected y before calculation if beta != 0
-     y_expected = y_data; // Start expected from initial y
+     this->y_expected = this->y_data; 
 
-    float alpha = 1.5f;
-    float beta = 0.8f;
+    ScalarType alpha = static_cast<ScalarType>(1.5);
+    ScalarType beta = static_cast<ScalarType>(0.8);
 
-    // Compute expected result (y = alpha * A * x + beta * y) for all batches
-    computeExpectedGemv(alpha, beta, Transpose::NoTrans); // Uses initial y_data for beta term
+    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    // Perform batched gemv with alpha and beta
-    gemv<Backend::CUDA>(*ctx, A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
 
-    ctx->wait();
+    this->ctx->wait();
 
-    // Verify result for each batch
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < rows; ++i) {
-            EXPECT_NEAR(y_data[b * rows + i], y_expected[b * rows + i], 1e-4f)
+    ScalarType tol = this->get_tolerance();
+    ScalarType floor_val = this->get_rel_error_floor();
+    for (int b = 0; b < this->batch_size; ++b) {
+        for (int i = 0; i < this->rows; ++i) {
+            auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
+            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
                 << "Mismatch with alpha/beta at batch " << b << ", index " << i;
         }
     }
