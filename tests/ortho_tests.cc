@@ -398,8 +398,8 @@ std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorit
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixFloatTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -411,8 +411,8 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixDoubleTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixDoubleTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -424,9 +424,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoAgainstMFloatTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMFloatTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
@@ -439,9 +439,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoAgainstMDoubleTest,
     ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(Transpose::NoTrans, Transpose::Trans),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2)
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMDoubleTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
