@@ -12,7 +12,7 @@ class BlasOperationsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Create a SYCL queue
-        ctx = std::make_shared<Queue>(Device::default_device());
+        ctx = std::make_shared<Queue>("cpu");
         
         // Initialize test matrices
         A_data = UnifiedVector<float>(rows * cols * batch_size);
@@ -67,7 +67,7 @@ TEST_F(BlasOperationsTest, GemmWithIdentityMatrix) {
     MatrixView C_view(C_data.data(), rows, cols, ld);
     
     // Perform C = A * B (which should equal A since B is identity)
-    gemm<Backend::CUDA>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f,
+    gemm<Backend::NETLIB>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f,
                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     
     ctx->wait();
@@ -86,7 +86,7 @@ TEST_F(BlasOperationsTest, BatchedGemm) {
     MatrixView C_view(C_data.data(), rows, cols, ld, rows * cols, batch_size);
     
     // Adding the ComputePrecision parameter
-    gemm<Backend::CUDA>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f, 
+    gemm<Backend::NETLIB>(*ctx, A_view, B_view, C_view, 1.0f, 0.0f, 
                       Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     
     ctx->wait();
