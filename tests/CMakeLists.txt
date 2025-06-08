@@ -31,6 +31,7 @@ set(TEST_TARGETS
     matrix_view_tests
     trsm_operations_tests
     ortho_tests
+    inverse_tests
     norm_tests
     cond_tests
 )
@@ -50,3 +51,4 @@ foreach(test ${TEST_TARGETS})
     # Add to CTest
     add_test(NAME ${test} COMMAND ${test})
 endforeach()
+
