@@ -26,10 +26,10 @@ set(TEST_TARGETS
     lanczos_tests
     syevx_benchmark
     ortho_benchmark
-    gemv_operations_tests
+    gemv_tests
     matrix_tests
     matrix_view_tests
-    trsm_operations_tests
+    trsm_tests
     ortho_tests
     inverse_tests
     norm_tests
