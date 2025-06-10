@@ -69,7 +69,7 @@ namespace batchlas{
     // Individual enum conversions for CUDA backend
     template<BackendLibrary B>
     constexpr auto enum_convert(Side side) {
-        if constexpr (B == BackendLibrary::CUBLAS) {
+        if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasSideMode_t>(
                 side == Side::Left ? CUBLAS_SIDE_LEFT : CUBLAS_SIDE_RIGHT
             );
@@ -77,6 +77,12 @@ namespace batchlas{
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
             );
+        } else if constexpr (B == BackendLibrary::LAPACKE) {
+            return static_cast<char>(
+                side == Side::Left ? 'L' : 'R'
+            );
+        } else {
+            static_assert(false, "Unsupported backend for Side conversion");
         }
     }
 

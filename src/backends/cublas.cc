@@ -102,7 +102,7 @@ namespace batchlas {
 
     template <Backend B, typename T>
     Event geqrf(Queue& ctx,
-        MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
+        const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
         Span<T> tau,
         Span<std::byte> work_space) {
         static LinalgHandle<B> handle;
@@ -121,12 +121,12 @@ namespace batchlas {
                 BackendScalar<T,B>::type, &device_l_work, &host_l_work);
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
-            int info;
+            auto d_info = pool.allocate<int>(ctx, 1);
             cusolverDnXgeqrf(handle, params, m, n,
                 BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(), 
-                BackendScalar<T,B>::type, device_work_space.data(), 
-                device_l_work, host_work_space.data(), host_l_work, &info);
+                BackendScalar<T,B>::type, tau.data(),
+                BackendScalar<T,B>::type, device_work_space.data(),
+                device_l_work, host_work_space.data(), host_l_work, d_info.data());
         } else {
             auto tau_data = tau.data();
             auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
@@ -158,9 +158,96 @@ namespace batchlas {
                 BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
                 BackendScalar<T,B>::type, tau.data(),
                 BackendScalar<T,B>::type, &device_l_work, &host_l_work);
-            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work);
+            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work) 
+                   + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
         } else {
             return BumpAllocator::allocation_size<T*>(ctx, batch_size) + BumpAllocator::allocation_size<int>(ctx, batch_size);
+        }
+    }
+
+    template <Backend B, typename T>
+    Event ormqr(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& C,
+                Side side,
+                Transpose trans,
+                Span<T> tau,
+                Span<std::byte> workspace) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = C.rows();
+        auto n = C.cols();
+        auto k = std::min(A.rows(), A.cols());
+        auto batch_size = A.batch_size();
+        BumpAllocator pool(workspace);
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize, 
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            auto device_ws = pool.allocate<T>(ctx, lwork);
+            auto info = pool.allocate<int>(ctx, 1);
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr, cusolverDnDormqr,
+                cusolverDnCunmqr, cusolverDnZunmqr,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                device_ws.data(), lwork, info.data());
+        } else {
+            Queue sub_queue(ctx.device(), false);
+            size_t single_ws = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
+            for (int i = 0; i < batch_size; ++i) {
+                auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
+                ormqr<B>(sub_queue, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
+            }
+            sub_queue.wait();
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t ormqr_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& C,
+                             Side side,
+                             Transpose trans,
+                             Span<T> tau) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = C.rows();
+        auto n = C.cols();
+        auto k = std::min(A.rows(), A.cols());
+        auto batch_size = A.batch_size();
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
+        } else {
+            size_t single = BumpAllocator::allocation_size<std::byte>(ctx, ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k)));
+            return single * batch_size;
         }
     }
 
@@ -287,7 +374,7 @@ namespace batchlas {
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::CUDA, fp>( \
         Queue&, \
-        MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>, \
         Span<std::byte>);
     
@@ -334,6 +421,23 @@ namespace batchlas {
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&);
 
+    #define ORMQR_INSTANTIATE(fp) \
+    template Event ormqr<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>, \
+        Span<std::byte>);
+
+    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t ormqr_buffer_size<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>);
+
     #define BLAS_LEVEL3_INSTANTIATE(fp)\
         GEMM_INSTANTIATE(fp)\
         GEMV_INSTANTIATE(fp)\
@@ -345,7 +449,9 @@ namespace batchlas {
         GETRF_INSTANTIATE(fp)\
         GETRF_BUFFER_SIZE_INSTANTIATE(fp)\
         GETRI_INSTANTIATE(fp)\
-        GETRI_BUFFER_SIZE_INSTANTIATE(fp)
+        GETRI_BUFFER_SIZE_INSTANTIATE(fp)\
+        ORMQR_INSTANTIATE(fp)\
+        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)
 
 
     BLAS_LEVEL3_INSTANTIATE(float)
@@ -359,6 +465,12 @@ namespace batchlas {
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRS_INSTANTIATE
+    #undef GETRS_BUFFER_SIZE_INSTANTIATE
     #undef GETRF_INSTANTIATE
+    #undef GETRF_BUFFER_SIZE_INSTANTIATE
+    #undef GETRI_INSTANTIATE
+    #undef GETRI_BUFFER_SIZE_INSTANTIATE
+    #undef ORMQR_INSTANTIATE
+    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
 }
