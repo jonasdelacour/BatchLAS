@@ -160,7 +160,7 @@ size_t getri_buffer_size(Queue& ctx,
 
 template <Backend B, typename T>
 Event geqrf(Queue& ctx,
-            MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
+            const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
             Span<T> tau,
             Span<std::byte> work_space);
 
