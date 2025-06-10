@@ -53,15 +53,14 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     const int n = 4;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
-    Vector<T> tau(n);
-    VectorView<T> tau_view(tau.data(), n);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau_view));
-    geqrf<B>(*this->ctx, A.view(), tau_view, ws_geqrf.to_span());
+    UnifiedVector<T> tau(n);
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
+    geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n);
-    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau_view));
-    ormqr<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau_view, ws_ormqr.to_span());
+    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
+    ormqr<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n);
@@ -84,15 +83,14 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     const int batch = 3;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
-    Vector<T> tau(n, 1, n, batch);
-    VectorView<T> tau_view(tau.data(), n, 1, n, batch);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau_view));
-    geqrf<B>(*this->ctx, A.view(), tau_view, ws_geqrf.to_span());
+    UnifiedVector<T> tau(n * batch);
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
+    geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
-    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau_view));
-    ormqr<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau_view, ws_ormqr.to_span());
+    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
+    ormqr<B>(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
