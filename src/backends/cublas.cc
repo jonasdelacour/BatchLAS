@@ -180,35 +180,37 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         BumpAllocator pool(workspace);
         if (batch_size == 1) {
-            cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
-            size_t device_l_work, host_l_work;
-            cusolverDnXormqr_bufferSize(handle, params,
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize, 
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
                 enum_convert<BackendLibrary::CUSOLVER>(side),
                 enum_convert<BackendLibrary::CUSOLVER>(trans),
                 m, n, k,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, C.data_ptr(), C.ld(),
-                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
-            auto device_ws = pool.allocate<std::byte>(ctx, device_l_work);
-            auto host_ws = pool.allocate<std::byte>(ctx, host_l_work);
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            auto device_ws = pool.allocate<T>(ctx, lwork);
             int info;
-            cusolverDnXormqr(handle, params,
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr, cusolverDnDormqr,
+                cusolverDnCunmqr, cusolverDnZunmqr,
+                handle,
                 enum_convert<BackendLibrary::CUSOLVER>(side),
                 enum_convert<BackendLibrary::CUSOLVER>(trans),
                 m, n, k,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, C.data_ptr(), C.ld(),
-                BackendScalar<T,B>::type, device_ws.data(), device_l_work,
-                host_ws.data(), host_l_work, &info);
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                device_ws.data(), lwork, &info);
         } else {
             Queue sub_queue(ctx.device(), false);
-            size_t single_ws = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.batch_item(0));
+            size_t single_ws = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
             for (int i = 0; i < batch_size; ++i) {
                 auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
-                ormqr<B>(sub_queue, A.batch_item(i), C.batch_item(i), side, trans, tau.batch_item(i), sub_ws);
+                ormqr<B>(sub_queue, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
             }
             sub_queue.wait();
         }
@@ -229,21 +231,21 @@ namespace batchlas {
         auto k = std::min(A.rows(), A.cols());
         auto batch_size = A.batch_size();
         if (batch_size == 1) {
-            size_t device_l_work, host_l_work;
-            cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
-            cusolverDnXormqr_bufferSize(handle, params,
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
                 enum_convert<BackendLibrary::CUSOLVER>(side),
                 enum_convert<BackendLibrary::CUSOLVER>(trans),
                 m, n, k,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, C.data_ptr(), C.ld(),
-                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
-            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work)
-                + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work);
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            return BumpAllocator::allocation_size<T>(ctx, lwork);
         } else {
-            size_t single = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.batch_item(0));
+            size_t single = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
             return single * batch_size;
         }
     }
