@@ -121,12 +121,12 @@ namespace batchlas {
                 BackendScalar<T,B>::type, &device_l_work, &host_l_work);
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
-            int info;
+            auto d_info = pool.allocate<int>(ctx, 1);
             cusolverDnXgeqrf(handle, params, m, n,
                 BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(), 
-                BackendScalar<T,B>::type, device_work_space.data(), 
-                device_l_work, host_work_space.data(), host_l_work, &info);
+                BackendScalar<T,B>::type, tau.data(),
+                BackendScalar<T,B>::type, device_work_space.data(),
+                device_l_work, host_work_space.data(), host_l_work, d_info.data());
         } else {
             auto tau_data = tau.data();
             auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
@@ -158,7 +158,8 @@ namespace batchlas {
                 BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
                 BackendScalar<T,B>::type, tau.data(),
                 BackendScalar<T,B>::type, &device_l_work, &host_l_work);
-            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work);
+            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work) 
+                   + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
         } else {
             return BumpAllocator::allocation_size<T*>(ctx, batch_size) + BumpAllocator::allocation_size<int>(ctx, batch_size);
         }
@@ -193,7 +194,7 @@ namespace batchlas {
                 C.data_ptr(), C.ld(),
                 &lwork);
             auto device_ws = pool.allocate<T>(ctx, lwork);
-            int info;
+            auto info = pool.allocate<int>(ctx, 1);
             call_backend<T, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSormqr, cusolverDnDormqr,
                 cusolverDnCunmqr, cusolverDnZunmqr,
@@ -204,7 +205,7 @@ namespace batchlas {
                 A.data_ptr(), A.ld(),
                 tau.data(),
                 C.data_ptr(), C.ld(),
-                device_ws.data(), lwork, &info);
+                device_ws.data(), lwork, info.data());
         } else {
             Queue sub_queue(ctx.device(), false);
             size_t single_ws = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
@@ -243,9 +244,9 @@ namespace batchlas {
                 tau.data(),
                 C.data_ptr(), C.ld(),
                 &lwork);
-            return BumpAllocator::allocation_size<T>(ctx, lwork);
+            return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
         } else {
-            size_t single = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
+            size_t single = BumpAllocator::allocation_size<std::byte>(ctx, ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k)));
             return single * batch_size;
         }
     }
