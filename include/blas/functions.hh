@@ -169,6 +169,23 @@ size_t geqrf_buffer_size(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          Span<T> tau);
 
+template <Backend B, typename T>
+Event ormqr(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<T, MatrixFormat::Dense>& C,
+            Side side,
+            Transpose trans,
+            Span<T> tau,
+            Span<std::byte> workspace);
+
+template <Backend B, typename T>
+size_t ormqr_buffer_size(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         Side side,
+                         Transpose trans,
+                         Span<T> tau);
+
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx,

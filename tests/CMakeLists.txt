@@ -34,6 +34,7 @@ set(TEST_TARGETS
     inverse_tests
     norm_tests
     cond_tests
+    ormqr_tests
     transpose_tests
 )
 

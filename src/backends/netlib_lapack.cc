@@ -366,6 +366,52 @@ namespace batchlas{
     }
 
     template <Backend B, typename T>
+    Event ormqr(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& C,
+                Side side,
+                Transpose trans,
+                Span<T> tau,
+                Span<std::byte> workspace) {
+        static_cast<void>(workspace);
+        int m = C.rows();
+        int n = C.cols();
+        int k = std::min(A.rows(), A.cols());
+        for (int i = 0; i < A.batch_size(); ++i) {
+            call_backend_nh<T, BackendLibrary::LAPACKE>(
+                LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
+                Layout::ColMajor,
+                side,
+                trans,
+                m,
+                n,
+                k,
+                A[i].data_ptr(),
+                A.ld(),
+                tau.data() + i * k,
+                C[i].data_ptr(),
+                C.ld());
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t ormqr_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& C,
+                             Side side,
+                             Transpose trans,
+                             Span<T> tau) {
+        static_cast<void>(ctx);
+        static_cast<void>(A);
+        static_cast<void>(C);
+        static_cast<void>(side);
+        static_cast<void>(trans);
+        static_cast<void>(tau);
+        return 0;
+    }
+
+    template <Backend B, typename T>
     size_t potrf_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& descrA,
                              Uplo uplo) {
@@ -478,6 +524,23 @@ namespace batchlas{
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&);
 
+    #define ORMQR_INSTANTIATE(fp) \
+    template Event ormqr<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>, \
+        Span<std::byte>);
+
+    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t ormqr_buffer_size<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>);
+
     #define POTRF_INSTANTIATE(fp) \
     template Event potrf<Backend::NETLIB, fp>( \
         Queue&, \
@@ -516,6 +579,8 @@ namespace batchlas{
         GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRI_INSTANTIATE(fp) \
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
+        ORMQR_INSTANTIATE(fp) \
+        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_INSTANTIATE(fp) \
@@ -540,6 +605,8 @@ namespace batchlas{
     #undef GETRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRI_INSTANTIATE
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
+    #undef ORMQR_INSTANTIATE
+    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_INSTANTIATE
