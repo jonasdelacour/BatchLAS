@@ -335,7 +335,7 @@ namespace batchlas{
 
     template <Backend B, typename T>
     Event geqrf(Queue& ctx,
-                MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
@@ -473,7 +473,7 @@ namespace batchlas{
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::NETLIB, fp>( \
         Queue&, \
-        MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>, \
         Span<std::byte>);
 

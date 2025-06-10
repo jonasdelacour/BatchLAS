@@ -102,7 +102,7 @@ namespace batchlas {
 
     template <Backend B, typename T>
     Event geqrf(Queue& ctx,
-        MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
+        const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
         Span<T> tau,
         Span<std::byte> work_space) {
         static LinalgHandle<B> handle;
@@ -373,7 +373,7 @@ namespace batchlas {
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::CUDA, fp>( \
         Queue&, \
-        MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>, \
         Span<std::byte>);
     
