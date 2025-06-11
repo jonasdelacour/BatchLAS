@@ -100,11 +100,11 @@ namespace batchlas {
         ~Matrix();
 
         // Add deep copy functionality while allowing moving
-        Matrix(const Matrix& other);
-        Matrix& operator=(const Matrix& other);
-        Matrix(Matrix&&) noexcept;
-        Matrix& operator=(Matrix&&) noexcept;
-        
+        Matrix(const Matrix& other) = default;
+        Matrix& operator=(const Matrix& other) = default;
+        Matrix(Matrix&&) noexcept = default;
+        Matrix& operator=(Matrix&&) noexcept = default;
+
         // Create a deep copy
         Matrix<T, MType> clone() const {
             Matrix<T, MType> result(rows_, cols_, batch_size_);
