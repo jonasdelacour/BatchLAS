@@ -17,14 +17,12 @@ static void BM_GEMM_Single(benchmark::State& state) {
 
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
 
+    gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    queue.wait();
     for (auto _ : state) {
-        state.PauseTiming();
-        auto C_copy = C;
-        state.ResumeTiming();
-        gemm<B>(queue, A.view(), Bm.view(), C_copy.view(), T(1), T(0),
-                Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
         queue.wait();
-        benchmark::DoNotOptimize(C_copy.data());
+        benchmark::DoNotOptimize(C.data());
     }
 
     state.counters["GFLOPS"] = benchmark::Counter(1e-9 * (2.0 * m * n * k),
@@ -45,14 +43,12 @@ static void BM_GEMM_Batched(benchmark::State& state) {
 
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
 
+    gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    queue.wait();
     for (auto _ : state) {
-        state.PauseTiming();
-        auto C_copy = C;
-        state.ResumeTiming();
-        gemm<B>(queue, A.view(), Bm.view(), C_copy.view(), T(1), T(0),
-                Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
         queue.wait();
-        benchmark::DoNotOptimize(C_copy.data());
+        benchmark::DoNotOptimize(C.data());
     }
 
     state.counters["GFLOPS"] = benchmark::Counter(
