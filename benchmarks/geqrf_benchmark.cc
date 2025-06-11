@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 #include <blas/linalg.hh>
+#include "bench_utils.hh"
 #include <vector>
 #include <random>
 #include <memory>
@@ -77,17 +78,25 @@ static void BM_GEQRF_Batched(benchmark::State& state) {
 }
 
 // Register single matrix benchmarks
-BENCHMARK_TEMPLATE(BM_GEQRF_Single, float, batchlas::Backend::NETLIB)->Args({64, 64})->Args({128, 128})->Args({256, 256})->Args({512, 512})->Args({1024, 1024});
-BENCHMARK_TEMPLATE(BM_GEQRF_Single, double, batchlas::Backend::NETLIB)->Args({64, 64})->Args({128, 128})->Args({256, 256})->Args({512, 512})->Args({1024, 1024});
+BENCHMARK_TEMPLATE(BM_GEQRF_Single, float, batchlas::Backend::NETLIB)
+    ->Apply(bench_utils::SquareSizes);
+BENCHMARK_TEMPLATE(BM_GEQRF_Single, double, batchlas::Backend::NETLIB)
+    ->Apply(bench_utils::SquareSizes);
 
-BENCHMARK_TEMPLATE(BM_GEQRF_Single, float, batchlas::Backend::CUDA)->Args({64, 64})->Args({128, 128})->Args({256, 256})->Args({512, 512})->Args({1024, 1024});
-BENCHMARK_TEMPLATE(BM_GEQRF_Single, double, batchlas::Backend::CUDA)->Args({64, 64})->Args({128, 128})->Args({256, 256})->Args({512, 512})->Args({1024, 1024});
+BENCHMARK_TEMPLATE(BM_GEQRF_Single, float, batchlas::Backend::CUDA)
+    ->Apply(bench_utils::SquareSizes);
+BENCHMARK_TEMPLATE(BM_GEQRF_Single, double, batchlas::Backend::CUDA)
+    ->Apply(bench_utils::SquareSizes);
 
 // Register batched matrix benchmarks
-BENCHMARK_TEMPLATE(BM_GEQRF_Batched, float, batchlas::Backend::NETLIB)->Args({64, 64, 10})->Args({128, 128, 10})->Args({256, 256, 10})->Args({64, 64, 100})->Args({128, 128, 100});
-BENCHMARK_TEMPLATE(BM_GEQRF_Batched, double, batchlas::Backend::NETLIB)->Args({64, 64, 10})->Args({128, 128, 10})->Args({256, 256, 10})->Args({64, 64, 100})->Args({128, 128, 100});
+BENCHMARK_TEMPLATE(BM_GEQRF_Batched, float, batchlas::Backend::NETLIB)
+    ->Apply(bench_utils::SquareBatchSizes);
+BENCHMARK_TEMPLATE(BM_GEQRF_Batched, double, batchlas::Backend::NETLIB)
+    ->Apply(bench_utils::SquareBatchSizes);
 
-BENCHMARK_TEMPLATE(BM_GEQRF_Batched, float, batchlas::Backend::CUDA)->Args({64, 64, 10})->Args({128, 128, 10})->Args({256, 256, 10})->Args({64, 64, 100})->Args({128, 128, 100})->Args({256, 256, 100})->Args({512, 512, 100})->Args({1024, 1024, 100});
-BENCHMARK_TEMPLATE(BM_GEQRF_Batched, double, batchlas::Backend::CUDA)->Args({64, 64, 10})->Args({128, 128, 10})->Args({256, 256, 10})->Args({64, 64, 100})->Args({128, 128, 100});
+BENCHMARK_TEMPLATE(BM_GEQRF_Batched, float, batchlas::Backend::CUDA)
+    ->Apply(bench_utils::SquareBatchSizes);
+BENCHMARK_TEMPLATE(BM_GEQRF_Batched, double, batchlas::Backend::CUDA)
+    ->Apply(bench_utils::SquareBatchSizes);
 
 BENCHMARK_MAIN();

@@ -20,6 +20,11 @@ endif()
 # Define test executables
 set(BENCHMARK_TARGETS
     geqrf_benchmark
+    gemm_benchmark
+    gemv_benchmark
+    spmm_benchmark
+    trsm_benchmark
+    ormqr_benchmark
 )
 
 # Create test executables
