@@ -654,6 +654,7 @@ add_subdirectory(src)
 if(BATCHLAS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+    add_subdirectory(benchmarks)
 endif()
 
 # Python bindings
