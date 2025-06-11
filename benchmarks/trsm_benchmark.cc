@@ -24,7 +24,7 @@ static void BM_TRSM_Single(benchmark::State& state) {
         benchmark::DoNotOptimize(B_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(1.0 * n * n,
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 * 1.0 * n * n,
                                                    benchmark::Counter::kIsRate);
 }
 
@@ -49,7 +49,7 @@ static void BM_TRSM_Batched(benchmark::State& state) {
         benchmark::DoNotOptimize(B_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         static_cast<double>(batch) * n * n, benchmark::Counter::kIsRate);
     state.counters["BatchSize"] = batch;
 }

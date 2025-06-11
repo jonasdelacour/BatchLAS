@@ -32,7 +32,7 @@ static void BM_ORMQR_Single(benchmark::State& state) {
         benchmark::DoNotOptimize(Q_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         4.0 * m * m * m, benchmark::Counter::kIsRate);
 }
 
@@ -65,7 +65,7 @@ static void BM_ORMQR_Batched(benchmark::State& state) {
         benchmark::DoNotOptimize(Q_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         static_cast<double>(batch) * 4.0 * m * m * m,
         benchmark::Counter::kIsRate);
     state.counters["BatchSize"] = batch;

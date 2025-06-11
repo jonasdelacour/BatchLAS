@@ -27,7 +27,7 @@ static void BM_GEMM_Single(benchmark::State& state) {
         benchmark::DoNotOptimize(C_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(2.0 * m * n * k,
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 * (2.0 * m * n * k),
                                                    benchmark::Counter::kIsRate);
 }
 
@@ -55,8 +55,8 @@ static void BM_GEMM_Batched(benchmark::State& state) {
         benchmark::DoNotOptimize(C_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
-        static_cast<double>(batch) * 2.0 * m * n * k, benchmark::Counter::kIsRate);
+    state.counters["GFLOPS"] = benchmark::Counter(
+        static_cast<double>(batch) * 1e-9 * (2.0 * m * n * k), benchmark::Counter::kIsRate);
     state.counters["BatchSize"] = batch;
 }
 

@@ -36,7 +36,7 @@ static void BM_GEQRF_Single(benchmark::State& state) {
     }
     
     state.SetComplexityN(m * n * std::min(m, n));
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         (2 * m * n * n + (2.0 / 3.0) * n * n * n),
         benchmark::Counter::kIsRate
     );
@@ -70,8 +70,8 @@ static void BM_GEQRF_Batched(benchmark::State& state) {
     }
     
     state.SetComplexityN(batch_size * m * n * std::min(m, n));
-    state.counters["FLOPS"] = benchmark::Counter(
-        batch_size * (2 * m * n * n + (2.0 / 3.0) * n * n * n),
+    state.counters["GFLOPS"] = benchmark::Counter(
+        1e-9 * batch_size * (2 * m * n * n + (2.0 / 3.0) * n * n * n),
         benchmark::Counter::kIsRate
     );
     state.counters["BatchSize"] = batch_size;

@@ -33,7 +33,7 @@ static void BM_SPMM_Single(benchmark::State& state) {
         benchmark::DoNotOptimize(C_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         2.0 * A.nnz() * n, benchmark::Counter::kIsRate);
 }
 
@@ -66,7 +66,7 @@ static void BM_SPMM_Batched(benchmark::State& state) {
         benchmark::DoNotOptimize(C_copy.data());
     }
 
-    state.counters["FLOPS"] = benchmark::Counter(
+    state.counters["GFLOPS"] = benchmark::Counter(1e-9 *
         static_cast<double>(batch) * 2.0 * A.nnz() * n,
         benchmark::Counter::kIsRate);
     state.counters["BatchSize"] = batch;
