@@ -25,6 +25,7 @@ set(BENCHMARK_TARGETS
     spmm_benchmark
     trsm_benchmark
     ormqr_benchmark
+    gemm_custom
 )
 
 # Create test executables
