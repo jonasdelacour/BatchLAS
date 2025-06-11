@@ -13,7 +13,7 @@ static void BM_SPMM_Single(benchmark::State& state) {
 
     // Create random dense matrix and convert to CSR for sparsity
     auto A_dense = Matrix<T>::Random(m, k, false);
-    auto A = A_dense.convert_to<MatrixFormat::CSR>();
+    auto A = A_dense.template convert_to<MatrixFormat::CSR>();
     auto Bm = Matrix<T>::Random(k, n, false);
     auto C = Matrix<T>::Random(m, n, false);
 
@@ -46,7 +46,7 @@ static void BM_SPMM_Batched(benchmark::State& state) {
     const int batch = state.range(3);
 
     auto A_dense = Matrix<T>::Random(m, k, false, batch);
-    auto A = A_dense.convert_to<MatrixFormat::CSR>();
+    auto A = A_dense.template convert_to<MatrixFormat::CSR>();
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
 
