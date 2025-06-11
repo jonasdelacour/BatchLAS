@@ -373,7 +373,7 @@ Matrix<T, MType>::~Matrix() {
 }
 
 // Move constructor
-template <typename T, MatrixFormat MType>
+/* template <typename T, MatrixFormat MType>
 Matrix<T, MType>::Matrix(Matrix<T, MType>&& other) noexcept
     : rows_(other.rows_), cols_(other.cols_), batch_size_(other.batch_size_),
       data_(std::move(other.data_)), backend_handle_(std::move(other.backend_handle_)) {
@@ -404,10 +404,10 @@ Matrix<T, MType>::Matrix(Matrix<T, MType>&& other) noexcept
     other.rows_ = 0;
     other.cols_ = 0;
     other.batch_size_ = 0;
-}
+} */
 
 // Move assignment operator
-template <typename T, MatrixFormat MType>
+/* template <typename T, MatrixFormat MType>
 Matrix<T, MType>& Matrix<T, MType>::operator=(Matrix<T, MType>&& other) noexcept {
     if (this != &other) {
         // Copy common fields
@@ -445,7 +445,7 @@ Matrix<T, MType>& Matrix<T, MType>::operator=(Matrix<T, MType>&& other) noexcept
         other.batch_size_ = 0;
     }
     return *this;
-}
+} */
 
 // Create a view of the entire matrix
 template <typename T, MatrixFormat MType>
