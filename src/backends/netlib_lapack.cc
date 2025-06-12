@@ -6,7 +6,6 @@
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <lapack.h>
-#include <cblas.h>
 #include <blas/linalg.hh>
 namespace batchlas{
 
