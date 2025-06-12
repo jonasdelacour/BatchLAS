@@ -29,18 +29,10 @@ static void BM_GEMV(minibench::State& state) {
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-static auto* bench_gemv_f_cpu =
-    minibench::RegisterBenchmark("gemv_float_cpu", BM_GEMV<float, Backend::NETLIB>);
-static auto* bench_gemv_d_cpu =
-    minibench::RegisterBenchmark("gemv_double_cpu", BM_GEMV<double, Backend::NETLIB>);
-static auto* bench_gemv_f_gpu =
-    minibench::RegisterBenchmark("gemv_float_gpu", BM_GEMV<float, Backend::CUDA>);
-static auto* bench_gemv_d_gpu =
-    minibench::RegisterBenchmark("gemv_double_gpu", BM_GEMV<double, Backend::CUDA>);
 
-minibench::SquareBatchSizes(bench_gemv_f_cpu);
-minibench::SquareBatchSizes(bench_gemv_d_cpu);
-minibench::SquareBatchSizes(bench_gemv_f_gpu);
-minibench::SquareBatchSizes(bench_gemv_d_gpu);
+MINI_BENCHMARK_REGISTER_SIZES(gemv_float_cpu, (BM_GEMV<float, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(gemv_double_cpu, (BM_GEMV<double, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(gemv_float_gpu, (BM_GEMV<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(gemv_double_gpu, (BM_GEMV<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

@@ -32,18 +32,10 @@ static void BM_ORMQR(minibench::State& state) {
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-static auto* bench_ormqr_f_cpu =
-    minibench::RegisterBenchmark("ormqr_float_cpu", BM_ORMQR<float, Backend::NETLIB>);
-static auto* bench_ormqr_d_cpu =
-    minibench::RegisterBenchmark("ormqr_double_cpu", BM_ORMQR<double, Backend::NETLIB>);
-static auto* bench_ormqr_f_gpu =
-    minibench::RegisterBenchmark("ormqr_float_gpu", BM_ORMQR<float, Backend::CUDA>);
-static auto* bench_ormqr_d_gpu =
-    minibench::RegisterBenchmark("ormqr_double_gpu", BM_ORMQR<double, Backend::CUDA>);
 
-minibench::SquareBatchSizes(bench_ormqr_f_cpu);
-minibench::SquareBatchSizes(bench_ormqr_d_cpu);
-minibench::SquareBatchSizes(bench_ormqr_f_gpu);
-minibench::SquareBatchSizes(bench_ormqr_d_gpu);
+MINI_BENCHMARK_REGISTER_SIZES(ormqr_float_cpu, (BM_ORMQR<float, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(ormqr_double_cpu, (BM_ORMQR<double, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(ormqr_float_gpu, (BM_ORMQR<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(ormqr_double_gpu, (BM_ORMQR<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

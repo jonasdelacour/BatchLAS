@@ -23,18 +23,10 @@ static void BM_TRSM(minibench::State& state) {
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-static auto* bench_trsm_f_cpu =
-    minibench::RegisterBenchmark("trsm_float_cpu", BM_TRSM<float, Backend::NETLIB>);
-static auto* bench_trsm_d_cpu =
-    minibench::RegisterBenchmark("trsm_double_cpu", BM_TRSM<double, Backend::NETLIB>);
-static auto* bench_trsm_f_gpu =
-    minibench::RegisterBenchmark("trsm_float_gpu", BM_TRSM<float, Backend::CUDA>);
-static auto* bench_trsm_d_gpu =
-    minibench::RegisterBenchmark("trsm_double_gpu", BM_TRSM<double, Backend::CUDA>);
 
-minibench::SquareBatchSizes(bench_trsm_f_cpu);
-minibench::SquareBatchSizes(bench_trsm_d_cpu);
-minibench::SquareBatchSizes(bench_trsm_f_gpu);
-minibench::SquareBatchSizes(bench_trsm_d_gpu);
+MINI_BENCHMARK_REGISTER_SIZES(trsm_float_cpu, (BM_TRSM<float, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(trsm_double_cpu, (BM_TRSM<double, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(trsm_float_gpu, (BM_TRSM<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(trsm_double_gpu, (BM_TRSM<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

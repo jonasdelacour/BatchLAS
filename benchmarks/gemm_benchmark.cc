@@ -24,22 +24,17 @@ static void BM_GEMM(minibench::State& state) {
         gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
     }
     queue.wait();
+    state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), true);
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-static auto* bench_gemm_f_cpu =
-    minibench::RegisterBenchmark("gemm_float_cpu", BM_GEMM<float, Backend::NETLIB>);
-static auto* bench_gemm_d_cpu =
-    minibench::RegisterBenchmark("gemm_double_cpu", BM_GEMM<double, Backend::NETLIB>);
-static auto* bench_gemm_f_gpu =
-    minibench::RegisterBenchmark("gemm_float_gpu", BM_GEMM<float, Backend::CUDA>);
-static auto* bench_gemm_d_gpu =
-    minibench::RegisterBenchmark("gemm_double_gpu", BM_GEMM<double, Backend::CUDA>);
 
-minibench::CubeBatchSizes(bench_gemm_f_cpu);
-minibench::CubeBatchSizes(bench_gemm_d_cpu);
-minibench::CubeBatchSizes(bench_gemm_f_gpu);
-minibench::CubeBatchSizes(bench_gemm_d_gpu);
+
+// Register size/batch combinations at static‑init time using macro
+//MINI_BENCHMARK_REGISTER_SIZES(gemm_float_cpu, (BM_GEMM<float, Backend::NETLIB>), CubeBatchSizes);
+//MINI_BENCHMARK_REGISTER_SIZES(gemm_double_cpu, (BM_GEMM<double, Backend::NETLIB>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(gemm_float_gpu, (BM_GEMM<float, Backend::CUDA>), CubeBatchSizes);
+//MINI_BENCHMARK_REGISTER_SIZES(gemm_double_gpu, (BM_GEMM<double, Backend::CUDA>), CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

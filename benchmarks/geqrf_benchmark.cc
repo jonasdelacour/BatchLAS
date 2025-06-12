@@ -34,18 +34,10 @@ static void BM_GEQRF(minibench::State& state) {
     state.SetMetric("BatchSize", static_cast<double>(batch_size));
 }
 
-static auto* bench_geqrf_f_cpu =
-    minibench::RegisterBenchmark("geqrf_float_cpu", BM_GEQRF<float, Backend::NETLIB>);
-static auto* bench_geqrf_d_cpu =
-    minibench::RegisterBenchmark("geqrf_double_cpu", BM_GEQRF<double, Backend::NETLIB>);
-static auto* bench_geqrf_f_gpu =
-    minibench::RegisterBenchmark("geqrf_float_gpu", BM_GEQRF<float, Backend::CUDA>);
-static auto* bench_geqrf_d_gpu =
-    minibench::RegisterBenchmark("geqrf_double_gpu", BM_GEQRF<double, Backend::CUDA>);
 
-minibench::SquareBatchSizes(bench_geqrf_f_cpu);
-minibench::SquareBatchSizes(bench_geqrf_d_cpu);
-minibench::SquareBatchSizes(bench_geqrf_f_gpu);
-minibench::SquareBatchSizes(bench_geqrf_d_gpu);
+MINI_BENCHMARK_REGISTER_SIZES(geqrf_float_cpu, (BM_GEQRF<float, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(geqrf_double_cpu, (BM_GEQRF<double, Backend::NETLIB>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(geqrf_float_gpu, (BM_GEQRF<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(geqrf_double_gpu, (BM_GEQRF<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

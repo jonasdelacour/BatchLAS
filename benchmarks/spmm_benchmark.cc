@@ -33,18 +33,10 @@ static void BM_SPMM(minibench::State& state) {
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-static auto* bench_spmm_f_cpu =
-    minibench::RegisterBenchmark("spmm_float_cpu", BM_SPMM<float, Backend::NETLIB>);
-static auto* bench_spmm_d_cpu =
-    minibench::RegisterBenchmark("spmm_double_cpu", BM_SPMM<double, Backend::NETLIB>);
-static auto* bench_spmm_f_gpu =
-    minibench::RegisterBenchmark("spmm_float_gpu", BM_SPMM<float, Backend::CUDA>);
-static auto* bench_spmm_d_gpu =
-    minibench::RegisterBenchmark("spmm_double_gpu", BM_SPMM<double, Backend::CUDA>);
 
-minibench::CubeBatchSizes(bench_spmm_f_cpu);
-minibench::CubeBatchSizes(bench_spmm_d_cpu);
-minibench::CubeBatchSizes(bench_spmm_f_gpu);
-minibench::CubeBatchSizes(bench_spmm_d_gpu);
+MINI_BENCHMARK_REGISTER_SIZES(spmm_float_cpu, (BM_SPMM<float, Backend::NETLIB>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(spmm_double_cpu, (BM_SPMM<double, Backend::NETLIB>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(spmm_float_gpu, (BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(spmm_double_gpu, (BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

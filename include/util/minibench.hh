@@ -1,4 +1,10 @@
 #pragma once
+// Macro to register a benchmark and apply a sizing function at static-init time
+#define MINI_BENCHMARK_REGISTER_SIZES(NAME, FUNC, SIZER) \
+    static int _reg_sizes_##NAME = ([]() { \
+        SIZER(minibench::RegisterBenchmark(#NAME, FUNC)); \
+        return 0; \
+    })();
 #include <chrono>
 #include <cmath>
 #include <functional>
