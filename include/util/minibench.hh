@@ -275,7 +275,7 @@ inline void print_header(const std::vector<std::string>& metric_names,
                         size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::fixed << std::setprecision(3);
+    std::cout << std::setprecision(5);
 
     std::cout << kColorHeader << std::left << std::setw(16) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
@@ -297,7 +297,7 @@ inline void print_row(const Result& r,
                       size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::fixed << std::setprecision(3);
+    std::cout << std::setprecision(5);
 
     std::cout << kColorName << std::left << std::setw(16) << r.name << kColorReset;
     for (size_t i = 0; i < max_args; ++i) {
@@ -311,10 +311,16 @@ inline void print_row(const Result& r,
               << std::setw(12) << r.stddev_ms;
     for (const auto& m : metric_names) {
         auto it = r.metrics.find(m);
-        if (it != r.metrics.end())
-            std::cout << std::setw(12) << it->second;
-        else
+        if (it != r.metrics.end()) {
+            double v = it->second;
+            if (std::fabs(v - std::round(v)) < 1e-9)
+                std::cout << std::setw(12)
+                          << static_cast<long long>(std::llround(v));
+            else
+                std::cout << std::setw(12) << v;
+        } else {
             std::cout << std::setw(12) << "";
+        }
     }
     std::cout << '\n';
 
