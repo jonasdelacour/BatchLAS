@@ -1,11 +1,11 @@
 #include <blas/linalg.hh>
-#include <util/simple_benchmark.hh>
+#include <util/minibench.hh>
 
 using namespace batchlas;
 
-SIMPLE_BENCHMARK(gemm_custom);
+MINI_BENCHMARK(gemm_custom);
 
-static void gemm_custom(simple_bench::State& state) {
+static void gemm_custom(minibench::State& state) {
     state.PauseTiming();
     size_t m = state.range(0);
     size_t n = state.range(1);
@@ -33,4 +33,4 @@ static auto* bench_cfg = BENCHMARK_gemm_custom
     ->Args({128, 128, 128, 1280}) ->Args({256, 256, 256, 1280})
     ->Args({512, 512, 512, 1280}) ->Args({1024, 1024, 1024, 1280});
 
-SIMPLE_BENCHMARK_MAIN();
+MINI_BENCHMARK_MAIN();
