@@ -275,9 +275,10 @@ inline void print_header(const std::vector<std::string>& metric_names,
                         size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::setprecision(5);
+    std::cout << std::showpoint << std::setprecision(5);
 
-    std::cout << kColorHeader << std::left << std::setw(16) << "Name";
+    constexpr int name_width = 32;
+    std::cout << kColorHeader << std::left << std::setw(name_width) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
         std::cout << std::setw(8) << ("Arg" + std::to_string(i));
     }
@@ -297,9 +298,10 @@ inline void print_row(const Result& r,
                       size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::setprecision(5);
+    std::cout << std::showpoint << std::setprecision(5);
 
-    std::cout << kColorName << std::left << std::setw(16) << r.name << kColorReset;
+    constexpr int name_width = 32;
+    std::cout << kColorName << std::left << std::setw(name_width) << r.name << kColorReset;
     for (size_t i = 0; i < max_args; ++i) {
         if (i < r.args.size())
             std::cout << std::setw(8) << r.args[i];
