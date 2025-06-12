@@ -14,8 +14,10 @@
 #endif
 
 #ifdef BATCHLAS_HAS_HOST_BACKEND
-    #include <cblas.h>
     #include <lapacke.h>
+    #ifndef BATCHLAS_HAS_MKL_BACKEND
+        #include <cblas.h>
+    #endif // BATCHLAS_HAS_MKL_BACKEND
 #endif
 
 #ifdef USE_ROCM
