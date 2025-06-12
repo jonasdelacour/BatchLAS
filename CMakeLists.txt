@@ -596,10 +596,8 @@ function(find_onemkl_libs)
     endif()
 endfunction()
 
-# Check for MKL libraries if Intel GPU was detected
-if(HAS_INTEL_GPU)
-    find_onemkl_libs()
-endif()
+# Check for MKL libraries on CPU or Intel GPU
+find_onemkl_libs()
 
 # Define compile-time backend macros
 if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BACKEND)

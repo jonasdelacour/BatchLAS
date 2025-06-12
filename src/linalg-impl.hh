@@ -14,8 +14,10 @@
 #endif
 
 #ifdef BATCHLAS_HAS_HOST_BACKEND
-    #include <cblas.h>
     #include <lapacke.h>
+    #ifndef BATCHLAS_HAS_MKL_BACKEND
+        #include <cblas.h>
+    #endif // BATCHLAS_HAS_MKL_BACKEND
 #endif
 
 #ifdef USE_ROCM
@@ -28,11 +30,14 @@
     #include <magma_v2.h>
 #endif
 
-#ifdef USE_MKL
-    #include <mkl.h>
-#include "linalg.hh"
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+    #include <oneapi/mkl/blas.hpp>
+    #include <oneapi/mkl/lapack.hpp>
+    #include <oneapi/mkl/types.hpp>
+    #include <oneapi/mkl/spblas.hpp>
 #endif
 
+#include <blas/linalg.hh>
 
 
 namespace batchlas{
@@ -81,6 +86,8 @@ namespace batchlas{
             return static_cast<char>(
                 side == Side::Left ? 'L' : 'R'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return side == Side::Left ? oneapi::mkl::side::left : oneapi::mkl::side::right;
         } else {
             static_assert(false, "Unsupported backend for Side conversion");
         }
@@ -96,6 +103,8 @@ namespace batchlas{
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return job == JobType::EigenVectors ? oneapi::mkl::job::vec : oneapi::mkl::job::novec;
         } else {
             static_assert(false, "Unsupported backend for JobType conversion");
         }
@@ -115,6 +124,8 @@ namespace batchlas{
             return static_cast<char>(
                 diag == Diag::NonUnit ? 'N' : 'U'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return diag == Diag::NonUnit ? oneapi::mkl::diag::nonunit : oneapi::mkl::diag::unit;
         }
     }
 
@@ -132,6 +143,8 @@ namespace batchlas{
             return static_cast<lapack_int>(
                 layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return layout == Layout::RowMajor ? oneapi::mkl::layout::row_major : oneapi::mkl::layout::col_major;
         }
     }
 
@@ -153,6 +166,8 @@ namespace batchlas{
             return static_cast<char>(
                 uplo == Uplo::Upper ? 'U' : 'L'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return uplo == Uplo::Upper ? oneapi::mkl::uplo::upper : oneapi::mkl::uplo::lower;
         }
     }
 
@@ -174,6 +189,8 @@ namespace batchlas{
             return static_cast<char>(
                 trans == Transpose::NoTrans ? 'N' : 'T'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return trans == Transpose::NoTrans ? oneapi::mkl::transpose::nontrans : oneapi::mkl::transpose::trans;
         }
     }
 
