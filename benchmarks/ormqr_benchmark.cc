@@ -24,13 +24,10 @@ static void BM_ORMQR(minibench::State& state) {
     UnifiedVector<std::byte> ws(orm_ws);
 
     for (auto _ : state) {
-        state.PauseTiming();
-        auto Q_copy = Q;
-        state.ResumeTiming();
-        ormqr<B>(queue, A.view(), Q_copy.view(), Side::Left, Transpose::NoTrans,
+        ormqr<B>(queue, A.view(), Q.view(), Side::Left, Transpose::NoTrans,
                  tau.to_span(), ws.to_span());
-        queue.wait();
     }
+    queue.wait();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 4.0 * m * m * m), true);
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }

@@ -27,13 +27,9 @@ static void BM_GEQRF(minibench::State& state) {
     UnifiedVector<std::byte> workspace(buffer_size);
     
     for (auto _ : state) {
-        state.PauseTiming();
-        auto matrices_copy = matrices;  // Reset matrices for each iteration
-        state.ResumeTiming();
-        geqrf<B>(queue, matrices_copy.view(), tau.to_span(), workspace.to_span());
-        queue.wait();
+        geqrf<B>(queue, matrices.view(), tau.to_span(), workspace.to_span());
     }
-    state.SetComplexityN(batch_size * m * n * std::min(m, n));
+    queue.wait();
     state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), true);
     state.SetMetric("BatchSize", static_cast<double>(batch_size));
 }

@@ -16,13 +16,10 @@ static void BM_TRSM(minibench::State& state) {
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
 
     for (auto _ : state) {
-        state.PauseTiming();
-        auto B_copy = Bm;
-        state.ResumeTiming();
-        trsm<B>(queue, A.view(), B_copy.view(), Side::Left, Uplo::Lower,
+        trsm<B>(queue, A.view(), Bm.view(), Side::Left, Uplo::Lower,
                 Transpose::NoTrans, Diag::NonUnit, T(1));
-        queue.wait();
     }
+    queue.wait();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n), true);
     state.SetMetric("BatchSize", static_cast<double>(batch));
 }
