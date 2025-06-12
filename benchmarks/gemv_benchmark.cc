@@ -30,9 +30,9 @@ static void BM_GEMV(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES(gemv_float_cpu, (BM_GEMV<float, Backend::NETLIB>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(gemv_double_cpu, (BM_GEMV<double, Backend::NETLIB>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(gemv_float_gpu, (BM_GEMV<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(gemv_double_gpu, (BM_GEMV<double, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(BM_GEMV<float, Backend::NETLIB>, SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES(BM_GEMV<double, Backend::NETLIB>, SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES(BM_GEMV<float, Backend::CUDA>, SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(BM_GEMV<double, Backend::CUDA>, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

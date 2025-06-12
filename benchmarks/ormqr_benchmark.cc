@@ -33,9 +33,9 @@ static void BM_ORMQR(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES(ormqr_float_cpu, (BM_ORMQR<float, Backend::NETLIB>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(ormqr_double_cpu, (BM_ORMQR<double, Backend::NETLIB>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(ormqr_float_gpu, (BM_ORMQR<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(ormqr_double_gpu, (BM_ORMQR<double, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(BM_ORMQR<float, Backend::NETLIB>, SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES(BM_ORMQR<double, Backend::NETLIB>, SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES(BM_ORMQR<float, Backend::CUDA>, SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES(BM_ORMQR<double, Backend::CUDA>, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

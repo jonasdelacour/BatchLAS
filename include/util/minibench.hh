@@ -1,9 +1,15 @@
 #pragma once
+// Helpers to generate unique variable names in macros
+#define MINI_BENCH_CONCAT_INNER(x, y) x##y
+#define MINI_BENCH_CONCAT(x, y) MINI_BENCH_CONCAT_INNER(x, y)
+#define MINI_BENCH_UNIQUE_NAME(prefix) MINI_BENCH_CONCAT(prefix, __COUNTER__)
+
 // Macro to register a benchmark and apply a sizing function at static-init time
-#define MINI_BENCHMARK_REGISTER_SIZES(NAME, FUNC, SIZER) \
-    static int _reg_sizes_##NAME = ([]() { \
-        SIZER(minibench::RegisterBenchmark(#NAME, FUNC)); \
-        return 0; \
+// The benchmark name is derived from the function name.
+#define MINI_BENCHMARK_REGISTER_SIZES(FUNC, SIZER)                           \
+    static int MINI_BENCH_UNIQUE_NAME(_reg_sizes_) = ([]() {                 \
+        SIZER(minibench::RegisterBenchmark(#FUNC, FUNC));                    \
+        return 0;                                                            \
     })();
 #include <chrono>
 #include <cmath>
@@ -494,6 +500,23 @@ inline void SquareBatchSizes(Benchmark* b) {
     }
 }
 
+// Reduced size set for CPU/NETLIB benchmarks
+template <typename Benchmark>
+inline void SquareBatchSizesNetlib(Benchmark* b) {
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, 1});
+    }
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, 10});
+    }
+    for (int s : {16, 32, 64, 128}) {
+        b->Args({s, s, 100});
+    }
+    for (int s : {16, 32, 64, 128, 256}) {
+        b->Args({s, s, 1000});
+    }
+}
+
 template <typename Benchmark>
 inline void CubeSizes(Benchmark* b) {
     for (int s : {64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
@@ -513,6 +536,23 @@ inline void CubeBatchSizes(Benchmark* b) {
         b->Args({s, s, s, 100});
     }
     for (int s : {64, 128, 256, 512, 1024}) {
+        b->Args({s, s, s, 1000});
+    }
+}
+
+// Reduced 3D sizes for CPU/NETLIB benchmarks
+template <typename Benchmark>
+inline void CubeBatchSizesNetlib(Benchmark* b) {
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, s, 1});
+    }
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, s, 10});
+    }
+    for (int s : {16, 32, 64, 128}) {
+        b->Args({s, s, s, 100});
+    }
+    for (int s : {16, 32, 64, 128, 256}) {
         b->Args({s, s, s, 1000});
     }
 }
