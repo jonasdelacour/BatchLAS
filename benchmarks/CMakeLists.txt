@@ -25,6 +25,9 @@ set(BENCHMARK_TARGETS
     spmm_benchmark
     trsm_benchmark
     ormqr_benchmark
+)
+
+set(SIMPLE_BENCH_TARGETS
     gemm_custom
 )
 
@@ -42,6 +45,14 @@ foreach(test ${BENCHMARK_TARGETS})
     )
     
     # Add to CTest
+    add_test(NAME ${test} COMMAND ${test})
+endforeach()
+
+foreach(test ${SIMPLE_BENCH_TARGETS})
+    add_executable(${test} ${test}.cc)
+    target_link_libraries(${test} PRIVATE
+        batchlas
+    )
     add_test(NAME ${test} COMMAND ${test})
 endforeach()
 
