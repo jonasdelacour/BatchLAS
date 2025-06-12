@@ -38,6 +38,36 @@ message(STATUS "SYCL support is mandatory for BatchLAS")
 # Find dependencies
 find_package(OpenMP QUIET)
 
+# Try to find oneMKL via its CMake package configuration.  This is available
+# when Intel oneAPI is installed and `setvars.sh` has been sourced.
+find_package(MKL CONFIG QUIET)
+if(MKL_FOUND)
+    # Determine which imported target exposes the SYCL interface.
+    # The name changed from MKL::MKL_DPCPP (<= 2024.x) to MKL::MKL_SYCL (2025.x).
+    if(TARGET MKL::MKL_DPCPP)
+        set(_MKL_SYCL_TARGET MKL::MKL_DPCPP)
+    elseif(TARGET MKL::MKL_SYCL)
+        set(_MKL_SYCL_TARGET MKL::MKL_SYCL)
+    else()
+        message(WARNING
+            "oneMKL was found but provides no SYCL interface target "
+            "(MKL::MKL_DPCPP or MKL::MKL_SYCL). The MKL backend will be disabled.")
+    endif()
+
+    if(DEFINED _MKL_SYCL_TARGET)
+        message(STATUS "Found oneMKL SYCL target: ${_MKL_SYCL_TARGET}")
+        # Interface target that pulls in the canonical MKL SYCL linkage
+        add_library(batchlas_mkl INTERFACE)
+        add_library(batchlas::mkl ALIAS batchlas_mkl)
+        target_link_libraries(batchlas_mkl INTERFACE ${_MKL_SYCL_TARGET})
+        # All BatchLAS code calling MKL uses the ILP64 interfaces
+        target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
+        set(BATCHLAS_HAS_MKL_BACKEND TRUE)
+    endif()
+else()
+    message(STATUS "MKL not found via CMake package, falling back to manual search")
+endif()
+
 find_program(SYCL_LS sycl-ls)
 if(SYCL_LS)
   get_filename_component(SYCL_BIN_DIR ${SYCL_LS} DIRECTORY)
@@ -596,8 +626,10 @@ function(find_onemkl_libs)
     endif()
 endfunction()
 
-# Check for MKL libraries on CPU or Intel GPU
-find_onemkl_libs()
+# Check for MKL libraries on CPU or Intel GPU if the MKL package wasn't found
+if(NOT MKL_FOUND)
+    find_onemkl_libs()
+endif()
 
 # Define compile-time backend macros
 if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BACKEND)
@@ -614,6 +646,11 @@ if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BA
     
     if(BATCHLAS_HAS_MKL_BACKEND)
         add_compile_definitions(BATCHLAS_HAS_MKL_BACKEND=1)
+        if(NOT MKL_FOUND)
+            # When using a manually discovered MKL installation, ensure ILP64
+            # interfaces are enabled globally.
+            add_compile_definitions(MKL_ILP64)
+        endif()
     endif()
     
     # Generate backend configuration header

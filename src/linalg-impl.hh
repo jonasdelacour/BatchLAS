@@ -4,6 +4,7 @@
 #include <sycl/sycl.hpp>
 #include <util/mempool.hh>
 #include <execution>
+#include <type_traits>
 
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
@@ -71,14 +72,21 @@ namespace batchlas{
     template<class T>
     struct is_complex_or_floating_point<std::complex<T>> : std::is_floating_point<T> { };
 
+    template<auto>
+    struct always_false : std::false_type {};
+
     // Individual enum conversions for CUDA backend
     template<BackendLibrary B>
     constexpr auto enum_convert(Side side) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasSideMode_t>(
                 side == Side::Left ? CUBLAS_SIDE_LEFT : CUBLAS_SIDE_RIGHT
             );
-        } else if constexpr (B == BackendLibrary::CBLAS){
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
             );
@@ -86,37 +94,55 @@ namespace batchlas{
             return static_cast<char>(
                 side == Side::Left ? 'L' : 'R'
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return side == Side::Left ? oneapi::mkl::side::left : oneapi::mkl::side::right;
-        } else {
-            static_assert(false, "Unsupported backend for Side conversion");
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for Side conversion");
         }
     }
 
     template<BackendLibrary B>
     constexpr auto enum_convert(JobType job) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUSOLVER) {
             return static_cast<cusolverEigMode_t>(
                 job == JobType::EigenVectors ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return job == JobType::EigenVectors ? oneapi::mkl::job::vec : oneapi::mkl::job::novec;
-        } else {
-            static_assert(false, "Unsupported backend for JobType conversion");
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for JobType conversion");
         }
     }
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Diag diag) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS) {
             return static_cast<cublasDiagType_t>(
                 diag == Diag::NonUnit ? CUBLAS_DIAG_NON_UNIT : CUBLAS_DIAG_UNIT
             );
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
             );
@@ -124,18 +150,29 @@ namespace batchlas{
             return static_cast<char>(
                 diag == Diag::NonUnit ? 'N' : 'U'
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return diag == Diag::NonUnit ? oneapi::mkl::diag::nonunit : oneapi::mkl::diag::unit;
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for Diag conversion");
         }
     }
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Layout layout) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUSPARSE) {
             return static_cast<cusparseOrder_t>(
                 layout == Layout::RowMajor ? CUSPARSE_ORDER_ROW : CUSPARSE_ORDER_COL
             );
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
             );
@@ -143,13 +180,21 @@ namespace batchlas{
             return static_cast<lapack_int>(
                 layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return layout == Layout::RowMajor ? oneapi::mkl::layout::row_major : oneapi::mkl::layout::col_major;
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for Layout conversion");
         }
     }
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Uplo uplo) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasFillMode_t>(
                 uplo == Uplo::Upper ? CUBLAS_FILL_MODE_UPPER : CUBLAS_FILL_MODE_LOWER
@@ -158,7 +203,10 @@ namespace batchlas{
             return static_cast<cusparseFillMode_t>(
                 uplo == Uplo::Upper ? CUSPARSE_FILL_MODE_UPPER : CUSPARSE_FILL_MODE_LOWER
             );
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
             );
@@ -166,13 +214,21 @@ namespace batchlas{
             return static_cast<char>(
                 uplo == Uplo::Upper ? 'U' : 'L'
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return uplo == Uplo::Upper ? oneapi::mkl::uplo::upper : oneapi::mkl::uplo::lower;
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for Uplo conversion");
         }
     }
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Transpose trans) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasOperation_t>(
                 trans == Transpose::NoTrans ? CUBLAS_OP_N : CUBLAS_OP_T
@@ -181,7 +237,10 @@ namespace batchlas{
             return static_cast<cusparseOperation_t>(
                 trans == Transpose::NoTrans ? CUSPARSE_OPERATION_NON_TRANSPOSE : CUSPARSE_OPERATION_TRANSPOSE
             );
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
             );
@@ -189,13 +248,21 @@ namespace batchlas{
             return static_cast<char>(
                 trans == Transpose::NoTrans ? 'N' : 'T'
             );
-        } else if constexpr (B == BackendLibrary::MKL) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+        if constexpr (B == BackendLibrary::MKL) {
             return trans == Transpose::NoTrans ? oneapi::mkl::transpose::nontrans : oneapi::mkl::transpose::trans;
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend for Transpose conversion");
         }
     }
 
     template<BackendLibrary B, typename T>
     constexpr auto enum_convert(ComputePrecision precision) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
             using BaseType = typename base_type<T>::type;
             
@@ -225,12 +292,16 @@ namespace batchlas{
                 }
                 throw std::runtime_error("Only F64 precision supported for double precision type");
             }
+        } else
+#endif
+        {
+            throw std::runtime_error("Unsupported backend or type combination");
         }
-        throw std::runtime_error("Unsupported backend or type combination");
     }
 
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(T** ptr) {
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -239,7 +310,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex**>(ptr);
             }
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float**>(ptr);
             } else if constexpr (std::is_same_v<T, double>) {
@@ -249,10 +323,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<void**>(ptr);
             }
-        }
-        
-        else {
-            static_assert(false, "Unsupported backend or type combination");
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend or type combination");
         }
     }
 
@@ -262,6 +336,7 @@ namespace batchlas{
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(T* ptr) {
         static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -270,7 +345,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex*>(ptr);
             }
-        } else if constexpr (B == BackendLibrary::CBLAS) {
+        } else
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
+        if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float*>(ptr);
             } else if constexpr (std::is_same_v<T, double>) {
@@ -290,8 +368,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<lapack_complex_double*>(ptr);
             }
-        } else {
-            static_assert(false, "Unsupported backend or type combination");
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend or type combination");
         }
     }
 
@@ -299,6 +379,7 @@ namespace batchlas{
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(const T* ptr) {
         static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -307,8 +388,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<const cuDoubleComplex*>(ptr);
             }
-        } else {
-            static_assert(false, "Unsupported backend or type combination");
+        } else
+#endif
+        {
+            static_assert(always_false<B>::value, "Unsupported backend or type combination");
         }
     }
 
@@ -404,6 +487,7 @@ namespace batchlas{
         return std::make_tuple(detail::convert_arg<B>(std::forward<Args>(args))...);
     }
 
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
     inline auto check_status(cublasStatus_t status) {
         if (status != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("CUBLAS error: " + std::to_string(status));
@@ -424,7 +508,9 @@ namespace batchlas{
         }
         return status;
     }
+#endif
     
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
@@ -437,6 +523,7 @@ namespace batchlas{
             return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
         }
     }
+#endif
 
     template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
