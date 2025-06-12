@@ -5,6 +5,7 @@
 #include <sycl/sycl.hpp>
 #include <oneapi/dpl/algorithm>
 #include <oneapi/dpl/execution>
+#include <oneapi/dpl/random>
 #include <complex>
 #include <random>
 #include <algorithm>
@@ -393,7 +394,12 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
 // Fill the matrix with a specific value
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::fill(T value) {
-    std::fill(data_.begin(), data_.end(), value);
+    Queue q;
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    q->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        data_ptr[idx[0]] = value;
+    }).wait();
 }
 
 // Copy from another matrix view
@@ -527,54 +533,58 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
+
+    Queue q;
+    T* data_ptr = result.data_.data();
+    size_t total_elements = result.data_.size();
+
     
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-    
-    // First generate random values for all elements
-    for (size_t i = 0; i < result.data_.size(); ++i) {
-        if constexpr (std::is_same_v<T, std::complex<float>> || 
+    q->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
+        oneapi::dpl::minstd_rand engine(seed, idx[0]);
+        auto r1 = dist(engine);
+        if constexpr (std::is_same_v<T, std::complex<float>> ||
                       std::is_same_v<T, std::complex<double>>) {
-            // For complex numbers, generate random real and imaginary parts
-            result.data_[i] = T(dist(gen), dist(gen));
+            auto r2 = dist(engine);
+            data_ptr[idx[0]] = T(r1, r2);
         } else {
-            // For real numbers, just generate a random value
-            result.data_[i] = T(dist(gen));
+            data_ptr[idx[0]] = T(r1);
         }
-    }
+    }).wait();
     
-    // If hermitian flag is set, enforce Hermitian property
+    // If hermitian flag is set, enforce Hermitian property using a kernel
     if (hermitian) {
-        // Matrices must be square for Hermitian
         if (rows != cols) {
             throw std::runtime_error("Hermitian matrices must be square");
         }
 
-        for (int b = 0; b < batch_size; ++b) {
-            for (int i = 0; i < rows; ++i) {
-                for (int j = i + 1; j < cols; ++j) {
-                    // Get indices for element (i,j) and its conjugate transpose position (j,i)
-                    size_t idx1 = b * result.stride_ + j * result.ld_ + i;  // (i,j) in column-major
-                    size_t idx2 = b * result.stride_ + i * result.ld_ + j;  // (j,i) in column-major
-                    
-                    // Set A(j,i) = conj(A(i,j)) to ensure hermitian property
-                    if constexpr (std::is_same_v<T, std::complex<float>> || 
-                                 std::is_same_v<T, std::complex<double>>) {
-                        result.data_[idx2] = std::conj(result.data_[idx1]);
-                    } else {
-                        // For real types, just copy the value (conjugate of real is the same value)
-                        result.data_[idx2] = result.data_[idx1];
-                    }
+        int ld = result.ld_;
+        int stride = result.stride_;
+        q->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * rows * cols),
+                        [=](sycl::id<1> idx) {
+            size_t flat = idx[0];
+            size_t b = flat / (rows * cols);
+            size_t rem = flat % (rows * cols);
+            size_t j = rem / rows; // column index
+            size_t i = rem % rows; // row index
+
+            if (j > i) {
+                size_t idx1 = b * stride + j * ld + i;
+                size_t idx2 = b * stride + i * ld + j;
+                if constexpr (std::is_same_v<T, std::complex<float>> ||
+                              std::is_same_v<T, std::complex<double>>) {
+                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                } else {
+                    data_ptr[idx2] = data_ptr[idx1];
                 }
-                
-                // Make the diagonal elements real
-                if constexpr (std::is_same_v<T, std::complex<float>> || 
-                             std::is_same_v<T, std::complex<double>>) {
-                    size_t diag_idx = b * result.stride_ + i * result.ld_ + i;
-                    result.data_[diag_idx] = T(std::real(result.data_[diag_idx]), 0);
+            } else if (i == j) {
+                if constexpr (std::is_same_v<T, std::complex<float>> ||
+                              std::is_same_v<T, std::complex<double>>) {
+                    size_t diag_idx = b * stride + i * ld + i;
+                    data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
                 }
             }
-        }
+        }).wait();
     }
     return result;
 }
@@ -603,17 +613,23 @@ template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat:
 Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batch_size) {
     int n = diag_values.size();
     Matrix<T, MType> result(n, n, batch_size);
-    
+
     // Set all elements to zero
     result.fill(T(0));
-    
-    // Set diagonal elements
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < n; ++i) {
-            result.data_[b * result.stride_ + i * result.ld_ + i] = diag_values[i];
-        }
-    }
-    
+
+    Queue q;
+    T* data_ptr = result.data_.data();
+    const T* diag_ptr = diag_values.data();
+    int ld = result.ld_;
+    int stride = result.stride_;
+
+    q->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
+        size_t flat = idx[0];
+        size_t b = flat / n;
+        size_t i = flat % n;
+        data_ptr[b * stride + i * ld + i] = diag_ptr[i];
+    }).wait();
+
     return result;
 }
 
