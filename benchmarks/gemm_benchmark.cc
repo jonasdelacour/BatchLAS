@@ -30,9 +30,9 @@ static void BM_GEMM(minibench::State& state) {
 
 
 // Register size/batch combinations at static‑init time using macro
-//MINI_BENCHMARK_REGISTER_SIZES(BM_GEMM<float, Backend::NETLIB>, CubeBatchSizesNetlib);
-//MINI_BENCHMARK_REGISTER_SIZES(BM_GEMM<double, Backend::NETLIB>, CubeBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES(BM_GEMM<float, Backend::CUDA>, CubeBatchSizes);
-//MINI_BENCHMARK_REGISTER_SIZES(BM_GEMM<double, Backend::CUDA>, CubeBatchSizes);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::CUDA>), CubeBatchSizes);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::CUDA>), CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

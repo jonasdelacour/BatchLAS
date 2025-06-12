@@ -36,9 +36,9 @@ static void BM_GEQRF(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES(BM_GEQRF<float, Backend::NETLIB>, SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES(BM_GEQRF<double, Backend::NETLIB>, SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES(BM_GEQRF<float, Backend::CUDA>, SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(BM_GEQRF<double, Backend::CUDA>, SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

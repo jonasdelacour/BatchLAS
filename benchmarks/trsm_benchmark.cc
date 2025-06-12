@@ -24,9 +24,9 @@ static void BM_TRSM(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES(BM_TRSM<float, Backend::NETLIB>, SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES(BM_TRSM<double, Backend::NETLIB>, SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES(BM_TRSM<float, Backend::CUDA>, SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(BM_TRSM<double, Backend::CUDA>, SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::CUDA>), SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();
