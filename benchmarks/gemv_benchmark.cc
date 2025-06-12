@@ -1,4 +1,4 @@
-#include <benchmark/benchmark.h>
+#include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
 
@@ -6,36 +6,10 @@ using namespace batchlas;
 
 // Single GEMV benchmark
 template <typename T, Backend B>
-static void BM_GEMV_Single(benchmark::State& state) {
+static void BM_GEMV(minibench::State& state) {
     const int m = state.range(0);
     const int n = state.range(1);
 
-    auto A = Matrix<T>::Random(m, n, false);
-    UnifiedVector<T> x(n);
-    UnifiedVector<T> y(m);
-
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
-
-    for (auto _ : state) {
-        state.PauseTiming();
-        auto y_copy = y;
-        state.ResumeTiming();
-        gemv<B>(queue, A.view(), VectorView<T>(x.data(), n, 1),
-                 VectorView<T>(y_copy.data(), m, 1), T(1), T(0),
-                 Transpose::NoTrans);
-        queue.wait();
-        benchmark::DoNotOptimize(y_copy.data());
-    }
-
-    state.counters["GFLOPS"] = benchmark::Counter(1e-9 * (2.0 * m * n),
-                                                   benchmark::Counter::kIsRate);
-}
-
-// Batched GEMV benchmark
-template <typename T, Backend B>
-static void BM_GEMV_Batched(benchmark::State& state) {
-    const int m = state.range(0);
-    const int n = state.range(1);
     const int batch = state.range(2);
 
     auto A = Matrix<T>::Random(m, n, false, batch);
@@ -52,22 +26,23 @@ static void BM_GEMV_Batched(benchmark::State& state) {
                  VectorView<T>(y_copy.data(), m, 1, m, batch), T(1), T(0),
                  Transpose::NoTrans);
         queue.wait();
-        benchmark::DoNotOptimize(y_copy.data());
     }
-
-    state.counters["GFLOPS"] = benchmark::Counter(
-        static_cast<double>(batch) * 1e-9 * (2.0 * m * n), benchmark::Counter::kIsRate);
-    state.counters["BatchSize"] = batch;
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n), true);
+    state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-BENCHMARK_TEMPLATE(BM_GEMV_Single, float, Backend::NETLIB)->Apply(bench_utils::SquareSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Single, double, Backend::NETLIB)->Apply(bench_utils::SquareSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Single, float, Backend::CUDA)->Apply(bench_utils::SquareSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Single, double, Backend::CUDA)->Apply(bench_utils::SquareSizes);
+static auto* bench_gemv_f_cpu =
+    minibench::RegisterBenchmark("gemv_float_cpu", BM_GEMV<float, Backend::NETLIB>);
+static auto* bench_gemv_d_cpu =
+    minibench::RegisterBenchmark("gemv_double_cpu", BM_GEMV<double, Backend::NETLIB>);
+static auto* bench_gemv_f_gpu =
+    minibench::RegisterBenchmark("gemv_float_gpu", BM_GEMV<float, Backend::CUDA>);
+static auto* bench_gemv_d_gpu =
+    minibench::RegisterBenchmark("gemv_double_gpu", BM_GEMV<double, Backend::CUDA>);
 
-BENCHMARK_TEMPLATE(BM_GEMV_Batched, float, Backend::NETLIB)->Apply(bench_utils::SquareBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Batched, double, Backend::NETLIB)->Apply(bench_utils::SquareBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Batched, float, Backend::CUDA)->Apply(bench_utils::SquareBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMV_Batched, double, Backend::CUDA)->Apply(bench_utils::SquareBatchSizes);
+bench_utils::SquareBatchSizes(bench_gemv_f_cpu);
+bench_utils::SquareBatchSizes(bench_gemv_d_cpu);
+bench_utils::SquareBatchSizes(bench_gemv_f_gpu);
+bench_utils::SquareBatchSizes(bench_gemv_d_gpu);
 
-BENCHMARK_MAIN();
+MINI_BENCHMARK_MAIN();
