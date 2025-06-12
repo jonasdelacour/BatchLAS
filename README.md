@@ -31,6 +31,7 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 
 ## Working Backends
 - NVIDIA CUDA (cuBLAS, cuSOLVER, cuSPARSE)
+- Intel oneMKL (CPU)
 - CPU (CBLAS, LAPACKE)
 
 ## Requirements
@@ -40,6 +41,8 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 - SYCL implementation (Intel oneAPI DPC++)
 - Optional: CUDA toolkit for NVIDIA GPUs
 - Optional: Netlib BLAS/LAPACK for CPU
+- Optional: Intel oneMKL for optimized CPU backend
+- For oneMKL support, set the `MKLROOT` environment variable to your oneAPI installation
 - Optional: Python 3.x (for Python bindings)
 
 ## Installation

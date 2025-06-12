@@ -58,6 +58,14 @@ if(BATCHLAS_ENABLE_CUDA)
     )
 endif()
 
+if(BATCHLAS_HAS_MKL_BACKEND)
+    list(APPEND BATCHLAS_LINK_LIBRARIES
+        ${MKL_CORE_LIBRARY}
+        ${MKL_SYCL_LIBRARY}
+        ${MKL_INTEL_THREAD_LIBRARY}
+    )
+endif()
+
 target_link_libraries(batchlas
     PUBLIC 
     # Specify any additional libraries here

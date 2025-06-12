@@ -2,6 +2,7 @@
 #include <blas/linalg.hh>
 #include "queue.hh"
 #include <sycl/sycl.hpp>
+#include <oneapi/math/types.hpp>
 #include <util/mempool.hh>
 #include <execution>
 
@@ -81,6 +82,8 @@ namespace batchlas{
             return static_cast<char>(
                 side == Side::Left ? 'L' : 'R'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return side == Side::Left ? oneapi::math::side::left : oneapi::math::side::right;
         } else {
             static_assert(false, "Unsupported backend for Side conversion");
         }
@@ -96,6 +99,8 @@ namespace batchlas{
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return job == JobType::EigenVectors ? oneapi::math::job::vec : oneapi::math::job::novec;
         } else {
             static_assert(false, "Unsupported backend for JobType conversion");
         }
@@ -115,6 +120,8 @@ namespace batchlas{
             return static_cast<char>(
                 diag == Diag::NonUnit ? 'N' : 'U'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return diag == Diag::NonUnit ? oneapi::math::diag::nonunit : oneapi::math::diag::unit;
         }
     }
 
@@ -132,6 +139,8 @@ namespace batchlas{
             return static_cast<lapack_int>(
                 layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return layout == Layout::RowMajor ? oneapi::math::layout::row_major : oneapi::math::layout::col_major;
         }
     }
 
@@ -153,6 +162,8 @@ namespace batchlas{
             return static_cast<char>(
                 uplo == Uplo::Upper ? 'U' : 'L'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return uplo == Uplo::Upper ? oneapi::math::uplo::upper : oneapi::math::uplo::lower;
         }
     }
 
@@ -174,6 +185,8 @@ namespace batchlas{
             return static_cast<char>(
                 trans == Transpose::NoTrans ? 'N' : 'T'
             );
+        } else if constexpr (B == BackendLibrary::MKL) {
+            return trans == Transpose::NoTrans ? oneapi::math::transpose::nontrans : oneapi::math::transpose::trans;
         }
     }
 
