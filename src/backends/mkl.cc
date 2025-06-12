@@ -81,7 +81,7 @@ namespace batchlas {
         auto n = A.cols();
         auto stride_a = A.stride();
         auto stride_tau = std::min(m, n);
-        return oneapi::mkl::lapack::geqrf_batch_scratchpad_size(
+        return oneapi::mkl::lapack::geqrf_batch_scratchpad_size<T>(
             *ctx, m, n, A.ld(), stride_a, stride_tau, A.batch_size()) * sizeof(T);
     }
 
