@@ -22,15 +22,15 @@ static void BM_SPMM(minibench::State& state) {
                                         T(1), T(0), Transpose::NoTrans,
                                         Transpose::NoTrans);
     UnifiedVector<std::byte> workspace(ws_size);
-
+    state.ResetTiming(); state.ResumeTiming();
     for (auto _ : state) {
         spmm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0),
                 Transpose::NoTrans, Transpose::NoTrans, workspace.to_span());
     }
     queue.wait();
+    state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) *
                         (1e-9 * 2.0 * A.nnz() * n), true);
-    state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
 

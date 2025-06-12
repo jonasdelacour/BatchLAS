@@ -25,13 +25,14 @@ static void BM_GEQRF(minibench::State& state) {
     // Get buffer size and allocate workspace
     size_t buffer_size = geqrf_buffer_size<B>(queue, matrices.view(), tau.to_span());
     UnifiedVector<std::byte> workspace(buffer_size);
-    
+    state.ResetTiming(); state.ResumeTiming();    
     for (auto _ : state) {
         geqrf<B>(queue, matrices.view(), tau.to_span(), workspace.to_span());
     }
     queue.wait();
+    state.StopTiming();
     state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), true);
-    state.SetMetric("BatchSize", static_cast<double>(batch_size));
+
 }
 
 

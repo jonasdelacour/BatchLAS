@@ -17,16 +17,16 @@ static void BM_GEMV(minibench::State& state) {
     UnifiedVector<T> y(m * batch);
 
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
-
+    state.ResetTiming(); state.ResumeTiming();
     for (auto _ : state) {
         gemv<B>(queue, A.view(), VectorView<T>(x.data(), n, 1, n, batch),
                  VectorView<T>(y.data(), m, 1, m, batch), T(1), T(0),
                  Transpose::NoTrans);
     }
     queue.wait();
+    state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
                     true);
-    state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
 
