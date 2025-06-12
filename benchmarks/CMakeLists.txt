@@ -27,7 +27,7 @@ set(BENCHMARK_TARGETS
     ormqr_benchmark
 )
 
-set(SIMPLE_BENCH_TARGETS
+set(MINI_BENCH_TARGETS
     gemm_custom
 )
 
@@ -48,7 +48,7 @@ foreach(test ${BENCHMARK_TARGETS})
     add_test(NAME ${test} COMMAND ${test})
 endforeach()
 
-foreach(test ${SIMPLE_BENCH_TARGETS})
+foreach(test ${MINI_BENCH_TARGETS})
     add_executable(${test} ${test}.cc)
     target_link_libraries(${test} PRIVATE
         batchlas

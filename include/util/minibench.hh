@@ -10,7 +10,11 @@
 #include <sstream>
 #include <iomanip>
 
-namespace simple_bench {
+namespace minibench {
+
+constexpr const char* kColorReset  = "\033[0m";
+constexpr const char* kColorHeader = "\033[1;36m";
+constexpr const char* kColorName   = "\033[1m";
 
 struct Config {
     size_t warmup_runs = 2;          // number of warmup executions
@@ -60,6 +64,16 @@ inline std::vector<int> parse_range_or_list(const std::string& str) {
         }
     } else if (!str.empty()) {
         vals.push_back(std::stoi(str));
+    }
+    return vals;
+}
+
+inline std::vector<int> make_range(int start, int end, int step = 1) {
+    std::vector<int> vals;
+    if (step == 0) step = 1;
+    if (end < start && step > 0) step = -step;
+    for (int v = start; (step > 0 ? v <= end : v >= end); v += step) {
+        vals.push_back(v);
     }
     return vals;
 }
@@ -144,6 +158,32 @@ struct Benchmark {
         args_list.push_back(a);
         return this;
     }
+
+    Benchmark* ArgRange(int start, int end, int step = 1) {
+        if (step == 0) step = 1;
+        if (end < start && step > 0) step = -step;
+        for (int v = start; (step > 0 ? v <= end : v >= end); v += step) {
+            args_list.push_back({v});
+        }
+        return this;
+    }
+
+    Benchmark* ArgsProduct(const std::vector<std::vector<int>>& ranges) {
+        std::vector<std::vector<int>> combos{{}};
+        for (const auto& r : ranges) {
+            std::vector<std::vector<int>> next;
+            for (const auto& c : combos) {
+                for (int v : r) {
+                    auto tmp = c;
+                    tmp.push_back(v);
+                    next.push_back(std::move(tmp));
+                }
+            }
+            combos = std::move(next);
+        }
+        for (auto& c : combos) args_list.push_back(std::move(c));
+        return this;
+    }
 };
 
 inline std::vector<Benchmark>& registry() {
@@ -156,11 +196,11 @@ inline Benchmark* RegisterBenchmark(const std::string& name, BenchFunc func) {
     return &registry().back();
 }
 
-#define SIMPLE_BENCHMARK(fn)                                              \
-    static void fn(simple_bench::State&);                                 \
-    static simple_bench::Benchmark* BENCHMARK_##fn =                      \
-        simple_bench::RegisterBenchmark(#fn, fn);                         \
-    static void fn(simple_bench::State& state)
+#define MINI_BENCHMARK(fn)                                                \
+    static void fn(minibench::State&);                                    \
+    static minibench::Benchmark* BENCHMARK_##fn =                         \
+        minibench::RegisterBenchmark(#fn, fn);                            \
+    static void fn(minibench::State& state)
 
 // Run a single benchmark function with specified arguments and configuration
 inline Result run_benchmark(const Benchmark& b,
@@ -219,22 +259,13 @@ inline Result run_benchmark(const Benchmark& b,
     return res;
 }
 
-inline void print_table(const std::vector<Result>& results) {
-    if (results.empty()) return;
-    size_t max_args = 0;
-    std::vector<std::string> metric_names;
-    std::unordered_map<std::string, bool> metric_seen;
-    for (const auto& r : results) {
-        max_args = std::max(max_args, r.args.size());
-        for (const auto& kv : r.metrics) {
-            if (!metric_seen[kv.first]) {
-                metric_names.push_back(kv.first);
-                metric_seen[kv.first] = true;
-            }
-        }
-    }
+inline void print_header(const std::vector<std::string>& metric_names,
+                        size_t max_args) {
+    std::ios orig_state(nullptr);
+    orig_state.copyfmt(std::cout);
+    std::cout << std::fixed << std::setprecision(3);
 
-    std::cout << std::left << std::setw(16) << "Name";
+    std::cout << kColorHeader << std::left << std::setw(16) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
         std::cout << std::setw(8) << ("Arg" + std::to_string(i));
     }
@@ -244,28 +275,38 @@ inline void print_table(const std::vector<Result>& results) {
     for (const auto& m : metric_names) {
         std::cout << std::setw(12) << m;
     }
+    std::cout << kColorReset << '\n';
+
+    std::cout.copyfmt(orig_state);
+}
+
+inline void print_row(const Result& r,
+                      const std::vector<std::string>& metric_names,
+                      size_t max_args) {
+    std::ios orig_state(nullptr);
+    orig_state.copyfmt(std::cout);
+    std::cout << std::fixed << std::setprecision(3);
+
+    std::cout << kColorName << std::left << std::setw(16) << r.name << kColorReset;
+    for (size_t i = 0; i < max_args; ++i) {
+        if (i < r.args.size())
+            std::cout << std::setw(8) << r.args[i];
+        else
+            std::cout << std::setw(8) << "";
+    }
+    std::cout << std::setw(12) << r.iterations
+              << std::setw(12) << r.avg_ms
+              << std::setw(12) << r.stddev_ms;
+    for (const auto& m : metric_names) {
+        auto it = r.metrics.find(m);
+        if (it != r.metrics.end())
+            std::cout << std::setw(12) << it->second;
+        else
+            std::cout << std::setw(12) << "";
+    }
     std::cout << '\n';
 
-    for (const auto& r : results) {
-        std::cout << std::left << std::setw(16) << r.name;
-        for (size_t i = 0; i < max_args; ++i) {
-            if (i < r.args.size())
-                std::cout << std::setw(8) << r.args[i];
-            else
-                std::cout << std::setw(8) << "";
-        }
-        std::cout << std::setw(12) << r.iterations
-                  << std::setw(12) << r.avg_ms
-                  << std::setw(12) << r.stddev_ms;
-        for (const auto& m : metric_names) {
-            auto it = r.metrics.find(m);
-            if (it != r.metrics.end())
-                std::cout << std::setw(12) << it->second;
-            else
-                std::cout << std::setw(12) << "";
-        }
-        std::cout << '\n';
-    }
+    std::cout.copyfmt(orig_state);
 }
 
 inline void write_csv(const std::string& path, const std::vector<Result>& results) {
@@ -311,17 +352,44 @@ inline void write_csv(const std::string& path, const std::vector<Result>& result
 inline int RunRegisteredBenchmarks(const Config& cfg = {},
                                    const std::string& csv_path = "") {
     std::vector<Result> results;
+    std::vector<std::string> metric_names;
+    std::unordered_map<std::string, bool> metric_seen;
+    size_t max_args = 0;
+    bool header_printed = false;
+
+    auto update_header = [&](const Result& r) {
+        bool changed = false;
+        max_args = std::max(max_args, r.args.size());
+        for (const auto& kv : r.metrics) {
+            if (!metric_seen[kv.first]) {
+                metric_names.push_back(kv.first);
+                metric_seen[kv.first] = true;
+                changed = true;
+            }
+        }
+        if (!header_printed || changed) {
+            if (header_printed) std::cout << "\n";
+            print_header(metric_names, max_args);
+            header_printed = true;
+        }
+    };
+
     for (const auto& b : registry()) {
         if (b.args_list.empty()) {
-            results.push_back(run_benchmark(b, {}, cfg));
+            auto r = run_benchmark(b, {}, cfg);
+            update_header(r);
+            print_row(r, metric_names, max_args);
+            results.push_back(r);
         } else {
             for (const auto& a : b.args_list) {
-                results.push_back(run_benchmark(b, a, cfg));
+                auto r = run_benchmark(b, a, cfg);
+                update_header(r);
+                print_row(r, metric_names, max_args);
+                results.push_back(r);
             }
         }
     }
 
-    print_table(results);
     if (!csv_path.empty()) write_csv(csv_path, results);
     return 0;
 }
@@ -381,7 +449,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
     return opt;
 }
 
-inline int SimpleBenchMain(int argc, char** argv) {
+inline int MiniBenchMain(int argc, char** argv) {
     auto opts = ParseCommandLine(argc, argv);
     for (auto& b : registry()) {
         if (!opts.args_list.empty() && b.args_list.empty()) {
@@ -391,10 +459,10 @@ inline int SimpleBenchMain(int argc, char** argv) {
     return RunRegisteredBenchmarks(opts.cfg, opts.csv_file);
 }
 
-#define SIMPLE_BENCHMARK_MAIN()                        \
+#define MINI_BENCHMARK_MAIN()                          \
     int main(int argc, char** argv) {                  \
-        return simple_bench::SimpleBenchMain(argc, argv); \
+        return minibench::MiniBenchMain(argc, argv); \
     }
 
-} // namespace simple_bench
+} // namespace minibench
 
