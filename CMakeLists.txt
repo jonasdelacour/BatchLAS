@@ -42,14 +42,28 @@ find_package(OpenMP QUIET)
 # when Intel oneAPI is installed and `setvars.sh` has been sourced.
 find_package(MKL CONFIG QUIET)
 if(MKL_FOUND)
-    message(STATUS "Found oneMKL via MKL::MKL_DPCPP")
-    # Interface target that pulls in the canonical MKL SYCL linkage
-    add_library(batchlas_mkl INTERFACE)
-    add_library(batchlas::mkl ALIAS batchlas_mkl)
-    target_link_libraries(batchlas_mkl INTERFACE MKL::MKL_DPCPP)
-    # All BatchLAS code calling MKL uses the ILP64 interfaces
-    target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
-    set(BATCHLAS_HAS_MKL_BACKEND TRUE)
+    # Determine which imported target exposes the SYCL interface.
+    # The name changed from MKL::MKL_DPCPP (<= 2024.x) to MKL::MKL_SYCL (2025.x).
+    if(TARGET MKL::MKL_DPCPP)
+        set(_MKL_SYCL_TARGET MKL::MKL_DPCPP)
+    elseif(TARGET MKL::MKL_SYCL)
+        set(_MKL_SYCL_TARGET MKL::MKL_SYCL)
+    else()
+        message(WARNING
+            "oneMKL was found but provides no SYCL interface target "
+            "(MKL::MKL_DPCPP or MKL::MKL_SYCL). The MKL backend will be disabled.")
+    endif()
+
+    if(DEFINED _MKL_SYCL_TARGET)
+        message(STATUS "Found oneMKL SYCL target: ${_MKL_SYCL_TARGET}")
+        # Interface target that pulls in the canonical MKL SYCL linkage
+        add_library(batchlas_mkl INTERFACE)
+        add_library(batchlas::mkl ALIAS batchlas_mkl)
+        target_link_libraries(batchlas_mkl INTERFACE ${_MKL_SYCL_TARGET})
+        # All BatchLAS code calling MKL uses the ILP64 interfaces
+        target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
+        set(BATCHLAS_HAS_MKL_BACKEND TRUE)
+    endif()
 else()
     message(STATUS "MKL not found via CMake package, falling back to manual search")
 endif()
