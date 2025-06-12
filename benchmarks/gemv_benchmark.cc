@@ -38,9 +38,9 @@ static auto* bench_gemv_f_gpu =
 static auto* bench_gemv_d_gpu =
     minibench::RegisterBenchmark("gemv_double_gpu", BM_GEMV<double, Backend::CUDA>);
 
-bench_utils::SquareBatchSizes(bench_gemv_f_cpu);
-bench_utils::SquareBatchSizes(bench_gemv_d_cpu);
-bench_utils::SquareBatchSizes(bench_gemv_f_gpu);
-bench_utils::SquareBatchSizes(bench_gemv_d_gpu);
+minibench::SquareBatchSizes(bench_gemv_f_cpu);
+minibench::SquareBatchSizes(bench_gemv_d_cpu);
+minibench::SquareBatchSizes(bench_gemv_f_gpu);
+minibench::SquareBatchSizes(bench_gemv_d_gpu);
 
 MINI_BENCHMARK_MAIN();

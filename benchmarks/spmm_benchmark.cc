@@ -42,9 +42,9 @@ static auto* bench_spmm_f_gpu =
 static auto* bench_spmm_d_gpu =
     minibench::RegisterBenchmark("spmm_double_gpu", BM_SPMM<double, Backend::CUDA>);
 
-bench_utils::CubeBatchSizes(bench_spmm_f_cpu);
-bench_utils::CubeBatchSizes(bench_spmm_d_cpu);
-bench_utils::CubeBatchSizes(bench_spmm_f_gpu);
-bench_utils::CubeBatchSizes(bench_spmm_d_gpu);
+minibench::CubeBatchSizes(bench_spmm_f_cpu);
+minibench::CubeBatchSizes(bench_spmm_d_cpu);
+minibench::CubeBatchSizes(bench_spmm_f_gpu);
+minibench::CubeBatchSizes(bench_spmm_d_gpu);
 
 MINI_BENCHMARK_MAIN();

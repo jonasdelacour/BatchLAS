@@ -41,9 +41,9 @@ static auto* bench_ormqr_f_gpu =
 static auto* bench_ormqr_d_gpu =
     minibench::RegisterBenchmark("ormqr_double_gpu", BM_ORMQR<double, Backend::CUDA>);
 
-bench_utils::SquareBatchSizes(bench_ormqr_f_cpu);
-bench_utils::SquareBatchSizes(bench_ormqr_d_cpu);
-bench_utils::SquareBatchSizes(bench_ormqr_f_gpu);
-bench_utils::SquareBatchSizes(bench_ormqr_d_gpu);
+minibench::SquareBatchSizes(bench_ormqr_f_cpu);
+minibench::SquareBatchSizes(bench_ormqr_d_cpu);
+minibench::SquareBatchSizes(bench_ormqr_f_gpu);
+minibench::SquareBatchSizes(bench_ormqr_d_gpu);
 
 MINI_BENCHMARK_MAIN();

@@ -43,9 +43,9 @@ static auto* bench_geqrf_f_gpu =
 static auto* bench_geqrf_d_gpu =
     minibench::RegisterBenchmark("geqrf_double_gpu", BM_GEQRF<double, Backend::CUDA>);
 
-bench_utils::SquareBatchSizes(bench_geqrf_f_cpu);
-bench_utils::SquareBatchSizes(bench_geqrf_d_cpu);
-bench_utils::SquareBatchSizes(bench_geqrf_f_gpu);
-bench_utils::SquareBatchSizes(bench_geqrf_d_gpu);
+minibench::SquareBatchSizes(bench_geqrf_f_cpu);
+minibench::SquareBatchSizes(bench_geqrf_d_cpu);
+minibench::SquareBatchSizes(bench_geqrf_f_gpu);
+minibench::SquareBatchSizes(bench_geqrf_d_gpu);
 
 MINI_BENCHMARK_MAIN();

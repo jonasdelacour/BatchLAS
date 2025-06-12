@@ -1,6 +1,5 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
-#include "bench_utils.hh"
 
 using namespace batchlas;
 
@@ -33,9 +32,9 @@ static auto* bench_trsm_f_gpu =
 static auto* bench_trsm_d_gpu =
     minibench::RegisterBenchmark("trsm_double_gpu", BM_TRSM<double, Backend::CUDA>);
 
-bench_utils::SquareBatchSizes(bench_trsm_f_cpu);
-bench_utils::SquareBatchSizes(bench_trsm_d_cpu);
-bench_utils::SquareBatchSizes(bench_trsm_f_gpu);
-bench_utils::SquareBatchSizes(bench_trsm_d_gpu);
+minibench::SquareBatchSizes(bench_trsm_f_cpu);
+minibench::SquareBatchSizes(bench_trsm_d_cpu);
+minibench::SquareBatchSizes(bench_trsm_f_gpu);
+minibench::SquareBatchSizes(bench_trsm_d_gpu);
 
 MINI_BENCHMARK_MAIN();

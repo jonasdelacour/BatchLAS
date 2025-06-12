@@ -464,5 +464,52 @@ inline int MiniBenchMain(int argc, char** argv) {
         return minibench::MiniBenchMain(argc, argv); \
     }
 
+
+template <typename Benchmark>
+inline void SquareSizes(Benchmark* b) {
+    for (int s : {64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+        b->Args({s, s});
+    }
+}
+
+template <typename Benchmark>
+inline void SquareBatchSizes(Benchmark* b) {
+    for (int s : {64, 128, 256}) {
+        b->Args({s, s, 1});
+    }
+    for (int s : {64, 128, 256}) {
+        b->Args({s, s, 10});
+    }
+    for (int s : {64, 128, 256, 512}) {
+        b->Args({s, s, 100});
+    }
+    for (int s : {64, 128, 256, 512, 1024}) {
+        b->Args({s, s, 1000});
+    }
+}
+
+template <typename Benchmark>
+inline void CubeSizes(Benchmark* b) {
+    for (int s : {64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+        b->Args({s, s, s});
+    }
+}
+
+template <typename Benchmark>
+inline void CubeBatchSizes(Benchmark* b) {
+    for (int s : {64, 128, 256}) {
+        b->Args({s, s, s, 1});
+    }
+    for (int s : {64, 128, 256}) {
+        b->Args({s, s, s, 10});
+    }
+    for (int s : {64, 128, 256, 512}) {
+        b->Args({s, s, s, 100});
+    }
+    for (int s : {64, 128, 256, 512, 1024}) {
+        b->Args({s, s, s, 1000});
+    }
+}
+
 } // namespace minibench
 
