@@ -494,34 +494,20 @@ inline void SquareSizes(Benchmark* b) {
 
 template <typename Benchmark>
 inline void SquareBatchSizes(Benchmark* b) {
-    for (int s : {64, 128, 256}) {
-        b->Args({s, s, 1});
-    }
-    for (int s : {64, 128, 256}) {
-        b->Args({s, s, 10});
-    }
-    for (int s : {64, 128, 256, 512}) {
-        b->Args({s, s, 100});
-    }
     for (int s : {64, 128, 256, 512, 1024}) {
-        b->Args({s, s, 1000});
+        for (int bs : {1, 10, 100, 1000}) {
+            b->Args({s, s, bs});
+        }
     }
 }
 
 // Reduced size set for CPU/NETLIB benchmarks
 template <typename Benchmark>
 inline void SquareBatchSizesNetlib(Benchmark* b) {
-    for (int s : {16, 32, 64}) {
-        b->Args({s, s, 1});
-    }
-    for (int s : {16, 32, 64}) {
-        b->Args({s, s, 10});
-    }
     for (int s : {16, 32, 64, 128}) {
-        b->Args({s, s, 100});
-    }
-    for (int s : {16, 32, 64, 128, 256}) {
-        b->Args({s, s, 1000});
+        for (int bs : {1, 10, 100}) {
+            b->Args({s, s, bs});
+        }
     }
 }
 
@@ -534,34 +520,20 @@ inline void CubeSizes(Benchmark* b) {
 
 template <typename Benchmark>
 inline void CubeBatchSizes(Benchmark* b) {
-    for (int s : {64, 128, 256}) {
-        b->Args({s, s, s, 1});
-    }
-    for (int s : {64, 128, 256}) {
-        b->Args({s, s, s, 10});
-    }
-    for (int s : {64, 128, 256, 512}) {
-        b->Args({s, s, s, 100});
-    }
     for (int s : {64, 128, 256, 512, 1024}) {
-        b->Args({s, s, s, 1000});
+        for (int bs : {1, 10, 100, 1000}) {
+            b->Args({s, s, s, bs});
+        }
     }
 }
 
 // Reduced 3D sizes for CPU/NETLIB benchmarks
 template <typename Benchmark>
 inline void CubeBatchSizesNetlib(Benchmark* b) {
-    for (int s : {16, 32, 64}) {
-        b->Args({s, s, s, 1});
-    }
-    for (int s : {16, 32, 64}) {
-        b->Args({s, s, s, 10});
-    }
     for (int s : {16, 32, 64, 128}) {
-        b->Args({s, s, s, 100});
-    }
-    for (int s : {16, 32, 64, 128, 256}) {
-        b->Args({s, s, s, 1000});
+        for (int bs : {1, 10, 100}) {
+            b->Args({s, s, s, bs});
+        }
     }
 }
 
