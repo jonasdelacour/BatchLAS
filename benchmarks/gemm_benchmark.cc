@@ -1,4 +1,4 @@
-#include <benchmark/benchmark.h>
+#include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
 
@@ -6,7 +6,7 @@ using namespace batchlas;
 
 // Batched GEMM benchmark
 template <typename T, Backend B>
-static void BM_GEMM(benchmark::State& state) {
+static void BM_GEMM(minibench::State& state) {
     state.PauseTiming();
     const size_t m = state.range(0);
     const size_t n = state.range(1);
@@ -22,17 +22,24 @@ static void BM_GEMM(benchmark::State& state) {
     state.ResumeTiming();
     for (auto _ : state) {
         gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-        benchmark::DoNotOptimize(C.data());
     }
     queue.wait();
-    state.counters["GFLOPS"] = benchmark::Counter(
-        static_cast<double>(batch) * 1e-9 * (2.0 * m * n * k), benchmark::Counter::kIsRate);
-    state.counters["BatchSize"] = batch;
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), true);
+    state.SetMetric("BatchSize", static_cast<double>(batch));
 }
 
-BENCHMARK_TEMPLATE(BM_GEMM, float, Backend::NETLIB)->Apply(bench_utils::CubeBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMM, double, Backend::NETLIB)->Apply(bench_utils::CubeBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMM, float, Backend::CUDA)->Apply(bench_utils::CubeBatchSizes);
-BENCHMARK_TEMPLATE(BM_GEMM, double, Backend::CUDA)->Apply(bench_utils::CubeBatchSizes);
+static auto* bench_gemm_f_cpu =
+    minibench::RegisterBenchmark("gemm_float_cpu", BM_GEMM<float, Backend::NETLIB>);
+static auto* bench_gemm_d_cpu =
+    minibench::RegisterBenchmark("gemm_double_cpu", BM_GEMM<double, Backend::NETLIB>);
+static auto* bench_gemm_f_gpu =
+    minibench::RegisterBenchmark("gemm_float_gpu", BM_GEMM<float, Backend::CUDA>);
+static auto* bench_gemm_d_gpu =
+    minibench::RegisterBenchmark("gemm_double_gpu", BM_GEMM<double, Backend::CUDA>);
 
-BENCHMARK_MAIN();
+minibench::CubeBatchSizes(bench_gemm_f_cpu);
+minibench::CubeBatchSizes(bench_gemm_d_cpu);
+minibench::CubeBatchSizes(bench_gemm_f_gpu);
+minibench::CubeBatchSizes(bench_gemm_d_gpu);
+
+MINI_BENCHMARK_MAIN();
