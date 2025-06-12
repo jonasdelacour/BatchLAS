@@ -34,9 +34,9 @@ static void BM_SPMM(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES(spmm_float_cpu, (BM_SPMM<float, Backend::NETLIB>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(spmm_double_cpu, (BM_SPMM<double, Backend::NETLIB>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(spmm_float_gpu, (BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES(spmm_double_gpu, (BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

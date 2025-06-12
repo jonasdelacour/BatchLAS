@@ -1,9 +1,15 @@
 #pragma once
+// Helpers to generate unique variable names in macros
+#define MINI_BENCH_CONCAT_INNER(x, y) x##y
+#define MINI_BENCH_CONCAT(x, y) MINI_BENCH_CONCAT_INNER(x, y)
+#define MINI_BENCH_UNIQUE_NAME(prefix) MINI_BENCH_CONCAT(prefix, __COUNTER__)
+
 // Macro to register a benchmark and apply a sizing function at static-init time
-#define MINI_BENCHMARK_REGISTER_SIZES(NAME, FUNC, SIZER) \
-    static int _reg_sizes_##NAME = ([]() { \
-        SIZER(minibench::RegisterBenchmark(#NAME, FUNC)); \
-        return 0; \
+// The benchmark name is derived from the function name.
+#define MINI_BENCHMARK_REGISTER_SIZES(FUNC, SIZER)                           \
+    static int MINI_BENCH_UNIQUE_NAME(_reg_sizes_) = ([]() {                 \
+        SIZER(minibench::RegisterBenchmark(#FUNC, FUNC));                    \
+        return 0;                                                            \
     })();
 #include <chrono>
 #include <cmath>
@@ -269,9 +275,10 @@ inline void print_header(const std::vector<std::string>& metric_names,
                         size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::fixed << std::setprecision(3);
+    std::cout << std::showpoint << std::setprecision(5);
 
-    std::cout << kColorHeader << std::left << std::setw(16) << "Name";
+    constexpr int name_width = 32;
+    std::cout << kColorHeader << std::left << std::setw(name_width) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
         std::cout << std::setw(8) << ("Arg" + std::to_string(i));
     }
@@ -291,9 +298,10 @@ inline void print_row(const Result& r,
                       size_t max_args) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
-    std::cout << std::fixed << std::setprecision(3);
+    std::cout << std::showpoint << std::setprecision(5);
 
-    std::cout << kColorName << std::left << std::setw(16) << r.name << kColorReset;
+    constexpr int name_width = 32;
+    std::cout << kColorName << std::left << std::setw(name_width) << r.name << kColorReset;
     for (size_t i = 0; i < max_args; ++i) {
         if (i < r.args.size())
             std::cout << std::setw(8) << r.args[i];
@@ -305,10 +313,16 @@ inline void print_row(const Result& r,
               << std::setw(12) << r.stddev_ms;
     for (const auto& m : metric_names) {
         auto it = r.metrics.find(m);
-        if (it != r.metrics.end())
-            std::cout << std::setw(12) << it->second;
-        else
+        if (it != r.metrics.end()) {
+            double v = it->second;
+            if (std::fabs(v - std::round(v)) < 1e-9)
+                std::cout << std::setw(12)
+                          << static_cast<long long>(std::llround(v));
+            else
+                std::cout << std::setw(12) << v;
+        } else {
             std::cout << std::setw(12) << "";
+        }
     }
     std::cout << '\n';
 
@@ -494,6 +508,23 @@ inline void SquareBatchSizes(Benchmark* b) {
     }
 }
 
+// Reduced size set for CPU/NETLIB benchmarks
+template <typename Benchmark>
+inline void SquareBatchSizesNetlib(Benchmark* b) {
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, 1});
+    }
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, 10});
+    }
+    for (int s : {16, 32, 64, 128}) {
+        b->Args({s, s, 100});
+    }
+    for (int s : {16, 32, 64, 128, 256}) {
+        b->Args({s, s, 1000});
+    }
+}
+
 template <typename Benchmark>
 inline void CubeSizes(Benchmark* b) {
     for (int s : {64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
@@ -513,6 +544,23 @@ inline void CubeBatchSizes(Benchmark* b) {
         b->Args({s, s, s, 100});
     }
     for (int s : {64, 128, 256, 512, 1024}) {
+        b->Args({s, s, s, 1000});
+    }
+}
+
+// Reduced 3D sizes for CPU/NETLIB benchmarks
+template <typename Benchmark>
+inline void CubeBatchSizesNetlib(Benchmark* b) {
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, s, 1});
+    }
+    for (int s : {16, 32, 64}) {
+        b->Args({s, s, s, 10});
+    }
+    for (int s : {16, 32, 64, 128}) {
+        b->Args({s, s, s, 100});
+    }
+    for (int s : {16, 32, 64, 128, 256}) {
         b->Args({s, s, s, 1000});
     }
 }
