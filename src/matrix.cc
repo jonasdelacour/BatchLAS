@@ -5,6 +5,7 @@
 #include <sycl/sycl.hpp>
 #include <oneapi/dpl/algorithm>
 #include <oneapi/dpl/execution>
+#include <oneapi/dpl/random>
 #include <complex>
 #include <random>
 #include <algorithm>
@@ -537,9 +538,9 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
     T* data_ptr = result.data_.data();
     size_t total_elements = result.data_.size();
 
-    oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-
+    
     q->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
         oneapi::dpl::minstd_rand engine(seed, idx[0]);
         auto r1 = dist(engine);
         if constexpr (std::is_same_v<T, std::complex<float>> ||
