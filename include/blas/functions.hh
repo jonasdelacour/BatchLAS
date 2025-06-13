@@ -170,6 +170,17 @@ size_t geqrf_buffer_size(Queue& ctx,
                          Span<T> tau);
 
 template <Backend B, typename T>
+Event orgqr(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A, //A overwritten with Q
+            Span<T> tau,
+            Span<std::byte> workspace);
+
+template <Backend B, typename T>
+size_t orgqr_buffer_size(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Span<T> tau);
+
+template <Backend B, typename T>
 Event ormqr(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             const MatrixView<T, MatrixFormat::Dense>& C,

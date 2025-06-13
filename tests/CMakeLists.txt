@@ -35,6 +35,7 @@ set(TEST_TARGETS
     norm_tests
     cond_tests
     ormqr_tests
+    orgqr_tests
     transpose_tests
 )
 

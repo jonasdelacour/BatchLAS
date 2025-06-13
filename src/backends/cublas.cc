@@ -251,6 +251,77 @@ namespace batchlas {
         }
     }
 
+    template <Backend B, typename T>
+    Event orgqr(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                Span<T> tau,
+                Span<std::byte> workspace) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = A.rows();
+        auto n = A.cols();
+        auto k = std::min(m, n);
+        auto batch_size = A.batch_size();
+        BumpAllocator pool(workspace);
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSorgqr_bufferSize, cusolverDnDorgqr_bufferSize,
+                cusolverDnCungqr_bufferSize, cusolverDnZungqr_bufferSize,
+                handle,
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                &lwork);
+            auto device_ws = pool.allocate<T>(ctx, lwork);
+            auto info = pool.allocate<int>(ctx, 1);
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSorgqr, cusolverDnDorgqr,
+                cusolverDnCungqr, cusolverDnZungqr,
+                handle,
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                device_ws.data(), lwork, info.data());
+        } else {
+            Queue sub_queue(ctx.device(), false);
+            size_t single_ws = orgqr_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k));
+            for (int i = 0; i < batch_size; ++i) {
+                auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
+                orgqr<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), sub_ws);
+            }
+            sub_queue.wait();
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t orgqr_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             Span<T> tau) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = A.rows();
+        auto n = A.cols();
+        auto k = std::min(m, n);
+        auto batch_size = A.batch_size();
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSorgqr_bufferSize, cusolverDnDorgqr_bufferSize,
+                cusolverDnCungqr_bufferSize, cusolverDnZungqr_bufferSize,
+                handle,
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                &lwork);
+            return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1);
+        } else {
+            size_t single = BumpAllocator::allocation_size<std::byte>(ctx, orgqr_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k)));
+            return single * batch_size;
+        }
+    }
+
     template <Backend Back, typename T>
     Event getrs(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
@@ -438,6 +509,19 @@ namespace batchlas {
         Side, Transpose, \
         Span<fp>);
 
+    #define ORGQR_INSTANTIATE(fp) \
+    template Event orgqr<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<fp>, \
+        Span<std::byte>);
+
+    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t orgqr_buffer_size<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<fp>);
+
     #define BLAS_LEVEL3_INSTANTIATE(fp)\
         GEMM_INSTANTIATE(fp)\
         GEMV_INSTANTIATE(fp)\
@@ -451,7 +535,9 @@ namespace batchlas {
         GETRI_INSTANTIATE(fp)\
         GETRI_BUFFER_SIZE_INSTANTIATE(fp)\
         ORMQR_INSTANTIATE(fp)\
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)
+        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)\
+        ORGQR_INSTANTIATE(fp)\
+        ORGQR_BUFFER_SIZE_INSTANTIATE(fp)
 
 
     BLAS_LEVEL3_INSTANTIATE(float)
@@ -472,5 +558,7 @@ namespace batchlas {
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_INSTANTIATE
     #undef ORMQR_BUFFER_SIZE_INSTANTIATE
+    #undef ORGQR_INSTANTIATE
+    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
 }
