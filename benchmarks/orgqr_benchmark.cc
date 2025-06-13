@@ -7,10 +7,11 @@ using namespace batchlas;
 // Single ORGQR benchmark
 template <typename T, Backend B>
 static void BM_ORGQR(minibench::State& state) {
-    const int m = state.range(0);
-    const int batch = state.range(1);
+    const size_t m = state.range(0);
+    const size_t n = state.range(1);
+    const size_t batch = state.range(2);
 
-    auto A = Matrix<T>::Random(m, m, false, batch);
+    auto A = Matrix<T>::Random(m, n, false, batch);
     UnifiedVector<T> tau(m * batch);
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
     size_t geqrf_ws = geqrf_buffer_size<B>(queue, A.view(), tau.to_span());
@@ -26,7 +27,8 @@ static void BM_ORGQR(minibench::State& state) {
     }
     queue.wait();
     state.StopTiming();
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * m * m), true);
+    //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), true);
 }
 
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::NETLIB>), SquareBatchSizesNetlib);
