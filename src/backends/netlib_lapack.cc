@@ -365,6 +365,39 @@ namespace batchlas{
     }
 
     template <Backend B, typename T>
+    Event orgqr(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                Span<T> tau,
+                Span<std::byte> workspace) {
+        static_cast<void>(workspace);
+        int m = A.rows();
+        int n = A.cols();
+        int k = std::min(m, n);
+        for (int i = 0; i < A.batch_size(); ++i) {
+            call_backend_nh<T, BackendLibrary::LAPACKE>(
+                LAPACKE_sorgqr, LAPACKE_dorgqr, LAPACKE_cungqr, LAPACKE_zungqr,
+                Layout::ColMajor,
+                m,
+                n,
+                k,
+                A[i].data_ptr(),
+                A.ld(),
+                tau.data() + i * k);
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t orgqr_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             Span<T> tau) {
+        static_cast<void>(ctx);
+        static_cast<void>(A);
+        static_cast<void>(tau);
+        return 0;
+    }
+
+    template <Backend B, typename T>
     Event ormqr(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
@@ -482,6 +515,19 @@ namespace batchlas{
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>);
 
+    #define ORGQR_INSTANTIATE(fp) \
+    template Event orgqr<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<fp>, \
+        Span<std::byte>);
+
+    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t orgqr_buffer_size<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<fp>);
+
     #define GETRS_INSTANTIATE(fp) \
     template Event getrs<Backend::NETLIB, fp>( \
         Queue&, \
@@ -580,6 +626,8 @@ namespace batchlas{
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_INSTANTIATE(fp) \
         ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
+        ORGQR_INSTANTIATE(fp) \
+        ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_INSTANTIATE(fp) \
@@ -606,6 +654,8 @@ namespace batchlas{
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_INSTANTIATE
     #undef ORMQR_BUFFER_SIZE_INSTANTIATE
+    #undef ORGQR_INSTANTIATE
+    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_INSTANTIATE
