@@ -23,16 +23,17 @@ static void BM_GEMM(minibench::State& state) {
         gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
     }
     queue.wait();
-    state.StopTiming();
+    auto time = state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
 }
 
 
 
 // Register size/batch combinations at static‑init time using macro
-//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
-//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::CUDA>), CubeBatchSizes);
-//MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();

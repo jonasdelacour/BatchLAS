@@ -7,10 +7,9 @@ using namespace batchlas;
 // Single GEMV benchmark
 template <typename T, Backend B>
 static void BM_GEMV(minibench::State& state) {
-    const int m = state.range(0);
-    const int n = state.range(1);
-
-    const int batch = state.range(2);
+    const size_t m = state.range(0);
+    const size_t n = state.range(1);
+    const size_t batch = state.range(2);
 
     auto A = Matrix<T>::Random(m, n, false, batch);
     UnifiedVector<T> x(n * batch);
@@ -24,15 +23,16 @@ static void BM_GEMV(minibench::State& state) {
                  Transpose::NoTrans);
     }
     queue.wait();
-    state.StopTiming();
+    auto time = state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
                     true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<float, Backend::CUDA>), SquareBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<double, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEMV<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();

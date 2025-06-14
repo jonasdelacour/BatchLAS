@@ -7,10 +7,10 @@ using namespace batchlas;
 // Single SPMM benchmark (CSR * Dense)
 template <typename T, Backend B>
 static void BM_SPMM(minibench::State& state) {
-    const int m = state.range(0);
-    const int k = state.range(1);
-    const int n = state.range(2);
-    const int batch = state.range(3);
+    const size_t m = state.range(0);
+    const size_t k = state.range(1);
+    const size_t n = state.range(2);
+    const size_t batch = state.range(3);
 
     auto A_dense = Matrix<T>::Random(m, k, false, batch);
     auto A = A_dense.template convert_to<MatrixFormat::CSR>();
@@ -28,15 +28,16 @@ static void BM_SPMM(minibench::State& state) {
                 Transpose::NoTrans, Transpose::NoTrans, workspace.to_span());
     }
     queue.wait();
-    state.StopTiming();
+    auto time = state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) *
                         (1e-9 * 2.0 * A.nnz() * n), true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();

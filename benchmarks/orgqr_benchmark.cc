@@ -26,15 +26,17 @@ static void BM_ORGQR(minibench::State& state) {
         orgqr<B>(queue, A.view(), tau.to_span(), ws.to_span());
     }
     queue.wait();
-    state.StopTiming();
+    auto time = state.StopTiming();
     //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+
 }
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::CUDA>), SquareBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<double, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();
 
