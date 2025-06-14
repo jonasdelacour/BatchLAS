@@ -669,11 +669,9 @@ namespace batchlas{
 
             void setStream(const Queue& ctx) {
                 cudaStream_t stream = sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
-                cudaStreamSynchronize(stream);
                 cublasSetStream(blas_handle_, stream);
                 cusparseSetStream(sparse_handle_, stream);
                 cusolverDnSetStream(solver_handle_, stream);
-                cudaStreamSynchronize(stream);
             }
         };
 
