@@ -255,8 +255,6 @@ inline Result run_benchmark(const Benchmark& b,
         res.stddev_ms = std::sqrt(var / times.size());
     }
 
-    res.metrics["time_ms"] = res.avg_ms;
-    res.metrics["iterations"] = static_cast<double>(res.iterations);
     double secs = res.avg_ms / 1000.0;
     for (const auto& kv : state.metrics_) {
         double v = kv.second.value;
@@ -277,7 +275,7 @@ inline void print_header(const std::vector<std::string>& metric_names,
     orig_state.copyfmt(std::cout);
     std::cout << std::showpoint << std::setprecision(5);
 
-    constexpr int name_width = 32;
+    constexpr int name_width = 50;
     std::cout << kColorHeader << std::left << std::setw(name_width) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
         std::cout << std::setw(8) << ("Arg" + std::to_string(i));
@@ -300,7 +298,7 @@ inline void print_row(const Result& r,
     orig_state.copyfmt(std::cout);
     std::cout << std::showpoint << std::setprecision(5);
 
-    constexpr int name_width = 32;
+    constexpr int name_width = 50;
     std::cout << kColorName << std::left << std::setw(name_width) << r.name << kColorReset;
     for (size_t i = 0; i < max_args; ++i) {
         if (i < r.args.size())
