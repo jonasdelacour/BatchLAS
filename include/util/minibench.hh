@@ -495,7 +495,7 @@ inline void SquareSizes(Benchmark* b) {
 template <typename Benchmark>
 inline void SquareBatchSizes(Benchmark* b) {
     for (int s : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 10, 100, 1000}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
             b->Args({s, s, bs});
         }
     }
@@ -521,7 +521,7 @@ inline void CubeSizes(Benchmark* b) {
 template <typename Benchmark>
 inline void CubeBatchSizes(Benchmark* b) {
     for (int s : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 10, 100, 1000}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
             b->Args({s, s, s, bs});
         }
     }
