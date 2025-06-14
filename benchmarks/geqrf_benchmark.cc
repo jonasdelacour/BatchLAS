@@ -12,9 +12,9 @@ using namespace batchlas;
 // Single matrix GEQRF benchmark
 template<typename T, Backend B>
 static void BM_GEQRF(minibench::State& state) {
-    const int m = state.range(0);
-    const int n = state.range(1);
-    const int batch_size = state.range(2);
+    const size_t m = state.range(0);
+    const size_t n = state.range(1);
+    const size_t batch_size = state.range(2);
 
     auto matrices = Matrix<T>::Random(m, n, false, batch_size);
     UnifiedVector<T> tau(batch_size * std::min(m, n));
@@ -30,15 +30,16 @@ static void BM_GEQRF(minibench::State& state) {
         geqrf<B>(queue, matrices.view(), tau.to_span(), workspace.to_span());
     }
     queue.wait();
-    state.StopTiming();
+    auto time = state.StopTiming();
     state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch_size) * time * 1e3, false);
 
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::CUDA>), SquareBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::NETLIB>), SquareBatchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();
