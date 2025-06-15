@@ -42,7 +42,7 @@ static void BM_SYEVX(minibench::State& state) {
 
 MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::CUDA>), SyevxBenchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::CUDA>), SyevxBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::NETLIB>), SyevxBenchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::NETLIB>), SyevxBenchSizesNetlib);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::NETLIB>), SyevxBenchSizesNetlib);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::NETLIB>), SyevxBenchSizesNetlib);
 
 MINI_BENCHMARK_MAIN();
