@@ -8,6 +8,7 @@ set(BENCHMARK_TARGETS
     orgqr_benchmark
     syev_benchmark
     syevx_benchmark
+    lanczos_benchmark
     gemm_custom
 )
 
