@@ -246,10 +246,7 @@ namespace batchlas {
                     auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data());
                     auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data());
                     if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
-                        auto Tstart = std::chrono::steady_clock::now();
                         ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
-                        ctx->wait();
-                        T_ortho += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - Tstart);
                     }
                 }
 
@@ -260,9 +257,6 @@ namespace batchlas {
                 } else {
                     gemm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
                 }
-                ctx->wait();
-                T_spmm += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - spmm_start);
-                auto lanczos_start = std::chrono::steady_clock::now();
                 ctx -> submit([&](sycl::handler& h) {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
                     auto v_current_ptr = Vmem.data() + it*n;
@@ -309,8 +303,6 @@ namespace batchlas {
                         }
                     });
                 });
-                ctx->wait();
-                T_lanczos += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - lanczos_start);
             }
         };
 
@@ -327,7 +319,6 @@ namespace batchlas {
         auto L_global = pool.allocate<T>(ctx, !smem_possible ? n * batch_size : 0);   // Lower diagonal of tridiag matrix (same as betas)
         auto Q_eigenvectors = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? n * n * batch_size : 0);
 
-        auto T0 = std::chrono::steady_clock::now();
         // Run the QR algorithm to get eigenvalues (and eigenvectors if requested)
         ctx->submit([&](sycl::handler& h) {
             auto Vstride = V.stride();
@@ -422,28 +413,22 @@ namespace batchlas {
                 }
             });
         });
-        ctx->wait();
-        auto elapsed_qr = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - T0).count();
 
         //We have computed the decomposition T = Q^H * diag(W) * Q
         //Furthermore we have A = V * T * V^H
         //Which means means A = V * Q^H * diag(W) * Q * V^H
         //So it follows that the eigenvectors of A are given by V * Q
-        auto T0_eigenvectors = std::chrono::steady_clock::now();
         if (jobz == JobType::EigenVectors) {
             gemm<B>(ctx, MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size), 
                         MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size), 
                         V, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
         }
-        ctx->wait();
-        auto elapsed_eigenvectors = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - T0_eigenvectors).count();
-        
-        std::cout << "Lanczos iteration time: " << T_lanczos.count() / batch_size << " µs per matrix" << std::endl;
-        std::cout << "Orthogonalization time: " << T_ortho.count() / batch_size << " µs per matrix" << std::endl;
-        std::cout << "SpMV time: " << T_spmm.count() / batch_size << " µs per matrix" << std::endl;
-        std::cout << "QR iteration time: " << elapsed_qr / batch_size << " µs per matrix" << std::endl;
-        std::cout << "Eigenvector time: " << elapsed_eigenvectors / batch_size << " µs per matrix" << std::endl;
-        std::cout << "Total time: " << (T_lanczos.count() + T_ortho.count() + T_spmm.count() + elapsed_qr + elapsed_eigenvectors) / batch_size << " µs per matrix" << std::endl;
+        /* std::cout << "Lanczos iteration time: " << T_lanczos.count() / batch_size << " µs per matrix" << std::endl; */
+        /* std::cout << "Orthogonalization time: " << T_ortho.count() / batch_size << " µs per matrix" << std::endl; */
+        /* std::cout << "SpMV time: " << T_spmm.count() / batch_size << " µs per matrix" << std::endl; */
+        /* std::cout << "QR iteration time: " << elapsed_qr / batch_size << " µs per matrix" << std::endl; */
+        /* std::cout << "Eigenvector time: " << elapsed_eigenvectors / batch_size << " µs per matrix" << std::endl; */
+        /* std::cout << "Total time: " << (T_lanczos.count() + T_ortho.count() + T_spmm.count() + elapsed_qr + elapsed_eigenvectors) / batch_size << " µs per matrix" << std::endl; */
 
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
