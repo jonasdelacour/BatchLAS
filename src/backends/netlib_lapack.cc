@@ -214,7 +214,7 @@ namespace batchlas{
     template <Backend B, typename T>
     Event syev(Queue& ctx,
                    const MatrixView<T,MatrixFormat::Dense>& descrA,
-                   Span<T> eigenvalues,
+                   Span<typename base_type<T>::type> eigenvalues,
                    JobType jobtype,
                    Uplo uplo,
                    Span<std::byte> workspace) {
@@ -456,7 +456,7 @@ namespace batchlas{
     template <Backend B, typename T>
     size_t syev_buffer_size(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& descrA,
-                   Span<T> eigenvalues,
+                   Span<typename base_type<T>::type> eigenvalues,
                    JobType jobtype,
                    Uplo uplo) {
         return 0;
@@ -602,13 +602,16 @@ namespace batchlas{
     template Event syev<Backend::NETLIB, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>, JobType, Uplo, Span<std::byte>);
+        Span<typename base_type<fp>::type>, \
+        JobType, Uplo, \
+        Span<std::byte>);
 
     #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t syev_buffer_size<Backend::NETLIB, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>, JobType, Uplo);
+        Span<typename base_type<fp>::type>, \
+        JobType, Uplo);
 
     #define BLAS_LEVEL3_INSTANTIATE(fp) \
         SPMM_INSTANTIATE(fp, MatrixFormat::CSR) \
