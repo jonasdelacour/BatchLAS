@@ -1,0 +1,43 @@
+#include <util/minibench.hh>
+#include <blas/functions.hh>
+#include <blas/extensions.hh>
+using namespace batchlas;
+
+// Symmetric eigenvalue decomposition benchmark
+template <typename T, Backend B>
+static void BM_LANCZOS(minibench::State& state) {
+    const size_t m = state.range(0);
+    const size_t n = state.range(1);
+    const size_t batch = state.range(2);
+
+    auto A = Matrix<T>::TriDiagToeplitz(m, 1.0, 0.5, 0.5, batch);
+    auto Acsr = A.template convert_to<MatrixFormat::CSR>();
+    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    UnifiedVector<typename base_type<T>::type> W(n * batch);
+
+    auto V = Matrix<T>::Zeros(n, batch);
+    LanczosParams<T> params;
+    params.ortho_algorithm = OrthoAlgorithm::CGS2;
+
+    size_t ws_size = lanczos_buffer_size<B>(queue, A.view(), W.to_span(),
+                                            JobType::NoEigenVectors, V.view(), params);
+    UnifiedVector<std::byte> workspace(ws_size);
+
+    state.ResetTiming(); state.ResumeTiming();
+    for (auto _ : state) {
+        lanczos<B>(queue, A.view(), W.to_span(),workspace.to_span(),
+                   JobType::NoEigenVectors, V.view(), params);
+    }
+    queue.wait();
+    auto time = state.StopTiming();
+    double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), true);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+}
+
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::CUDA>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::CUDA>), SquareBatchSizes);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::NETLIB>), SquareBatchSizesNetlib);
+//MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+
+MINI_BENCHMARK_MAIN();
