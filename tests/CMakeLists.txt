@@ -24,8 +24,6 @@ set(TEST_TARGETS
     gemm_tests
     syevx_tests
     lanczos_tests
-    syevx_benchmark
-    ortho_benchmark
     gemv_tests
     matrix_tests
     matrix_view_tests

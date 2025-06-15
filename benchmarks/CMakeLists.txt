@@ -6,6 +6,8 @@ set(BENCHMARK_TARGETS
     trsm_benchmark
     ormqr_benchmark
     orgqr_benchmark
+    syev_benchmark
+    syevx_benchmark
     gemm_custom
 )
 
