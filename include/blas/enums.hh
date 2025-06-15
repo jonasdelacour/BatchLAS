@@ -1,4 +1,5 @@
 #pragma once
+#include <complex>
 namespace batchlas {
     template<typename T>
     struct base_type {
