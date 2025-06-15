@@ -538,7 +538,7 @@ inline void CubeBatchSizesNetlib(Benchmark* b) {
 template <typename Benchmark>
 inline void SyevxBenchSizes(Benchmark* b) {
     for (int n : {128, 256, 512}) {
-        for (int bs : {1, 2, 4, 8, 16}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}) {
             for (int ne : {5, 10, 15}) {
                 b->Args({n, bs, ne});
             }
