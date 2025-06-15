@@ -11,7 +11,7 @@
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {
 
-    #if defined(CUDART_VERSION) && CUDART_VERSION >= 12062
+    #if defined(CUDART_VERSION) && CUDART_VERSION >= 12060
         #define USE_CUSOLVER_X_API 1
     #else
         #define USE_CUSOLVER_X_API 0
