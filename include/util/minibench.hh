@@ -535,5 +535,27 @@ inline void CubeBatchSizesNetlib(Benchmark* b) {
     }
 }
 
+template <typename Benchmark>
+inline void SyevxBenchSizes(Benchmark* b) {
+    for (int n : {128, 256, 512}) {
+        for (int bs : {1, 2, 4, 8, 16}) {
+            for (int ne : {5, 10, 15}) {
+                b->Args({n, bs, ne});
+            }
+        }
+    }
+}
+
+template <typename Benchmark>
+inline void SyevxBenchSizesNetlib(Benchmark* b) {
+    for (int n : {16, 32, 64, 128}) {
+        for (int bs : {1, 10, 100}) {
+            for (int ne : {2, 4, 8}) {
+                b->Args({n, bs, ne});
+            }
+        }
+    }
+}
+
 } // namespace minibench
 
