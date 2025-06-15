@@ -156,13 +156,16 @@ Benchmark executables are built in the `benchmarks` directory. Each benchmark
 registers a default set of input sizes, but you can override these at runtime by
 providing custom sizes on the command line. Arguments may be integers,
 comma&#8209;separated lists or `start:end:num` ranges. When custom sizes are
-supplied they replace the registered ones for all benchmarks.
+supplied they replace the registered ones for all benchmarks. You can further
+limit execution to specific backends or floating point types using the
+`--backend` and `--type` options.
 
 Example:
 
 ```bash
 ./gemm_benchmark 512 512 128 10
 ./gemm_benchmark 64:256:4 64:256:4 64:256:4 1,2,4
+./gemm_benchmark --backend=CUDA --type=float 256 256 64 8
 ```
 
 ## License

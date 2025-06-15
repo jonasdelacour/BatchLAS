@@ -80,6 +80,16 @@ inline std::vector<int> parse_range_or_list(const std::string& str) {
     return vals;
 }
 
+inline std::vector<std::string> parse_list(const std::string& str) {
+    std::vector<std::string> vals;
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) vals.push_back(item);
+    }
+    return vals;
+}
+
 inline std::vector<int> make_range(int start, int end, int step = 1) {
     std::vector<int> vals;
     if (step == 0) step = 1;
@@ -367,8 +377,43 @@ inline void write_csv(const std::string& path, const std::vector<Result>& result
     }
 }
 
+inline bool match_filter(const Benchmark& b,
+                         const std::vector<std::string>& backends,
+                         const std::vector<std::string>& types) {
+    if (!backends.empty()) {
+        bool ok = false;
+        for (const auto& be : backends) {
+            if (b.name.find("Backend::" + be) != std::string::npos) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return false;
+    }
+    if (!types.empty()) {
+        bool ok = false;
+        for (const auto& t : types) {
+            if (t == "float" && b.name.find("float") != std::string::npos)
+                ok = true;
+            else if (t == "double" && b.name.find("double") != std::string::npos)
+                ok = true;
+            else if ((t == "cfloat" || t == "complex<float>") &&
+                     b.name.find("complex<float>") != std::string::npos)
+                ok = true;
+            else if ((t == "cdouble" || t == "complex<double>") &&
+                     b.name.find("complex<double>") != std::string::npos)
+                ok = true;
+            if (ok) break;
+        }
+        if (!ok) return false;
+    }
+    return true;
+}
+
 inline int RunRegisteredBenchmarks(const Config& cfg = {},
-                                   const std::string& csv_path = "") {
+                                   const std::string& csv_path = "",
+                                   const std::vector<std::string>& backends = {},
+                                   const std::vector<std::string>& types = {}) {
     std::vector<Result> results;
     std::vector<std::string> metric_names;
     std::unordered_map<std::string, bool> metric_seen;
@@ -393,6 +438,8 @@ inline int RunRegisteredBenchmarks(const Config& cfg = {},
     };
 
     for (const auto& b : registry()) {
+        if (!match_filter(b, backends, types))
+            continue;
         if (b.args_list.empty()) {
             auto r = run_benchmark(b, {}, cfg);
             update_header(r);
@@ -416,6 +463,8 @@ struct CliOptions {
     Config cfg;
     std::vector<std::vector<int>> args_list;
     std::string csv_file;
+    std::vector<std::string> backends;
+    std::vector<std::string> types;
 };
 
 inline CliOptions ParseCommandLine(int argc, char** argv) {
@@ -433,6 +482,10 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             opt.cfg.min_time_ms = std::stod(s.substr(11));
         } else if (s.rfind("--csv=", 0) == 0) {
             opt.csv_file = s.substr(6);
+        } else if (s.rfind("--backend=", 0) == 0) {
+            opt.backends = parse_list(s.substr(10));
+        } else if (s.rfind("--type=", 0) == 0) {
+            opt.types = parse_list(s.substr(7));
         } else if (s == "--help" || s == "-h") {
             std::cout << "Usage: benchmark [options] [ARGS...]\n";
             std::cout << "Options:\n";
@@ -441,6 +494,8 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             std::cout << "  --max_iters=N    maximum measured iterations\n";
             std::cout << "  --min_time=MS    minimum total measurement time\n";
             std::cout << "  --csv=FILE       write results to CSV file\n";
+            std::cout << "  --backend=LIST   comma separated backends to run\n";
+            std::cout << "  --type=LIST      comma separated floating point types\n";
             std::cout << "  ARGS can be integers, comma lists or start:end:num ranges\n";
             exit(0);
         } else {
@@ -474,7 +529,8 @@ inline int MiniBenchMain(int argc, char** argv) {
             b.args_list = opts.args_list;
         }
     }
-    return RunRegisteredBenchmarks(opts.cfg, opts.csv_file);
+    return RunRegisteredBenchmarks(opts.cfg, opts.csv_file,
+                                   opts.backends, opts.types);
 }
 
 #define MINI_BENCHMARK_MAIN()                          \
