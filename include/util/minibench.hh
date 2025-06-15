@@ -470,7 +470,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
 inline int MiniBenchMain(int argc, char** argv) {
     auto opts = ParseCommandLine(argc, argv);
     for (auto& b : registry()) {
-        if (!opts.args_list.empty() && b.args_list.empty()) {
+        if (!opts.args_list.empty()) {
             b.args_list = opts.args_list;
         }
     }

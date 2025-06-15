@@ -150,6 +150,21 @@ BatchLAS automatically selects the most suitable backend for your hardware, but 
 gemm<Backend::CUDA>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
 ```
 
+## Benchmarks
+
+Benchmark executables are built in the `benchmarks` directory. Each benchmark
+registers a default set of input sizes, but you can override these at runtime by
+providing custom sizes on the command line. Arguments may be integers,
+comma&#8209;separated lists or `start:end:num` ranges. When custom sizes are
+supplied they replace the registered ones for all benchmarks.
+
+Example:
+
+```bash
+./gemm_benchmark 512 512 128 10
+./gemm_benchmark 64:256:4 64:256:4 64:256:4 1,2,4
+```
+
 ## License
 
 TBD
