@@ -89,7 +89,7 @@ namespace batchlas {
         auto device_workspace = pool.allocate<std::byte>(ctx, l_work_device);
 
         if (descrA.batch_size() == 1) {
-            int info;
+            auto info = pool.allocate<int>(ctx, 1);
             cusolverDnXsyevd(
                 handle,
                 params,
@@ -106,7 +106,7 @@ namespace batchlas {
                 l_work_device,
                 host_workspace.data(),
                 l_work_host,
-                &info);
+                info.data());
         } else {
             auto info = pool.allocate<int>(ctx, descrA.batch_size());
             #if USE_CUSOLVER_X_API
@@ -148,7 +148,6 @@ namespace batchlas {
         handle.setStream(ctx);
         size_t l_work_device = 0;
         size_t l_work_host;
-        size_t total = 0;
         cusolverDnParams_t params;
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
@@ -164,10 +163,9 @@ namespace batchlas {
                     handle, jobtype, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_int, syevj_info, descrA.batch_size());
                 l_work_device = static_cast<size_t>(l_work_device_int);
             #endif
-            total = BumpAllocator::allocation_size<int>(ctx, descrA.batch_size());
-        }
+        };
 
-        return BumpAllocator::allocation_size<std::byte>(ctx, l_work_host) + BumpAllocator::allocation_size<std::byte>(ctx, l_work_device) + total;
+        return BumpAllocator::allocation_size<std::byte>(ctx, l_work_host) + BumpAllocator::allocation_size<std::byte>(ctx, l_work_device) + BumpAllocator::allocation_size<int>(ctx, descrA.batch_size());
     }
 
     #define POTRF_INSTANTIATE(fp) \
