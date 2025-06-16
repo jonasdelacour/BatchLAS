@@ -206,6 +206,20 @@ namespace batchlas {
         JobType jobz = JobType::NoEigenVectors,
         const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
         const LanczosParams<T>& params = LanczosParams<T>());
+
+    template <Backend B, typename T>
+    Event tridiagonal_solver(Queue& ctx,
+        Span<T> alphas,
+        Span<T> betas,
+        Span<typename base_type<T>::type> W,
+        Span<std::byte> workspace,
+        JobType jobz,
+        const MatrixView<T, MatrixFormat::Dense>& Q,
+        size_t n,
+        size_t batch_size);
+
+    template <Backend B, typename T>
+    size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
     /**
      * @brief Computes the explicit inverse of a dense matrix
      *

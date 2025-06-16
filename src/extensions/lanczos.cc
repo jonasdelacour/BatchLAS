@@ -309,119 +309,27 @@ namespace batchlas {
         init();
         lanczos_iteration(n);
 
-        //Allocate memory for the QR factorization
-        auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
-        bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= smem_required;
-
-        auto V_reflectors = pool.allocate<T>(ctx, !smem_possible ? 2 * n * batch_size : 0);
-        auto D_global = pool.allocate<T>(ctx, !smem_possible ? (n+1) * batch_size : 0);   // Diagonal of tridiag matrix (same as alphas)
-        auto U_global = pool.allocate<T>(ctx, !smem_possible ? 2 * (n + 1) * batch_size : 0);   // Upper diagonal of tridiag matrix (same as betas)
-        auto L_global = pool.allocate<T>(ctx, !smem_possible ? n * batch_size : 0);   // Lower diagonal of tridiag matrix (same as betas)
+        //Allocate workspace and compute eigenvalues/eigenvectors of the tridiagonal matrix
         auto Q_eigenvectors = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? n * n * batch_size : 0);
+        auto qr_workspace = pool.allocate<std::byte>(ctx, tridiagonal_solver_buffer_size<B,T>(ctx, n, batch_size, jobz));
 
-        // Run the QR algorithm to get eigenvalues (and eigenvectors if requested)
-        ctx->submit([&](sycl::handler& h) {
-            auto Vstride = V.stride();
-            auto Vdata = V.data_ptr();
-            auto Vld = V.ld();
+        tridiagonal_solver<B>(ctx,
+                alphas,
+                betas,
+                W,
+                qr_workspace,
+                jobz,
+                MatrixView<T, MatrixFormat::Dense>(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
+                n,
+                batch_size);
 
-            sycl::local_accessor<T, 1> D_smem(smem_possible ? n + 1 : 0, h);
-            sycl::local_accessor<T, 1> L_smem(smem_possible ? n : 0, h);
-            sycl::local_accessor<T, 1> U_smem(smem_possible ? 2 * (n + 1) : 0, h);
-            sycl::local_accessor<T, 1> V_smem(smem_possible ? 2 * n : 0, h);
-
-            h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
-                auto bid = item.get_group_linear_id();
-                auto tid = item.get_local_linear_id();
-                auto bdim = item.get_local_range()[0];
-                auto cta = item.get_group();
-
-                auto D = Span(smem_possible ? D_smem.begin() : D_global.data() + bid*(n+1), n+1);
-                auto L = Span(smem_possible ? L_smem.begin() : L_global.data() + bid*n, n);
-                auto U = Span(smem_possible ? U_smem.begin() : U_global.data() + bid*2*(n+1), 2 * (n + 1));
-                auto V = Span(smem_possible ? V_smem.begin() : V_reflectors.data() + bid*2*n, 2 * n);
-                
-                // Set up the pointers to the batch-specific data
-                auto batch_alphas = Span(alphas.data() + bid * n, n);
-                auto batch_betas = Span(betas.data() + bid * n, n);
-                T* batch_Q = Q_eigenvectors.data() + (jobz == JobType::EigenVectors ? bid * n * n : bid * n);
-                typename base_type<T>::type* batch_W = W.data() + bid * n;
-
-                //If jobz == EigenVectors, initialize the eigenvector matrix to identity
-                if (jobz == JobType::EigenVectors) {
-                    for (int i = tid; i < n*n; i += bdim) {
-                        batch_Q[i] = T(0); // Initialize to zero matrix
-                    }
-                    sycl::group_barrier(cta);
-                    for (int i = tid; i < n; i += bdim) {
-                        batch_Q[i * (n + 1)] = T(1); // Set diagonal to 1
-                    }
-                }
-
-                for( int i = tid; i < n; i += bdim) {
-                    D[i] = batch_alphas[i];
-                    L[i] = batch_betas[i];
-                }
-                
-                sycl::group_barrier(cta);
-                
-                // Process each eigenvalue using the QR algorithm
-                for (int k = n-1; k >= 0; k--) {
-                    T d = D[k];
-                    T shift = d;
-                    
-                    int i = 0;
-                    real_t GR = (k > 0 ? std::abs(L[k-1]) : 0) + std::abs(L[k]);
-                    int not_done = 1;
-                    
-                    while (not_done > 0) {
-                        i++;
-                        
-                        // Apply the QR transformation to the tridiagonal matrix
-                        T_QTQ(cta, k+1, D, L, U, V, shift);
-                        
-                        // Update eigenvectors if requested
-                        if (jobz == JobType::EigenVectors) {
-                            apply_all_reflections(cta, V, k, n, batch_Q);
-                        }
-                        
-                        
-                        GR = (k > 0 ? std::abs(L[k-1]) : 0) + (k+1 < n ? std::abs(L[k]) : 0);
-                        
-                        if (k > 0) {
-                            std::array<T,4> args = {D[k-1], L[k-1], L[k-1], D[k]};
-                            auto [l0, l1] = eigvalsh2x2(args);
-                            shift = std::abs(l0-d) < std::abs(l1-d) ? l0 : l1;
-                        } else {
-                            shift = D[k];
-                        }
-                        
-                        if (GR <= std::numeric_limits<real_t>::epsilon() * real_t(10.0)) {
-                            not_done--;
-                        }
-                        
-                        if (i > 5) {
-                            // Convergence failed, use current best estimate
-                            break;
-                        }
-                    }
-                }
-                
-                // Copy eigenvalues to output array
-                for (int i = tid; i < n; i += bdim) {
-                    batch_W[i] = real_part(D[i]);
-                }
-            });
-        });
-
-        //We have computed the decomposition T = Q^H * diag(W) * Q
-        //Furthermore we have A = V * T * V^H
-        //Which means means A = V * Q^H * diag(W) * Q * V^H
-        //So it follows that the eigenvectors of A are given by V * Q
         if (jobz == JobType::EigenVectors) {
-            gemm<B>(ctx, MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size), 
-                        MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size), 
-                        V, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx,
+                    MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size),
+                    MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
+                    V,
+                    T(1), T(0),
+                    Transpose::NoTrans, Transpose::NoTrans);
         }
         /* std::cout << "Lanczos iteration time: " << T_lanczos.count() / batch_size << " µs per matrix" << std::endl; */
         /* std::cout << "Orthogonalization time: " << T_ortho.count() / batch_size << " µs per matrix" << std::endl; */
@@ -569,14 +477,9 @@ namespace batchlas {
         if constexpr (!(MF == MatrixFormat::Dense)){
             basic_size += BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
         }
-        // Additional memory required for QR factorization if there is insufficient shared memory for work-group local storage
-        bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= sizeof(T) * (3 * n + 3 * (n + 1));
-
-            // Allocate memory for the Householder reflection vectors and the tridiagonal matrix
-        basic_size += BumpAllocator::allocation_size<T>(ctx,    smem_possible ? (2*n*batch_size) : 0) + // Householder reflection vectors
-                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? ((n+1)*batch_size) : 0) + // Diagonal of tridiagonal matrix
-                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? (2*(n+1)*batch_size) : 0) + // Upper diagonal of tridiagonal matrix
-                        BumpAllocator::allocation_size<T>(ctx,  smem_possible ? (n*batch_size) : 0); // Lower diagonal of tridiagonal matrix
+        // Additional memory required for the tridiagonal solver
+        basic_size += BumpAllocator::allocation_size<std::byte>(ctx,
+                        tridiagonal_solver_buffer_size<B,T>(ctx, n, batch_size, jobz));
 
         // Eigenvector memory (only if needed)
         size_t eigenvectors_size = (jobz == JobType::EigenVectors) ? 
