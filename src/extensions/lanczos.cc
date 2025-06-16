@@ -26,150 +26,6 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>
     struct DiagonalizeKernel {};
 
-    template <typename T>
-    std::array<T,2> eigvalsh2x2(const std::array<T,4> &A){
-        auto [a,b,c,d] = A;
-        T D = sycl::sqrt(4*b*c+(a-d)*(a-d));
-        return {(a+d-D)/2, (a+d+D)/2};
-    }
-
-    template <typename T>
-    void apply_all_reflections(const sycl::group<1> &cta, const Span<T> V, const int n, const int m, T* Q) {   
-        auto tid = cta.get_local_linear_id();
-        auto bdim = cta.get_local_range()[0];
-        
-        for(int k = 0; k < n; k++) {
-            const T &v0 = V[2*k], &v1 = V[2*k+1];      
-            // Apply Householder reflection
-            for(int l = tid; l < m; l += bdim) {
-                T &q0 = Q[k*m+l], &q1 = Q[(k+1)*m+l];
-                T vTA = q0*v0 + q1*v1;
-                q0 -= 2*v0*vTA;
-                q1 -= 2*v1*vTA;
-            }      
-        }
-    }
-
-    template <typename T>
-    void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, const Span<T> U, const Span<T> Vout, T shift=0) {
-        using real_t = typename base_type<T>::type;
-        using coord3d = std::array<T, 3>;
-    
-        int tix = cta.get_local_linear_id();
-        int bdim = cta.get_local_range()[0];
-        
-        // Find max norm for numerical stability
-        T local_max = T(0.);
-        for (int i = tix; i < n; i += bdim){
-            local_max = std::max(local_max, std::abs(D[i]) + 2*std::abs(L[i]));
-        }
-        T max_norm = sycl::reduce_over_group(cta, local_max, sycl::maximum<T>());
-        T numerical_zero = 10*std::numeric_limits<T>::epsilon();
-        T d_n, l_n, l_nm1;
-        
-        d_n = D[n]; l_n = L[n]; l_nm1 = L[n-1];
-        
-        sycl::group_barrier(cta);
-        
-        real_t a[2], v[2];
-        for(int k = tix; k < n + 1; k += bdim){
-            D[k] -= shift;
-            U[n+1 + k] = real_t(0.);
-            if(k < n-1){
-                U[k] = L[k];
-                Vout[2*k] = real_t(0.); Vout[2*k+1] = real_t(0.);
-            } else {
-                L[k] = real_t(0.);
-                U[k] = real_t(0.);
-            }
-        }
-
-        sycl::group_barrier(cta);
-        
-        // This part must execute serially by a single thread
-        if(tix == 0) {
-            for(int k = 0; k < n-1; k++) {
-                if (std::abs(L[k]) > numerical_zero) {
-                    a[0] = D[k]; a[1] = L[k];       // a = T[k:k+2,k] is the vector of nonzeros in kth subdiagonal column.
-                    
-                    real_t anorm = sycl::sqrt(a[0]*a[0] + a[1]*a[1]); 
-
-                    v[0] = D[k]; v[1] = L[k];
-                    real_t alpha = -sycl::copysign(anorm,a[0]);
-                    v[0] -= alpha;
-
-                    real_t vnorm = sycl::sqrt(v[0]*v[0]+v[1]*v[1]);
-                    real_t norm_inv = real_t(1.)/vnorm;
-                    v[0] *= norm_inv;  v[1] *= norm_inv;
-
-                    Vout[2*k] = v[0]; Vout[2*k+1] = v[1];
-                    
-                    coord3d vTA = { D[ k ]*v[0] + L[ k ]*v[1],
-                                    U[ k ]*v[0] + D[k+1]*v[1],
-                                    U[(n+1)+k]*v[0] + U[k+1]*v[1]};
-
-                    D[k]     -= real_t(2.)*v[0]*vTA[0];
-                    L[k]     -= real_t(2.)*v[1]*vTA[0];
-                    U[k]     -= real_t(2.)*v[0]*vTA[1];
-                    D[k+1]     -= real_t(2.)*v[1]*vTA[1];
-                    U[(n+1)+k] -= real_t(2.)*v[0]*vTA[2];
-                    U[k+1]     -= real_t(2.)*v[1]*vTA[2];
-                }
-            }
-        }
-
-        // Still single-threaded part
-        if(tix == 0) {
-            int k = 0;
-            const real_t *v = &Vout[0];
-            real_t vTA[2] = {D[k]*v[0] + U[k]*v[1],
-                            0 + D[k+1]*v[1]};
-            
-            D[k]       -= real_t(2.)*v[0]*vTA[0];
-            U[k]       -= real_t(2.)*v[1]*vTA[0];
-            L[k]       -= real_t(2.)*v[0]*vTA[1];
-            D[k+1]     -= real_t(2.)*v[1]*vTA[1];
-        }
-        
-        sycl::group_barrier(cta);
-
-        // Another single-threaded part
-        if(tix == 0) {
-            for(int k = 1; k < n-1; k++) {
-                const real_t *v = &Vout[2*k];
-                coord3d vTA = {U[k-1]*v[0] + U[(n+1)+k-1]*v[1],
-                                D[k]*v[0] + U[k]*v[1],
-                                L[k]*v[0] + D[k+1]*v[1]};
-
-                U[k-1]     -= real_t(2.)*v[0]*vTA[0];
-                U[(n+1)+(k-1)] -= real_t(2.)*v[1]*vTA[0];
-                U[k]       -= real_t(2.)*v[1]*vTA[1];
-                D[k]       -= real_t(2.)*v[0]*vTA[1];
-                L[k]       -= real_t(2.)*v[0]*vTA[2];
-                D[k+1]     -= real_t(2.)*v[1]*vTA[2];
-            }
-        }
-
-        sycl::group_barrier(cta);
-        
-        // Copy working diagonals to output - parallel
-        for (int k = tix; k < n; k += bdim) {
-            D[k] += shift;
-            if(k < n-1) {
-                L[k] = U[k];
-            }
-        }
-        
-        sycl::group_barrier(cta);
-        
-        if (tix == 0) {
-            D[n] = d_n;
-            L[n-1] = l_nm1;
-            L[n] = l_n;
-        }
-        sycl::group_barrier(cta);
-    }
-
     template <Backend B, typename T, MatrixFormat MF>
     Event lanczos(Queue& ctx,
                 const MatrixView<T, MF>& A,
@@ -235,10 +91,6 @@ namespace batchlas {
                 });
             });
         };
-
-        auto T_ortho =      std::chrono::duration<double, std::micro>(0);
-        auto T_spmm =       std::chrono::duration<double, std::micro>(0);
-        auto T_lanczos =    std::chrono::duration<double, std::micro>(0);
 
         auto lanczos_iteration = [&](const int iterations){
             for (int it = 0; it < iterations; it++) {
@@ -331,12 +183,6 @@ namespace batchlas {
                     T(1), T(0),
                     Transpose::NoTrans, Transpose::NoTrans);
         }
-        /* std::cout << "Lanczos iteration time: " << T_lanczos.count() / batch_size << " µs per matrix" << std::endl; */
-        /* std::cout << "Orthogonalization time: " << T_ortho.count() / batch_size << " µs per matrix" << std::endl; */
-        /* std::cout << "SpMV time: " << T_spmm.count() / batch_size << " µs per matrix" << std::endl; */
-        /* std::cout << "QR iteration time: " << elapsed_qr / batch_size << " µs per matrix" << std::endl; */
-        /* std::cout << "Eigenvector time: " << elapsed_eigenvectors / batch_size << " µs per matrix" << std::endl; */
-        /* std::cout << "Total time: " << (T_lanczos.count() + T_ortho.count() + T_spmm.count() + elapsed_qr + elapsed_eigenvectors) / batch_size << " µs per matrix" << std::endl; */
 
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
