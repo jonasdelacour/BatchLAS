@@ -14,7 +14,7 @@
     #include <cusolverDn.h>
 #endif
 
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
     #include <lapacke.h>
     #ifndef BATCHLAS_HAS_MKL_BACKEND
         #include <cblas.h>
@@ -85,7 +85,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
@@ -115,7 +115,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
@@ -141,7 +141,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
@@ -171,7 +171,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
@@ -205,7 +205,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
@@ -239,7 +239,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
@@ -312,7 +312,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float**>(ptr);
@@ -347,7 +347,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float*>(ptr);
