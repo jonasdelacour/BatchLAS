@@ -30,7 +30,7 @@ option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
-option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
+option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 
