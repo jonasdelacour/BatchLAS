@@ -30,6 +30,7 @@ option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
+option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
@@ -544,8 +545,8 @@ function(find_rocm_libs)
     endif()
 endfunction()
 
-# Check for ROCm libraries if AMD GPU was detected
-if(HAS_AMD_GPU)
+# Check for ROCm libraries if an AMD GPU was detected **or** the user explicitly enabled ROCm support
+if(HAS_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
     find_rocm_libs()
 endif()
 
