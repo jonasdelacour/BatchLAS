@@ -32,6 +32,10 @@ option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
 
+# Default GPU architectures (override with -D or ccmake)
+set(BATCHLAS_AMD_ARCH "gfx942" CACHE STRING "AMD GPU architecture for ROCm")
+set(BATCHLAS_NVIDIA_ARCH "sm50" CACHE STRING "NVIDIA GPU architecture for CUDA")
+
 # SYCL is mandatory for this project
 message(STATUS "SYCL support is mandatory for BatchLAS")
 
@@ -285,18 +289,6 @@ detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
 detect_sycl_cpu_target()
-
-# Add all detected targets in a single -fsycl-targets option
-list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
-if(BATCHLAS_SYCL_TARGETS)
-    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
-    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
-endif()
-
-# This ensures proper integration with Intel's SYCL implementation
-message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
 
 # Function to find NVIDIA libraries like cuBLAS
 function(find_nvidia_libs)
@@ -560,6 +552,41 @@ if(HAS_AMD_GPU)
     find_rocm_libs()
 endif()
 
+# Finalise SYCL targets based on detected backends
+set(DETECTED_AMD_ARCH "")
+set(DETECTED_NVIDIA_ARCH "")
+foreach(_arch ${BATCHLAS_SYCL_TARGETS})
+    if(_arch MATCHES "gfx[0-9]+")
+        set(DETECTED_AMD_ARCH ${_arch})
+    elseif(_arch MATCHES "sm[0-9]+")
+        set(DETECTED_NVIDIA_ARCH ${_arch})
+    endif()
+endforeach()
+
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    set(_AMD_ARCH "${BATCHLAS_AMD_ARCH}")
+    if(DETECTED_AMD_ARCH AND "${BATCHLAS_AMD_ARCH}" STREQUAL "gfx942")
+        set(_AMD_ARCH ${DETECTED_AMD_ARCH})
+    endif()
+    list(FIND BATCHLAS_SYCL_TARGETS ${_AMD_ARCH} _amd_idx)
+    if(_amd_idx EQUAL -1)
+        list(APPEND BATCHLAS_SYCL_TARGETS ${_AMD_ARCH})
+    endif()
+    message(STATUS "Compiling for AMD architecture: ${_AMD_ARCH}")
+endif()
+
+if(BATCHLAS_ENABLE_CUDA)
+    set(_NVIDIA_ARCH "${BATCHLAS_NVIDIA_ARCH}")
+    if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm50")
+        set(_NVIDIA_ARCH ${DETECTED_NVIDIA_ARCH})
+    endif()
+    list(FIND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH} _nv_idx)
+    if(_nv_idx EQUAL -1)
+        list(APPEND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH})
+    endif()
+    message(STATUS "Compiling for NVIDIA architecture: ${_NVIDIA_ARCH}")
+endif()
+
 # Check for oneMKL for Intel GPUs
 function(find_onemkl_libs)
     # Check for Intel oneAPI MKL
@@ -630,6 +657,18 @@ endfunction()
 if(NOT MKL_FOUND)
     find_onemkl_libs()
 endif()
+
+# Apply final SYCL target flags
+list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
+if(BATCHLAS_SYCL_TARGETS)
+    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
+    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
+endif()
+
+# This ensures proper integration with Intel's SYCL implementation
+message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
 
 # Define compile-time backend macros
 if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BACKEND)
