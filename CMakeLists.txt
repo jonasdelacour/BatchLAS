@@ -84,7 +84,9 @@ if(SYCL_LS)
 
   if(DPCPP_COMPILER)
     message("Found dpc++ compiler: ${DPCPP_COMPILER}")
-    set(CMAKE_CXX_COMPILER ${DPCPP_COMPILER})
+    # Cache the compiler choice to stop CMake from thinking the value keeps changing
+    set(CMAKE_CXX_COMPILER "${DPCPP_COMPILER}" CACHE FILEPATH "DPC++ compiler" FORCE)
+    message(STATUS "C++ compiler locked to: ${CMAKE_CXX_COMPILER}")
   else()
     message("Could not find dpc++ compiler")
   endif()
@@ -95,13 +97,6 @@ endif()
 set(BATCHLAS_SYCL_TARGETS "")
 
 
-# Set the Intel oneAPI DPC++ compiler
-if(NOT DEFINED CMAKE_CXX_COMPILER) 
-    find_program(CMAKE_CXX_COMPILER NAMES icpx dpcpp)
-    if(NOT CMAKE_CXX_COMPILER)
-        message(FATAL_ERROR "Intel DPC++ compiler (icpx/dpcpp) not found. Please install Intel oneAPI Base Toolkit. SYCL is required for building BatchLAS.")
-    endif()
-endif()
 
 # Function to detect SYCL GPU architectures
 function(detect_sycl_gpu_architectures)
