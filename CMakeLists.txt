@@ -31,6 +31,8 @@ option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
+option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
+set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 
 # Default GPU architectures (override with -D or ccmake)
 set(BATCHLAS_AMD_ARCH "gfx942" CACHE STRING "AMD GPU architecture for ROCm")
@@ -668,6 +670,32 @@ if(NOT MKL_FOUND)
     find_onemkl_libs()
 endif()
 
+# Function to locate Netlib BLAS/LAPACK libraries
+function(find_netlib_libs)
+    if(NOT BATCHLAS_ENABLE_NETLIB)
+        return()
+    endif()
+
+    message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
+
+    find_library(LAPACKE_LIBRARY NAMES lapacke)
+    find_library(CBLAS_LIBRARY NAMES cblas blas)
+
+    if(LAPACKE_LIBRARY AND CBLAS_LIBRARY)
+        message(STATUS "Found LAPACKE: ${LAPACKE_LIBRARY}")
+        message(STATUS "Found CBLAS: ${CBLAS_LIBRARY}")
+        set(BATCHLAS_LAPACKE_LIBRARY ${LAPACKE_LIBRARY} PARENT_SCOPE)
+        set(BATCHLAS_CBLAS_LIBRARY ${CBLAS_LIBRARY} PARENT_SCOPE)
+        set(BATCHLAS_HAS_HOST_BACKEND TRUE PARENT_SCOPE)
+    else()
+        message(WARNING "LAPACKE/CBLAS libraries not found - disabling host backend")
+        set(BATCHLAS_HAS_HOST_BACKEND FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+# Detect host libraries
+find_netlib_libs()
+
 # Apply final SYCL target flags
 list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
 if(BATCHLAS_SYCL_TARGETS)
@@ -681,49 +709,35 @@ endif()
 message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
 
 # Define compile-time backend macros
-if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BACKEND)
-    # Default HOST backend is always available
+if(BATCHLAS_HAS_HOST_BACKEND)
     add_compile_definitions(BATCHLAS_HAS_HOST_BACKEND=1)
-    
-    if(BATCHLAS_HAS_CUDA_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_CUDA_BACKEND=1)
-    endif()
-    
-    if(BATCHLAS_HAS_ROCM_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_ROCM_BACKEND=1)
-    endif()
-    
-    if(BATCHLAS_HAS_MKL_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_MKL_BACKEND=1)
-        if(NOT MKL_FOUND)
-            # When using a manually discovered MKL installation, ensure ILP64
-            # interfaces are enabled globally.
-            add_compile_definitions(MKL_ILP64)
-        endif()
-    endif()
-    
-    # Generate backend configuration header
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/backend_config.h.in
-        ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-    )
-    include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-            DESTINATION include/batchlas)
-else()
-    # Only HOST backend available
-    add_compile_definitions(BATCHLAS_HAS_HOST_BACKEND=1)
-    message(STATUS "Only CPU HOST backend will be enabled")
-    
-    # Generate backend configuration header with just HOST backend
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/backend_config.h.in
-        ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-    )
-    include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-            DESTINATION include/batchlas)
 endif()
+
+if(BATCHLAS_HAS_CUDA_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_CUDA_BACKEND=1)
+endif()
+
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_ROCM_BACKEND=1)
+endif()
+
+if(BATCHLAS_HAS_MKL_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_MKL_BACKEND=1)
+    if(NOT MKL_FOUND)
+        # When using a manually discovered MKL installation, ensure ILP64
+        # interfaces are enabled globally.
+        add_compile_definitions(MKL_ILP64)
+    endif()
+endif()
+
+# Generate backend configuration header
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend_config.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
+)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
+        DESTINATION include/batchlas)
 
 # Set include directories
 include_directories(

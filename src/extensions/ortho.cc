@@ -329,6 +329,7 @@ namespace batchlas {
                 BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
     }  
 
+    #if BATCHLAS_HAS_CUDA_BACKEND
     #define ORTHO_INSTANTIATE(fp) \
     template Event ortho<Backend::CUDA, fp>( \
         Queue&, \
@@ -366,4 +367,5 @@ namespace batchlas {
     ORTHO_INSTANTIATE(std::complex<double>)
 
     #undef ORTHO_INSTANTIATE
+    #endif
 }
