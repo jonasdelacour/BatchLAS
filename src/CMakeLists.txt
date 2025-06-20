@@ -58,6 +58,14 @@ if(BATCHLAS_ENABLE_CUDA)
     )
 endif()
 
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    list(APPEND BATCHLAS_LINK_LIBRARIES
+        rocblas
+        rocsparse
+        rocsolver
+    )
+endif()
+
 if(BATCHLAS_HAS_MKL_BACKEND)
     list(APPEND BATCHLAS_LINK_LIBRARIES
         batchlas::mkl

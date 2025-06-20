@@ -21,10 +21,12 @@
     #endif // BATCHLAS_HAS_MKL_BACKEND
 #endif
 
-#ifdef USE_ROCM
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
     #include <hip/hip_runtime.h>
     #include <hip/hip_runtime_api.h>
-    #include <rocblas.h>
+    #include <rocblas/rocblas.h>
+    #include <rocsparse/rocsparse.h>
+    #include <rocsolver/rocsolver.h>
 #endif
 
 #ifdef USE_MAGMA
@@ -85,6 +87,11 @@ namespace batchlas{
             );
         } else
 #endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
+            return static_cast<rocblas_side>(side == Side::Left ? rocblas_side_left : rocblas_side_right);
+        } else
+#endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
@@ -115,6 +122,11 @@ namespace batchlas{
             );
         } else
 #endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCSOLVER) {
+            return job == JobType::EigenVectors ? rocblas_evect_original : rocblas_evect_none;
+        } else
+#endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
@@ -139,6 +151,11 @@ namespace batchlas{
             return static_cast<cublasDiagType_t>(
                 diag == Diag::NonUnit ? CUBLAS_DIAG_NON_UNIT : CUBLAS_DIAG_UNIT
             );
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS) {
+            return diag == Diag::NonUnit ? rocblas_diagonal_non_unit : rocblas_diagonal_unit;
         } else
 #endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
@@ -169,6 +186,11 @@ namespace batchlas{
             return static_cast<cusparseOrder_t>(
                 layout == Layout::RowMajor ? CUSPARSE_ORDER_ROW : CUSPARSE_ORDER_COL
             );
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCSPARSE) {
+            return static_cast<rocsparse_order>(layout == Layout::RowMajor ? rocsparse_order_row : rocsparse_order_column);
         } else
 #endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
@@ -205,6 +227,13 @@ namespace batchlas{
             );
         } else
 #endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
+            return uplo == Uplo::Upper ? rocblas_fill_upper : rocblas_fill_lower;
+        } else if constexpr (B == BackendLibrary::ROCSPARSE) {
+            return uplo == Uplo::Upper ? rocsparse_fill_mode_upper : rocsparse_fill_mode_lower;
+        } else
+#endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
@@ -237,6 +266,13 @@ namespace batchlas{
             return static_cast<cusparseOperation_t>(
                 trans == Transpose::NoTrans ? CUSPARSE_OPERATION_NON_TRANSPOSE : CUSPARSE_OPERATION_TRANSPOSE
             );
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
+            return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
+        } else if constexpr (B == BackendLibrary::ROCSPARSE) {
+            return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
         } else
 #endif
 #ifdef BATCHLAS_HAS_HOST_BACKEND
@@ -294,6 +330,20 @@ namespace batchlas{
             }
         } else
 #endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
+            (void)precision;
+            if constexpr (std::is_same_v<T, float>) {
+                return rocblas_datatype_f32_r;
+            } else if constexpr (std::is_same_v<T, double>) {
+                return rocblas_datatype_f64_r;
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return rocblas_datatype_f32_c;
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                return rocblas_datatype_f64_c;
+            }
+        } else
+#endif
         {
             throw std::runtime_error("Unsupported backend or type combination");
         }
@@ -309,6 +359,17 @@ namespace batchlas{
                 return reinterpret_cast<cuComplex**>(ptr);
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex**>(ptr);
+            }
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
+            if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                return ptr;
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return reinterpret_cast<rocblas_float_complex**>(ptr);
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                return reinterpret_cast<rocblas_double_complex**>(ptr);
             }
         } else
 #endif
@@ -344,6 +405,17 @@ namespace batchlas{
                 return reinterpret_cast<cuComplex*>(ptr);
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<cuDoubleComplex*>(ptr);
+            }
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
+            if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                return ptr;
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return reinterpret_cast<rocblas_float_complex*>(ptr);
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                return reinterpret_cast<rocblas_double_complex*>(ptr);
             }
         } else
 #endif
@@ -387,6 +459,17 @@ namespace batchlas{
                 return reinterpret_cast<const cuComplex*>(ptr);
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<const cuDoubleComplex*>(ptr);
+            }
+        } else
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
+            if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                return ptr;
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return reinterpret_cast<const rocblas_float_complex*>(ptr);
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                return reinterpret_cast<const rocblas_double_complex*>(ptr);
             }
         } else
 #endif
@@ -509,8 +592,39 @@ namespace batchlas{
         return status;
     }
 #endif
+
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+    inline auto check_status(rocblas_status status) {
+        if (status != rocblas_status_success) {
+            throw std::runtime_error("rocBLAS error: " + std::to_string(status));
+        }
+        return status;
+    }
+
+    inline auto check_status(rocsparse_status status) {
+        if (status != rocsparse_status_success) {
+            throw std::runtime_error("rocSPARSE error: " + std::to_string(status));
+        }
+        return status;
+    }
+#endif
     
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
+    template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+    auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
+        if constexpr (std::is_same_v<T,float>) {
+            return check_status(std::apply(fun1, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
+        } else if constexpr (std::is_same_v<T,double>) {
+            return check_status(std::apply(fun2, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
+        } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+            return check_status(std::apply(fun3, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
+        } else if constexpr (std::is_same_v<T,std::complex<double>>) {
+            return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
+        }
+    }
+#endif
+
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
@@ -572,12 +686,41 @@ namespace batchlas{
         struct BackendScalar<std::complex<double>, Backend::CUDA> {
             static constexpr cudaDataType_t type = CUDA_C_64F;
         };
+#endif
+
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        template <>
+        struct BackendScalar<float, Backend::ROCM> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f32_r;
+        };
+
+        template <>
+        struct BackendScalar<double, Backend::ROCM> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f64_r;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<float>, Backend::ROCM> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f32_c;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, Backend::ROCM> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f64_c;
+        };
+#endif
 
         template <typename T>
         struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
             static constexpr cublasComputeType_t type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_64F;
         };
 
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        template <typename T>
+        struct BlasComputeType<T, ComputePrecision::Default, Backend::ROCM> {
+            static constexpr rocblas_datatype type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? rocblas_datatype_f32_r : rocblas_datatype_f64_r;
+        };
+#endif
 
         /* template <>
         struct BackendTranspose<Transpose::NoTrans, Layout::ColMajor, Backend::CUDA> {
@@ -677,6 +820,43 @@ namespace batchlas{
 
     #endif
 
+
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+        template <>
+        struct LinalgHandle<Backend::ROCM> {
+            rocblas_handle blas_handle_{};
+            rocsparse_handle sparse_handle_{};
+
+            LinalgHandle() {
+                hipDeviceSynchronize();
+                rocblas_create_handle(&blas_handle_);
+                rocsparse_create_handle(&sparse_handle_);
+                hipDeviceSynchronize();
+            }
+
+            LinalgHandle(const LinalgHandle&) = delete;
+            LinalgHandle& operator=(const LinalgHandle&) = delete;
+            LinalgHandle(LinalgHandle&&) = delete;
+            LinalgHandle& operator=(LinalgHandle&&) = delete;
+
+            ~LinalgHandle() {
+                hipDeviceSynchronize();
+                rocblas_destroy_handle(blas_handle_);
+                rocsparse_destroy_handle(sparse_handle_);
+                hipDeviceSynchronize();
+            }
+
+            constexpr inline operator rocblas_handle() const { return blas_handle_; }
+            constexpr inline operator rocsparse_handle() const { return sparse_handle_; }
+
+            void setStream(const Queue& ctx) {
+                hipStream_t stream = sycl::get_native<sycl::backend::ext_oneapi_hip>(*ctx);
+                rocblas_set_stream(blas_handle_, stream);
+                rocsparse_set_stream(sparse_handle_, stream);
+            }
+        };
+
+#endif
 
     template <>
     struct LinalgHandle<Backend::NETLIB>{};
