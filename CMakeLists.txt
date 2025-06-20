@@ -34,7 +34,7 @@ option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
 
 # Default GPU architectures (override with -D or ccmake)
 set(BATCHLAS_AMD_ARCH "gfx942" CACHE STRING "AMD GPU architecture for ROCm")
-set(BATCHLAS_NVIDIA_ARCH "sm50" CACHE STRING "NVIDIA GPU architecture for CUDA")
+set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA")
 
 # SYCL is mandatory for this project
 message(STATUS "SYCL support is mandatory for BatchLAS")
@@ -558,7 +558,7 @@ set(DETECTED_NVIDIA_ARCH "")
 foreach(_arch ${BATCHLAS_SYCL_TARGETS})
     if(_arch MATCHES "gfx[0-9]+")
         set(DETECTED_AMD_ARCH ${_arch})
-    elseif(_arch MATCHES "sm[0-9]+")
+    elseif(_arch MATCHES "nvidia_gpu_sm_[0-9]+")
         set(DETECTED_NVIDIA_ARCH ${_arch})
     endif()
 endforeach()
@@ -576,14 +576,24 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
 endif()
 
 if(BATCHLAS_ENABLE_CUDA)
-    set(_NVIDIA_ARCH "${BATCHLAS_NVIDIA_ARCH}")
-    if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm50")
+    # Format the default NVIDIA architecture string
+    set(_NVIDIA_ARCH "nvidia_gpu_${BATCHLAS_NVIDIA_ARCH}")
+    
+    # Debug the detected architecture
+    message(STATUS "Detected NVIDIA architecture: ${DETECTED_NVIDIA_ARCH}")
+    
+    # Use detected architecture if available and default is still the original sm_50
+    if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm_50")
+        message(STATUS "Using detected NVIDIA architecture instead of default")
         set(_NVIDIA_ARCH ${DETECTED_NVIDIA_ARCH})
     endif()
+    
+    # Make sure the architecture is in the targets list
     list(FIND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH} _nv_idx)
     if(_nv_idx EQUAL -1)
         list(APPEND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH})
     endif()
+    
     message(STATUS "Compiling for NVIDIA architecture: ${_NVIDIA_ARCH}")
 endif()
 

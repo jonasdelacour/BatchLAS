@@ -79,7 +79,7 @@ Available options:
 - `BATCHLAS_ENABLE_OPENMP`: Enable OpenMP support (default: OFF)
 - `BATCHLAS_BUILD_PYTHON`: Build Python bindings (default: ON)
 - `BATCHLAS_AMD_ARCH`: AMD GPU architecture when building ROCm backend (default: gfx942)
-- `BATCHLAS_NVIDIA_ARCH`: NVIDIA GPU architecture when building CUDA backend (default: sm50)
+- `BATCHLAS_NVIDIA_ARCH`: NVIDIA GPU architecture when building CUDA backend (default: sm_50)
 
 ## Quick Start
 
