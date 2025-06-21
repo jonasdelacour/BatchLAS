@@ -31,21 +31,14 @@ install(TARGETS batchlas
     INCLUDES DESTINATION include
 )
 
-# Find LAPACKE and CBLAS libraries
-find_library(LAPACKE_LIBRARY NAMES lapacke PATHS ${LD_LIBRARY_PATH})
-find_library(CBLAS_LIBRARY NAMES cblas PATHS ${LD_LIBRARY_PATH})
+set(BATCHLAS_LINK_LIBRARIES)
 
-if(NOT LAPACKE_LIBRARY)
-  message(FATAL_ERROR "LAPACKE library not found")
+if(BATCHLAS_HAS_HOST_BACKEND)
+    list(APPEND BATCHLAS_LINK_LIBRARIES
+        ${BATCHLAS_LAPACKE_LIBRARY}
+        ${BATCHLAS_CBLAS_LIBRARY}
+    )
 endif()
-if(NOT CBLAS_LIBRARY)
-  message(FATAL_ERROR "CBLAS library not found")
-endif()
-
-set(BATCHLAS_LINK_LIBRARIES
-    ${LAPACKE_LIBRARY}
-    ${CBLAS_LIBRARY}
-)
 
 if(BATCHLAS_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)

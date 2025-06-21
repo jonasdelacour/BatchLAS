@@ -1,6 +1,10 @@
-set(BACKEND_SOURCES
-    netlib_lapack.cc
-)
+set(BACKEND_SOURCES)
+
+if(BATCHLAS_HAS_HOST_BACKEND)
+    list(APPEND BACKEND_SOURCES
+        netlib_lapack.cc
+    )
+endif()
 
 if(BATCHLAS_HAS_MKL_BACKEND)
     list(APPEND BACKEND_SOURCES

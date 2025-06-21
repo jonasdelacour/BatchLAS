@@ -30,7 +30,14 @@ option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
-option(BATCHLAS_BUILD_PYTHON "Build Python bindings" ON)
+option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
+option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
+option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
+set(BATCHLAS_HAS_HOST_BACKEND FALSE)
+
+# Default GPU architectures (override with -D or ccmake)
+set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
+set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA")
 
 # SYCL is mandatory for this project
 message(STATUS "SYCL support is mandatory for BatchLAS")
@@ -78,7 +85,9 @@ if(SYCL_LS)
 
   if(DPCPP_COMPILER)
     message("Found dpc++ compiler: ${DPCPP_COMPILER}")
-    set(CMAKE_CXX_COMPILER ${DPCPP_COMPILER})
+    # Cache the compiler choice to stop CMake from thinking the value keeps changing
+    set(CMAKE_CXX_COMPILER "${DPCPP_COMPILER}" CACHE FILEPATH "DPC++ compiler" FORCE)
+    message(STATUS "C++ compiler locked to: ${CMAKE_CXX_COMPILER}")
   else()
     message("Could not find dpc++ compiler")
   endif()
@@ -89,13 +98,6 @@ endif()
 set(BATCHLAS_SYCL_TARGETS "")
 
 
-# Set the Intel oneAPI DPC++ compiler
-if(NOT DEFINED CMAKE_CXX_COMPILER) 
-    find_program(CMAKE_CXX_COMPILER NAMES icpx dpcpp)
-    if(NOT CMAKE_CXX_COMPILER)
-        message(FATAL_ERROR "Intel DPC++ compiler (icpx/dpcpp) not found. Please install Intel oneAPI Base Toolkit. SYCL is required for building BatchLAS.")
-    endif()
-endif()
 
 # Function to detect SYCL GPU architectures
 function(detect_sycl_gpu_architectures)
@@ -164,7 +166,10 @@ function(detect_sycl_gpu_architectures)
     foreach(ARCH_MATCH ${ARCH_MATCHES})
         string(REGEX REPLACE "Architecture: ([^\n]+)" "\\1" ARCH_FLAG "${ARCH_MATCH}")
         string(STRIP "${ARCH_FLAG}" ARCH_FLAG)
-
+        # If the detected AMD architecture lacks the vendor prefix, add it.
+        if(ARCH_FLAG MATCHES "^gfx[0-9]+$")
+            set(ARCH_FLAG "amd_gpu_${ARCH_FLAG}")
+        endif()
         # Only keep GPU architecture names (avoid CPU architectures like intel_cpu_spr)
         if(ARCH_FLAG MATCHES "_gpu_")
             list(FIND GPU_ARCH_FLAGS "${ARCH_FLAG}" ARCH_INDEX)
@@ -285,18 +290,6 @@ detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
 detect_sycl_cpu_target()
-
-# Add all detected targets in a single -fsycl-targets option
-list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
-if(BATCHLAS_SYCL_TARGETS)
-    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
-    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
-endif()
-
-# This ensures proper integration with Intel's SYCL implementation
-message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
 
 # Function to find NVIDIA libraries like cuBLAS
 function(find_nvidia_libs)
@@ -555,9 +548,58 @@ function(find_rocm_libs)
     endif()
 endfunction()
 
-# Check for ROCm libraries if AMD GPU was detected
-if(HAS_AMD_GPU)
+# Check for ROCm libraries if an AMD GPU was detected **or** the user explicitly enabled ROCm support
+if(HAS_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
     find_rocm_libs()
+endif()
+
+# Finalise SYCL targets based on detected backends
+set(DETECTED_AMD_ARCH "")
+set(DETECTED_NVIDIA_ARCH "")
+foreach(_arch ${BATCHLAS_SYCL_TARGETS})
+    if(_arch MATCHES "amd_gpu_gfx[0-9]+")
+        set(DETECTED_AMD_ARCH ${_arch})
+    elseif(_arch MATCHES "nvidia_gpu_sm_[0-9]+")
+        set(DETECTED_NVIDIA_ARCH ${_arch})
+    endif()
+endforeach()
+
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    set(_AMD_ARCH "${BATCHLAS_AMD_ARCH}")
+    # Guarantee the canonical prefix for AMD targets provided by users or defaults
+    if(_AMD_ARCH MATCHES "^gfx[0-9]+$")
+        set(_AMD_ARCH "amd_gpu_${_AMD_ARCH}")
+    endif()
+    if(DETECTED_AMD_ARCH AND "${BATCHLAS_AMD_ARCH}" STREQUAL "amd_gpu_gfx942")
+        set(_AMD_ARCH ${DETECTED_AMD_ARCH})
+    endif()
+    list(FIND BATCHLAS_SYCL_TARGETS ${_AMD_ARCH} _amd_idx)
+    if(_amd_idx EQUAL -1)
+        list(APPEND BATCHLAS_SYCL_TARGETS ${_AMD_ARCH})
+    endif()
+    message(STATUS "Compiling for AMD architecture: ${_AMD_ARCH}")
+endif()
+
+if(BATCHLAS_ENABLE_CUDA)
+    # Format the default NVIDIA architecture string
+    set(_NVIDIA_ARCH "nvidia_gpu_${BATCHLAS_NVIDIA_ARCH}")
+    
+    # Debug the detected architecture
+    message(STATUS "Detected NVIDIA architecture: ${DETECTED_NVIDIA_ARCH}")
+    
+    # Use detected architecture if available and default is still the original sm_50
+    if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm_50")
+        message(STATUS "Using detected NVIDIA architecture instead of default")
+        set(_NVIDIA_ARCH ${DETECTED_NVIDIA_ARCH})
+    endif()
+    
+    # Make sure the architecture is in the targets list
+    list(FIND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH} _nv_idx)
+    if(_nv_idx EQUAL -1)
+        list(APPEND BATCHLAS_SYCL_TARGETS ${_NVIDIA_ARCH})
+    endif()
+    
+    message(STATUS "Compiling for NVIDIA architecture: ${_NVIDIA_ARCH}")
 endif()
 
 # Check for oneMKL for Intel GPUs
@@ -631,50 +673,74 @@ if(NOT MKL_FOUND)
     find_onemkl_libs()
 endif()
 
-# Define compile-time backend macros
-if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_MKL_BACKEND)
-    # Default HOST backend is always available
-    add_compile_definitions(BATCHLAS_HAS_HOST_BACKEND=1)
-    
-    if(BATCHLAS_HAS_CUDA_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_CUDA_BACKEND=1)
+# Function to locate Netlib BLAS/LAPACK libraries
+function(find_netlib_libs)
+    if(NOT BATCHLAS_ENABLE_NETLIB)
+        return()
     endif()
-    
-    if(BATCHLAS_HAS_ROCM_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_ROCM_BACKEND=1)
+
+    message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
+
+    find_library(LAPACKE_LIBRARY NAMES lapacke)
+    find_library(CBLAS_LIBRARY NAMES cblas blas)
+
+    if(LAPACKE_LIBRARY AND CBLAS_LIBRARY)
+        message(STATUS "Found LAPACKE: ${LAPACKE_LIBRARY}")
+        message(STATUS "Found CBLAS: ${CBLAS_LIBRARY}")
+        set(BATCHLAS_LAPACKE_LIBRARY ${LAPACKE_LIBRARY} PARENT_SCOPE)
+        set(BATCHLAS_CBLAS_LIBRARY ${CBLAS_LIBRARY} PARENT_SCOPE)
+        set(BATCHLAS_HAS_HOST_BACKEND TRUE PARENT_SCOPE)
+    else()
+        message(WARNING "LAPACKE/CBLAS libraries not found - disabling host backend")
+        set(BATCHLAS_HAS_HOST_BACKEND FALSE PARENT_SCOPE)
     endif()
-    
-    if(BATCHLAS_HAS_MKL_BACKEND)
-        add_compile_definitions(BATCHLAS_HAS_MKL_BACKEND=1)
-        if(NOT MKL_FOUND)
-            # When using a manually discovered MKL installation, ensure ILP64
-            # interfaces are enabled globally.
-            add_compile_definitions(MKL_ILP64)
-        endif()
-    endif()
-    
-    # Generate backend configuration header
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/backend_config.h.in
-        ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-    )
-    include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-            DESTINATION include/batchlas)
-else()
-    # Only HOST backend available
-    add_compile_definitions(BATCHLAS_HAS_HOST_BACKEND=1)
-    message(STATUS "Only CPU HOST backend will be enabled")
-    
-    # Generate backend configuration header with just HOST backend
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/backend_config.h.in
-        ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-    )
-    include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
-            DESTINATION include/batchlas)
+endfunction()
+
+# Detect host libraries
+find_netlib_libs()
+
+# Apply final SYCL target flags
+list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
+if(BATCHLAS_SYCL_TARGETS)
+    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
+    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
+    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
 endif()
+
+# This ensures proper integration with Intel's SYCL implementation
+message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
+
+# Define compile-time backend macros
+if(BATCHLAS_HAS_HOST_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_HOST_BACKEND=1)
+endif()
+
+if(BATCHLAS_HAS_CUDA_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_CUDA_BACKEND=1)
+endif()
+
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_ROCM_BACKEND=1)
+endif()
+
+if(BATCHLAS_HAS_MKL_BACKEND)
+    add_compile_definitions(BATCHLAS_HAS_MKL_BACKEND=1)
+    if(NOT MKL_FOUND)
+        # When using a manually discovered MKL installation, ensure ILP64
+        # interfaces are enabled globally.
+        add_compile_definitions(MKL_ILP64)
+    endif()
+endif()
+
+# Generate backend configuration header
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend_config.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
+)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
+        DESTINATION include/batchlas)
 
 # Set include directories
 include_directories(

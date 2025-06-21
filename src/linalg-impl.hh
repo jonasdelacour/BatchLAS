@@ -14,7 +14,7 @@
     #include <cusolverDn.h>
 #endif
 
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
     #include <lapacke.h>
     #ifndef BATCHLAS_HAS_MKL_BACKEND
         #include <cblas.h>
@@ -127,7 +127,7 @@ namespace batchlas{
             return job == JobType::EigenVectors ? rocblas_evect_original : rocblas_evect_none;
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
@@ -158,7 +158,7 @@ namespace batchlas{
             return diag == Diag::NonUnit ? rocblas_diagonal_non_unit : rocblas_diagonal_unit;
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
@@ -193,7 +193,7 @@ namespace batchlas{
             return static_cast<rocsparse_order>(layout == Layout::RowMajor ? rocsparse_order_row : rocsparse_order_column);
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
@@ -234,7 +234,7 @@ namespace batchlas{
             return uplo == Uplo::Upper ? rocsparse_fill_mode_upper : rocsparse_fill_mode_lower;
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
@@ -275,7 +275,7 @@ namespace batchlas{
             return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
@@ -373,7 +373,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float**>(ptr);
@@ -419,7 +419,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float*>(ptr);
@@ -722,29 +722,7 @@ namespace batchlas{
         };
 #endif
 
-        /* template <>
-        struct BackendTranspose<Transpose::NoTrans, Layout::ColMajor, Backend::CUDA> {
-            static constexpr cublasOperation_t type = CUBLAS_OP_N;
-        };
-
-        template <>
-        struct BackendTranspose<Transpose::NoTrans, Layout::RowMajor, Backend::CUDA> {
-            static constexpr cublasOperation_t type = CUBLAS_OP_T;
-        };  
-
-        template <>
-        struct BackendTranspose<Transpose::Trans, Layout::ColMajor, Backend::CUDA> {
-            static constexpr cublasOperation_t type = CUBLAS_OP_T;
-        };
-
-        template <>
-        struct BackendTranspose<Transpose::Trans, Layout::RowMajor, Backend::CUDA> {
-            static constexpr cublasOperation_t type = CUBLAS_OP_N;
-        }; */
-
-        inline cublasOperation_t backendTransposeOp(Transpose t) {
-            return (t == Transpose::NoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
-        }
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
 
         template <>
         struct LinalgHandle<Backend::CUDA> {
@@ -817,10 +795,7 @@ namespace batchlas{
                 cusolverDnSetStream(solver_handle_, stream);
             }
         };
-
-    #endif
-
-
+#endif
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
         template <>
         struct LinalgHandle<Backend::ROCM> {
