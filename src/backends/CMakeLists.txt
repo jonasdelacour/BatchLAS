@@ -20,4 +20,12 @@ if(BATCHLAS_ENABLE_CUDA)
     )
 endif()
 
+if(BATCHLAS_HAS_ROCM_BACKEND)
+    list(APPEND BACKEND_SOURCES
+        rocblas.cc
+        rocsparse.cc
+        rocsolver.cc
+    )
+endif()
+
 target_sources(batchlas PRIVATE ${BACKEND_SOURCES})
