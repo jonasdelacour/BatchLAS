@@ -30,10 +30,10 @@ namespace batchlas {
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha,
-                A.data_ptr(), BackendScalar<T,Back>::type, A.ld(),
-                B.data_ptr(), BackendScalar<T,Back>::type, B.ld(),
+                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(),
+                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(),
                 &beta,
-                C.data_ptr(), BackendScalar<T,Back>::type, C.ld(),
+                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(),
                 enum_convert<BackendLibrary::CUBLAS, T>(precision),
                 CUBLAS_GEMM_DFALT);
         } else {
@@ -41,10 +41,10 @@ namespace batchlas {
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha,
-                A.data_ptr(), BackendScalar<T,Back>::type, A.ld(), A.stride(),
-                B.data_ptr(), BackendScalar<T,Back>::type, B.ld(), B.stride(),
+                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
+                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
                 &beta,
-                C.data_ptr(), BackendScalar<T,Back>::type, C.ld(), C.stride(),
+                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
                 A.batch_size(),
                 enum_convert<BackendLibrary::CUBLAS, T>(precision),
                 CUBLAS_GEMM_DFALT);
@@ -116,16 +116,16 @@ namespace batchlas {
             cusolverDnCreateParams(&params);
             size_t device_l_work, host_l_work;
             cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, &device_l_work, &host_l_work);
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
             auto d_info = pool.allocate<int>(ctx, 1);
             cusolverDnXgeqrf(handle, params, m, n,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, device_work_space.data(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, device_work_space.data(),
                 device_l_work, host_work_space.data(), host_l_work, d_info.data());
         } else {
             auto tau_data = tau.data();
@@ -155,9 +155,9 @@ namespace batchlas {
             cusolverDnParams_t params;
             cusolverDnCreateParams(&params);
             cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,B>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,B>::type, tau.data(),
-                BackendScalar<T,B>::type, &device_l_work, &host_l_work);
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUBLAS>::type, &device_l_work, &host_l_work);
             return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work) 
                    + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
         } else {
@@ -340,9 +340,9 @@ namespace batchlas {
                 cusolverDnParams_t params;
                 cusolverDnCreateParams(&params);
                 cusolverDnXgetrs(handle, params, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    BackendScalar<T,Back>::type, A.data_ptr(), A.ld(),
+                    BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
                     pivots.data(),
-                    BackendScalar<T,Back>::type, B.data_ptr(), B.ld(),
+                    BackendScalar<T,BackendLibrary::CUBLAS>::type, B.data_ptr(), B.ld(),
                     info.data());
             } else {
                 int info;
