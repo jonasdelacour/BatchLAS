@@ -15,6 +15,6 @@ set(BENCHMARK_TARGETS
 foreach(test ${BENCHMARK_TARGETS})
     add_executable(${test} ${test}.cc)
     target_link_libraries(${test} PRIVATE batchlas)
-    add_test(NAME ${test} COMMAND ${test})
+    #add_test(NAME ${test} COMMAND ${test})
 endforeach()
 
