@@ -383,7 +383,10 @@ MatrixView<T, MType> Matrix<T, MType>::view() const {
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
     if constexpr (MType == MatrixFormat::Dense) {
-        return MatrixView<T, MType>(*this, 0, 0, rows, cols);
+        return MatrixView<T, MType>(*this, rows, cols, 
+                                    ld > 0 ? ld : this->ld(), 
+                                    stride > 0 ? stride : this->stride(), 
+                                    batch_size_);
     } else {
         // This implementation is simplified - in practice, extracting a submatrix from CSR format
         // requires conversion to coordinate format, extracting the submatrix, and converting back
