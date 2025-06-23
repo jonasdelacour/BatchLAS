@@ -7,8 +7,6 @@
 using namespace batchlas;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-
-#if BATCHLAS_HAS_CUDA_BACKEND
 TEST(InverseTest, InverseIdentityCheck) {
     Queue ctx(Device::default_device());
 
