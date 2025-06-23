@@ -284,19 +284,23 @@ namespace batchlas {
             auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors * 3, n, n * block_vectors * 3, batch_size, nullptr);
             auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors * 3, n, n * block_vectors * 3, batch_size, nullptr);
             work_size += BumpAllocator::allocation_size<std::byte>(ctx,syev_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors*3,block_vectors*3,block_vectors*3, 3*3*block_vectors*block_vectors,batch_size, nullptr), W, JobType::EigenVectors, Uplo::Lower));
-            work_size += BumpAllocator::allocation_size<std::byte>(ctx,ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm));
+            work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(    ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
+                                                                                    ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
             
             if (batch_size > 1) {
-                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 20;
+                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 21;
             }
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * batch_size);
+            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);
+            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size); //residuals
+            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size); //best residuals
             return work_size;
     }
 
