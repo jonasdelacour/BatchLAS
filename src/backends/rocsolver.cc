@@ -54,15 +54,17 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto info = pool.allocate<int>(ctx, A.batch_size());
+        auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
         if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyevd, rocsolver_dsyevd, rocsolver_cheevd, rocsolver_zheevd,
-                handle, enum_convert<BackendLibrary::ROCSOLVER>(jobtype), enum_convert<BackendLibrary::ROCSOLVER>(uplo),
-                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), info.data());
+            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
+                info.data());
         } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyevd_strided_batched, rocsolver_dsyevd_strided_batched,
+            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
                 rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
-                handle, enum_convert<BackendLibrary::ROCSOLVER>(jobtype), enum_convert<BackendLibrary::ROCSOLVER>(uplo),
-                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), eigenvalues.size()/A.batch_size(), info.data(), A.batch_size());
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
         }
         return ctx.get_event();
     }
