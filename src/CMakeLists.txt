@@ -59,11 +59,11 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
     )
 endif()
 
-if(BATCHLAS_HAS_MKL_BACKEND)
-    list(APPEND BATCHLAS_LINK_LIBRARIES
-        batchlas::mkl
-    )
-endif()
+#if(BATCHLAS_HAS_MKL_BACKEND)
+ #   list(APPEND BATCHLAS_LINK_LIBRARIES
+        #batchlas::mkl
+#  )
+#endif()
 
 target_link_libraries(batchlas
     PUBLIC 

@@ -7,9 +7,9 @@ if(BATCHLAS_HAS_HOST_BACKEND)
 endif()
 
 if(BATCHLAS_HAS_MKL_BACKEND)
-    list(APPEND BACKEND_SOURCES
-        mkl.cc
-    )
+    #list(APPEND BACKEND_SOURCES
+    #    mkl.cc
+    #)
 endif()
 
 if(BATCHLAS_ENABLE_CUDA)
