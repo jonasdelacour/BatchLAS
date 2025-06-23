@@ -74,10 +74,10 @@ namespace batchlas {
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
         if (descrA.batch_size() == 1) {
-            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host);
+            cusolverDnXsyevd_bufferSize(handle, params, enum_convert<BackendLibrary::CUSOLVER>(jobtype), enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
-                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host, descrA.batch_size());
+                cusolverDnXsyevBatched_bufferSize(handle, params, enum_convert<BackendLibrary::CUSOLVER>(jobtype), enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host, descrA.batch_size());
             #else
                 int l_work_device_int = 0;
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
@@ -148,17 +148,16 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         size_t l_work_device = 0;
-        size_t l_work_host;
+        size_t l_work_host = 0;
         cusolverDnParams_t params;
         cusolverDnCreateParams(&params);
         syevjInfo_t syevj_info;
         cusolverDnCreateSyevjInfo(&syevj_info);
         if (descrA.batch_size() == 1) {
-            cusolverDnXsyevd_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host);
+            cusolverDnXsyevd_bufferSize(handle, params, enum_convert<BackendLibrary::CUSOLVER>(jobtype), enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host);
         } else {
             #if USE_CUSOLVER_X_API
-                cusolverDnXsyevBatched_bufferSize(handle, params, CUSOLVER_EIG_MODE_VECTOR, enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows_, BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host, descrA.batch_size());
-            #else
+                cusolverDnXsyevBatched_bufferSize(handle, params, enum_convert<BackendLibrary::CUSOLVER>(jobtype), enum_convert<BackendLibrary::CUSOLVER>(uplo), descrA.rows(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, descrA.data_ptr(), descrA.ld(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, eigenvalues.data(), BackendScalar<T,BackendLibrary::CUSOLVER>::type, &l_work_device, &l_work_host, descrA.batch_size());            #else
                 int l_work_device_int = 0;
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
                     handle, jobtype, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_int, syevj_info, descrA.batch_size());
