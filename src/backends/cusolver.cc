@@ -15,6 +15,7 @@ namespace batchlas {
         #define USE_CUSOLVER_X_API 1
     #else
         #define USE_CUSOLVER_X_API 0
+        #pragma message("cuSOLVER X API is not available, using legacy API be wary batches of matrices larger than 128x128")
     #endif
 
     template <Backend B, typename T>
