@@ -34,13 +34,13 @@ struct BackendMatrixHandle {
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) {
         #ifdef BATCHLAS_HAS_CUDA_BACKEND
             if constexpr (MType == MatrixFormat::Dense) {
-                cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, Backend::CUDA>::type, CUSPARSE_ORDER_COL);
+                cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
                 if (matrix.batch_size() > 1) {
                     cusparseDnMatSetStridedBatch(cusparse_descr_, matrix.batch_size(), matrix.stride());
                 }
             } else if constexpr (MType == MatrixFormat::CSR) {
                 cusparseCreateCsr(&cusparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(), matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
-                                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<T, Backend::CUDA>::type);
+                                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<T, BackendLibrary::CUSPARSE>::type);
                 if (matrix.batch_size() > 1) {
                     cusparseCsrSetStridedBatch(cusparse_descr_sp_, matrix.batch_size(), matrix.offset_stride(), matrix.matrix_stride());
                 }
