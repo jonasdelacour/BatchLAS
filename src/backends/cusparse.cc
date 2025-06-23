@@ -40,7 +40,7 @@ namespace batchlas {
             *B_mat,
             &beta,
             *C,
-            BackendScalar<T,B>::type,
+            BackendScalar<T,BackendLibrary::CUSPARSE>::type,
             CUSPARSE_SPMM_ALG_DEFAULT,
             buffer.data()
         );
@@ -70,7 +70,7 @@ namespace batchlas {
             *B_mat,
             &beta,
             *C,
-            BackendScalar<T,B>::type,
+            BackendScalar<T,BackendLibrary::CUSPARSE>::type,
             CUSPARSE_SPMM_ALG_DEFAULT,
             &size
         );
