@@ -24,31 +24,26 @@ namespace batchlas {
         auto [kB, n] = get_effective_dims(B, transB);
         auto compute_type = enum_convert<BackendLibrary::ROCBLAS, T>(precision);
         if (A.batch_size() <= 1) {
-            rocblas_gemm_ex(handle,
-                             enum_convert<BackendLibrary::ROCBLAS>(transA),
-                             enum_convert<BackendLibrary::ROCBLAS>(transB),
-                             m, n, k,
-                             &alpha,
-                             A.data_ptr(), BackendScalar<T,Back>::type, A.ld(),
-                             B.data_ptr(), BackendScalar<T,Back>::type, B.ld(),
-                             &beta,
-                             C.data_ptr(), BackendScalar<T,Back>::type, C.ld(),
-                             C.data_ptr(), BackendScalar<T,Back>::type, C.ld(),
-                             compute_type,
-                             rocblas_gemm_algo_standard, 0, 0);
+            call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm, rocblas_dgemm, rocblas_cgemm, rocblas_zgemm,
+                             handle, transA, transB,
+                                m, n, k,
+                                &alpha,
+                                A.data_ptr(), A.ld(),
+                                B.data_ptr(), B.ld(),
+                                &beta,
+                                C.data_ptr(), C.ld());
         } else {
-            rocblas_gemm_strided_batched_ex(handle,
-                             enum_convert<BackendLibrary::ROCBLAS>(transA),
-                             enum_convert<BackendLibrary::ROCBLAS>(transB),
-                             m, n, k,
-                             &alpha,
-                             A.data_ptr(), BackendScalar<T,Back>::type, A.ld(), A.stride(),
-                             B.data_ptr(), BackendScalar<T,Back>::type, B.ld(), B.stride(),
-                             &beta,
-                             C.data_ptr(), BackendScalar<T,Back>::type, C.ld(), C.stride(),
-                             C.batch_size(),
-                             compute_type,
-                             rocblas_gemm_algo_standard, 0, 0);
+            call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm_strided_batched, rocblas_dgemm_strided_batched,
+                            rocblas_cgemm_strided_batched, rocblas_zgemm_strided_batched,
+                            handle,
+                            transA, transB,
+                            m, n, k,
+                            &alpha,
+                            A.data_ptr(), A.ld(), A.stride(),
+                            B.data_ptr(), B.ld(), B.stride(),
+                            &beta,
+                            C.data_ptr(), C.ld(), C.stride(),
+                            A.batch_size());
         }
         return ctx.get_event();
     }
