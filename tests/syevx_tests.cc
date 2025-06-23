@@ -8,9 +8,10 @@
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
 #include <batchlas/backend_config.h>
+#include "test_utils.hh"
 
 using namespace batchlas;
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_GPU_BACKEND
 // Test fixture for SYEVX operations
 class SyevxOperationsTest : public ::testing::Test {
 protected:
@@ -134,15 +135,15 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
     UnifiedVector<float> W_lobpcg(n * batch, 0);
     UnifiedVector<float> W_syev(n * batch, 0);
 
-    auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size<Backend::CUDA>(
+    auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
         *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params));
     ctx ->wait();
-    auto syev_workspace = UnifiedVector<std::byte>(syev_buffer_size<Backend::CUDA>(
+    auto syev_workspace = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower));
 
-    syevx<Backend::CUDA>(
+    syevx<test_utils::gpu_backend>(
         *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params);
-    syev<Backend::CUDA>(
+    syev<test_utils::gpu_backend>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
     ctx->wait();
 
@@ -176,12 +177,12 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     params.absolute_tolerance = 1e-6f;
     params.relative_tolerance = 1e-6f;
 
-    size_t buffer_size = syevx_buffer_size<Backend::CUDA>(
+    size_t buffer_size = syevx_buffer_size<test_utils::gpu_backend>(
         *ctx, A_view, W_data, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
 
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    syevx<Backend::CUDA>(
+    syevx<test_utils::gpu_backend>(
         *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
 
     ctx->wait();
@@ -215,10 +216,10 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     params.find_largest = true;
 
 
-    size_t buf_size = syevx_buffer_size<Backend::CUDA>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
+    size_t buf_size = syevx_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    syevx<Backend::CUDA>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
+    syevx<test_utils::gpu_backend>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
     std::vector<float> expected(n);
@@ -240,4 +241,4 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
-#endif // BATCHLAS_HAS_CUDA_BACKEND
+#endif // BATCHLAS_HAS_GPU_BACKEND

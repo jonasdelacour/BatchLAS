@@ -36,21 +36,7 @@ static void BM_SPMM(minibench::State& state) {
 }
 
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::ROCM>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::ROCM>), CubeBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::MKL>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::MKL>), CubeBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
-#endif
+
+BATCHLAS_REGISTER_BENCHMARK(BM_SPMM, CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

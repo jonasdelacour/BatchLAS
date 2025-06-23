@@ -3,12 +3,13 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
+#include "test_utils.hh"
 #include <complex>
 #include <vector>
 #include <iostream>
 
 using namespace batchlas;
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_GPU_BACKEND
 
 template <typename T>
 void print_matrix(const MatrixView<T, MatrixFormat::Dense>& mat, const std::string& name) {
@@ -55,10 +56,10 @@ protected:
 
         if (transQ == Transpose::NoTrans) { // Columns are orthogonal, Q is m x k
             // Result_actual = Q^T * Q
-            gemm<Backend::CUDA>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
+            gemm<test_utils::gpu_backend>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
         } else { // Rows are orthogonal, Q is k x m
             // Result_actual = Q * Q^T
-            gemm<Backend::CUDA>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::Trans);
+            gemm<test_utils::gpu_backend>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::Trans);
         }
         ctx->wait();
         // print_matrix(Result_actual_view, "Result_actual (Q^T*Q or Q*Q^T)");
@@ -115,15 +116,15 @@ protected:
         if (transQ == Transpose::NoTrans) { // Q is m x k_q (vectors are columns)
             // M is m x m (assuming M is symmetric and defines inner product for columns of Q)
             // Temp_MQ (m x k_q) = M (m x m) * Q (m x k_q)
-            gemm<Backend::CUDA>(*ctx, M_view, Q_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<test_utils::gpu_backend>(*ctx, M_view, Q_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             // Result_actual (k_q x k_q) = Q^T (k_q x m) * Temp_MQ (m x k_q)
-            gemm<Backend::CUDA>(*ctx, Q_view, Temp_MQ_view, Result_actual_view, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
+            gemm<test_utils::gpu_backend>(*ctx, Q_view, Temp_MQ_view, Result_actual_view, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
         } else { // Q is k_q x m (vectors are rows)
             // M is m x m
             // Temp_MQ (k_q x m) = Q (k_q x m) * M (m x m)
-            gemm<Backend::CUDA>(*ctx, Q_view, M_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<test_utils::gpu_backend>(*ctx, Q_view, M_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             // Result_actual (k_q x k_q) = Temp_MQ (k_q x m) * Q^T (m x k_q)
-            gemm<Backend::CUDA>(*ctx, Temp_MQ_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::Trans);
+            gemm<test_utils::gpu_backend>(*ctx, Temp_MQ_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::Trans);
         }
         ctx->wait();
 
@@ -187,7 +188,7 @@ protected:
         Matrix<T, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
         auto Result_AM_view = Result_AM.view();
 
-        gemm<Backend::CUDA>(*ctx, A_view, M_basis_view, Result_AM_view, T(1.0), T(0.0), opA, opM);
+        gemm<test_utils::gpu_backend>(*ctx, A_view, M_basis_view, Result_AM_view, T(1.0), T(0.0), opA, opM);
         ctx->wait();
 
         // print_matrix(Result_AM_view, "Result_AM (A vs M_basis)");
@@ -242,10 +243,10 @@ TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
 
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
-    size_t buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), A, transA, algo);
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, transA, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    ortho<Backend::CUDA, float>(*(this->ctx), A, transA, workspace.to_span(), algo);
+    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, transA, workspace.to_span(), algo);
     this->ctx->wait();
 
     this->check_orthonormality(A, transA, tol);
@@ -262,13 +263,13 @@ TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, batch_size);
     Matrix<float, MatrixFormat::Dense> Atransposed = A.to_row_major();
 
-    size_t buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), A, Transpose::NoTrans, algo);
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, Transpose::NoTrans, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    ortho<Backend::CUDA, float>(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), algo);
+    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), algo);
     this->ctx->wait();
     std::cout << A << std::endl;
-    ortho<Backend::CUDA, float>(*(this->ctx), MatrixView<float, MatrixFormat::Dense>(Atransposed, 0, 0, cols, rows, cols), Transpose::Trans, workspace.to_span(), algo);
+    ortho<test_utils::gpu_backend, float>(*(this->ctx), MatrixView<float, MatrixFormat::Dense>(Atransposed, 0, 0, cols, rows, cols), Transpose::Trans, workspace.to_span(), algo);
     this->ctx->wait();
     std::cout << MatrixView<float, MatrixFormat::Dense>(Atransposed, 0, 0, cols, rows, cols) << std::endl;
 
@@ -285,10 +286,10 @@ TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
 
     Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
-    size_t buffer_size = ortho_buffer_size<Backend::CUDA, double>(*(this->ctx), A, transA, algo);
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), A, transA, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    ortho<Backend::CUDA, double>(*(this->ctx), A, transA, workspace.to_span(), algo);
+    ortho<test_utils::gpu_backend, double>(*(this->ctx), A, transA, workspace.to_span(), algo);
     this->ctx->wait();
 
     this->check_orthonormality(A, transA, tol);
@@ -310,18 +311,18 @@ TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
     Matrix<float, MatrixFormat::Dense> M = Matrix<float, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
 
-    size_t ortho_M_buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), M, transM, algo);
+    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), M, transM, algo);
     UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<Backend::CUDA, float>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
+    ortho<test_utils::gpu_backend, float>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
     this->ctx->wait();
 
     this->check_orthonormality(M, transM, tol);
 
-    size_t buffer_size = ortho_buffer_size<Backend::CUDA, float>(*(this->ctx), A, M, transA, transM, algo);
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, M, transA, transM, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
     const size_t iterations = 2;
 
-    ortho<Backend::CUDA, float>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
+    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
     this->ctx->wait();
 
     this->check_orthonormality(A, transA, tol);
@@ -348,20 +349,20 @@ TEST_P(OrthoAgainstMDoubleTest, OrthogonalizeMatrixAgainstM) {
 
     Matrix<double, MatrixFormat::Dense> M_basis_orig = Matrix<double, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, false, batch_size);
     auto M_basis_view_orig = M_basis_orig.view();
-    size_t ortho_M_buffer_size = ortho_buffer_size<Backend::CUDA, double>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
+    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
     UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<Backend::CUDA, double>(*(this->ctx), M_basis_view_orig, transM_basis, workspace_M_ortho.to_span(), algo);
+    ortho<test_utils::gpu_backend, double>(*(this->ctx), M_basis_view_orig, transM_basis, workspace_M_ortho.to_span(), algo);
     this->ctx->wait();
     
     this->check_orthonormality(M_basis_view_orig, transM_basis, tol);
 
     auto M_ortho_basis_view = M_basis_view_orig;
 
-    size_t buffer_size = ortho_buffer_size<Backend::CUDA, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, algo);
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, algo);
     UnifiedVector<std::byte> workspace(buffer_size);
     const size_t iterations = 2;
 
-    ortho<Backend::CUDA, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, workspace.to_span(), algo, iterations);
+    ortho<test_utils::gpu_backend, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, workspace.to_span(), algo, iterations);
     this->ctx->wait();
 
     this->check_orthonormality(A_view, transA, tol);
@@ -453,4 +454,4 @@ INSTANTIATE_TEST_SUITE_P(
     }
 );
 
-#endif // BATCHLAS_HAS_CUDA_BACKEND
+#endif // BATCHLAS_HAS_GPU_BACKEND

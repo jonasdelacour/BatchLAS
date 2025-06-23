@@ -27,20 +27,7 @@ static void BM_TRSM(minibench::State& state) {
 
 
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::CUDA>), SquareBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::ROCM>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::ROCM>), SquareBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::MKL>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::MKL>), SquareBatchSizes);
-#endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::NETLIB>), SquareBatchSizesNetlib);
-#endif
+
+BATCHLAS_REGISTER_BENCHMARK(BM_TRSM, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

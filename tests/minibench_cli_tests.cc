@@ -2,6 +2,7 @@
 #include <util/minibench.hh>
 #include <blas/enums.hh>
 #include <batchlas/backend_config.h>
+#include "../benchmarks/bench_utils.hh"
 
 static int last_arg = 0;
 static void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
@@ -17,19 +18,19 @@ static void typed_bench(minibench::State&) {}
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::CUDA>(minibench::State&) { ++called_fc; }
-MINI_BENCHMARK_REGISTER_SIZES((typed_bench<float, batchlas::Backend::CUDA>), [](auto* b){ b->Args({1}); });
+BATCHLAS_BENCH_CUDA(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::ROCM>(minibench::State&) { ++called_fc; }
-MINI_BENCHMARK_REGISTER_SIZES((typed_bench<float, batchlas::Backend::ROCM>), [](auto* b){ b->Args({1}); });
+BATCHLAS_BENCH_ROCM(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
 #ifdef BATCHLAS_HAS_MKL_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::MKL>(minibench::State&) { ++called_fc; }
-MINI_BENCHMARK_REGISTER_SIZES((typed_bench<float, batchlas::Backend::MKL>), [](auto* b){ b->Args({1}); });
+BATCHLAS_BENCH_MKL(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
 #ifdef BATCHLAS_HAS_HOST_BACKEND

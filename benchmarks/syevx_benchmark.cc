@@ -41,21 +41,7 @@ static void BM_SYEVX(minibench::State& state) {
 }
 
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::CUDA>), SyevxBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::CUDA>), SyevxBenchSizes);
-#endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::ROCM>), SyevxBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::ROCM>), SyevxBenchSizes);
-#endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::MKL>), SyevxBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::MKL>), SyevxBenchSizes);
-#endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
-//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::NETLIB>), SyevxBenchSizesNetlib);
-//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::NETLIB>), SyevxBenchSizesNetlib);
-#endif
+
+BATCHLAS_REGISTER_BENCHMARK(BM_SYEVX, SyevxBenchSizes);
 
 MINI_BENCHMARK_MAIN();
