@@ -46,6 +46,30 @@ struct BackendMatrixHandle {
                 }
             }
         #endif
+        #ifdef BATCHLAS_HAS_ROCM_BACKEND
+            if constexpr (MType == MatrixFormat::Dense) {
+                rocsparse_create_dnmat_descr(&rocsparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(),
+                                            std::is_same_v<T, float> ? rocsparse_datatype_f32_r :
+                                            std::is_same_v<T, double> ? rocsparse_datatype_f64_r :
+                                            std::is_same_v<T, std::complex<float>> ? rocsparse_datatype_f32_c :
+                                            rocsparse_datatype_f64_c,
+                                            rocsparse_order_column);
+                if (matrix.batch_size() > 1) {
+                    rocsparse_dnmat_set_strided_batch(rocsparse_descr_, matrix.batch_size(), matrix.stride());
+                }
+            } else if constexpr (MType == MatrixFormat::CSR) {
+                rocsparse_create_csr_descr( &rocsparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(),
+                                            matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
+                                            rocsparse_indextype_i32, rocsparse_indextype_i32, rocsparse_index_base_zero,
+                                            std::is_same_v<T, float> ? rocsparse_datatype_f32_r :
+                                            std::is_same_v<T, double> ? rocsparse_datatype_f64_r :
+                                            std::is_same_v<T, std::complex<float>> ? rocsparse_datatype_f32_c :
+                                            rocsparse_datatype_f64_c);
+                if (matrix.batch_size() > 1) {
+                    rocsparse_csr_set_strided_batch(rocsparse_descr_sp_, matrix.batch_size(), matrix.offset_stride(), matrix.matrix_stride());
+                }
+            }
+        #endif
     }
 
     BackendMatrixHandle(const Matrix<T, MType>& matrix) : BackendMatrixHandle(matrix.view()) {}
@@ -62,7 +86,17 @@ struct BackendMatrixHandle {
         }
     #endif
     #ifdef BATCHLAS_HAS_ROCM_BACKEND
-        rocsparse_mat_descr rocm_descr_ = nullptr;
+        rocsparse_dnmat_descr rocsparse_descr_ = nullptr;
+        rocsparse_spmat_descr rocsparse_descr_sp_ = nullptr;
+
+
+        constexpr inline operator rocsparse_dnmat_descr() const {
+            return rocsparse_descr_;
+        }
+
+        constexpr inline operator rocsparse_spmat_descr() const {
+            return rocsparse_descr_sp_;
+        }
     #endif
 };
 
