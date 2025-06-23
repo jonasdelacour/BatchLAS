@@ -72,7 +72,7 @@ namespace batchlas {
     template <Backend B, typename T>
     Event syev_buffer_size(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
-                        Span<typename base_type<T>::type eigenvalues,
+                        Span<typename base_type<T>::type> eigenvalues,
                         JobType jobtype,
                         Uplo uplo) {
                             return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
@@ -85,11 +85,14 @@ namespace batchlas {
     template size_t potrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo);
     #define SYEV_INSTANTIATE(fp) \
     template Event syev<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
+    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t syev_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
 
     #define ROCSOLVER_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp)
+        SYEV_INSTANTIATE(fp) \
+        SYEV_BUFFER_SIZE_INSTANTIATE(fp)
 
     ROCSOLVER_INSTANTIATE(float)
     ROCSOLVER_INSTANTIATE(double)
