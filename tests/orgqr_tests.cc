@@ -10,11 +10,34 @@ struct OrgqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
+#include <batchlas/backend_config.h>
 using OrgqrTestTypes = ::testing::Types<
+#if BATCHLAS_HAS_HOST_BACKEND
     OrgqrConfig<float, Backend::NETLIB>,
-    OrgqrConfig<double, Backend::NETLIB>,
+    OrgqrConfig<double, Backend::NETLIB>
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
     OrgqrConfig<float, Backend::CUDA>,
-    OrgqrConfig<double, Backend::CUDA>>;
+    OrgqrConfig<double, Backend::CUDA>
+#if BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+    OrgqrConfig<float, Backend::ROCM>,
+    OrgqrConfig<double, Backend::ROCM>
+#if BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_MKL_BACKEND
+    OrgqrConfig<float, Backend::MKL>,
+    OrgqrConfig<double, Backend::MKL>
+#endif
+>;
 
 template <typename Config>
 class OrgqrTest : public ::testing::Test {

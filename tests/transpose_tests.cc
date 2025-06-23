@@ -2,7 +2,9 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <blas/extra.hh>
+#include <batchlas/backend_config.h>
 using namespace batchlas;
+#if BATCHLAS_HAS_CUDA_BACKEND
 
 template <typename T>
 class TransposeTest : public ::testing::Test {
@@ -88,3 +90,4 @@ TYPED_TEST(TransposeTest, SimpleTranspose) {
     }
 }
 
+#endif // BATCHLAS_HAS_CUDA_BACKEND

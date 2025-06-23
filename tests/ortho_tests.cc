@@ -2,11 +2,13 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
+#include <batchlas/backend_config.h>
 #include <complex>
 #include <vector>
 #include <iostream>
 
 using namespace batchlas;
+#if BATCHLAS_HAS_CUDA_BACKEND
 
 template <typename T>
 void print_matrix(const MatrixView<T, MatrixFormat::Dense>& mat, const std::string& name) {
@@ -451,3 +453,4 @@ INSTANTIATE_TEST_SUITE_P(
     }
 );
 
+#endif // BATCHLAS_HAS_CUDA_BACKEND

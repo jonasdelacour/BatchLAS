@@ -3,10 +3,13 @@
 #include <blas/matrix.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
+#include <batchlas/backend_config.h>
 #include <cmath>
 #include <vector>
 
 using namespace batchlas;
+
+#if BATCHLAS_HAS_CUDA_BACKEND
 
 // Typed test fixture for condition number computations
 template <typename T>
@@ -108,4 +111,6 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
         }
     }
 }
+
+#endif // BATCHLAS_HAS_CUDA_BACKEND
 

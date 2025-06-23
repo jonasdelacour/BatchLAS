@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
+#include <batchlas/backend_config.h>
 using namespace batchlas;
 
 // Symmetric eigenvalue decomposition benchmark
@@ -35,9 +36,21 @@ static void BM_LANCZOS(minibench::State& state) {
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
 }
 
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::CUDA>), SquareBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::CUDA>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::ROCM>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::ROCM>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::MKL>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::MKL>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
 //MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<float, Backend::NETLIB>), SquareBatchSizesNetlib);
 //MINI_BENCHMARK_REGISTER_SIZES((BM_LANCZOS<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+#endif
 
 MINI_BENCHMARK_MAIN();

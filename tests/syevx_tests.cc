@@ -7,8 +7,10 @@
 #include <blas/matrix.hh>
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
+#if BATCHLAS_HAS_CUDA_BACKEND
 // Test fixture for SYEVX operations
 class SyevxOperationsTest : public ::testing::Test {
 protected:
@@ -238,3 +240,4 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND

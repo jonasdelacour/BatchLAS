@@ -10,11 +10,34 @@ struct OrmqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
+#include <batchlas/backend_config.h>
 using OrmqrTestTypes = ::testing::Types<
+#if BATCHLAS_HAS_HOST_BACKEND
     OrmqrConfig<float, Backend::NETLIB>,
-    OrmqrConfig<double, Backend::NETLIB>,
+    OrmqrConfig<double, Backend::NETLIB>
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
     OrmqrConfig<float, Backend::CUDA>,
-    OrmqrConfig<double, Backend::CUDA>>;
+    OrmqrConfig<double, Backend::CUDA>
+#if BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+    OrmqrConfig<float, Backend::ROCM>,
+    OrmqrConfig<double, Backend::ROCM>
+#if BATCHLAS_HAS_MKL_BACKEND
+    ,
+#endif
+#endif
+#if BATCHLAS_HAS_MKL_BACKEND
+    OrmqrConfig<float, Backend::MKL>,
+    OrmqrConfig<double, Backend::MKL>
+#endif
+>;
 
 template <typename Config>
 class OrmqrTest : public ::testing::Test {

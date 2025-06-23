@@ -2,9 +2,13 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
 
+#if BATCHLAS_HAS_CUDA_BACKEND
+
+#if BATCHLAS_HAS_CUDA_BACKEND
 TEST(InverseTest, InverseIdentityCheck) {
     Queue ctx(Device::default_device());
 
@@ -34,6 +38,7 @@ TEST(InverseTest, InverseIdentityCheck) {
         }
     }
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

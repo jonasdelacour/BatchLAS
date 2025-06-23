@@ -4,12 +4,14 @@
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <sycl/sycl.hpp>
+#include <batchlas/backend_config.h>
 #include <iostream>
 #include <vector>
 #include <cmath>
 
 
 using namespace batchlas;
+#if BATCHLAS_HAS_CUDA_BACKEND
 // Test fixture for SYEVX operations
 class LanczosTestBase : public ::testing::Test {
 protected:
@@ -301,3 +303,4 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND

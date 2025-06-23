@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
 
@@ -36,9 +37,21 @@ static void BM_ORMQR(minibench::State& state) {
 }
 
 
+#ifdef BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<float, Backend::CUDA>), SquareBatchSizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<double, Backend::CUDA>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_ROCM_BACKEND
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<float, Backend::ROCM>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<double, Backend::ROCM>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_MKL_BACKEND
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<float, Backend::MKL>), SquareBatchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<double, Backend::MKL>), SquareBatchSizes);
+#endif
+#ifdef BATCHLAS_HAS_HOST_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<float, Backend::NETLIB>), SquareBatchSizesNetlib);
 MINI_BENCHMARK_REGISTER_SIZES((BM_ORMQR<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+#endif
 
 MINI_BENCHMARK_MAIN();
