@@ -247,8 +247,8 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         
         // Create temporary matrices for calculating buffer sizes
-        auto temp_C = MatrixView<T, MatrixFormat::Dense>(nullptr, k, k, k);
-        auto temp_view = MatrixView<T, MatrixFormat::Dense>(nullptr, m, k, m);
+        auto temp_C = MatrixView<T, MatrixFormat::Dense>(nullptr, k, k, k, k * k, batch_size);
+        auto temp_view = MatrixView<T, MatrixFormat::Dense>(nullptr, m, k, m, m * k, batch_size);
         auto is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3;
 
         auto mem_for_svqb = algo == OrthoAlgorithm::SVQB ? 
