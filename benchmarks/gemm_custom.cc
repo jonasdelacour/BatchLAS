@@ -5,9 +5,8 @@
 using namespace batchlas;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-MINI_BENCHMARK(gemm_custom);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+MINI_BENCHMARK(gemm_custom);
 static void gemm_custom(minibench::State& state) {
     state.PauseTiming();
     size_t m = state.range(0);
