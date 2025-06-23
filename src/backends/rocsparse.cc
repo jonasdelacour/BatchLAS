@@ -5,10 +5,11 @@
 #include <sycl/sycl.hpp>
 #include <blas/linalg.hh>
 #include <complex>
+#include "backend_handle.cc"
 
 namespace batchlas {
 
-    template <Backend B, typename T, MatrixFormat MFormat>
+    template <Backend Back, typename T, MatrixFormat MFormat>
     Event spmm(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
@@ -18,10 +19,10 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                Span<std::byte> workspace) {
-        static LinalgHandle<B> handle;
+        static LinalgHandle<Back> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        auto buffer_size = spmm_buffer_size<B>(ctx, A, B, C, alpha, beta, transA, transB);
+        auto buffer_size = spmm_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
         rocsparse_spmm(handle,
                        enum_convert<BackendLibrary::ROCSPARSE>(transA),
@@ -31,20 +32,7 @@ namespace batchlas {
                        *B,
                        &beta,
                        *C,
-                       BackendScalar<T,B>::type,
-                       rocsparse_spmm_alg_default,
-                       rocsparse_spmm_stage_preprocess,
-                       &buffer_size,
-                       buffer.data());
-        rocsparse_spmm(handle,
-                       enum_convert<BackendLibrary::ROCSPARSE>(transA),
-                       enum_convert<BackendLibrary::ROCSPARSE>(transB),
-                       &alpha,
-                       *A,
-                       *B,
-                       &beta,
-                       *C,
-                       BackendScalar<T,B>::type,
+                       BackendScalar<T,BackendLibrary::ROCSPARSE>::type,
                        rocsparse_spmm_alg_default,
                        rocsparse_spmm_stage_compute,
                        &buffer_size,
@@ -52,7 +40,7 @@ namespace batchlas {
         return ctx.get_event();
     }
 
-    template <Backend B, typename T, MatrixFormat MFormat>
+    template <Backend Back, typename T, MatrixFormat MFormat>
     size_t spmm_buffer_size(Queue& ctx,
                           const MatrixView<T, MFormat>& A,
                           const MatrixView<T, MatrixFormat::Dense>& B,
@@ -61,7 +49,7 @@ namespace batchlas {
                           T beta,
                           Transpose transA,
                           Transpose transB) {
-        static LinalgHandle<B> handle;
+        static LinalgHandle<Back> handle;
         handle.setStream(ctx);
         size_t size = 0;
         rocsparse_spmm(handle,
@@ -72,7 +60,7 @@ namespace batchlas {
                                  *B,
                                  &beta,
                                  *C,
-                       BackendScalar<T,B>::type,
+                       BackendScalar<T,BackendLibrary::ROCSPARSE>::type,
                        rocsparse_spmm_alg_default,
                        rocsparse_spmm_stage_buffer_size,
                        &size,
