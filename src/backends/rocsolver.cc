@@ -69,6 +69,16 @@ namespace batchlas {
         return ctx.get_event();
     }
 
+    template <Backend B, typename T>
+    Event syev_buffer_size(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        Span<typename base_type<T>::type eigenvalues,
+                        JobType jobtype,
+                        Uplo uplo) {
+                            return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
+                                   BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+    }
+
     #define POTRF_INSTANTIATE(fp) \
     template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>);
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
