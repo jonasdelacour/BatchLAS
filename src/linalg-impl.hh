@@ -22,8 +22,8 @@
 #endif
 
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
+    #define  __HIP_PLATFORM_AMD__
     #include <hip/hip_runtime.h>
-    #include <hip/hip_runtime_api.h>
     #include <rocblas/rocblas.h>
     #include <rocsparse/rocsparse.h>
     #include <rocsolver/rocsolver.h>
@@ -44,7 +44,7 @@
 
 
 namespace batchlas{
-    template <typename T, Backend B>
+    template <typename T, BackendLibrary B>
     struct BackendScalar;
 
     template <typename T, ComputePrecision P, Backend B>
@@ -668,52 +668,128 @@ namespace batchlas{
 
     #ifdef BATCHLAS_HAS_CUDA_BACKEND
         template <>
-        struct BackendScalar<float, Backend::CUDA> {
+        struct BackendScalar<float, BackendLibrary::CUBLAS> {
             static constexpr cudaDataType_t type = CUDA_R_32F;
         };
 
         template <>
-        struct BackendScalar<double, Backend::CUDA> {
+        struct BackendScalar<float, BackendLibrary::CUSPARSE> {
+            static constexpr cudaDataType_t type = CUDA_R_32F;
+        };
+
+        template <>
+        struct BackendScalar<float, BackendLibrary::CUSOLVER> {
+            static constexpr cudaDataType_t type = CUDA_R_32F;
+        };
+
+        
+        template <>
+        struct BackendScalar<double, BackendLibrary::CUBLAS> {
+            static constexpr cudaDataType_t type = CUDA_R_64F;
+        };
+        
+        template <>
+        struct BackendScalar<double, BackendLibrary::CUSPARSE> {
+            static constexpr cudaDataType_t type = CUDA_R_64F;
+        };
+        
+        template <>
+        struct BackendScalar<double, BackendLibrary::CUSOLVER> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
         };
 
         template <>
-        struct BackendScalar<std::complex<float>, Backend::CUDA> {
+        struct BackendScalar<std::complex<float>, BackendLibrary::CUBLAS> {
             static constexpr cudaDataType_t type = CUDA_C_32F;
         };
 
         template <>
-        struct BackendScalar<std::complex<double>, Backend::CUDA> {
+        struct BackendScalar<std::complex<float>, BackendLibrary::CUSPARSE> {
+            static constexpr cudaDataType_t type = CUDA_C_32F;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<float>, BackendLibrary::CUSOLVER> {
+            static constexpr cudaDataType_t type = CUDA_C_32F;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::CUBLAS> {
+            static constexpr cudaDataType_t type = CUDA_C_64F;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::CUSPARSE> {
+            static constexpr cudaDataType_t type = CUDA_C_64F;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::CUSOLVER> {
             static constexpr cudaDataType_t type = CUDA_C_64F;
         };
 #endif
 
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
         template <>
-        struct BackendScalar<float, Backend::ROCM> {
+        struct BackendScalar<float, BackendLibrary::ROCBLAS> {
             static constexpr rocblas_datatype type = rocblas_datatype_f32_r;
         };
 
         template <>
-        struct BackendScalar<double, Backend::ROCM> {
+        struct BackendScalar<float, BackendLibrary::ROCSPARSE> {
+            static constexpr rocsparse_datatype type = rocsparse_datatype_f32_r;
+        };
+
+        template <>
+        struct BackendScalar<float, BackendLibrary::ROCSOLVER> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f32_r;
+        };
+
+        template <>
+        struct BackendScalar<double, BackendLibrary::ROCBLAS> {
             static constexpr rocblas_datatype type = rocblas_datatype_f64_r;
         };
 
         template <>
-        struct BackendScalar<std::complex<float>, Backend::ROCM> {
+        struct BackendScalar<double, BackendLibrary::ROCSPARSE> {
+            static constexpr rocsparse_datatype type = rocsparse_datatype_f64_r;
+        };
+
+        template <>
+        struct BackendScalar<double, BackendLibrary::ROCSOLVER> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f64_r;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<float>, BackendLibrary::ROCBLAS> {
             static constexpr rocblas_datatype type = rocblas_datatype_f32_c;
         };
 
         template <>
-        struct BackendScalar<std::complex<double>, Backend::ROCM> {
+        struct BackendScalar<std::complex<float>, BackendLibrary::ROCSPARSE> {
+            static constexpr rocsparse_datatype type = rocsparse_datatype_f32_c;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<float>, BackendLibrary::ROCSOLVER> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f32_c;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::ROCBLAS> {
+            static constexpr rocblas_datatype type = rocblas_datatype_f64_c;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::ROCSPARSE> {
+            static constexpr rocsparse_datatype type = rocsparse_datatype_f64_c;
+        };
+
+        template <>
+        struct BackendScalar<std::complex<double>, BackendLibrary::ROCSOLVER> {
             static constexpr rocblas_datatype type = rocblas_datatype_f64_c;
         };
 #endif
-
-        template <typename T>
-        struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
-            static constexpr cublasComputeType_t type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_64F;
-        };
 
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
         template <typename T>
@@ -723,6 +799,11 @@ namespace batchlas{
 #endif
 
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
+
+        template <typename T>
+        struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
+            static constexpr cublasComputeType_t type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_64F;
+        };
 
         template <>
         struct LinalgHandle<Backend::CUDA> {
