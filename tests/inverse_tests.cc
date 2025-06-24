@@ -8,7 +8,7 @@
 using namespace batchlas;
 
 #if BATCHLAS_HAS_GPU_BACKEND
-#if BATCHLAS_HAS_GPU_BACKEND
+TEST(InverseTest, InverseIdentityCheck) {
     Queue ctx(Device::default_device());
 
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(40, 40, false, 2);
