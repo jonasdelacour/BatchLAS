@@ -70,7 +70,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T>
-    Event syev_buffer_size(Queue& ctx,
+    size_t syev_buffer_size(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         Span<typename base_type<T>::type> eigenvalues,
                         JobType jobtype,
