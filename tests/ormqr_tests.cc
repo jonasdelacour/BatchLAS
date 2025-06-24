@@ -21,7 +21,7 @@ protected:
     std::shared_ptr<Queue> ctx;
 
     void SetUp() override {
-        if constexpr (BackendType == Backend::CUDA) {
+        if constexpr (BackendType != Backend::NETLIB) {
             try {
                 ctx = std::make_shared<Queue>("gpu");
                 if (!(ctx->device().type == DeviceType::GPU)) {

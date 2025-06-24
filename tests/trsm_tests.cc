@@ -12,10 +12,10 @@
 
 using namespace batchlas;
 
-template <typename T, batchlas::Backend B>
+template <typename T, Backend B>
 struct TestConfig {
     using ScalarType = T;
-    static constexpr batchlas::Backend BackendVal = B;
+    static constexpr Backend BackendVal = B;
 };
 
 #include "test_utils.hh"
@@ -26,10 +26,10 @@ template<typename Config>
 class TrsmOperationsTest : public ::testing::Test {
 protected:
     using ScalarType = typename Config::ScalarType;
-    static constexpr batchlas::Backend BackendType = Config::BackendVal;
+    static constexpr Backend BackendType = Config::BackendVal;
     void SetUp() override {
         // Create a SYCL queue based on BackendType
-        if constexpr (BackendType == batchlas::Backend::CUDA) {
+        if constexpr (BackendType != Backend::NETLIB) {
             try {
                 ctx = std::make_shared<Queue>("gpu");
                 if (!(ctx->device().type == DeviceType::GPU)) {
