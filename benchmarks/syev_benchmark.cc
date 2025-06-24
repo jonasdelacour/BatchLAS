@@ -1,6 +1,6 @@
 #include <util/minibench.hh>
 #include <blas/functions.hh>
-
+#include "bench_utils.hh"
 using namespace batchlas;
 
 // Symmetric eigenvalue decomposition benchmark
