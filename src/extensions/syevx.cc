@@ -7,6 +7,7 @@
 #include <complex>
 #include <oneapi/dpl/random>
 #include <blas/linalg.hh>
+#include <batchlas/backend_config.h>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -304,8 +305,8 @@ namespace batchlas {
             return work_size;
     }
 
-    #define SYEVX_INSTANTIATE(fp, fmt) \
-    template Event syevx<Backend::CUDA, fp, fmt>(\
+    #define SYEVX_INSTANTIATE(back, fp, fmt) \
+    template Event syevx<back, fp, fmt>(\
         Queue&,\
         const MatrixView<fp, fmt>&,\
         Span<typename base_type<fp>::type>,\
@@ -314,7 +315,7 @@ namespace batchlas {
         JobType,\
         const MatrixView<fp, MatrixFormat::Dense>&,\
         const SyevxParams<fp>&);\
-    template size_t syevx_buffer_size<Backend::CUDA, fp, fmt>(\
+    template size_t syevx_buffer_size<back, fp, fmt>(\
         Queue&,\
         const MatrixView<fp, fmt>&,\
         Span<typename base_type<fp>::type>,\
@@ -323,13 +324,26 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&,\
         const SyevxParams<fp>&);
     
-    SYEVX_INSTANTIATE(float, MatrixFormat::Dense)
-    SYEVX_INSTANTIATE(double, MatrixFormat::Dense)
-    SYEVX_INSTANTIATE(std::complex<float>, MatrixFormat::Dense)
-    SYEVX_INSTANTIATE(std::complex<double>, MatrixFormat::Dense)
-    SYEVX_INSTANTIATE(float, MatrixFormat::CSR)
-    SYEVX_INSTANTIATE(double, MatrixFormat::CSR)
-    SYEVX_INSTANTIATE(std::complex<float>, MatrixFormat::CSR)
-    SYEVX_INSTANTIATE(std::complex<double>, MatrixFormat::CSR)
+
+    #define SYEVX_INSTANTIATE_FOR_BACKEND(back)\
+        SYEVX_INSTANTIATE(back, float, MatrixFormat::Dense)\
+        SYEVX_INSTANTIATE(back, double, MatrixFormat::Dense)\
+        SYEVX_INSTANTIATE(back, std::complex<float>, MatrixFormat::Dense)\
+        SYEVX_INSTANTIATE(back, std::complex<double>, MatrixFormat::Dense)\
+        SYEVX_INSTANTIATE(back, float, MatrixFormat::CSR)\
+        SYEVX_INSTANTIATE(back, double, MatrixFormat::CSR)\
+        SYEVX_INSTANTIATE(back, std::complex<float>, MatrixFormat::CSR)\
+        SYEVX_INSTANTIATE(back, std::complex<double>, MatrixFormat::CSR)
+
+    #if BATCHLAS_HAS_CUDA_BACKEND
+        SYEVX_INSTANTIATE_FOR_BACKEND(Backend::CUDA);
+    #endif
+    #if BATCHLAS_HAS_ROCM_BACKEND
+        SYEVX_INSTANTIATE_FOR_BACKEND(Backend::ROCM);
+    #endif
+    #if BATCHLAS_HAS_HOST_BACKEND
+        SYEVX_INSTANTIATE_FOR_BACKEND(Backend::NETLIB);
+    #endif
+
     #undef SYEVX_INSTANTIATE
 }
