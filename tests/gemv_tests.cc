@@ -18,12 +18,8 @@ struct TestConfig {
 };
 
 // Define the types to be tested
-using MyTypes = ::testing::Types<
-    TestConfig<float, batchlas::Backend::NETLIB>,
-    TestConfig<double, batchlas::Backend::NETLIB>,
-    TestConfig<float, batchlas::Backend::CUDA>,
-    TestConfig<double, batchlas::Backend::CUDA>
->;
+#include "test_utils.hh"
+using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
 // Test fixture for GEMV operations using MatrixView/VectorView, now templated
 template <typename Config>

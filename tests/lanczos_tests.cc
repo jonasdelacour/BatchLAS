@@ -4,12 +4,15 @@
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <sycl/sycl.hpp>
+#include <batchlas/backend_config.h>
+#include "test_utils.hh"
 #include <iostream>
 #include <vector>
 #include <cmath>
 
 
 using namespace batchlas;
+#if BATCHLAS_HAS_GPU_BACKEND
 // Test fixture for SYEVX operations
 class LanczosTestBase : public ::testing::Test {
 protected:
@@ -149,11 +152,11 @@ TEST_F(LanczosTestBase, LanczosTest) {
         batch_size);
         
         
-    size_t buffer_size = lanczos_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
+    size_t buffer_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
         eigenvectors, params);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    lanczos<Backend::CUDA>(
+    lanczos<test_utils::gpu_backend>(
         *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors, params);
 
     ctx->wait();
@@ -181,10 +184,10 @@ TEST_F(LanczosTestBase, LanczosTest) {
     }
 
     UnifiedVector<std::byte> spmm_workspace(
-        spmm_buffer_size<Backend::CUDA>(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size<test_utils::gpu_backend>(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
 
     //Compute R = A @ V - V @ diag(W)
-    spmm<Backend::CUDA>(
+    spmm<test_utils::gpu_backend>(
         *ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
 
     ctx->wait();
@@ -192,7 +195,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
     //Compute the norms of the residuals
     UnifiedVector<float> norms_memory(batch_size * rows * rows, 0.0f);
     
-    gemm<Backend::CUDA>(
+    gemm<test_utils::gpu_backend>(
         *ctx, residuals, residuals, MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
     ctx->wait();
 
@@ -231,10 +234,10 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     params.reorthogonalization_iterations = 2;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
 
-    size_t buf_size = lanczos_buffer_size<Backend::CUDA>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
+    size_t buf_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    lanczos<Backend::CUDA>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
+    lanczos<test_utils::gpu_backend>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
     ctx->wait();
 
     // expected eigenvalues for Toeplitz matrix
@@ -272,12 +275,12 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
         }
     }
     auto spmm_workspace = UnifiedVector<std::byte>(
-        spmm_buffer_size<Backend::CUDA>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
     // Compute residuals = A*v - v*λ
     std::cout << "Computing residuals..." << std::endl;
-    spmm<Backend::CUDA>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, 
+    spmm<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f,
                         Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
-    gemm<Backend::CUDA>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f, 
+    gemm<test_utils::gpu_backend>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f,
                         Transpose::NoTrans, Transpose::NoTrans);
     ctx->wait();
 
@@ -301,3 +304,4 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+#endif // BATCHLAS_HAS_GPU_BACKEND

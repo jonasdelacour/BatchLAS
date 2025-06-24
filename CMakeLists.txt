@@ -33,7 +33,9 @@ option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
+option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
+set(BATCHLAS_HAS_MKL_BACKEND FALSE)
 
 # Default GPU architectures (override with -D or ccmake)
 set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
@@ -45,10 +47,11 @@ message(STATUS "SYCL support is mandatory for BatchLAS")
 # Find dependencies
 find_package(OpenMP QUIET)
 
-# Try to find oneMKL via its CMake package configuration.  This is available
-# when Intel oneAPI is installed and `setvars.sh` has been sourced.
-find_package(MKL CONFIG QUIET)
-if(MKL_FOUND)
+if(BATCHLAS_ENABLE_MKL)
+  # Try to find oneMKL via its CMake package configuration.  This is available
+  # when Intel oneAPI is installed and `setvars.sh` has been sourced.
+  find_package(MKL CONFIG QUIET)
+  if(MKL_FOUND)
     # Determine which imported target exposes the SYCL interface.
     # The name changed from MKL::MKL_DPCPP (<= 2024.x) to MKL::MKL_SYCL (2025.x).
     if(TARGET MKL::MKL_DPCPP)
@@ -71,8 +74,11 @@ if(MKL_FOUND)
         target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
         set(BATCHLAS_HAS_MKL_BACKEND TRUE)
     endif()
-else()
+  else()
     message(STATUS "MKL not found via CMake package, falling back to manual search")
+  endif()
+else()
+  message(STATUS "MKL backend disabled")
 endif()
 
 find_program(SYCL_LS sycl-ls)
@@ -669,7 +675,7 @@ function(find_onemkl_libs)
 endfunction()
 
 # Check for MKL libraries on CPU or Intel GPU if the MKL package wasn't found
-if(NOT MKL_FOUND)
+if(BATCHLAS_ENABLE_MKL AND NOT MKL_FOUND)
     find_onemkl_libs()
 endif()
 

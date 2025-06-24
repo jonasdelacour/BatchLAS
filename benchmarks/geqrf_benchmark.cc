@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
+#include <batchlas/backend_config.h>
 #include <vector>
 #include <random>
 #include <memory>
@@ -37,9 +38,7 @@ static void BM_GEQRF(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEQRF<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+
+BATCHLAS_REGISTER_BENCHMARK(BM_GEQRF, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

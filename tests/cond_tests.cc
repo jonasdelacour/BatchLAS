@@ -3,10 +3,14 @@
 #include <blas/matrix.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
+#include <batchlas/backend_config.h>
+#include "test_utils.hh"
 #include <cmath>
 #include <vector>
 
 using namespace batchlas;
+
+#if BATCHLAS_HAS_GPU_BACKEND
 
 // Typed test fixture for condition number computations
 template <typename T>
@@ -68,7 +72,7 @@ TYPED_TEST(CondTest, IdentityMatrix) {
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
 
     for (auto nt : {NormType::One, NormType::Inf, NormType::Max}) {
-        auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), nt);
+        auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_NEAR(conds[b], static_cast<typename CondTest<T>::real_t>(1), this->tolerance())
@@ -76,7 +80,7 @@ TYPED_TEST(CondTest, IdentityMatrix) {
         }
     }
 
-    auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), NormType::Frobenius);
     this->ctx->wait();
     for (int b = 0; b < batch_size; ++b) {
         EXPECT_NEAR(conds[b], n, this->tolerance()) // Frobenius norm of identity is sqrt(n) so ||I|| * ||I^-1|| = sqrt(n) * sqrt(n) = n
@@ -100,7 +104,7 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
 
     for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
         real_t expected = CondTest<T>::expected_cond_diagonal(diag, nt);
-        auto conds = cond<Backend::CUDA>(*this->ctx, mat.view(), nt);
+        auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_NEAR(conds[b], expected, this->tolerance())
@@ -108,4 +112,6 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
         }
     }
 }
+
+#endif // BATCHLAS_HAS_GPU_BACKEND
 

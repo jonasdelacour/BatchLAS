@@ -10,11 +10,8 @@ struct OrgqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
-using OrgqrTestTypes = ::testing::Types<
-    OrgqrConfig<float, Backend::NETLIB>,
-    OrgqrConfig<double, Backend::NETLIB>,
-    OrgqrConfig<float, Backend::CUDA>,
-    OrgqrConfig<double, Backend::CUDA>>;
+#include "test_utils.hh"
+using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
 
 template <typename Config>
 class OrgqrTest : public ::testing::Test {

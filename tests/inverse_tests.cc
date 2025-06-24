@@ -2,9 +2,12 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
+#include <batchlas/backend_config.h>
+#include "test_utils.hh"
 
 using namespace batchlas;
 
+#if BATCHLAS_HAS_GPU_BACKEND
 TEST(InverseTest, InverseIdentityCheck) {
     Queue ctx(Device::default_device());
 
@@ -12,12 +15,12 @@ TEST(InverseTest, InverseIdentityCheck) {
     auto Adata = A.data();
     
     Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
-    UnifiedVector<std::byte> ws(inv_buffer_size<Backend::CUDA>(ctx, A.view()));
-    inv<Backend::CUDA>(ctx, A.view(), Ainverse.view(), ws);
+    UnifiedVector<std::byte> ws(inv_buffer_size<test_utils::gpu_backend>(ctx, A.view()));
+    inv<test_utils::gpu_backend>(ctx, A.view(), Ainverse.view(), ws);
     ctx.wait();
 
     Matrix<float, MatrixFormat::Dense> result(40,40,2);
-    gemm<Backend::CUDA>(ctx, A.view(), Ainverse.view(), result.view(), 1.0f, 0.0f,
+    gemm<test_utils::gpu_backend>(ctx, A.view(), Ainverse.view(), result.view(), 1.0f, 0.0f,
                         Transpose::NoTrans, Transpose::NoTrans);
     ctx.wait();
 
@@ -34,6 +37,7 @@ TEST(InverseTest, InverseIdentityCheck) {
         }
     }
 }
+#endif // BATCHLAS_HAS_GPU_BACKEND
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

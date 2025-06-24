@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
 
@@ -31,9 +32,7 @@ static void BM_GEMM(minibench::State& state) {
 
 
 // Register size/batch combinations at static‑init time using macro
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_GEMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
+
+BATCHLAS_REGISTER_BENCHMARK(BM_GEMM, CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

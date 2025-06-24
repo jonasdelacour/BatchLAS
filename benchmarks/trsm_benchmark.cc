@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
-
+#include <batchlas/backend_config.h>
+#include "bench_utils.hh"
 using namespace batchlas;
 
 // Single TRSM benchmark
@@ -24,10 +25,6 @@ static void BM_TRSM(minibench::State& state) {
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
 }
 
-
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_TRSM<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+BATCHLAS_REGISTER_BENCHMARK(BM_TRSM, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

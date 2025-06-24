@@ -259,14 +259,28 @@ size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
     return size;
 }
 
-#define TRIDAG_INSTANTIATE(fp) \
-    template Event tridiagonal_solver<Backend::CUDA, fp>(Queue&, Span<fp>, Span<fp>, Span<typename base_type<fp>::type>, Span<std::byte>, JobType, const MatrixView<fp, MatrixFormat::Dense>&, size_t, size_t); \
-    template size_t tridiagonal_solver_buffer_size<Backend::CUDA, fp>(Queue&, size_t, size_t, JobType);
+#define TRIDAG_INSTANTIATE(back, fp) \
+    template Event tridiagonal_solver<back, fp>(Queue&, Span<fp>, Span<fp>, Span<typename base_type<fp>::type>, Span<std::byte>, JobType, const MatrixView<fp, MatrixFormat::Dense>&, size_t, size_t); \
+    template size_t tridiagonal_solver_buffer_size<back, fp>(Queue&, size_t, size_t, JobType);
 
-TRIDAG_INSTANTIATE(float)
-TRIDAG_INSTANTIATE(double)
-//TRIDAG_INSTANTIATE(std::complex<float>)
-//TRIDAG_INSTANTIATE(std::complex<double>)
+#define TRIDIAG_INSTANTIATE_FOR_BACKEND(back) \
+    TRIDAG_INSTANTIATE(back, float) \
+    TRIDAG_INSTANTIATE(back, double) \
+    //TRIDAG_INSTANTIATE(back, std::complex<float>) \
+    //TRIDAG_INSTANTIATE(back, std::complex<double>)
+
+#if BATCHLAS_HAS_HOST_BACKEND
+    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+    #endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
+#endif
+
+//TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<float>)
+//TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<double>)
 
 #undef TRIDAG_INSTANTIATE
 

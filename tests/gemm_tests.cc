@@ -15,11 +15,9 @@ struct TestConfig {
     static constexpr batchlas::Backend BackendVal = B;
 };
 
-using GemmTestTypes = ::testing::Types<
-    TestConfig<float, batchlas::Backend::NETLIB>,
-    TestConfig<double, batchlas::Backend::NETLIB>,
-    TestConfig<float, batchlas::Backend::CUDA>,
-    TestConfig<double, batchlas::Backend::CUDA>>;
+#include "test_utils.hh"
+
+using GemmTestTypes = typename test_utils::backend_types<TestConfig>::type;
 
 template <typename Config>
 class GemmTest : public ::testing::Test {

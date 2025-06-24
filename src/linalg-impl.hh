@@ -913,9 +913,12 @@ namespace batchlas{
         };
 
 #endif
-
+#if BATCHLAS_HAS_HOST_BACKEND
     template <>
-    struct LinalgHandle<Backend::NETLIB>{};
+    struct LinalgHandle<Backend::NETLIB>{
+        void setStream(const Queue& ctx) {}
+    };
+#endif
 
 
     template <typename KernelName>

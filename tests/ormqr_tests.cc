@@ -10,11 +10,8 @@ struct OrmqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
-using OrmqrTestTypes = ::testing::Types<
-    OrmqrConfig<float, Backend::NETLIB>,
-    OrmqrConfig<double, Backend::NETLIB>,
-    OrmqrConfig<float, Backend::CUDA>,
-    OrmqrConfig<double, Backend::CUDA>>;
+#include "test_utils.hh"
+using OrmqrTestTypes = typename test_utils::backend_types<OrmqrConfig>::type;
 
 template <typename Config>
 class OrmqrTest : public ::testing::Test {

@@ -1,7 +1,8 @@
 #include <util/minibench.hh>
 #include <blas/extensions.hh>
 #include <blas/functions.hh>
-
+#include <batchlas/backend_config.h>
+#include "bench_utils.hh"
 using namespace batchlas;
 
 // SYEVX benchmark operating on dense symmetric matrices
@@ -40,9 +41,7 @@ static void BM_SYEVX(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::CUDA>), SyevxBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::CUDA>), SyevxBenchSizes);
-//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<float, Backend::NETLIB>), SyevxBenchSizesNetlib);
-//MINI_BENCHMARK_REGISTER_SIZES((BM_SYEVX<double, Backend::NETLIB>), SyevxBenchSizesNetlib);
+
+BATCHLAS_REGISTER_BENCHMARK(BM_SYEVX, SyevxBenchSizes);
 
 MINI_BENCHMARK_MAIN();

@@ -33,10 +33,8 @@ static void BM_ORGQR(minibench::State& state) {
 
 }
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<double, Backend::CUDA>), SquareBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<float, Backend::NETLIB>), SquareBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_ORGQR<double, Backend::NETLIB>), SquareBatchSizesNetlib);
+
+BATCHLAS_REGISTER_BENCHMARK(BM_ORGQR, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();
 

@@ -1,10 +1,12 @@
 #include <blas/linalg.hh>
 #include <util/minibench.hh>
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
 
-MINI_BENCHMARK(gemm_custom);
+#if BATCHLAS_HAS_CUDA_BACKEND
 
+MINI_BENCHMARK(gemm_custom);
 static void gemm_custom(minibench::State& state) {
     state.PauseTiming();
     size_t m = state.range(0);
@@ -27,10 +29,12 @@ static void gemm_custom(minibench::State& state) {
     queue.wait();
     state.StopTiming();
 }
-
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
 static auto* bench_cfg = BENCHMARK_gemm_custom
     ->Args({32, 32, 32, 1280}) ->Args({64, 64, 64, 1280})
     ->Args({128, 128, 128, 1280}) ->Args({256, 256, 256, 1280})
     ->Args({512, 512, 512, 1280}) ->Args({1024, 1024, 1024, 1280});
 
 MINI_BENCHMARK_MAIN();
+#endif

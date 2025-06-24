@@ -18,11 +18,8 @@ struct TestConfig {
     static constexpr batchlas::Backend BackendVal = B;
 };
 
-using TrsmTestTypes = ::testing::Types<
-    TestConfig<float, batchlas::Backend::NETLIB>,
-    TestConfig<double, batchlas::Backend::NETLIB>,
-    TestConfig<float, batchlas::Backend::CUDA>,
-    TestConfig<double, batchlas::Backend::CUDA>>;
+#include "test_utils.hh"
+using TrsmTestTypes = typename test_utils::backend_types<TestConfig>::type;
 
 // Template test fixture for TRSM operations
 template<typename Config>

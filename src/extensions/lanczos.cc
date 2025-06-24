@@ -9,6 +9,7 @@
 #include <oneapi/dpl/random>
 #include <oneapi/dpl/algorithm>
 #include <blas/linalg.hh>
+#include <batchlas/backend_config.h>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>
@@ -337,8 +338,8 @@ namespace batchlas {
         return basic_size  + eigenvectors_size + sort_size;
     }
 
-    #define LANCZOS_INSTANTIATE(fp, mf) \
-    template Event lanczos<Backend::CUDA, fp, mf>( \
+    #define LANCZOS_INSTANTIATE(back, fp, mf) \
+    template Event lanczos<back, fp, mf>( \
         Queue&, \
         const MatrixView<fp, mf>&, \
         Span<typename base_type<fp>::type>, \
@@ -346,7 +347,7 @@ namespace batchlas {
         JobType, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
-    template size_t lanczos_buffer_size<Backend::CUDA, fp, mf>( \
+    template size_t lanczos_buffer_size<back, fp, mf>( \
         Queue&, \
         const MatrixView<fp, mf>&, \
         Span<typename base_type<fp>::type>, \
@@ -354,12 +355,22 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
     
-    #define LANCZOS_INSTANTIATE_FOR_FP(fp) \
-        LANCZOS_INSTANTIATE(fp, MatrixFormat::CSR) \
-        LANCZOS_INSTANTIATE(fp, MatrixFormat::Dense)
+    #define LANCZOS_INSANTIATE_FOR_BACKEND(back)\
+        LANCZOS_INSTANTIATE(back, float, MatrixFormat::CSR)\
+        LANCZOS_INSTANTIATE(back, float, MatrixFormat::Dense)\
+        LANCZOS_INSTANTIATE(back, double, MatrixFormat::CSR)\
+        LANCZOS_INSTANTIATE(back, double, MatrixFormat::Dense)
 
-    LANCZOS_INSTANTIATE_FOR_FP(float)
-    LANCZOS_INSTANTIATE_FOR_FP(double)
+    #if BATCHLAS_HAS_CUDA_BACKEND
+        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::CUDA)
+    #endif
+    #if BATCHLAS_HAS_ROCM_BACKEND
+        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::ROCM)
+    #endif
+    #if BATCHLAS_HAS_HOST_BACKEND
+        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::NETLIB)
+    #endif
+
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
 

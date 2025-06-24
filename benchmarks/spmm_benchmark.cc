@@ -1,6 +1,7 @@
 #include <util/minibench.hh>
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
+#include <batchlas/backend_config.h>
 
 using namespace batchlas;
 
@@ -35,9 +36,7 @@ static void BM_SPMM(minibench::State& state) {
 }
 
 
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::CUDA>), CubeBatchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<float, Backend::NETLIB>), CubeBatchSizesNetlib);
-MINI_BENCHMARK_REGISTER_SIZES((BM_SPMM<double, Backend::NETLIB>), CubeBatchSizesNetlib);
+
+BATCHLAS_REGISTER_BENCHMARK(BM_SPMM, CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();
