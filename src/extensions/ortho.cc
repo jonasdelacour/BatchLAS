@@ -8,6 +8,8 @@
 #include <numeric>
 #include <algorithm>
 #include <blas/linalg.hh>
+#include <batchlas/backend_config.h>
+
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
@@ -329,15 +331,14 @@ namespace batchlas {
                 BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
     }  
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
-    #define ORTHO_INSTANTIATE(fp) \
-    template Event ortho<Backend::CUDA, fp>( \
+    #define ORTHO_INSTANTIATE(back, fp) \
+    template Event ortho<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Transpose, \
         Span<std::byte>, \
         OrthoAlgorithm); \
-    template Event ortho<Backend::CUDA, fp>( \
+    template Event ortho<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
@@ -346,12 +347,12 @@ namespace batchlas {
         Span<std::byte>, \
         OrthoAlgorithm, \
         size_t); \
-    template size_t ortho_buffer_size<Backend::CUDA, fp>( \
+    template size_t ortho_buffer_size<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Transpose, \
         OrthoAlgorithm); \
-    template size_t ortho_buffer_size<Backend::CUDA, fp>( \
+    template size_t ortho_buffer_size<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
@@ -361,11 +362,21 @@ namespace batchlas {
         size_t);
 
     // Instantiate for the floating-point types of interest
-    ORTHO_INSTANTIATE(float)
-    ORTHO_INSTANTIATE(double)
-    ORTHO_INSTANTIATE(std::complex<float>)
-    ORTHO_INSTANTIATE(std::complex<double>)
+    #define INSTANTIATE_ORTHO_FOR_BACKEND(back)\
+        ORTHO_INSTANTIATE(back, float) \
+        ORTHO_INSTANTIATE(back, double)\
+        ORTHO_INSTANTIATE(back, std::complex<float>)\
+        ORTHO_INSTANTIATE(back, std::complex<double>)
+
+    #if BATCHLAS_HAS_CUDA_BACKEND
+        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::CUDA)
+    #endif
+    #if BATCHLAS_HAS_ROCM_BACKEND 
+        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::ROCM)
+    #endif
+    #if BATCHLAS_HAS_HOST_BACKEND 
+        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::NETLIB)
+    #endif
 
     #undef ORTHO_INSTANTIATE
-    #endif
 }
