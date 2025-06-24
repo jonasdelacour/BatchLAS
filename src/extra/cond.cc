@@ -65,24 +65,36 @@ namespace batchlas
         return conds;
     }
 
-    #define COND_INSTANTIATE(fp, fmt) \
-    template Event cond<Backend::CUDA, fp, fmt>(\
+    #define COND_INSTANTIATE(back, fp, fmt) \
+    template Event cond<back, fp, fmt>(\
         Queue&,\
         const MatrixView<fp, fmt>&,\
         const NormType,\
         const Span<fp>,\
         const Span<std::byte>);\
-    template UnifiedVector<fp> cond<Backend::CUDA, fp, fmt>(\
+    template UnifiedVector<fp> cond<back, fp, fmt>(\
         Queue&,\
         const MatrixView<fp, fmt>&,\
         const NormType);\
-    template size_t cond_buffer_size<Backend::CUDA, fp, fmt>(\
+    template size_t cond_buffer_size<back, fp, fmt>(\
         Queue&,\
         const MatrixView<fp, fmt>&,\
         const NormType);
+
+    #define COND_INSTANTIATE_FOR_BACKEND(back) \
+        COND_INSTANTIATE(back, float, MatrixFormat::Dense) \
+        COND_INSTANTIATE(back, double, MatrixFormat::Dense) 
+
+    #if BATCHLAS_HAS_CUDA_BACKEND
+        COND_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+    #endif
+    #if BATCHLAS_HAS_ROCM_BACKEND
+        //COND_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
+    #endif
+    #if BATCHLAS_HAS_HOST_BACKEND
+        COND_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
+    #endif
     
-    COND_INSTANTIATE(float, MatrixFormat::Dense)
-    COND_INSTANTIATE(double, MatrixFormat::Dense)
 
 } // namespace batchlas
 

@@ -43,15 +43,28 @@ namespace batchlas {
         return Aout;
     }
 
-#define INV_INSTANTIATE(fp) \
-    template Event inv<Backend::CUDA, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<std::byte>); \
-    template size_t inv_buffer_size<Backend::CUDA, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&); \
-    template Matrix<fp, MatrixFormat::Dense> inv<Backend::CUDA, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
+#define INV_INSTANTIATE(back, fp) \
+    template Event inv<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<std::byte>); \
+    template size_t inv_buffer_size<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&); \
+    template Matrix<fp, MatrixFormat::Dense> inv<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
 
-    INV_INSTANTIATE(float)
-    INV_INSTANTIATE(double)
-    INV_INSTANTIATE(std::complex<float>)
-    INV_INSTANTIATE(std::complex<double>)
+#define INV_INSTANTIATE_FOR_BACK(back)\
+    INV_INSTANTIATE(back, float) \
+    INV_INSTANTIATE(back, double) \
+    INV_INSTANTIATE(back, std::complex<float>) \
+    INV_INSTANTIATE(back, std::complex<double>) 
+
+#if BATCHLAS_HAS_CUDA_BACKEND
+    #pragma message "Instantiating inv for CUDA backend"
+    INV_INSTANTIATE_FOR_BACK(Backend::CUDA)
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+    #pragma message "Instantiating inv for ROCM backend"
+    //INV_INSTANTIATE_FOR_BACK(Backend::ROCM)
+#endif
+#if BATCHLAS_HAS_HOST_BACKEND
+    //INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
+#endif
 
 #undef INV_INSTANTIATE
 
