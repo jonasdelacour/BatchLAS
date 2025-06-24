@@ -36,6 +36,8 @@ option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_MKL_BACKEND FALSE)
+set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
+set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
 
 # Default GPU architectures (override with -D or ccmake)
 set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
