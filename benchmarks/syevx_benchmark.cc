@@ -2,7 +2,7 @@
 #include <blas/extensions.hh>
 #include <blas/functions.hh>
 #include <batchlas/backend_config.h>
-
+#include "bench_utils.hh"
 using namespace batchlas;
 
 // SYEVX benchmark operating on dense symmetric matrices
