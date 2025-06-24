@@ -9,10 +9,10 @@
 
 using namespace batchlas;
 
-template <typename T, batchlas::Backend B>
+template <typename T, Backend B>
 struct TestConfig {
     using ScalarType = T;
-    static constexpr batchlas::Backend BackendVal = B;
+    static constexpr Backend BackendVal = B;
 };
 
 #include "test_utils.hh"
@@ -23,11 +23,11 @@ template <typename Config>
 class GemmTest : public ::testing::Test {
 protected:
     using ScalarType = typename Config::ScalarType;
-    static constexpr batchlas::Backend BackendType = Config::BackendVal;
+    static constexpr Backend BackendType = Config::BackendVal;
 
     void SetUp() override {
         // Create a SYCL queue based on BackendType
-        if constexpr (BackendType == batchlas::Backend::CUDA) {
+        if constexpr (BackendType != Backend::NETLIB) {
             try {
                 ctx = std::make_shared<Queue>("gpu");
                 if (!(ctx->device().type == DeviceType::GPU)) {
@@ -100,7 +100,7 @@ TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
     // Create matrix views with the new matrix handle format - using default template parameters
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->cols, this->cols, this->ld);
@@ -122,7 +122,7 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
 // Test batched GEMM operation
 TYPED_TEST(GemmTest, BatchedGemm) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
     // Create batched matrix views - using default template parameters
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);

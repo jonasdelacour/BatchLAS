@@ -11,10 +11,10 @@
 using namespace batchlas;
 
 // Configuration struct for parameterized tests
-template <typename T, batchlas::Backend B>
+template <typename T, Backend B>
 struct TestConfig {
     using ScalarType = T;
-    static constexpr batchlas::Backend BackendVal = B;
+    static constexpr Backend BackendVal = B;
 };
 
 // Define the types to be tested
@@ -26,11 +26,11 @@ template <typename Config>
 class GemvMatrixViewTest : public ::testing::Test {
 protected:
     using ScalarType = typename Config::ScalarType;
-    static constexpr batchlas::Backend BackendType = Config::BackendVal;
+    static constexpr Backend BackendType = Config::BackendVal;
 
     void SetUp() override {
         // Create a SYCL queue based on BackendType
-        if constexpr (BackendType == batchlas::Backend::CUDA) {
+        if constexpr (BackendType != Backend::NETLIB) {
             try {
                 this->ctx = std::make_shared<Queue>("gpu");
                 // Check if a GPU device was actually obtained
@@ -154,7 +154,7 @@ TYPED_TEST_SUITE(GemvMatrixViewTest, MyTypes);
 // Test single GEMV operation with no transpose using MatrixView
 TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
     VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1); 
@@ -179,7 +179,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
 // Test single GEMV operation with transpose using MatrixView
 TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
 
     ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
@@ -207,7 +207,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 // Test batched GEMV operation using MatrixView
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
                                                 this->rows * this->cols, this->batch_size); 
@@ -237,7 +237,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
 // Test batched GEMV operation with transpose using MatrixView
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
 
     ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
@@ -269,7 +269,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 // Test both alpha and beta in batched GEMV
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
     using ScalarType = typename TestFixture::ScalarType;
-    constexpr batchlas::Backend BackendType = TestFixture::BackendType;
+    constexpr Backend BackendType = TestFixture::BackendType;
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
                                                 this->rows * this->cols, this->batch_size); 
