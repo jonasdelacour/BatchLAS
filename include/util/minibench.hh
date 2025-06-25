@@ -604,7 +604,7 @@ inline void SyevxBenchSizes(Benchmark* b) {
 
 template <typename Benchmark>
 inline void SyevxBenchSizesNetlib(Benchmark* b) {
-    for (int n : {16, 32, 64, 128}) {
+    for (int n : {64, 128, 256}) {
         for (int bs : {1, 10, 100}) {
             for (int ne : {2, 4, 8}) {
                 b->Args({n, bs, ne});
