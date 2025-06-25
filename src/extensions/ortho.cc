@@ -50,6 +50,7 @@ namespace batchlas {
         auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, ATA_stride, batch_size, matATAmem.data());
         auto potrf_workspace = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
         
+        
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
         
         auto chol_alg = [&](){
@@ -144,40 +145,51 @@ namespace batchlas {
             chol_alg();
         };
 
-        if (algo == OrthoAlgorithm::Cholesky){
-            chol_alg();
-        } else if (algo == OrthoAlgorithm::Chol2){
-            chol_alg();
-            chol_alg();
-        } else if (algo == OrthoAlgorithm::ShiftChol3) {
-            shift_chol_alg();
-        } else if (algo == OrthoAlgorithm::Householder) {
-            throw std::runtime_error("Householder is not implemented yet");
-        } else if (algo == OrthoAlgorithm::CGS2) {
-            cgs_alg();
-        } else if (algo == OrthoAlgorithm::SVQB) {
-            auto diags = pool.allocate<T>(ctx, batch_size * k);
-            auto lambdas = pool.allocate<float_t>(ctx, batch_size * k);
-            auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower));
-            auto output_basis = pool.allocate<T>(ctx, batch_size * m * k);
-            //Compute A^T * A
-            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
-            //Compute D = diag(A^T * A) ^-1/2
-            ctx -> submit([&](sycl::handler& h) {
-                auto ATA_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+        switch (algo) {
+            case OrthoAlgorithm::Cholesky:
+                chol_alg();
+                break;
+            case OrthoAlgorithm::Chol2:
+                chol_alg();
+                chol_alg();
+                break;
+            case OrthoAlgorithm::ShiftChol3:
+                shift_chol_alg();
+                break;
+            case OrthoAlgorithm::Householder: {
+                auto tau = pool.allocate<T>(ctx, k);
+                auto geqrf_workspace = pool.allocate<std::byte>(ctx, geqrf_buffer_size<B>(ctx, A, tau));
+                auto orgqr_workspace = pool.allocate<std::byte>(ctx, orgqr_buffer_size<B>(ctx, A, tau));
+                geqrf<B>(ctx, A, tau, geqrf_workspace);
+                orgqr<B>(ctx, A, tau, orgqr_workspace);
+                break;
+            }
+            case OrthoAlgorithm::CGS2:
+                cgs_alg();
+                break;
+            case OrthoAlgorithm::SVQB: {
+                auto diags = pool.allocate<T>(ctx, batch_size * k);
+                auto lambdas = pool.allocate<float_t>(ctx, batch_size * k);
+                auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower));
+                auto output_basis = pool.allocate<T>(ctx, batch_size * m * k);
+                //Compute A^T * A
+                gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
+                //Compute D = diag(A^T * A) ^-1/2
+                ctx -> submit([&](sycl::handler& h) {
+                    auto ATA_ptr = C.data_ptr();
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
                     auto diags_acc = diags.subspan(bid * k, k);
                     diags_acc[tid] = sycl::rsqrt(real_part(ATA_acc[tid * k + tid]));
+                    });
                 });
-            });
-            //Compute StS = D * StS * D
-            ctx -> submit([&](sycl::handler& h){
-                auto D_local = sycl::local_accessor<T, 1>(k, h);
-                auto ATA_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                //Compute StS = D * StS * D
+                ctx -> submit([&](sycl::handler& h){
+                    auto D_local = sycl::local_accessor<T, 1>(k, h);
+                    auto ATA_ptr = C.data_ptr();
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
@@ -190,15 +202,15 @@ namespace batchlas {
                         auto D_i = D_local[i];
                         AtA_acc[i * k + tid] *= D_tid * D_i;
                     }
+                    });
                 });
-            });
 
-            syev<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
-            //First Compute D * EigenVectors * Lambda^-1/2
-            ctx -> submit([&](sycl::handler& h){
-                auto D_local = sycl::local_accessor<T, 1>(k, h);
-                auto C_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                syev<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                //First Compute D * EigenVectors * Lambda^-1/2
+                ctx -> submit([&](sycl::handler& h){
+                    auto D_local = sycl::local_accessor<T, 1>(k, h);
+                    auto C_ptr = C.data_ptr();
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
@@ -212,29 +224,28 @@ namespace batchlas {
                         auto lambda_i = lambdas[bid * k + i] < tau ? tau : lambdas[bid * k + i];
                         C_acc[i * k + tid] *= D_tid * sycl::rsqrt(std::abs(real_part(lambda_i)));
                     }
+                    });
                 });
-            });
-            //Compute Q = S * D * EigenVectors * Lambda^-1/2
-            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
-            //gemm<B>(ctx, is_A_trans ? C : A, is_A_trans ? A : C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
-            gemm<B>(ctx, A, C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
-            //Memcpy
-            //ctx -> memcpy(A.data_ptr(), output_basis.data(), m * k * batch_size * sizeof(T));
-            auto A_stride = A.stride();
-            auto A_ld = A.ld();
-            auto Adata = A.data();
-            auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
-            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
-                auto batch_idx = item.get_group().get_id(0);
-                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
+                //Compute Q = S * D * EigenVectors * Lambda^-1/2
+                auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+                gemm<B>(ctx, A, C, output_view, T(1.0), T(0.0), transA, Transpose::NoTrans);
+                //Memcpy
+                auto A_stride = A.stride();
+                auto A_ld = A.ld();
+                auto Adata = A.data();
+                auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
+                ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
+                    auto batch_idx = item.get_group().get_id(0);
+                    for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
                     auto i = linear_ix % m;
                     auto j = linear_ix / m;
                     Adata[batch_idx * A_stride + j * A_ld + i] = output_basis[batch_idx * m * k + j*m + i];
-                }
-            });
-            //Explicit transpose dependent copy to A
-        } else {
-            throw std::runtime_error("Unknown orthogonalization algorithm");
+                    }
+                });
+                break;
+            }
+            default:
+                throw std::runtime_error("Unknown orthogonalization algorithm");
         }
         
         return ctx.get_event();
@@ -262,13 +273,19 @@ namespace batchlas {
         
         auto mem_for_cgs = algo == OrthoAlgorithm::CGS2 ? 
             (BumpAllocator::allocation_size<T>(ctx, m * batch_size)) : 0;
+
+        auto mem_for_householder = algo == OrthoAlgorithm::Householder ? 
+            (BumpAllocator::allocation_size<T>(ctx, k) + 
+             BumpAllocator::allocation_size<std::byte>(ctx, geqrf_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k))) +
+             BumpAllocator::allocation_size<std::byte>(ctx, orgqr_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k)))) : 0;
         
         return  BumpAllocator::allocation_size<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, temp_C, Uplo::Lower) : 0) +
                 BumpAllocator::allocation_size<T>(ctx, k*k*batch_size) +
                 BumpAllocator::allocation_size<T>(ctx, m*batch_size)+ 
                 BumpAllocator::allocation_size<T>(ctx, m*k*batch_size) +
                 mem_for_svqb +
-                mem_for_cgs;
+                mem_for_cgs +
+                mem_for_householder;
 
     }
 
