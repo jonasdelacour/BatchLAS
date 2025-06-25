@@ -55,7 +55,6 @@ namespace batchlas {
     INV_INSTANTIATE(back, std::complex<double>) 
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-    #pragma message "Instantiating inv for CUDA backend"
     INV_INSTANTIATE_FOR_BACK(Backend::CUDA)
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
@@ -63,7 +62,7 @@ namespace batchlas {
     //INV_INSTANTIATE_FOR_BACK(Backend::ROCM)
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
-    //INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
+    INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
 #endif
 
 #undef INV_INSTANTIATE
