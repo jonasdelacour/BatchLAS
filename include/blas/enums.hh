@@ -74,8 +74,8 @@ namespace batchlas {
         ShiftChol3, //More stable than Chol2
         Householder, //Most numerically stable
         CGS2,     //Classical Gram-Schmidt with 2 iterations
-        SVQB
-
+        SVQB,
+        NUM_ALGORITHMS //Used to determine the number of algorithms
     };
     
     //Some of the types are not supported by all backends, compilation errors will make this apparent
