@@ -21,6 +21,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <blas/enums.hh>
 
 namespace minibench {
 
@@ -608,6 +609,37 @@ inline void SyevxBenchSizesNetlib(Benchmark* b) {
         for (int bs : {1, 10, 100}) {
             for (int ne : {2, 4, 8}) {
                 b->Args({n, bs, ne});
+            }
+        }
+    }
+}
+
+
+template <typename Benchmark>
+inline void OrthoBenchSizes(Benchmark* b) {
+    for (int algo = 0; algo < static_cast<int>(batchlas::OrthoAlgorithm::NUM_ALGORITHMS); ++algo) {
+        for (int m : {64, 128, 256, 512, 1024}) {
+            for (int n : {64, 128, 256, 512, 1024}) {
+                for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
+                    if (m >= n) {
+                        b->Args({m, n, bs, algo});
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <typename Benchmark>
+inline void OrthoBenchSizesNetlib(Benchmark* b) {
+    for (int algo = 0; algo < static_cast<int>(batchlas::OrthoAlgorithm::NUM_ALGORITHMS); ++algo) {
+        for (int m : {16, 32, 64, 128}) {
+            for (int n : {16, 32, 64, 128}) {
+                for (int bs : {1, 10, 100}) {
+                    if (m >= n) {
+                        b->Args({m, n, bs, algo});
+                    }
+                }
             }
         }
     }
