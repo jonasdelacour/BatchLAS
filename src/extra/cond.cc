@@ -89,7 +89,7 @@ namespace batchlas
         COND_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
     #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
-        //COND_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
+        COND_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
     #endif
     #if BATCHLAS_HAS_HOST_BACKEND
         COND_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
