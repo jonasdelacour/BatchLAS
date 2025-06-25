@@ -9,7 +9,7 @@ set(BENCHMARK_TARGETS
     syev_benchmark
     syevx_benchmark
     lanczos_benchmark
-    gemm_custom
+    ortho_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})
