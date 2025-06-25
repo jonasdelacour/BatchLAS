@@ -45,9 +45,10 @@ namespace batchlas {
         auto matAmem =      pool.allocate<T*>(ctx, batch_size);
         auto matATAmem =    pool.allocate<T*>(ctx, batch_size);
         auto ATA_stride = k*k;
+        auto is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3;
 
         auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, ATA_stride, batch_size, matATAmem.data());
-        auto potrf_workspace = pool.allocate<std::byte>(ctx, algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3 ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
+        auto potrf_workspace = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
         
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
         
