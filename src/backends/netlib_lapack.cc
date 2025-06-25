@@ -169,7 +169,7 @@ namespace batchlas{
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
                     Layout::ColMajor, side, uplo, transA, diag,
-                    n, kB,
+                    kB, n,
                     alpha,
                     descrA.data_ptr(), descrA.ld(),
                     descrB.data_ptr(), descrB.ld());    
