@@ -31,7 +31,7 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 
 ## Working Backends
 - NVIDIA CUDA (cuBLAS, cuSOLVER, cuSPARSE)
-- Intel oneMKL (CPU)
+- AMD ROCm (rocBLAS, rocSOLVER, rocSPARSE)
 - CPU (CBLAS, LAPACKE)
 
 ## Requirements
@@ -40,8 +40,9 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 - CMake 3.14 or higher
 - SYCL implementation (Intel oneAPI DPC++)
 - Optional: CUDA toolkit for NVIDIA GPUs
+- Optional: ROCm for AMD GPUs
 - Optional: Netlib BLAS/LAPACK for CPU
-- Optional: Intel oneMKL for optimized CPU backend
+- Optional: Intel oneMKL for optimized CPU backend (currently experimental)
 - For oneMKL support, set the `MKLROOT` environment variable to your oneAPI installation
 - Optional: Python 3.x (for Python bindings)
 
@@ -67,6 +68,7 @@ cmake .. \
   -DBATCHLAS_BUILD_TESTS=ON \
   -DBATCHLAS_BUILD_EXAMPLES=ON \
   -DBATCHLAS_ENABLE_CUDA=ON \
+  -DBATCHLAS_ENABLE_ROCM=ON \
   -DBATCHLAS_ENABLE_OPENMP=ON \
   -DBATCHLAS_BUILD_PYTHON=ON
 ```
@@ -76,8 +78,10 @@ Available options:
 - `BATCHLAS_BUILD_EXAMPLES`: Build examples (default: OFF)
 - `BATCHLAS_BUILD_DOCS`: Build documentation (default: OFF)
 - `BATCHLAS_ENABLE_CUDA`: Enable CUDA support (default: OFF)
+- `BATCHLAS_ENABLE_ROCM`: Enable ROCm support (default: OFF)
 - `BATCHLAS_ENABLE_OPENMP`: Enable OpenMP support (default: OFF)
 - `BATCHLAS_BUILD_PYTHON`: Build Python bindings (default: ON)
+- `BATCHLAS_ENABLE_MKL`: Enable Intel oneMKL backend (default: OFF, experimental)
 - `BATCHLAS_AMD_ARCH`: AMD GPU architecture when building ROCm backend (default: gfx942)
 - `BATCHLAS_NVIDIA_ARCH`: NVIDIA GPU architecture when building CUDA backend (default: sm_50)
 
@@ -150,6 +154,9 @@ BatchLAS automatically selects the most suitable backend for your hardware, but 
 ```cpp
 // Use CUDA backend explicitly on NVIDIA hardware
 gemm<Backend::CUDA>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
+
+// Use ROCm backend explicitly on AMD hardware  
+gemm<Backend::ROCM>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
 ```
 
 ## Benchmarks
