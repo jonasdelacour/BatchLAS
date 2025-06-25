@@ -202,7 +202,7 @@ namespace batchlas {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
-    template <Backend B, typename T>
+    template <Backend Back, typename T>
     Event getrs(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,
@@ -210,11 +210,11 @@ namespace batchlas {
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        static LinalgHandle<B> handle;
+        static LinalgHandle<Back> handle;
         handle.setStream(ctx);
         auto ipiv = pivots.as_span<int>();
         if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrs, rocsolver_dgetrs,
+            call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs, rocsolver_dgetrs,
                                                          rocsolver_cgetrs, rocsolver_zgetrs,
                                                          handle,
                                                          enum_convert<BackendLibrary::ROCSOLVER>(transA),
@@ -222,7 +222,7 @@ namespace batchlas {
                                                          A.data_ptr(), A.ld(), ipiv.data(),
                                                          B.data_ptr(), B.ld());
         } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrs_strided_batched,
+            call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs_strided_batched,
                                                          rocsolver_dgetrs_strided_batched,
                                                          rocsolver_cgetrs_strided_batched,
                                                          rocsolver_zgetrs_strided_batched,
@@ -237,7 +237,7 @@ namespace batchlas {
         return ctx.get_event();
     }
 
-    template <Backend B, typename T>
+    template <Backend Back, typename T>
     size_t getrs_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
