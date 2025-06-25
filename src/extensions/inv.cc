@@ -58,8 +58,7 @@ namespace batchlas {
     INV_INSTANTIATE_FOR_BACK(Backend::CUDA)
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
-    #pragma message "Instantiating inv for ROCM backend"
-    //INV_INSTANTIATE_FOR_BACK(Backend::ROCM)
+    INV_INSTANTIATE_FOR_BACK(Backend::ROCM)
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
     INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
