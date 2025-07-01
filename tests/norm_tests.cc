@@ -8,6 +8,7 @@
 #include <vector>
 #include <chrono>
 #include <blas/extra.hh>
+#include "test_utils.hh"
 
 using namespace batchlas;
 
