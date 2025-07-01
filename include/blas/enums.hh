@@ -40,7 +40,8 @@ namespace batchlas {
 
     enum class Transpose {
         NoTrans,
-        Trans
+        Trans,
+        ConjTrans
     };
 
     enum class JobType {
