@@ -138,9 +138,8 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     for (size_t b = 0; b < this->batch_size; ++b) {
         for (size_t i = 0; i < this->rows; ++i) {
             for (size_t j = 0; j < this->cols; ++j) {
-                EXPECT_NEAR(this->C_data[b * this->rows * this->cols + i * this->cols + j],
-                            this->A_data[b * this->rows * this->cols + i * this->cols + j], tol)
-                << "Mismatch at batch " << b << ", index (" << i << ", " << j << ")";
+                test_utils::assert_near(this->C_data[b * this->rows * this->cols + i * this->cols + j],
+                            this->A_data[b * this->rows * this->cols + i * this->cols + j], tol);
             }
         }
     }
