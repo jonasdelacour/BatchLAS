@@ -123,14 +123,14 @@ protected:
         }
     }
 
-    ScalarType get_tolerance() {
+    typename base_type<ScalarType>::type get_tolerance() {
         if constexpr (std::is_same_v<ScalarType, float>) {
             return 1e-4f;
         } else {
             return 1e-7;
         }
     }
-    ScalarType get_rel_error_floor() {
+    typename base_type<ScalarType>::type get_rel_error_floor() {
         if constexpr (std::is_same_v<ScalarType, float>) {
             return 1e-6f;
         } else {
@@ -169,9 +169,9 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
 
     this->ctx->wait();
     
-    ScalarType tol = this->get_tolerance();
+    auto tol = this->get_tolerance();
     for (int i = 0; i < this->rows; ++i) {
-        EXPECT_NEAR(this->y_data[i], this->y_expected[i], tol) 
+        EXPECT_NEAR(std::real(this->y_data[i]), std::real(this->y_expected[i]), tol) 
             << "Mismatch at index " << i;
     }
 }
@@ -196,9 +196,9 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 
     this->ctx->wait();
 
-    ScalarType tol = this->get_tolerance();
+    auto tol = this->get_tolerance();
     for (int i = 0; i < this->cols; ++i) {
-        EXPECT_NEAR(this->y_data[i], this->y_expected[i], tol)
+        EXPECT_NEAR(std::real(this->y_data[i]), std::real(this->y_expected[i]), tol)
         << "Mismatch with transpose at index " << i;
     }
 }
@@ -223,12 +223,12 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
 
     this->ctx->wait();
 
-    ScalarType tol = this->get_tolerance();
-    ScalarType floor_val = this->get_rel_error_floor();
+    auto tol = this->get_tolerance();
+    auto floor_val = this->get_rel_error_floor();
     for (int b = 0; b < this->batch_size; ++b) {
         for (int i = 0; i < this->rows; ++i) {
             auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
+            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
                 << "Mismatch at batch " << b << ", index " << i;
         }
     }
@@ -255,12 +255,12 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 
     this->ctx->wait();
 
-    ScalarType tol = this->get_tolerance();
-    ScalarType floor_val = this->get_rel_error_floor();
+    auto tol = this->get_tolerance();
+    auto floor_val = this->get_rel_error_floor();
     for (int b = 0; b < this->batch_size; ++b) {
         for (int i = 0; i < this->cols; ++i) { 
             auto rel_error = std::abs(this->y_data[b * this->cols + i] - this->y_expected[b * this->cols + i]) / std::max(std::abs(this->y_expected[b * this->cols + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
+            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
                 << "Mismatch with transpose at batch " << b << ", index " << i;
         }
     }
@@ -292,12 +292,12 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     this->ctx->wait();
 
-    ScalarType tol = this->get_tolerance();
-    ScalarType floor_val = this->get_rel_error_floor();
+    auto tol = this->get_tolerance();
+    auto floor_val = this->get_rel_error_floor();
     for (int b = 0; b < this->batch_size; ++b) {
         for (int i = 0; i < this->rows; ++i) {
             auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<ScalarType>(0.0), tol)
+            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
                 << "Mismatch with alpha/beta at batch " << b << ", index " << i;
         }
     }
