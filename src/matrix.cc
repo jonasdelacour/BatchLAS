@@ -113,7 +113,7 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
 // Convert to a different matrix format
 template <typename T, MatrixFormat MType>
 template <MatrixFormat NewMType>
-Matrix<T, NewMType> Matrix<T, MType>::convert_to(const T& zero_threshold) const {
+Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshold) const {
     Queue q; // Use default queue
 
     // Handle identity conversion (same format)
@@ -1049,6 +1049,8 @@ template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<d
 // Matrix conversion instantiations
 template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
 template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
+template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
+template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
 
 //----------------------------------------------------------------------
 // Deep copy instantiations
