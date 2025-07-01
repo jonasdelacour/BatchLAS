@@ -36,6 +36,7 @@ set(TEST_TARGETS
     ormqr_tests
     orgqr_tests
     transpose_tests
+    syev_tests
 )
 
 # Create test executables
