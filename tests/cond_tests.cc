@@ -27,11 +27,7 @@ protected:
     using real_t = typename base_type<T>::type;
 
     static constexpr real_t tolerance() {
-        if constexpr (std::is_same_v<T, float>) {
-            return 1e-5f;
-        } else {
-            return 1e-10;
-        }
+        return test_utils::tolerance<T>();
     }
 
     // Compute expected condition number for a diagonal matrix

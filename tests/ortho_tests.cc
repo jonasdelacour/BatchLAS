@@ -42,7 +42,7 @@ protected:
     // Helper to check for orthonormality: Q^T * Q = I or Q * Q^T = I
     // For column orthonormality (transA = NoTrans), check Q^T * Q = I
     // For row orthonormality (transA = Trans), check Q * Q^T = I
-    void check_orthonormality(const MatrixView<T, MatrixFormat::Dense>& Q_view, Transpose transQ, T tolerance) {
+    void check_orthonormality(const MatrixView<T, MatrixFormat::Dense>& Q_view, Transpose transQ, typename base_type<T>::type tolerance) {
         int m = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols();
         int k = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows();
         int batch_size = Q_view.batch_size();
@@ -77,12 +77,7 @@ protected:
                     // Indexing for Result_actual_view (k x k) and I_expected_view (k x k)
                     // These are always k x k, ld = k, stride = k*k
                     size_t idx = b * k * k + i * k + j;
-                    if constexpr (sycl::detail::is_complex<T>::value) {
-                        ASSERT_NEAR(res_data[idx].real(), expected_val.real(), tolerance.real());
-                        ASSERT_NEAR(res_data[idx].imag(), expected_val.imag(), tolerance.imag());
-                    } else {
-                        ASSERT_NEAR(res_data[idx], expected_val, tolerance);
-                    }
+                    test_utils::assert_near(res_data[idx], expected_val, tolerance);
                 }
             }
         }
@@ -92,7 +87,7 @@ protected:
     void check_M_orthonormality(const MatrixView<T, MatrixFormat::Dense>& Q_view,
                                 const MatrixView<T, MatrixFormat::Dense>& M_view,
                                 Transpose transQ, // Determines orientation of Q for M-orthogonality check
-                                T tolerance) {
+                                typename base_type<T>::type tolerance) {
         int m_q = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols(); // num_vectors in Q
         int k_q = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows(); // dimension of vectors in Q
 
@@ -138,12 +133,7 @@ protected:
                 for (int j = 0; j < k_q; ++j) {
                     T expected_val = (i == j) ? T(1.0) : T(0.0);
                     size_t idx = b * k_q * k_q + i * k_q + j;
-                     if constexpr (sycl::detail::is_complex<T>::value) {
-                        ASSERT_NEAR(res_data[idx].real(), expected_val.real(), tolerance.real());
-                        ASSERT_NEAR(res_data[idx].imag(), expected_val.imag(), tolerance.imag());
-                    } else {
-                        ASSERT_NEAR(res_data[idx], expected_val, tolerance);
-                    }
+                    test_utils::assert_near(res_data[idx], expected_val, tolerance)
                 }
             }
         }
@@ -153,7 +143,7 @@ protected:
                                    const MatrixView<T, MatrixFormat::Dense>& M_basis_view,
                                    Transpose transA, // Orientation of A
                                    Transpose transM, // Orientation of M_basis
-                                   T tolerance) {
+                                   typename base_type<T>::type tolerance) {
         int a_rows = A_view.rows();
         int a_cols = A_view.cols();
         int m_rows = M_basis_view.rows();
@@ -199,12 +189,7 @@ protected:
             for (int r = 0; r < res_rows; ++r) {
                 for (int c = 0; c < res_cols; ++c) {
                     size_t idx = b * res_rows * res_cols + r * res_cols + c; // Assuming result is row-major
-                     if constexpr (sycl::detail::is_complex<T>::value) {
-                        ASSERT_NEAR(res_data[idx].real(), T(0.0).real(), tolerance.real());
-                        ASSERT_NEAR(res_data[idx].imag(), T(0.0).imag(), tolerance.imag());
-                    } else {
-                        ASSERT_NEAR(res_data[idx], T(0.0), tolerance);
-                    }
+                    test_utils::assert_near(res_data[idx], T(0.0), tolerance)
                 }
             }
         }
@@ -238,7 +223,7 @@ class OrthoAgainstMDoubleTest : public OrthoTest<double>,
 
 // Test implementations
 TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
-    float tol = 1e-5f;
+    auto tol = test_utils::tolerance<float>();
     Transpose transA = std::get<0>(GetParam());
     OrthoAlgorithm algo = std::get<1>(GetParam());
     
@@ -258,7 +243,7 @@ TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
 }
 
 TEST_P(OrthoMatrixComplexFloatTest, OrthogonalizeMatrix) {
-    std::complex<float> tol = {1e-5,1e-5};
+    auto tol = test_utils::tolerance<std::complex<float>>();
     Transpose transA = std::get<0>(GetParam());
     OrthoAlgorithm algo = std::get<1>(GetParam());
     
@@ -301,7 +286,7 @@ TEST_P(OrthoMatrixComplexFloatTest, OrthogonalizeMatrix) {
 } */
 
 TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
-    double tol = 1e-9;
+    auto tol = test_utils::tolerance<double>();
     Transpose transA = std::get<0>(GetParam());
     OrthoAlgorithm algo = std::get<1>(GetParam());
     
@@ -321,7 +306,7 @@ TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
 }
 
 TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
-    float tol = 1e-5f;
+    auto tol = test_utils::tolerance<float>();
     Transpose transA = std::get<0>(GetParam());
     Transpose transM = std::get<1>(GetParam());
     OrthoAlgorithm algo = std::get<2>(GetParam());
@@ -357,7 +342,7 @@ TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
 
 
 TEST_P(OrthoAgainstMDoubleTest, OrthogonalizeMatrixAgainstM) {
-    double tol = 1e-9;
+    auto tol = test_utils::tolerance<double>();
     Transpose transA = std::get<0>(GetParam());
     Transpose transM_basis = std::get<1>(GetParam());
     OrthoAlgorithm algo = std::get<2>(GetParam());

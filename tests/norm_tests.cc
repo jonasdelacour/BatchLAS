@@ -128,11 +128,7 @@ protected:
     
     // Test tolerances based on type
     static constexpr auto tolerance() {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
-            return 1e-5f;
-        } else {
-            return 1e-10;
-        }
+        return test_utils::tolerance<T>();
     }
 
     // Small helper to map NormType to a string for readable failure messages

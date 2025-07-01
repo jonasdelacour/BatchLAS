@@ -113,7 +113,7 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     this->ctx->wait();
     
     // Verify result (C should be equal to A)
-    ScalarType tol = std::is_same_v<ScalarType, float> ? ScalarType(1e-5) : ScalarType(1e-10);
+    auto tol = test_utils::tolerance<ScalarType>();
     for (size_t i = 0; i < this->rows*this->cols; ++i) {
         EXPECT_NEAR(std::real(this->C_data[i]), std::real(this->A_data[i]), tol) << "Mismatch at index " << i;
     }
@@ -134,7 +134,7 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     
     this->ctx->wait();
 
-    ScalarType tol = std::is_same_v<ScalarType, float> ? ScalarType(1e-5) : ScalarType(1e-10);
+    auto tol = test_utils::tolerance<ScalarType>();
     for (size_t b = 0; b < this->batch_size; ++b) {
         for (size_t i = 0; i < this->rows; ++i) {
             for (size_t j = 0; j < this->cols; ++j) {
