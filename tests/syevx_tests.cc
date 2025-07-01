@@ -195,7 +195,6 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
         }
     }
 }
-
 TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     constexpr int n = 200;
     constexpr int batch = 2;
@@ -232,6 +231,45 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
         auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
         EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
             << "Eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
+    }
+}
+
+TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
+    constexpr int n = 200;
+    constexpr int batch = 2;
+    const int neig = 3;
+    std::complex<float> a(2.0f, 0.0f);
+    std::complex<float> b(200.0f, 0.0f), c(200.0f, 0.0f);
+
+    auto dense = Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
+    
+    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = A_CSR.view();
+
+    UnifiedVector<float> W(neig * batch);  // Eigenvalues are real for Hermitian matrices
+    Matrix<std::complex<float>, MatrixFormat::Dense> V(n, neig, batch);
+
+    SyevxParams<std::complex<float>> params;
+    params.algorithm = OrthoAlgorithm::Chol2;
+    params.extra_directions = 10;
+    params.find_largest = true;
+
+    size_t buf_size = syevx_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
+    UnifiedVector<std::byte> workspace(buf_size);
+
+    syevx<test_utils::gpu_backend>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
+    ctx->wait();
+
+    std::vector<float> expected(n);
+    for (int k = 1; k <= n; ++k) {
+        expected[k-1] = a.real() - 2.0f * std::sqrt(b.real() * c.real()) * std::cos(M_PI * k / (n + 1));
+    }
+    std::sort(expected.begin(), expected.end(), std::greater<float>());
+
+    for (int i = 0; i < neig; ++i) {
+        auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
+        EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
+            << "Complex eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
     }
 }
 
