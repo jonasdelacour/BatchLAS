@@ -188,8 +188,6 @@ namespace batchlas {
                     diags_acc[tid] = sycl::rsqrt(real_part(ATA_acc[tid * k + tid]));
                     });
                 });
-                ctx -> wait();
-                std::cout << diags << std::endl;
                 //Compute StS = D * StS * D
                 ctx -> submit([&](sycl::handler& h){
                     auto D_local = sycl::local_accessor<float_t, 1>(k, h);
@@ -209,12 +207,9 @@ namespace batchlas {
                     }
                     });
                 });
-                ctx -> wait();
-                std::cout << C << std::endl;
 
                 syev<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
-                ctx -> wait();
-                std::cout << "Eigenvalues: " << lambdas << std::endl;
+
                 //First Compute D * EigenVectors * Lambda^-1/2
                 ctx -> submit([&](sycl::handler& h){
                     auto D_local = sycl::local_accessor<float_t, 1>(k, h);
