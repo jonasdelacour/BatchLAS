@@ -115,7 +115,7 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     // Verify result (C should be equal to A)
     ScalarType tol = std::is_same_v<ScalarType, float> ? ScalarType(1e-5) : ScalarType(1e-10);
     for (size_t i = 0; i < this->rows*this->cols; ++i) {
-        EXPECT_NEAR(this->C_data[i], this->A_data[i], tol) << "Mismatch at index " << i;
+        EXPECT_NEAR(std::real(this->C_data[i]), std::real(this->A_data[i]), tol) << "Mismatch at index " << i;
     }
 }
 
