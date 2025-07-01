@@ -15,9 +15,8 @@ protected:
     }
     std::shared_ptr<Queue> ctx;
 
-    static T tolerance() {
-        if constexpr (std::is_same_v<T, float>) return T(1e-5);
-        else return T(1e-9);
+    static auto tolerance() {
+        return test_utils::tolerance<T>();
     }
 };
 

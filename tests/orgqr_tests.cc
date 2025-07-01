@@ -67,7 +67,7 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
             T expected = (i == j) ? T(1) : T(0);
-            EXPECT_NEAR(r[i * Result.ld() + j], expected, T(1e-4));
+            test_utils::assert_near(r[i * Result.ld() + j], expected);
         }
     }
 }
@@ -97,7 +97,7 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 T expected = (i == j) ? T(1) : T(0);
-                EXPECT_NEAR(r[b * Result.stride() + i * Result.ld() + j], expected, T(1e-4));
+                test_utils::assert_near(r[b * Result.stride() + i * Result.ld() + j], expected);
             }
         }
     }

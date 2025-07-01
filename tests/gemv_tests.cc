@@ -124,11 +124,7 @@ protected:
     }
 
     typename base_type<ScalarType>::type get_tolerance() {
-        if constexpr (std::is_same_v<ScalarType, float>) {
-            return 1e-4f;
-        } else {
-            return 1e-7;
-        }
+        return test_utils::tolerance<ScalarType>();
     }
     typename base_type<ScalarType>::type get_rel_error_floor() {
         if constexpr (std::is_same_v<ScalarType, float>) {
