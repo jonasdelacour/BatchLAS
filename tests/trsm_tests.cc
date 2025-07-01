@@ -76,7 +76,7 @@ protected:
         
         // Initialize matrix B with some test values
         std::mt19937 rng(42); // Fixed seed for reproducibility
-        std::uniform_real_distribution<ScalarType> dist(static_cast<ScalarType>(1.0), static_cast<ScalarType>(10.0));
+        std::uniform_real_distribution<typename base_type<ScalarType>::type> dist(static_cast<typename base_type<ScalarType>::type>(1.0), static_cast<typename base_type<ScalarType>::type>(10.0));
         
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
@@ -96,7 +96,7 @@ protected:
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
                 int idx = batch_idx * rows * cols + i * cols + j;
-                if (std::abs(B_data[idx] - B_data_original[idx]) > static_cast<ScalarType>(1e-6)) {
+                if (std::abs(B_data[idx] - B_data_original[idx]) > test_utils::tolerance<ScalarType>()) {
                     anyChanges = true;
                 }
             }
@@ -122,7 +122,7 @@ protected:
                 }
                 
                 // Use a reasonable tolerance for floating point comparisons
-                ScalarType tolerance = std::is_same_v<ScalarType, float> ? static_cast<ScalarType>(1e-2) : static_cast<ScalarType>(1e-6);
+                auto tolerance = test_utils::tolerance<ScalarType>();
                 if (std::abs(calculated - expected) > tolerance) {
                     allMatch = false;
                     break;
