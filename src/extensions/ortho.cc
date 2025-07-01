@@ -36,8 +36,9 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto [m, k] = get_effective_dims(A, transA);
-        bool is_A_trans = transA == Transpose::Trans;
-        Transpose inv_trans = is_A_trans ? Transpose::NoTrans : Transpose::Trans;
+        bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
+        Transpose inv_trans = is_A_trans ? Transpose::NoTrans : 
+                            std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
         //Else if k > m && transA == Trans the rows of A are linearly dependent
@@ -52,6 +53,7 @@ namespace batchlas {
         
         
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
+        auto square = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
         
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
@@ -103,12 +105,13 @@ namespace batchlas {
                             auto Anext_squared_span = Span(static_cast<float_t*>(Anext_squared.get_pointer()), m);
                             
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                Anext_squared_span[j] = real_part(A_local_vector[j]) * real_part(A_local_vector[j]);
+                                Anext_squared_span[j] = square(A_local_vector[j]);
                             }
                             
                             sycl::group_barrier(cta);
-                            auto norm = std::sqrt(sycl::joint_reduce(cta, Anext_squared.begin(), Anext_squared.end(), sycl::plus<float_t>()));
-                            
+                            auto squared_norm = sycl::joint_reduce(cta, Anext_squared.begin(), Anext_squared.end(), sycl::plus<float_t>());
+                            auto norm = std::sqrt(squared_norm);
+
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
                                 A_local_vector[j] /= norm;
                             }
@@ -168,13 +171,13 @@ namespace batchlas {
                 cgs_alg();
                 break;
             case OrthoAlgorithm::SVQB: {
-                auto diags = pool.allocate<T>(ctx, batch_size * k);
+                auto diags = pool.allocate<float_t>(ctx, batch_size * k);
                 auto lambdas = pool.allocate<float_t>(ctx, batch_size * k);
                 auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower));
                 auto output_basis = pool.allocate<T>(ctx, batch_size * m * k);
-                //Compute A^T * A
+                //Compute A^H * A
                 gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
-                //Compute D = diag(A^T * A) ^-1/2
+                //Compute D = diag(A^H * A) ^-1/2
                 ctx -> submit([&](sycl::handler& h) {
                     auto ATA_ptr = C.data_ptr();
                     h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
@@ -185,9 +188,11 @@ namespace batchlas {
                     diags_acc[tid] = sycl::rsqrt(real_part(ATA_acc[tid * k + tid]));
                     });
                 });
+                ctx -> wait();
+                std::cout << diags << std::endl;
                 //Compute StS = D * StS * D
                 ctx -> submit([&](sycl::handler& h){
-                    auto D_local = sycl::local_accessor<T, 1>(k, h);
+                    auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                     auto ATA_ptr = C.data_ptr();
                     h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
@@ -204,11 +209,15 @@ namespace batchlas {
                     }
                     });
                 });
+                ctx -> wait();
+                std::cout << C << std::endl;
 
                 syev<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                ctx -> wait();
+                std::cout << "Eigenvalues: " << lambdas << std::endl;
                 //First Compute D * EigenVectors * Lambda^-1/2
                 ctx -> submit([&](sycl::handler& h){
-                    auto D_local = sycl::local_accessor<T, 1>(k, h);
+                    auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                     auto C_ptr = C.data_ptr();
                     h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
