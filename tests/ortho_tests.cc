@@ -133,7 +133,7 @@ protected:
                 for (int j = 0; j < k_q; ++j) {
                     T expected_val = (i == j) ? T(1.0) : T(0.0);
                     size_t idx = b * k_q * k_q + i * k_q + j;
-                    test_utils::assert_near(res_data[idx], expected_val, tolerance)
+                    test_utils::assert_near(res_data[idx], expected_val, tolerance);
                 }
             }
         }
@@ -189,7 +189,7 @@ protected:
             for (int r = 0; r < res_rows; ++r) {
                 for (int c = 0; c < res_cols; ++c) {
                     size_t idx = b * res_rows * res_cols + r * res_cols + c; // Assuming result is row-major
-                    test_utils::assert_near(res_data[idx], T(0.0), tolerance)
+                    test_utils::assert_near(res_data[idx], T(0.0), tolerance);
                 }
             }
         }
