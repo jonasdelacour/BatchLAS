@@ -260,11 +260,13 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
     syevx<test_utils::gpu_backend>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
-    std::vector<float> expected(n);
+    std::vector<std::complex<float>> expected(n);
     for (int k = 1; k <= n; ++k) {
-        expected[k-1] = a.real() - 2.0f * std::sqrt(b.real() * c.real()) * std::cos(M_PI * k / (n + 1));
+        expected[k-1] = a - std::complex<float>(2.0f) * std::sqrt(std::real(b * std::conj(c))) * std::complex<float>(std::cos(M_PI * k / (n + 1)));
     }
-    std::sort(expected.begin(), expected.end(), std::greater<float>());
+    std::sort(expected.begin(), expected.end(), [](const auto& lhs, const auto& rhs) {
+        return std::abs(lhs) > std::abs(rhs);
+    });
 
     for (int i = 0; i < neig; ++i) {
         auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
