@@ -16,19 +16,27 @@ struct backend_types {
     using tuple_type = decltype(std::tuple_cat(
 #if BATCHLAS_HAS_HOST_BACKEND
         std::tuple<Config<float, batchlas::Backend::NETLIB>,
-                   Config<double, batchlas::Backend::NETLIB>>{},
+                   Config<double, batchlas::Backend::NETLIB>,
+                   Config<std::complex<float>, batchlas::Backend::NETLIB>,
+                   Config<std::complex<double>, batchlas::Backend::NETLIB>>{},
 #endif
 #if BATCHLAS_HAS_CUDA_BACKEND
         std::tuple<Config<float, batchlas::Backend::CUDA>,
-                   Config<double, batchlas::Backend::CUDA>>{},
+                   Config<double, batchlas::Backend::CUDA>,
+                   Config<std::complex<float>, batchlas::Backend::CUDA>,
+                   Config<std::complex<double>, batchlas::Backend::CUDA>>{},
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
         std::tuple<Config<float, batchlas::Backend::ROCM>,
-                   Config<double, batchlas::Backend::ROCM>>{},
+                   Config<double, batchlas::Backend::ROCM>,
+                   Config<std::complex<float>, batchlas::Backend::ROCM>,
+                   Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
 #if BATCHLAS_HAS_MKL_BACKEND
         std::tuple<Config<float, batchlas::Backend::MKL>,
-                   Config<double, batchlas::Backend::MKL>>{},
+                   Config<double, batchlas::Backend::MKL>,
+                   Config<std::complex<float>, batchlas::Backend::MKL>,
+                   Config<std::complex<double>, batchlas::Backend::MKL>>{},
 #endif
         std::tuple<>{}));
 
