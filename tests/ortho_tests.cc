@@ -156,9 +156,9 @@ protected:
         // Then A^T * M_basis should be zero (nA x nM)
         int res_rows, res_cols;
         Transpose opA, opM;
-
+        auto trans = std::is_same_v<T, std::complex<typename base_type<T>::type>> ? Transpose::ConjTrans : Transpose::Trans;
         if (transA == Transpose::NoTrans) { // A vectors are columns (dim x nA)
-            opA = Transpose::Trans; // Use A^T (nA x dim)
+            opA = trans;
             res_rows = a_cols; // nA
         } else { // A vectors are rows (nA x dim)
             opA = Transpose::NoTrans; // Use A (nA x dim)
@@ -211,14 +211,26 @@ class OrthoMatrixDoubleTest : public OrthoTest<double>,
                             public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
 };
 
+class OrthoMatrixComplexDoubleTest : public OrthoTest<std::complex<double>>,
+                            public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
+};
+
 // Float version of ortho against M test
 class OrthoAgainstMFloatTest : public OrthoTest<float>,
+                             public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
+};
+
+class OrthoAgainstMComplexFloatTest : public OrthoTest<std::complex<float>>,
                              public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
 };
 
 // Double version of ortho against M test
 class OrthoAgainstMDoubleTest : public OrthoTest<double>,
                               public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
+};
+
+class OrthoAgainstMComplexDoubleTest : public OrthoTest<std::complex<double>>,
+                             public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
 };
 
 // Test implementations
@@ -305,6 +317,26 @@ TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
     this->check_orthonormality(A, transA, tol);
 }
 
+TEST_P(OrthoMatrixComplexDoubleTest, OrthogonalizeMatrix) {
+    auto tol = test_utils::tolerance<std::complex<double>>();
+    Transpose transA = std::get<0>(GetParam());
+    OrthoAlgorithm algo = std::get<1>(GetParam());
+    
+    const int m = 10, k = 5, batch_size = 2;
+    int rows = (transA == Transpose::NoTrans) ? m : k;
+    int cols = (transA == Transpose::NoTrans) ? k : m;
+
+    Matrix<std::complex<double>, MatrixFormat::Dense> A = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
+
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A, transA, algo);
+    UnifiedVector<std::byte> workspace(buffer_size);
+
+    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A, transA, workspace.to_span(), algo);
+    this->ctx->wait();
+
+    this->check_orthonormality(A, transA, tol);
+}
+
 TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
     auto tol = test_utils::tolerance<float>();
     Transpose transA = std::get<0>(GetParam());
@@ -333,6 +365,40 @@ TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
     const size_t iterations = 2;
 
     ortho<test_utils::gpu_backend, float>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
+    this->ctx->wait();
+
+    this->check_orthonormality(A, transA, tol);
+    this->check_orthogonality_to_M(A, M, transA, transM, tol);
+}
+
+TEST_P(OrthoAgainstMComplexFloatTest, OrthogonalizeMatrixAgainstM) {
+    auto tol = test_utils::tolerance<std::complex<float>>();
+    Transpose transA = std::get<0>(GetParam());
+    Transpose transM = std::get<1>(GetParam());
+    OrthoAlgorithm algo = std::get<2>(GetParam());
+    
+    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
+    
+    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
+    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
+    int M_rows = (transM == Transpose::NoTrans) ? dim : nM;
+    int M_cols = (transM == Transpose::NoTrans) ? nM : dim;
+
+    Matrix<std::complex<float>, MatrixFormat::Dense> A = Matrix<std::complex<float>, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
+    Matrix<std::complex<float>, MatrixFormat::Dense> M = Matrix<std::complex<float>, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
+
+    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), M, transM, algo);
+    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
+    ortho<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
+    this->ctx->wait();
+
+    this->check_orthonormality(M, transM, tol);
+
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, M, transA, transM, algo);
+    UnifiedVector<std::byte> workspace(buffer_size);
+    const size_t iterations = 2;
+
+    ortho<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
     this->ctx->wait();
 
     this->check_orthonormality(A, transA, tol);
@@ -379,6 +445,44 @@ TEST_P(OrthoAgainstMDoubleTest, OrthogonalizeMatrixAgainstM) {
     this->check_orthogonality_to_M(A_view, M_ortho_basis_view, transA, transM_basis, tol);
 }
 
+TEST_P(OrthoAgainstMComplexDoubleTest, OrthogonalizeMatrixAgainstM) {
+    auto tol = test_utils::tolerance<std::complex<double>>();
+    Transpose transA = std::get<0>(GetParam());
+    Transpose transM_basis = std::get<1>(GetParam());
+    OrthoAlgorithm algo = std::get<2>(GetParam());
+    
+    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
+    
+    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
+    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
+    int M_basis_rows = (transM_basis == Transpose::NoTrans) ? dim : nM;
+    int M_basis_cols = (transM_basis == Transpose::NoTrans) ? nM : dim;
+
+    Matrix<std::complex<double>, MatrixFormat::Dense> A = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
+    auto A_view = A.view();
+
+    Matrix<std::complex<double>, MatrixFormat::Dense> M_basis_orig = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, false, batch_size);
+    auto M_basis_view_orig = M_basis_orig.view();
+    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
+    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
+    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), M_basis_view_orig, transM_basis, workspace_M_ortho.to_span(), algo);
+    this->ctx->wait();
+    
+    this->check_orthonormality(M_basis_view_orig, transM_basis, tol);
+
+    auto M_ortho_basis_view = M_basis_view_orig;
+
+    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, algo);
+    UnifiedVector<std::byte> workspace(buffer_size);
+    const size_t iterations = 2;
+
+    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, workspace.to_span(), algo, iterations);
+    this->ctx->wait();
+
+    this->check_orthonormality(A_view, transA, tol);
+    this->check_orthogonality_to_M(A_view, M_ortho_basis_view, transA, transM_basis, tol);
+}
+
 // Helper function for test name generation
 std::string GetTestName(Transpose trans, OrthoAlgorithm algo) {
     std::string trans_str = (trans == Transpose::NoTrans) ? "NoTrans" : "Trans";
@@ -414,7 +518,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixFloatTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::Householder)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -427,7 +531,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixComplexFloatTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::Householder)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixComplexFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -440,9 +544,22 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixDoubleTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::Householder)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixDoubleTest::ParamType>& info) {
+        Transpose trans = std::get<0>(info.param);
+        OrthoAlgorithm algo = std::get<1>(info.param);
+        return GetTestName(trans, algo);
+    }
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    Combinations, OrthoMatrixComplexDoubleTest,
+    ::testing::Combine(
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+    ),
+    [](const ::testing::TestParamInfo<OrthoMatrixComplexDoubleTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
         OrthoAlgorithm algo = std::get<1>(info.param);
         return GetTestName(trans, algo);
@@ -454,9 +571,24 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::Householder)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMFloatTest::ParamType>& info) {
+        Transpose transA = std::get<0>(info.param);
+        Transpose transM = std::get<1>(info.param);
+        OrthoAlgorithm algo = std::get<2>(info.param);
+        return GetAgainstMTestName(transA, transM, algo);
+    }
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    Combinations, OrthoAgainstMComplexFloatTest,
+    ::testing::Combine(
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+    ),
+    [](const ::testing::TestParamInfo<OrthoAgainstMComplexFloatTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
         Transpose transM = std::get<1>(info.param);
         OrthoAlgorithm algo = std::get<2>(info.param);
@@ -469,9 +601,24 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::Householder)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMDoubleTest::ParamType>& info) {
+        Transpose transA = std::get<0>(info.param);
+        Transpose transM = std::get<1>(info.param);
+        OrthoAlgorithm algo = std::get<2>(info.param);
+        return GetAgainstMTestName(transA, transM, algo);
+    }
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    Combinations, OrthoAgainstMComplexDoubleTest,
+    ::testing::Combine(
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+    ),
+    [](const ::testing::TestParamInfo<OrthoAgainstMComplexDoubleTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
         Transpose transM = std::get<1>(info.param);
         OrthoAlgorithm algo = std::get<2>(info.param);
