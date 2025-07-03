@@ -317,16 +317,17 @@ namespace batchlas {
             throw std::runtime_error("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-
-        auto inv_transA = transA == Transpose::Trans ? Transpose::NoTrans : Transpose::Trans;
-        auto inv_transM = transM == Transpose::Trans ? Transpose::NoTrans : Transpose::Trans;
+        auto trans = sycl::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto no_trans = Transpose::NoTrans;
+        auto inv_transA = transA == trans ? no_trans : trans;
+        auto inv_transM = transM == trans ? no_trans : trans;
         auto batch_size = A.batch_size();
         auto MAmem = pool.allocate<T>(ctx, nM*nA * batch_size);
         auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo));
         auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size);
-        auto isAtrans = transA == Transpose::Trans;
-        auto is_first_transposed = static_cast<Transpose>(((transA == Transpose::Trans) || (transM == Transpose::Trans)));
-        auto is_second_transposed = static_cast<Transpose>(((transA == Transpose::Trans) && (transM == Transpose::NoTrans)));
+        auto isAtrans = transA == trans;
+        auto is_first_transposed = static_cast<Transpose>(((transA == trans) || (transM == trans)));
+        auto is_second_transposed = static_cast<Transpose>(((transA == trans) && (transM == no_trans)));
         
         for (size_t i = 0; i < iterations; i++){
             gemm<B>(ctx, M, A, descrMA, T(1.0), T(0.0), inv_transM, transA);
