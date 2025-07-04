@@ -9,6 +9,7 @@
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <blas/extra.hh>
+#include "../math-helpers.hh"
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -166,18 +167,13 @@ namespace batchlas {
                     sycl::group_barrier(cta);
                     
                     for (int i = 0; i < neigs; i++){
-                        if constexpr (sycl::detail::is_complex<T>::value){
-                            smem[tid] = std::real(blockR[i*n + tid] * std::conj(blockR[i*n + tid]));
-                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
-                            smem[tid] = std::real(blockX[i*n + tid] * std::conj(blockX[i*n + tid]));
-                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
-                        } else {
-                            smem[tid] = blockR[i*n + tid] * blockR[i*n + tid];
-                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
-                            smem[tid] = blockX[i*n + tid] * blockX[i*n + tid];
-                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
-                        }
+                        smem[tid] = internal::norm_squared(blockR[i*n + tid]);
+                        blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
+                        smem[tid] = internal::norm_squared(blockX[i*n + tid]);
+                        blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
                     }
+                    
+                    sycl::group_barrier(cta);
                     if (tid < neigs){
                         auto bestresidual = blockbestresiduals[tid];
                         auto residual = blockresiduals[tid];
@@ -258,28 +254,14 @@ namespace batchlas {
 
 
             //Compute new search directions
-            //X = [X, P, R] * [Zx, Zp, Zr]
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-            //Make an implicit update of AX
-            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            //X = [X, P, R] * C_x
+            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
+            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
             ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
-            
-            ctx -> wait();
-            Matrix<T> gramm_mat(block_vectors, block_vectors);
-            gemm<B>(ctx, MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), MatrixView(C_p, Nvecs, block_vectors, Nvecs), gramm_mat.view(), T(1.0), T(0.0), trans, Transpose::NoTrans);
-            ctx -> wait();
-            std::cout << norm(ctx, gramm_mat.view()) << std::endl;
-            
             //Compute P = [X, P, R] * C_p
             gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-            
-            //Verify orthonormality of X and P:
-            ctx -> wait();
-            gemm<B>(ctx, MatrixView(X_new, n, block_vectors), MatrixView(P_new, n, block_vectors), gramm_mat.view(), T(1.0), T(0.0), trans, Transpose::NoTrans);
-            ctx -> wait();
-            std::cout << norm(ctx, gramm_mat.view()) << std::endl;
-
             //Make an implicit update of AP
             gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(C_p, Nvecs, block_vectors, Nvecs), AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
 
