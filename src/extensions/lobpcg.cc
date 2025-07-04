@@ -8,8 +8,6 @@
 #include <oneapi/dpl/random>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include <blas/extra.hh>
-#include "../math-helpers.hh"
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -67,6 +65,7 @@ namespace batchlas {
         auto AX_new = MatrixView(Stempdata.data(), n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto AP_new = MatrixView(Stempdata.data() + n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto AR_new = MatrixView(Stempdata.data() + 2 * n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+
         Span<std::byte> spmm_workspace;
         if constexpr (MFormat == MatrixFormat::CSR) {
             spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, S, AS, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
@@ -90,7 +89,6 @@ namespace batchlas {
         };
 
         auto initialization_wg_size = std::min(get_kernel_max_wg_size<RandomInitializationKernel<B,T,MFormat>>(ctx), size_t(n));
-        auto trans = (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) ? Transpose::ConjTrans : Transpose::Trans;
 
         ctx -> submit([&](sycl::handler& h ){
             h.parallel_for<RandomInitializationKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*initialization_wg_size)}, sycl::range{size_t(initialization_wg_size)}), [=](sycl::nd_item<1> item){
@@ -103,12 +101,7 @@ namespace batchlas {
     
                 sycl::group_barrier(cta);
                 for (int i = tid; i < n*block_vectors; i+=cta.get_local_range(0)){
-                    if constexpr (sycl::detail::is_complex<T>::value) {
-                        blockX[i] = T(distr(engine), distr(engine));
-                    } else {
-                        //For real types we only need the real part
-                        blockX[i] = T(distr(engine));
-                    }
+                    blockX[i] = distr(engine);
                 }
             });
         });
@@ -123,7 +116,7 @@ namespace batchlas {
             spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
         }
         //Compute X^T AX
-        gemm<B>(ctx, X, AX, XtAX, T(1.0), T(0.0), trans, Transpose::NoTrans);
+        gemm<B>(ctx, X, AX, XtAX, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
         //Solve the eigenvalue problem
         syev<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         //Update X and corresponding implicit update of AX
@@ -134,6 +127,7 @@ namespace batchlas {
         bool restart = true;
 
         size_t residual_wg_size = std::min(get_kernel_max_wg_size<SyevxResidualsKernel<B,T,MFormat>>(ctx), size_t(n));
+
 
         //Compute R = AX - X * diag(lambdas)
         for(int it = 0; it < params.iterations; it++){
@@ -164,16 +158,20 @@ namespace batchlas {
                         auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - eigvect_id) : eigvect_id];
                         blockR[i] = blockAX[i] - blockX[i] * eigval;
                     }
-                    sycl::group_barrier(cta);
                     
                     for (int i = 0; i < neigs; i++){
-                        smem[tid] = internal::norm_squared(blockR[i*n + tid]);
-                        blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
-                        smem[tid] = internal::norm_squared(blockX[i*n + tid]);
-                        blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                        if constexpr (sycl::detail::is_complex<T>::value){
+                            smem[tid] = blockR[i*n + tid].real() * blockR[i*n + tid].real();
+                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
+                            smem[tid] = blockX[i*n + tid].real() * blockX[i*n + tid].real();
+                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                        } else {
+                            smem[tid] = blockR[i*n + tid] * blockR[i*n + tid];
+                            blockresiduals[i] = sycl::sqrt((sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())));
+                            smem[tid] = blockX[i*n + tid] * blockX[i*n + tid];
+                            blockresiduals[i] /= sycl::sqrt(sycl::joint_reduce(cta, smem.get_pointer(), smem.get_pointer() + n, sycl::plus<float_type>())) * blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                        }
                     }
-                    
-                    sycl::group_barrier(cta);
                     if (tid < neigs){
                         auto bestresidual = blockbestresiduals[tid];
                         auto residual = blockresiduals[tid];
@@ -184,6 +182,7 @@ namespace batchlas {
                     }
                 });
             });
+
 
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
 
@@ -209,7 +208,7 @@ namespace batchlas {
                 spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
             //Compute S^T A S
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), T(1.0), T(0.0), trans, Transpose::NoTrans);
+            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
             //Solve the eigenvalue problem
             syev<B>(ctx, MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             //If largest = true, then the order of the eigenvectors is reversed
@@ -250,14 +249,12 @@ namespace batchlas {
                     C_p[tid * Nvecs + tid] -= 1;
                 });
             });
-            
-
 
             //Compute new search directions
-            //X = [X, P, R] * C_x
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-            //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
-            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            //X = [X, P, R] * [Zx, Zp, Zr]^T
+            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            //Make an implicit update of AX
+            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
             ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
@@ -284,10 +281,10 @@ namespace batchlas {
             auto batch_size = A.batch_size();
             auto n = A.rows();
             size_t work_size = 0;
-            auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
-            auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
+            auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors * 3, n, n * block_vectors * 3, batch_size, nullptr);
+            auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors * 3, n, n * block_vectors * 3, batch_size, nullptr);
             work_size += BumpAllocator::allocation_size<std::byte>(ctx,syev_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors*3,block_vectors*3,block_vectors*3, 3*3*block_vectors*block_vectors,batch_size, nullptr), W, JobType::EigenVectors, Uplo::Lower));
-            work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(    ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
+            work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(    ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
                                                                                     ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
@@ -299,7 +296,7 @@ namespace batchlas {
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
-            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //lambdas
+            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //Lambdas
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals
             return work_size;

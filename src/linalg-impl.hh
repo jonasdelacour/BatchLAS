@@ -259,20 +259,34 @@ namespace batchlas{
     constexpr auto enum_convert(Transpose trans) {
 #ifdef BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
-            return static_cast<cublasOperation_t>(
-                trans == Transpose::NoTrans ? CUBLAS_OP_N : CUBLAS_OP_T
-            );
+            switch (trans) {
+                case Transpose::NoTrans: return static_cast<cublasOperation_t>(CUBLAS_OP_N);
+                case Transpose::Trans: return static_cast<cublasOperation_t>(CUBLAS_OP_T);
+                case Transpose::ConjTrans: return static_cast<cublasOperation_t>(CUBLAS_OP_C);
+            }
         } else if constexpr (B == BackendLibrary::CUSPARSE) {
-            return static_cast<cusparseOperation_t>(
-                trans == Transpose::NoTrans ? CUSPARSE_OPERATION_NON_TRANSPOSE : CUSPARSE_OPERATION_TRANSPOSE
-            );
+            switch (trans) {
+                case Transpose::NoTrans: return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_NON_TRANSPOSE);
+                case Transpose::Trans: return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_TRANSPOSE);
+                case Transpose::ConjTrans: return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE);
+            }
         } else
 #endif
 #ifdef BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
-            return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
+            //return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
+            switch (trans) {
+                case Transpose::NoTrans: return rocblas_operation_none;
+                case Transpose::Trans: return rocblas_operation_transpose;
+                case Transpose::ConjTrans: return rocblas_operation_conjugate_transpose;
+            }
         } else if constexpr (B == BackendLibrary::ROCSPARSE) {
-            return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
+            //return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
+            switch (trans){
+                case Transpose::NoTrans: return rocsparse_operation_none;
+                case Transpose::Trans: return rocsparse_operation_transpose;
+                case Transpose::ConjTrans: return rocsparse_operation_conjugate_transpose;
+            }
         } else
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND

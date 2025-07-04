@@ -231,6 +231,8 @@ template struct Span<double*>;
 
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<float>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<double>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::complex<float>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::complex<double>>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<uint16_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<uint32_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<int>& vec);

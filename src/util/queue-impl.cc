@@ -98,6 +98,7 @@ size_t Device::get_property(DeviceProperty property) const {
         case 8: return d.get_info<sycl::info::device::max_num_sub_groups>();
         case 9: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
         case 10: return d.get_info<sycl::info::device::mem_base_addr_align>();
+        case 11: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
         default: std::cerr << "Unknown property" << std::endl; return 0;
     }
 }

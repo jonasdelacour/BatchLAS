@@ -116,16 +116,16 @@ namespace batchlas {
             cusolverDnCreateParams(&params);
             size_t device_l_work, host_l_work;
             cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, &device_l_work, &host_l_work);
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
             auto d_info = pool.allocate<int>(ctx, 1);
             cusolverDnXgeqrf(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, device_work_space.data(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
                 device_l_work, host_work_space.data(), host_l_work, d_info.data());
         } else {
             auto tau_data = tau.data();

@@ -69,7 +69,7 @@ inline void trsm_validate_params(
         }
 
         // Validate enum parameters
-        if (transA != Transpose::NoTrans && transA != Transpose::Trans) {
+        if (transA != Transpose::NoTrans && transA != Transpose::Trans && transA != Transpose::ConjTrans) {
                 throw std::runtime_error("TRSM: Invalid transpose operation: " + std::to_string(static_cast<int>(transA)));
         }
         if (uplo != Uplo::Lower && uplo != Uplo::Upper) {

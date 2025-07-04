@@ -11,13 +11,13 @@ namespace batchlas
     Event norm(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
-              const Span<T> norms);
+              const Span<float_t<T>> norms);
 
     // Convenience function which allocates and returns the results stored in an array.
     template <typename T, MatrixFormat MF>
-    UnifiedVector<T> norm(Queue &ctx,
+    UnifiedVector<float_t<T>> norm(Queue &ctx,
                           const MatrixView<T, MF> &A,
-                          const NormType norm_type);
+                          const NormType norm_type = NormType::Frobenius);
 
     //Memory passed from outside
     template <Backend B, typename T, MatrixFormat MF>

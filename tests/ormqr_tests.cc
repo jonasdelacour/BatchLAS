@@ -19,6 +19,7 @@ protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
     std::shared_ptr<Queue> ctx;
+    Transpose trans = test_utils::is_complex<ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
 
     void SetUp() override {
         if constexpr (BackendType != Backend::NETLIB) {
@@ -61,14 +62,14 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n);
-    gemm<B>(*this->ctx, Q.view(), Q.view(), Result.view(), T(1), T(0), Transpose::Trans, Transpose::NoTrans);
+    gemm<B>(*this->ctx, Q.view(), Q.view(), Result.view(), T(1), T(0), this->trans, Transpose::NoTrans);
     this->ctx->wait();
 
     auto r = Result.data();
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
             T expected = (i == j) ? T(1) : T(0);
-            EXPECT_NEAR(r[i * Result.ld() + j], expected, T(1e-4));
+            test_utils::assert_near(r[i * Result.ld() + j], expected);
         }
     }
 }
@@ -91,7 +92,7 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
-    gemm<B>(*this->ctx, Q.view(), Q.view(), Result.view(), T(1), T(0), Transpose::Trans, Transpose::NoTrans);
+    gemm<B>(*this->ctx, Q.view(), Q.view(), Result.view(), T(1), T(0), this->trans, Transpose::NoTrans);
     this->ctx->wait();
 
     auto r = Result.data();
@@ -99,7 +100,7 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 T expected = (i == j) ? T(1) : T(0);
-                EXPECT_NEAR(r[b * Result.stride() + i * Result.ld() + j], expected, T(1e-4));
+                test_utils::assert_near(r[b * Result.stride() + i * Result.ld() + j], expected);
             }
         }
     }

@@ -89,7 +89,7 @@ namespace batchlas {
         
         // Convert to a different matrix format
         template <MatrixFormat NewMType>
-        Matrix<T, NewMType> convert_to(const T& zero_threshold = 1e-7) const;
+        Matrix<T, NewMType> convert_to(const float_t<T>& zero_threshold = 1e-7) const;
 
         // Create a copy with data in row-major format from column-major
         template <typename U = T, MatrixFormat M = MType, 

@@ -13,7 +13,10 @@ struct BumpAllocator {
 
     template<typename T>
     constexpr inline static auto alignment(const Device& device){
-        auto device_align_bytes = device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8;
+        //It is common for GPU vendors to require 16 byte alignment of pointers (equal to 4 floats).
+        //It seems however that this property can't be immediately queried through the sycl runtime, 
+        //hence the hardcoded value of 16.
+        auto device_align_bytes = std::max((size_t)16, (size_t)device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN)/8);
         return std::max(device_align_bytes, static_cast<std::uintptr_t>(alignof(T)));
     }
 
@@ -29,17 +32,19 @@ struct BumpAllocator {
 
     template<typename T>
     constexpr inline Span<T> allocate(const Device& device, size_t size){
+        if (size == 0) return {};
         size_t alloc_size = allocation_size<T>(device,size);
         if (alloc_size > byte_size){
             throw std::runtime_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
         }
         
         std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(data);
-        std::uintptr_t aligned = (addr + alignment<T>(device) - 1) & ~(alignment<T>(device) - 1);  // Changed from alignof(T)
+        std::uintptr_t align = alignment<T>(device);
+        std::uintptr_t aligned = (addr % align == 0) ? addr : (addr + align - 1) & ~(align - 1);
         T* ptr = reinterpret_cast<T*>(aligned);
 
         data = reinterpret_cast<void*>(ptr + size);
-        byte_size -= (reinterpret_cast<char*>(data) - reinterpret_cast<char*>(ptr));
+        byte_size -= (reinterpret_cast<char*>(data) - reinterpret_cast<char*>(reinterpret_cast<void*>(addr)));
 
         return Span(ptr, size);
     }
