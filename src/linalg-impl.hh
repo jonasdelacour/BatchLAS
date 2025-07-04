@@ -292,11 +292,11 @@ namespace batchlas{
 #if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
-                trans == Transpose::NoTrans ? CblasNoTrans : CblasTrans
+                trans == Transpose::NoTrans ? CblasNoTrans : trans == Transpose::ConjTrans ? CblasConjTrans : CblasTrans
             );
         } else if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
-                trans == Transpose::NoTrans ? 'N' : 'T'
+                trans == Transpose::NoTrans ? 'N' : trans == Transpose::ConjTrans ? 'C' : 'T'
             );
         } else
 #endif
