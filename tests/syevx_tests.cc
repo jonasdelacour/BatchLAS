@@ -210,9 +210,10 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
 
     SyevxParams<float> params;
-    params.algorithm = OrthoAlgorithm::SVQB;
-    params.extra_directions = 10;
+    params.algorithm = OrthoAlgorithm::SVQB2;
+    params.extra_directions = 5;
     params.find_largest = true;
+    params.iterations = 30;
 
 
     size_t buf_size = syevx_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
@@ -229,7 +230,7 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
 
     for (int i = 0; i < neig; ++i) {
         auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
-        EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
+        EXPECT_NEAR(rel_err, 0.0f, 3e-4f)
             << "Eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
     }
 }
@@ -237,22 +238,23 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
 TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
     constexpr int n = 200;
     constexpr int batch = 2;
-    const int neig = 3;
-    std::complex<float> a(2.0f, 0.0f);
-    std::complex<float> b(200.0f, 0.0f), c(200.0f, 0.0f);
+    const int neig = 5;
+    std::complex<float> a(10.0f, 0.0f);
+    std::complex<float> b(100.0f, 5.0f), c(100.0f, -5.0f);
 
     auto dense = Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
     
-    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
-    auto A_view = A_CSR.view();
+    //auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = dense.view();
 
     UnifiedVector<float> W(neig * batch);  // Eigenvalues are real for Hermitian matrices
     Matrix<std::complex<float>, MatrixFormat::Dense> V(n, neig, batch);
 
     SyevxParams<std::complex<float>> params;
-    params.algorithm = OrthoAlgorithm::Chol2;
-    params.extra_directions = 10;
+    params.algorithm = OrthoAlgorithm::SVQB2;
+    params.extra_directions = 5;
     params.find_largest = true;
+    params.iterations = 50;
 
     size_t buf_size = syevx_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(buf_size);
@@ -262,7 +264,7 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 
     std::vector<std::complex<float>> expected(n);
     for (int k = 1; k <= n; ++k) {
-        expected[k-1] = a - std::complex<float>(2.0f) * std::sqrt(std::real(b * std::conj(c))) * std::complex<float>(std::cos(M_PI * k / (n + 1)));
+        expected[k-1] = a - std::complex<float>(2.0f) * std::sqrt(b * c) * std::complex<float>(std::cos(M_PI * k / (n + 1)));
     }
     std::sort(expected.begin(), expected.end(), [](const auto& lhs, const auto& rhs) {
         return std::abs(lhs) > std::abs(rhs);
@@ -270,11 +272,76 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 
     for (int i = 0; i < neig; ++i) {
         auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
-        EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
+        EXPECT_NEAR(rel_err, 0.0f, 1e-5f)
             << "Complex eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
     }
 }
 
+TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
+    constexpr int n = 200;
+    constexpr int batch = 2;
+    const int neig = 5;
+    std::complex<double> a(10.0f, 0.0f);
+    std::complex<double> b(100.0f, 5.0f), c(100.0f, -5.0f);
+
+    auto dense = Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
+    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = A_CSR.view();
+
+    UnifiedVector<std::complex<double>> expected(n);
+    for (int k = 1; k <= n; ++k) {
+        expected[k-1] = a - std::complex<double>(2.0f) * std::sqrt(b * c) * std::complex<double>(std::cos(M_PI * k / (n + 1)));
+    }
+    std::sort(expected.begin(), expected.end(), [](const auto& lhs, const auto& rhs) {
+        return std::abs(lhs) > std::abs(rhs);
+    });
+
+    auto shift = expected[neig] + std::complex<double>(1.0f);
+    
+    //Shift the matrices:
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            dense.view().at(i, i, b) -= shift.real();  // Shift diagonal elements
+        }
+    }
+
+    auto shift_inv = inv<test_utils::gpu_backend>(*ctx, dense.view());
+    ctx->wait();
+    //Adjust expectation to the shift inverted
+    for (auto& val : expected) {
+        val = 1.0 / (val - shift);
+    }
+
+    SyevxParams<std::complex<double>> params;
+    params.algorithm = OrthoAlgorithm::SVQB2;
+    params.ortho_iterations = 2;
+    params.extra_directions = 2;
+    params.find_largest = false;
+    params.iterations = 30;
+
+    UnifiedVector<double> W(neig * batch);
+    UnifiedVector<std::byte> workspace(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_view, W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
+
+    syevx<test_utils::gpu_backend>(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params);
+        ctx->wait();
+
+    for (int i = 0; i < neig; ++i) {
+        auto rel_err = std::abs(W[i] - expected[i]) / std::abs(expected[i]);
+        EXPECT_NEAR(rel_err, 0.0f, 1e-5f)
+            << "Complex eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
+    }
+    /* std::cout << "LOBPCG Computed eigenvalues (shifted): " << W.subspan(0, neig) << std::endl;
+
+    auto syev_buffer = syev_buffer_size<test_utils::gpu_backend>(*ctx, shift_inv.view(), W, JobType::NoEigenVectors, Uplo::Lower);
+    UnifiedVector<std::byte> syev_workspace(syev_buffer);
+    UnifiedVector<double> ref_vals(n * batch, 0.0);
+    syev<test_utils::gpu_backend>(*ctx, shift_inv.view(), ref_vals, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
+    ctx->wait();
+
+    std::cout << "Reference Computed eigenvalues (shifted): " << ref_vals.subspan(0, n) << std::endl;
+    std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */
+}
 
 
 int main(int argc, char **argv) {
