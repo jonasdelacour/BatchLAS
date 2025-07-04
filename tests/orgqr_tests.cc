@@ -19,6 +19,7 @@ protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
     std::shared_ptr<Queue> ctx;
+    Transpose trans_op = test_utils::is_complex<ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
 
     void SetUp() override {
         if constexpr (BackendType != Backend::NETLIB) {
@@ -60,7 +61,7 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n);
-    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), Transpose::Trans, Transpose::NoTrans);
+    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), this->trans_op, Transpose::NoTrans);
     this->ctx->wait();
 
     auto r = Result.data();
@@ -89,7 +90,7 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
-    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), Transpose::Trans, Transpose::NoTrans);
+    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), this->trans_op, Transpose::NoTrans);
     this->ctx->wait();
 
     auto r = Result.data();
