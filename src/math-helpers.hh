@@ -26,7 +26,7 @@ namespace batchlas {
         }
 
         template <typename T>
-        base_float_t<T> norm(const T& value) {
+        base_float_t<T> norm_squared(const T& value) {
             if constexpr (is_complex<T>::value) {
                 return std::real(std::conj(value) * value); // For complex numbers, return the squared norm
             } else {
