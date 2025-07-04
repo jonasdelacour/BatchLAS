@@ -491,6 +491,7 @@ std::string GetTestName(Transpose trans, OrthoAlgorithm algo) {
         case OrthoAlgorithm::Chol2: algo_str = "Chol2"; break;
         case OrthoAlgorithm::ShiftChol3: algo_str = "ShiftChol3"; break;
         case OrthoAlgorithm::SVQB: algo_str = "SVQB"; break;
+        case OrthoAlgorithm::SVQB2: algo_str = "SVQB2"; break;
         case OrthoAlgorithm::CGS2: algo_str = "CGS2"; break;
         case OrthoAlgorithm::Householder: algo_str = "Householder"; break;
         default: algo_str = "Unknown"; break;
@@ -506,6 +507,7 @@ std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorit
         case OrthoAlgorithm::Chol2: algo_str = "Chol2"; break;
         case OrthoAlgorithm::ShiftChol3: algo_str = "ShiftChol3"; break;
         case OrthoAlgorithm::SVQB: algo_str = "SVQB"; break;
+        case OrthoAlgorithm::SVQB2: algo_str = "SVQB2"; break;
         case OrthoAlgorithm::CGS2: algo_str = "CGS2"; break;
         case OrthoAlgorithm::Householder: algo_str = "Householder"; break;
         default: algo_str = "Unknown"; break;
@@ -518,7 +520,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixFloatTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -531,7 +533,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixComplexFloatTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixComplexFloatTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -544,7 +546,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixDoubleTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixDoubleTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -557,7 +559,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combinations, OrthoMatrixComplexDoubleTest,
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoMatrixComplexDoubleTest::ParamType>& info) {
         Transpose trans = std::get<0>(info.param);
@@ -571,7 +573,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMFloatTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
@@ -586,7 +588,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMComplexFloatTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
@@ -601,7 +603,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMDoubleTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
@@ -616,7 +618,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
         ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB)
+        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
     ),
     [](const ::testing::TestParamInfo<OrthoAgainstMComplexDoubleTest::ParamType>& info) {
         Transpose transA = std::get<0>(info.param);
