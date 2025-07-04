@@ -70,13 +70,14 @@ namespace batchlas {
     };
     
     enum class OrthoAlgorithm {
-        Chol2,      //Default
-        Cholesky,   //Rarely sufficient
-        ShiftChol3, //More stable than Chol2
-        Householder, //Most numerically stable
-        CGS2,     //Classical Gram-Schmidt with 2 iterations
-        SVQB,
-        NUM_ALGORITHMS //Used to determine the number of algorithms
+        Chol2,          //Default
+        Cholesky,       //Rarely sufficient
+        ShiftChol3,     //More stable than Chol2
+        Householder,    
+        CGS2,           //Classical Gram-Schmidt with 2 iterations
+        SVQB,       
+        SVQB2,          //2 Iterations of SVQB
+        NUM_ALGORITHMS  //Used to determine the number of algorithms
     };
     
     //Some of the types are not supported by all backends, compilation errors will make this apparent
