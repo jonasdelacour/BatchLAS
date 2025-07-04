@@ -22,6 +22,7 @@ set(TEST_TARGETS
     util_vector_tests
     util_device_queue_tests
     minibench_cli_tests
+    mempool_tests
     gemm_tests
     syevx_tests
     lanczos_tests
