@@ -36,7 +36,7 @@ namespace batchlas
                     for (int j = local_idx; j < rows * cols; j += local_size) {
                         auto col = j / rows;
                         auto row = j % rows;
-                        temp += internal::norm(data_span[col * ld + row]);
+                        temp += internal::norm_squared(data_span[col * ld + row]);
                     }
                     result = sycl::sqrt(sycl::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
