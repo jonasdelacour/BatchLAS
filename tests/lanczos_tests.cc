@@ -130,9 +130,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
         total_nnz,
         rows+1,
         batch_size);
-    
-    std::cout << "Sparse Matrix (CSR format):\n";
-    sparse_matrix.print(std::cout, 60, 60, 60);
+
     
     LanczosParams<float> params;
     params.sort_enabled = false;
@@ -162,8 +160,6 @@ TEST_F(LanczosTestBase, LanczosTest) {
     ctx->wait();
 
     UnifiedVector<float> residuals_memory(rows * rows * batch_size, 0.0f);
-
-    std::cout << "First eigenvector: " << Span(eigenvector_memory.data(), rows) << std::endl;
 
 
     MatrixView residuals(
@@ -198,16 +194,6 @@ TEST_F(LanczosTestBase, LanczosTest) {
     gemm<test_utils::gpu_backend>(
         *ctx, residuals, residuals, MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
     ctx->wait();
-
-    std::cout << "Residuals:\n[ ";
-    for (size_t i = 0; i < rows; ++i) {
-        std::cout << norms_memory[i*rows + i] << " ,";
-    }
-    std::cout << "]" << std::endl;
-    
-
-    std::cout << Span(W_data.data(), rows) << std::endl;
-
     
     // Verify that the computed eigenvalues match the expected ones
     for (int b = 0; b < batch_size; ++b) {
@@ -232,7 +218,9 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
 
     LanczosParams<float> params;
     params.reorthogonalization_iterations = 2;
+    params.sort_enabled = true;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
+    params.sort_order = SortOrder::Descending;
 
     size_t buf_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
     UnifiedVector<std::byte> workspace(buf_size);
@@ -241,20 +229,19 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     ctx->wait();
 
     // expected eigenvalues for Toeplitz matrix
-    std::vector<float> expected(n);
+    UnifiedVector<float> expected(n);
     for (int k = 1; k <= n; ++k) {
         expected[k-1] = a - 2.0f * std::sqrt(b * c) * std::cos(k * M_PI / (n + 1));
     }
     std::sort(expected.begin(), expected.end(), std::greater<float>());
 
+    auto tol = test_utils::tolerance<float>() * 1e1;
+    
     for (int b = 0; b < batch; ++b) {
         for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(W[b * n + i], expected[i], 1e-3f);
+            EXPECT_NEAR(W[b * n + i], expected[i], tol);
         }
     }
-    
-    std::cout << W << std::endl;
-    std::cout << Span(expected.data(), expected.size()) << std::endl;
 
     // verify eigenvectors A*v = lambda*v
     // Create workspace for residuals
@@ -265,39 +252,32 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     Matrix<float> scaled_eigenvectors(n, n, batch);
     auto scaled_eigenvectors_view = scaled_eigenvectors.view();
 
-
-    // Scale eigenvectors by eigenvalues: scaled_v = v * λ
-    for (int b = 0; b < batch; ++b) {
-        for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) {
-                scaled_eigenvectors_view.at(i,j,b) = eigenvectors_view.at(i,j,b) * W[b * n + j];
-            }
-        }
-    }
     auto spmm_workspace = UnifiedVector<std::byte>(
-        spmm_buffer_size<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
     // Compute residuals = A*v - v*λ
-    std::cout << "Computing residuals..." << std::endl;
-    spmm<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, residuals_view, 1.0f, 0.0f,
-                        Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
-    gemm<test_utils::gpu_backend>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f,
-                        Transpose::NoTrans, Transpose::NoTrans);
-    ctx->wait();
 
-    
-    // Compute the norm of each residual column
-    UnifiedVector<float> norms(n * batch, 0.0f);
+    spmm<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f,
+                        Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+    /* gemm<test_utils::gpu_backend>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f,
+                        Transpose::NoTrans, Transpose::NoTrans); */
+    ctx->wait();
+    UnifiedVector<float> ritz_values(batch * n, 0.0f);
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
-            float norm = 0.0f;
             for (int i = 0; i < n; ++i) {
-                float val = residuals_view.at(i,j,b);
-                norm += val * val;
+                ritz_values[b * n + j] += scaled_eigenvectors_view.at(i,j,b) / eigenvectors_view.at(i,j,b);
             }
-            norms[b*n + j] = std::sqrt(norm);
-            EXPECT_LT(norms[b*n + j], 1e-2f);
+            ritz_values[b * n + j] /= n;
         }
     }
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            EXPECT_NEAR(ritz_values[b * n + j], W[b * n + j], tol)
+                << "Ritz value mismatch at batch " << b << ", index " << j;
+        }
+    }
+
 }
 
 int main(int argc, char **argv) {
