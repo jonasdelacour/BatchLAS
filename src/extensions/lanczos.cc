@@ -207,6 +207,7 @@ namespace batchlas {
             h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
                 auto tid = item.get_local_linear_id();
+                auto bdim = item.get_local_range()[0];
                 auto cta = item.get_group();
                 
                 // Set up pointers to the batch-specific data
@@ -220,7 +221,7 @@ namespace batchlas {
                 
                 if (jobz == JobType::EigenVectors) {
                     // Initialize indices - each thread handles a portion
-                    for (int i = tid; i < n; i += item.get_local_range()[0]) {
+                    for (int i = tid; i < n; i += bdim) {
                         batch_indices[i] = i;
                     }
                     
@@ -243,12 +244,12 @@ namespace batchlas {
                         }
                     );
 
-                    for (int i = tid; i < n; i += item.get_local_range()[0]) {
+                    for (int i = tid; i < n; i += bdim) {
                         temp_eigenvalues[i] = batch_W[batch_indices[i]];
                     }
                     sycl::group_barrier(cta);
-                    
-                    for (int i = tid; i < n; i += item.get_local_range()[0]) {
+
+                    for (int i = tid; i < n; i += bdim) {
                         batch_W[i] = temp_eigenvalues[i];
                     }
                     
@@ -257,22 +258,39 @@ namespace batchlas {
                     // Reorder eigenvectors based on the sorted indices
                     T* batch_V_out = const_cast<T*>(Vdata) + bid * Vstride;
                     
-                    // Reorder the eigenvectors column by column
-                    for (int i = 0; i < n; i++) {
-                        // Each thread handles some rows of the eigenvector
-                        for (int j = tid; j < n; j += item.get_local_range()[0]) {
-                            // Store in temp buffer
-                            batch_temp_vec[j] = batch_V_out[batch_indices[i] * n + j];
-                        }
-                        
+                    // In‑place permutation of the eigenvector columns using cycle‑decomposition.
+                    for (int i = 0; i < n; ++i) {
+                        if (batch_indices[i] < 0) continue;               // already processed
+                        int curr_ix = i;
+                        int next_ix = -1;
+
+                        // Preserve the first column of this cycle
                         sycl::group_barrier(cta);
-                        
-                        // Copy from temp buffer to output
-                        for (int j = tid; j < n; j += item.get_local_range()[0]) {
-                            batch_V_out[i * Vld + j] = batch_temp_vec[j];
-                        }
-                        
+                        for (int j = tid; j < n; j += bdim)
+                            batch_temp_vec[j] = batch_V_out[curr_ix * Vld + j];
                         sycl::group_barrier(cta);
+
+                        while (true) {
+                            next_ix = batch_indices[curr_ix];
+
+                            // If the next index closes the cycle, write the saved column and finish
+                            if (next_ix == i) {
+                                for (int j = tid; j < n; j += bdim)
+                                    batch_V_out[curr_ix * Vld + j] = batch_temp_vec[j];
+                                batch_indices[curr_ix] = -1;
+                                break;
+                            }
+
+                            // Move the column that belongs to the current position
+                            for (int j = tid; j < n; j += bdim)
+                                batch_V_out[curr_ix * Vld + j] = batch_V_out[next_ix * Vld + j];
+
+                            sycl::group_barrier(cta);
+                            batch_indices[curr_ix] = -1;                   // mark this slot done
+                            curr_ix = next_ix;
+                        }
+
+                        sycl::group_barrier(cta); // ensure all threads sync before the next outer iteration
                     }
                 } else {
                     // If only eigenvalues are needed, just sort them directly
