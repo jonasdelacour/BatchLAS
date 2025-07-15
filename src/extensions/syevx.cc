@@ -14,8 +14,6 @@
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxResidualsKernel;
-    template <Backend B, typename T, MatrixFormat MFormat>
-    struct RandomInitializationKernel;
 
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx(Queue& ctx,
@@ -55,7 +53,7 @@ namespace batchlas {
         auto AP =   AS({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS
         auto AR =   AS({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS
 
-        auto StAS = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto StAS_base = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto XtAX = MatrixView(StASdata.data(), block_vectors, block_vectors, block_vectors, block_vectors * block_vectors, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
@@ -76,9 +74,9 @@ namespace batchlas {
             spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, S, AS, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, StAS, W, JobType::EigenVectors, Uplo::Lower));
+        auto syev_workspace = pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, StAS_base, W, JobType::EigenVectors, Uplo::Lower));
         auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(  ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
-                                                                        ortho_buffer_size<B>(ctx, C_p, StAS, Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
+                                                                        ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
         
         //Double buffering pointer swap approach as opposed to copying data unnecessarily                                                                        
         auto swap_subspace = [&](){
@@ -93,29 +91,9 @@ namespace batchlas {
             std::swap(AR, AR_new);
         };
 
-        auto initialization_wg_size = std::min(get_kernel_max_wg_size<RandomInitializationKernel<B,T,MFormat>>(ctx), size_t(n));
         auto trans = (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) ? Transpose::ConjTrans : Transpose::Trans;
 
-        ctx -> submit([&](sycl::handler& h ){
-            h.parallel_for<RandomInitializationKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*initialization_wg_size)}, sycl::range{size_t(initialization_wg_size)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
-                sycl::group<1> cta = item.get_group();
-                auto bid = item.get_group_linear_id();
-                oneapi::dpl::uniform_real_distribution<typename base_type<T>::type> distr(0.0, 1.0);            
-                oneapi::dpl::minstd_rand engine(42, tid);
-                auto blockX = Sdata.subspan(bid * block_vectors*3 * n, block_vectors*n);
-    
-                sycl::group_barrier(cta);
-                for (int i = tid; i < n*block_vectors; i+=cta.get_local_range(0)){
-                    if constexpr (sycl::detail::is_complex<T>::value) {
-                        blockX[i] = T(distr(engine), distr(engine));
-                    } else {
-                        //For real types we only need the real part
-                        blockX[i] = T(distr(engine));
-                    }
-                }
-            });
-        });
+        S.fill_random(ctx);
 
         //Orthonormalize initial vectors
         ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
@@ -212,10 +190,12 @@ namespace batchlas {
             } else {
                 spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
+
+            auto StAS = MatrixView(StAS_base, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs);
             //Compute S^T A S
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), T(1.0), T(0.0), trans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, T(1.0), T(0.0), trans, Transpose::NoTrans);
             //Solve the eigenvalue problem
-            syev<B>(ctx, MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            syev<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             //If largest = true, then the order of the eigenvectors is reversed
             if(params.find_largest){
                 ctx -> submit([&](sycl::handler& h){
@@ -259,12 +239,11 @@ namespace batchlas {
 
             //Compute new search directions
             //X = [X, P, R] * C_x
-            //gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), StAS({0,Nvecs}, {0,block_vectors}), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), StAS({0,Nvecs}, {0,block_vectors}), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
-            ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
+            ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), StAS({0,Nvecs}, {0,block_vectors}), Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AP
@@ -299,7 +278,7 @@ namespace batchlas {
             }
             
             if (batch_size > 1) {
-                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 21;
+                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
             }
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
