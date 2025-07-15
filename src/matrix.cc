@@ -394,17 +394,6 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
     }
 }
 
-// Fill the matrix with a specific value
-template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::fill(T value) {
-    Queue q;
-    T* data_ptr = data_.data();
-    size_t total_elements = data_.size();
-    q->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
-        data_ptr[idx[0]] = value;
-    }).wait();
-}
-
 // Copy from another matrix view
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
@@ -493,21 +482,23 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
 // Factory method to create triangular matrix with specific values using SYCL
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
+Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Side side, T diagonal_value,
                                              T non_diagonal_value, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    
-    // Create a queue to submit work to
-    Queue q;
+    result.view().fill_triangular(side, diagonal_value, non_diagonal_value).wait();
+    return result;
+}
 
-    // Get pointers to the matrix data
-    T* data_ptr = result.data_.data();
-    
-    // Calculate total number of elements
-    size_t total_elements = static_cast<size_t>(n) * n * batch_size;
-    
-    // Submit a kernel to initialize the triangular matrix
-    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Side side, T diagonal_value, 
+                                             T non_diagonal_value) {
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+
+    ctx -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         // Calculate 3D coordinates from flat index
         size_t flat_idx = idx[0];
         size_t b = flat_idx / (n * n);          // batch index
@@ -518,17 +509,170 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
         if (i == j) {
             // Diagonal elements
             data_ptr[b * n * n + i * n + j] = diagonal_value;
-        } else if ((uplo == Uplo::Lower && i > j) || 
-                  (uplo == Uplo::Upper && i < j)) {
-            // Lower or upper triangular elements
+        } else if ((side == Side::Left && i > j) || 
+                  (side == Side::Right && i < j)) {
+            // Lower or upper triangular elements (Left = lower, Right = upper)
             data_ptr[b * n * n + i * n + j] = non_diagonal_value;
         } else {
             // Zero elements
             data_ptr[b * n * n + i * n + j] = T(0);
         }
-    }).wait();
-    
-    return result;
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Side side, 
+                                                    Diag diag,
+                                                    unsigned int seed){
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+
+    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+        oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
+        oneapi::dpl::minstd_rand engine(seed, remainder);
+        T rand_value;
+        if constexpr (std::is_same_v<T, std::complex<float>> || 
+                      std::is_same_v<T, std::complex<double>>) {
+            // For complex numbers, generate both real and imaginary parts
+            auto r1 = dist(engine);
+            auto r2 = dist(engine);
+            rand_value = T(r1, r2);
+        } else {
+            // For real numbers
+            rand_value = dist(engine);
+        }
+        if (i == j) {
+            // Diagonal elements
+            data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
+        } else if ((side == Side::Left && i > j) || 
+                  (side == Side::Right && i < j)) {
+            // Lower or upper triangular elements
+            data_ptr[b * n * n + i * n + j] = rand_value;
+        } else {
+            // Zero elements
+            data_ptr[b * n * n + i * n + j] = T(0);
+        }
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::triangularize(const Queue& ctx, Side side, 
+                                                    Diag diag) {
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+
+    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+        
+        if (i == j && diag == Diag::Unit) {
+            data_ptr[b * n * n + i * n + j] = T(1);
+        } else if ((side == Side::Left && i < j) || (side == Side::Right && i > j)) {
+            // Zero out elements above or below the diagonal depending on side
+            data_ptr[b * n * n + i * n + j] = T(0);
+        }
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) {
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+    auto ld = ld_; // Leading dimension
+    auto stride = stride_; // Stride for batched matrices
+
+    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+
+        if (uplo == Uplo::Upper) {
+            // Upper triangular part
+            if (i < j) {
+                size_t idx1 = b * stride + i * ld + j;
+                size_t idx2 = b * stride + j * ld + i;
+                data_ptr[idx2] = data_ptr[idx1];
+            }
+        } else {
+            // Lower triangular part
+            if (i > j) {
+                size_t idx1 = b * stride + i * ld + j;
+                size_t idx2 = b * stride + j * ld + i;
+                data_ptr[idx2] = data_ptr[idx1];
+            }
+        }
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) {
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+    auto ld = ld_; // Leading dimension
+    auto stride = stride_; // Stride for batched matrices
+
+    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+        // Calculate 3D coordinates from flat index
+        size_t flat_idx = idx[0];
+        size_t b = flat_idx / (n * n);          // batch index
+        size_t remainder = flat_idx % (n * n);
+        size_t i = remainder / n;               // row index
+        size_t j = remainder % n;               // column index
+
+        if (uplo == Uplo::Upper) {
+            // Upper triangular part
+            if (i < j) {
+                size_t idx1 = b * stride + i * ld + j;
+                size_t idx2 = b * stride + j * ld + i;
+                data_ptr[idx2] = std::conj(data_ptr[idx1]);
+            }
+        } else {
+            // Lower triangular part
+            if (i > j) {
+                size_t idx1 = b * stride + i * ld + j;
+                size_t idx2 = b * stride + j * ld + i;
+                data_ptr[idx2] = std::conj(data_ptr[idx1]);
+            }
+        }
+        if (i == j) {
+            // Ensure diagonal elements are real
+            if constexpr (std::is_same_v<T, std::complex<float>> || 
+                          std::is_same_v<T, std::complex<double>>) {
+                size_t diag_idx = b * stride + i * ld + i;
+                data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
+            }
+        }
+    });
+    return ctx.get_event();
 }
 
 // Factory method to create random matrix
@@ -536,13 +680,20 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
+    result.view().fill_random(hermitian, seed).wait();
+    return result;
+}
 
-    Queue q;
-    T* data_ptr = result.data_.data();
-    size_t total_elements = result.data_.size();
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) {
+    T* data_ptr = data_.data();
+    size_t total_elements = data_.size();
+    auto rows = rows_;
+    auto cols = cols_;
+    auto batch_size = batch_size_;
 
-    
-    q->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
         oneapi::dpl::minstd_rand engine(seed, idx[0]);
         auto r1 = dist(engine);
@@ -553,7 +704,7 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
         } else {
             data_ptr[idx[0]] = T(r1);
         }
-    }).wait();
+    });
     
     // If hermitian flag is set, enforce Hermitian property using a kernel
     if (hermitian) {
@@ -561,9 +712,9 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
             throw std::runtime_error("Hermitian matrices must be square");
         }
 
-        int ld = result.ld_;
-        int stride = result.stride_;
-        q->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * rows * cols),
+        int ld = ld_;
+        int stride = stride_;
+        ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * rows * cols),
                         [=](sycl::id<1> idx) {
             size_t flat = idx[0];
             size_t b = flat / (rows * cols);
@@ -587,9 +738,19 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
                     data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
                 }
             }
-        }).wait();
+        });
     }
-    return result;
+    return ctx.get_event();
+}
+
+
+template <typename T, MatrixFormat MType>
+Event MatrixView<T, MType>::fill(const Queue& ctx, T value) {
+    auto data_ptr = data_.data();
+    ctx->parallel_for(sycl::range<1>(data_.size()), [=](sycl::id<1> idx) {
+        data_ptr[idx[0]] = value;
+    });
+    return ctx.get_event();
 }
 
 // Factory method to create zeros matrix
@@ -619,39 +780,68 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 
     // Set all elements to zero
     result.fill(T(0));
+    result.view().template fill_diagonal<MType>(diag_values);
 
-    Queue q;
-    T* data_ptr = result.data_.data();
+    return result;
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values) {
+    T* data_ptr = data_.data();
     const T* diag_ptr = diag_values.data();
-    int ld = result.ld_;
-    int stride = result.stride_;
+    int ld = ld_;
+    int stride = stride_;
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
 
-    q->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
+    ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
         size_t flat = idx[0];
         size_t b = flat / n;
         size_t i = flat % n;
         data_ptr[b * stride + i * ld + i] = diag_ptr[i];
-    }).wait();
+    });
+    return ctx.get_event();
+}
 
-    return result;
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) {
+    T* data_ptr = data_.data();
+    int ld = ld_;
+    int stride = stride_;
+    auto n = rows_; // Assuming square matrix
+    auto batch_size = batch_size_;
+
+    ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
+        size_t flat = idx[0];
+        size_t b = flat / n;
+        size_t i = flat % n;
+        data_ptr[b * stride + i * ld + i] = diag_value;
+    });
+    return ctx.get_event();
 }
 
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    
-    // Create a queue to submit work to
-    Queue q;
-    
-    // Get pointer to the matrix data
-    T* data_ptr = result.data_.data();
+    result.view().template fill_tridiag_toeplitz<MType>(diag, sub, super);
+    return result;
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T sub_diag, T super_diag) {
+    T* data_ptr = data().data();
+    int n = rows_; // Assuming square matrix
+    int batch_size = batch_size_;
     
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
     
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
-    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    ctx -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
         // Calculate 3D coordinates from flat index
         int64_t flat_idx = idx[0];
         int64_t b = flat_idx / (n * n);          // batch index
@@ -662,15 +852,14 @@ Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super
         if (i == j) {
             data_ptr[b * n * n + j * n + i] = diag; // Diagonal element
         } else if (i == j - 1) {
-            data_ptr[b * n * n + j * n + i] = super; // Super-diagonal element
+            data_ptr[b * n * n + j * n + i] = super_diag; // Super-diagonal element
         } else if (i == j + 1) {
-            data_ptr[b * n * n + j * n + i] = sub;   // Sub-diagonal element
+            data_ptr[b * n * n + j * n + i] = sub_diag;   // Sub-diagonal element
         } else {
             data_ptr[b * n * n + j * n + i] = T(0);   // Zero elsewhere
         }
-    }).wait();
-    
-    return result;
+    });
+    return ctx.get_event();
 }
 
 // Implement to_column_major using SYCL
@@ -1036,10 +1225,10 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_row_major() const;
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_row_major() const;
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Triangular(int, Uplo, float, float, int);
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Uplo, double, double, int);
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<float>, std::complex<float>, int);
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Triangular(int, Side, float, float, int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Side, double, double, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Side, std::complex<float>, std::complex<float>, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Side, std::complex<double>, std::complex<double>, int);
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(int, float, float, float, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);

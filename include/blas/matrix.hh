@@ -21,6 +21,14 @@ namespace batchlas {
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class BackendMatrixHandle;
 
+    struct Slice { //Default Slice selects entire matrix
+        int64_t start = std::numeric_limits<int64_t>::min(); // Use min to indicate start from the beginning
+        int64_t end = std::numeric_limits<int64_t>::max();   // Use max to indicate end
+
+        Slice(int64_t start) : start(start) {}
+        Slice(int64_t start, int64_t end) : start(start), end(end) {}
+    };
+
     // Matrix class - owning container for matrix data
     template <typename T, MatrixFormat MType>
     class Matrix {
@@ -74,7 +82,7 @@ namespace batchlas {
         // Create a triangular matrix with specific values
         template <typename U = T, MatrixFormat M = MType, 
                 typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1), 
+        static Matrix<T, MType> Triangular(int n, Side side, T diagonal_value = T(1), 
                                           T non_diagonal_value = T(0.5), int batch_size = 1);
         
         template <typename U = T, MatrixFormat M = MType, 
@@ -152,7 +160,7 @@ namespace batchlas {
         Span<T> data() const { return data_.to_span(); }
         
         // Fill the matrix with a specific value
-        void fill(T value);
+        void fill(T value) {this->view().fill(value).wait();}
         
         // Deep copy from another matrix or view
         void copy_from(const MatrixView<T, MType>& src);
@@ -357,7 +365,181 @@ namespace batchlas {
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         const T& at(int row, int col, int batch = 0) const;
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        T& operator()(int row, int col, int batch = 0) {
+            return at(row, col, batch);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        const T& operator()(int row, int col, int batch = 0) const {
+            return at(row, col, batch);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
+            // Create a new view based on the slices
+            int n_rows, n_cols;
+            if (rows.start == std::numeric_limits<int>::min() && rows.end == std::numeric_limits<int>::max()) {n_rows = rows_; rows.start = 0;}
+            else {
+                if (rows.start < 0) rows.start = rows_ + rows.start;
+                if (rows.end < 0) rows.end = rows_ + rows.end;
+                n_rows = rows.end - rows.start;
+            }
+            if (cols.start == std::numeric_limits<int>::min() && cols.end == std::numeric_limits<int>::max()) {n_cols = cols_; cols.start = 0;}
+            else {
+                if (cols.start < 0) cols.start = cols_ + cols.start;
+                if (cols.end < 0) cols.end = cols_ + cols.end;
+                n_cols = cols.end - cols.start;
+            }
+            if (n_rows <= 0 || n_cols <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions for MatrixView");
+            }
+            auto offset = cols.start * ld_ + rows.start;
+            return MatrixView<T, MType>(data_ptr() + offset, n_rows, n_cols, ld_, stride_, batch_size_,
+                                        data_ptrs_.data());
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView<T, MType> operator()(Slice rows) const {
+            return (*this)(rows, {});
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event symmetrize(const Queue& ctx, Uplo uplo);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event symmetrize(Uplo uplo) {
+            return symmetrize(Queue(), uplo);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event hermitize(const Queue& ctx, Uplo uplo);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event hermitize(Uplo uplo) {
+            return hermitize(Queue(), uplo);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event transpose(const Queue& ctx, bool conjugate = false);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event transpose(bool conjugate = false) {
+            return transpose(Queue(), conjugate);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event triangularize(const Queue& ctx, Side side, Diag diag);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event triangularize(Side side, Diag diag) {
+            return triangularize(Queue(), side, diag);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned int seed = 42);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_random(bool hermitian = false, unsigned int seed = 42) {
+            return fill_random(Queue(), hermitian, seed);
+        }
+
+        Event fill(const Queue& ctx, T value);
+
+        Event fill(T value) {
+            return fill(Queue(), value);
+        }
+
+        Event fill_zeros(const Queue& ctx) {
+            return fill(ctx, T(0));
+        }
+
+        Event fill_zeros() {
+            return fill_zeros(Queue());
+        }
+
+        Event fill_ones(const Queue& ctx) {
+            return fill(ctx, T(1));
+        }
+
+        Event fill_ones() {
+            return fill_ones(Queue());
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_diagonal(const Span<T>& diag_values) {
+            return fill_diagonal(Queue(), diag_values);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_diagonal(const Queue& ctx, const T& value);
         
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_diagonal(const T& value) {
+            return fill_diagonal(Queue(), value);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_triangular(const Queue& ctx, Side side, T diagonal_value = T(1), 
+                              T non_diagonal_value = T(0.5));
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_triangular(Side side, T diagonal_value = T(1), 
+                              T non_diagonal_value = T(0.5)) {
+            return fill_triangular(Queue(), side, diagonal_value, non_diagonal_value);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_tridiag_toeplitz(const Queue& ctx, T diag = T(1), 
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5));
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_tridiag_toeplitz(T diag = T(1), 
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) {
+            return fill_tridiag_toeplitz(Queue(), diag, sub_diag, super_diag);
+        }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_triangular_random(const Queue& ctx, Side side, 
+                                     Diag diag = Diag::Unit, 
+                                     unsigned int seed = 42);
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_triangular_random(Side side, 
+                                     Diag diag = Diag::Unit,
+                                     unsigned int seed = 42) {
+            return fill_triangular_random(Queue(), side, diag, seed);
+        }
+
+
         // Create a new view into a single batch item
         MatrixView<T, MType> batch_item(int batch_index) const;
         
