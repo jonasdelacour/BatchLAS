@@ -63,7 +63,7 @@ void Queue::enqueue(Event& event) {
     });
 }
 
-Event Queue::get_event() {
+Event Queue::get_event() const {
     EventImpl event = impl_->submit([](sycl::handler& h){h.single_task([](){});});
     return event;
 }

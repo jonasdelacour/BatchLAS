@@ -121,7 +121,7 @@ struct Queue{
     QueueImpl& operator*() const;
     
     void enqueue(Event& event);
-    Event get_event();
+    Event get_event() const;
 
     template <typename EventContainer>
     void enqueue(EventContainer& events){
