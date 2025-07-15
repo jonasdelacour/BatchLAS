@@ -25,7 +25,7 @@ namespace batchlas {
         int64_t start = std::numeric_limits<int64_t>::min(); // Use min to indicate start from the beginning
         int64_t end = std::numeric_limits<int64_t>::max();   // Use max to indicate end
 
-        Slice(int64_t start) : start(start) {}
+        Slice(int64_t end) : end(end), start(0) {}
         Slice(int64_t start, int64_t end) : start(start), end(end) {}
     };
 
