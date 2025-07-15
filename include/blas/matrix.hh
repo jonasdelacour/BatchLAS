@@ -82,7 +82,7 @@ namespace batchlas {
         // Create a triangular matrix with specific values
         template <typename U = T, MatrixFormat M = MType, 
                 typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        static Matrix<T, MType> Triangular(int n, Side side, T diagonal_value = T(1), 
+        static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1), 
                                           T non_diagonal_value = T(0.5), int batch_size = 1);
         
         template <typename U = T, MatrixFormat M = MType, 
@@ -441,12 +441,12 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event triangularize(const Queue& ctx, Side side, Diag diag);
+        Event triangularize(const Queue& ctx, Uplo uplo, Diag diag);
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event triangularize(Side side, Diag diag) {
-            return triangularize(Queue(), side, diag);
+        Event triangularize(Uplo uplo, Diag diag) {
+            return triangularize(Queue(), uplo, diag);
         }
 
         template <MatrixFormat M = MType, 
@@ -503,14 +503,14 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_triangular(const Queue& ctx, Side side, T diagonal_value = T(1), 
+        Event fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value = T(1), 
                               T non_diagonal_value = T(0.5));
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_triangular(Side side, T diagonal_value = T(1), 
+        Event fill_triangular(Uplo uplo, T diagonal_value = T(1), 
                               T non_diagonal_value = T(0.5)) {
-            return fill_triangular(Queue(), side, diagonal_value, non_diagonal_value);
+            return fill_triangular(Queue(), uplo, diagonal_value, non_diagonal_value);
         }
 
         template <MatrixFormat M = MType, 
@@ -527,16 +527,16 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_triangular_random(const Queue& ctx, Side side, 
+        Event fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                      Diag diag = Diag::Unit, 
                                      unsigned int seed = 42);
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_triangular_random(Side side, 
+        Event fill_triangular_random(Uplo uplo, 
                                      Diag diag = Diag::Unit,
                                      unsigned int seed = 42) {
-            return fill_triangular_random(Queue(), side, diag, seed);
+            return fill_triangular_random(Queue(), uplo, diag, seed);
         }
 
 

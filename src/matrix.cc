@@ -482,16 +482,16 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
 // Factory method to create triangular matrix with specific values using SYCL
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Side side, T diagonal_value,
+Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
                                              T non_diagonal_value, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    result.view().fill_triangular(side, diagonal_value, non_diagonal_value).wait();
+    result.view().fill_triangular(uplo, diagonal_value, non_diagonal_value).wait();
     return result;
 }
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Side side, T diagonal_value, 
+Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
                                              T non_diagonal_value) {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -509,8 +509,8 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Side side, T diago
         if (i == j) {
             // Diagonal elements
             data_ptr[b * n * n + i * n + j] = diagonal_value;
-        } else if ((side == Side::Left && i > j) || 
-                  (side == Side::Right && i < j)) {
+        } else if ((uplo == Uplo::Lower && i > j) || 
+                  (uplo == Uplo::Upper && i < j)) {
             // Lower or upper triangular elements (Left = lower, Right = upper)
             data_ptr[b * n * n + i * n + j] = non_diagonal_value;
         } else {
@@ -523,7 +523,7 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Side side, T diago
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Side side, 
+Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                                     Diag diag,
                                                     unsigned int seed){
     T* data_ptr = data_.data();
@@ -554,8 +554,8 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Side side,
         if (i == j) {
             // Diagonal elements
             data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
-        } else if ((side == Side::Left && i > j) || 
-                  (side == Side::Right && i < j)) {
+        } else if ((uplo == Uplo::Lower && i > j) || 
+                  (uplo == Uplo::Upper && i < j)) {
             // Lower or upper triangular elements
             data_ptr[b * n * n + i * n + j] = rand_value;
         } else {
@@ -568,7 +568,7 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Side side,
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::triangularize(const Queue& ctx, Side side, 
+Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
                                                     Diag diag) {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -585,8 +585,8 @@ Event MatrixView<T, MType>::triangularize(const Queue& ctx, Side side,
         
         if (i == j && diag == Diag::Unit) {
             data_ptr[b * n * n + i * n + j] = T(1);
-        } else if ((side == Side::Left && i < j) || (side == Side::Right && i > j)) {
-            // Zero out elements above or below the diagonal depending on side
+        } else if ((uplo == Uplo::Lower && i < j) || (uplo == Uplo::Upper && i > j)) {
+            // Zero out elements above or below the diagonal depending on Uplo
             data_ptr[b * n * n + i * n + j] = T(0);
         }
     });
@@ -1225,10 +1225,10 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_row_major() const;
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_row_major() const;
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Triangular(int, Side, float, float, int);
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Side, double, double, int);
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Side, std::complex<float>, std::complex<float>, int);
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Side, std::complex<double>, std::complex<double>, int);
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Triangular(int, Uplo, float, float, int);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Triangular(int, Uplo, double, double, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<float>, std::complex<float>, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Triangular(int, Uplo, std::complex<double>, std::complex<double>, int);
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(int, float, float, float, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);
