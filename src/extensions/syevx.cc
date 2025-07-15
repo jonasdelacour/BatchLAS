@@ -30,7 +30,7 @@ namespace batchlas {
         using float_type = typename base_type<T>::type;
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
-        auto block_vectors = neigs + params.extra_directions;
+        int64_t block_vectors = neigs + params.extra_directions;
         auto pool = BumpAllocator(workspace);
         auto n = A.rows_;
         auto batch_size = A.batch_size();
@@ -45,28 +45,32 @@ namespace batchlas {
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         
         auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto X =    MatrixView(Sdata.data(), n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto R =    MatrixView(Sdata.data() + 2 * n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto P =    MatrixView(Sdata.data() + n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto XP =   MatrixView(Sdata.data(), n, block_vectors * 2, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-
+        auto X = S({0,n}, {0,block_vectors});                       //First block of S
+        auto P = S({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S
+        auto R = S({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S
+        auto XP = S({0,n}, {0,2 * block_vectors});                  //First two blocks of S
+        
         auto AS =   MatrixView(ASdata.data(), n, block_vectors*3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AX =   MatrixView(ASdata.data(), n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AP =   MatrixView(ASdata.data() + n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AR =   MatrixView(ASdata.data() + 2 * n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto AX =   AS({0,n}, {0,block_vectors});                       //First block of AS
+        auto AP =   AS({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS
+        auto AR =   AS({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS
+
         auto StAS = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto XtAX = MatrixView(StASdata.data(), block_vectors, block_vectors, block_vectors, block_vectors * block_vectors, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto X_new =  MatrixView(S_newdata.data(), n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto P_new =  MatrixView(S_newdata.data() + n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto XP_new = MatrixView(S_newdata.data(), n, block_vectors * 2, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto R_new =  MatrixView(S_newdata.data() + 2 * n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+
+        auto X_new =  S_new({0,n}, {0,block_vectors});                       //First block of S_new
+        auto P_new = S_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S_new
+        auto R_new = S_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S_new
+        auto XP_new = S_new({0,n}, {0,2 * block_vectors});                 //First two blocks of S_new
 
         auto AS_new = MatrixView(Stempdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AX_new = MatrixView(Stempdata.data(), n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AP_new = MatrixView(Stempdata.data() + n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto AR_new = MatrixView(Stempdata.data() + 2 * n * block_vectors, n, block_vectors, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto AX_new = AS_new({0,n}, {0,block_vectors});                       //First block of AS_new
+        auto AP_new = AS_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS_new
+        auto AR_new = AS_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS_new
+
+
         Span<std::byte> spmm_workspace;
         if constexpr (MFormat == MatrixFormat::CSR) {
             spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, S, AS, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
@@ -209,7 +213,7 @@ namespace batchlas {
                 spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
             //Compute S^T A S
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), T(1.0), T(0.0), trans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), T(1.0), T(0.0), trans, Transpose::NoTrans);
             //Solve the eigenvalue problem
             syev<B>(ctx, MatrixView(StAS, Nvecs, Nvecs, Nvecs, Nvecs * Nvecs), lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             //If largest = true, then the order of the eigenvectors is reversed
@@ -255,15 +259,16 @@ namespace batchlas {
 
             //Compute new search directions
             //X = [X, P, R] * C_x
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            //gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
-            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
             ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), MatrixView(StAS, Nvecs, block_vectors, Nvecs, Nvecs * Nvecs), Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
-            gemm<B>(ctx, MatrixView(S, n, Nvecs), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AP
-            gemm<B>(ctx, MatrixView(AS, n, Nvecs), MatrixView(C_p, Nvecs, block_vectors, Nvecs), AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
