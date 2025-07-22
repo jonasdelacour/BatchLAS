@@ -31,6 +31,17 @@ size_t spmm_buffer_size(Queue& ctx,
                         Transpose transA,
                         Transpose transB);
 
+template <Backend Ba, typename T>
+Event trmm(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& B,
+                const MatrixView<T, MatrixFormat::Dense>& C,
+                T alpha,
+                Side side,
+                Uplo uplo,
+                Transpose transA,
+                Diag diag);
+
 template <Backend Back, typename T>
 Event gemm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
