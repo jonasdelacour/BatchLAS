@@ -112,7 +112,7 @@ namespace batchlas
     {
         // Allocate memory for the results
         UnifiedVector<float_t<T>> norms(A.batch_size());
-        norm_impl(ctx, A, norm_type, norms.to_span());
+        norm_impl(ctx, A, norm_type, norms.to_span()).wait();
         return norms;
     }
 
