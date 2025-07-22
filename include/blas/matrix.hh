@@ -21,12 +21,16 @@ namespace batchlas {
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class BackendMatrixHandle;
 
+    struct SliceEnd {};
+
     struct Slice { //Default Slice selects entire matrix
         int64_t start = std::numeric_limits<int64_t>::min(); // Use min to indicate start from the beginning
         int64_t end = std::numeric_limits<int64_t>::max();   // Use max to indicate end
 
-        Slice(int64_t end) : end(end), start(0) {}
+        Slice(int64_t start, SliceEnd) : start(start), end(std::numeric_limits<int64_t>::max()) {}
         Slice(int64_t start, int64_t end) : start(start), end(end) {}
+        Slice(int64_t start) : Slice(start, SliceEnd()) {} // Single argument constructor
+        Slice() : Slice(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()) {} // Default constructor
     };
 
     // Matrix class - owning container for matrix data
@@ -66,6 +70,14 @@ namespace batchlas {
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned int seed = 42);
+
+        template <typename U = T, MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned int seed = 42) {
+            auto result = Matrix<T, MType>(n, n, batch_size);
+            result.view().fill_triangular_random(uplo, diag, seed).wait();
+            return result;
+        }
         
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
@@ -382,21 +394,25 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
             // Create a new view based on the slices
-            int n_rows, n_cols;
-            if (rows.start == std::numeric_limits<int>::min() && rows.end == std::numeric_limits<int>::max()) {n_rows = rows_; rows.start = 0;}
+            int64_t n_rows, n_cols;
+            if (rows.start == std::numeric_limits<int64_t>::min() && rows.end == std::numeric_limits<int64_t>::max()) {n_rows = rows_; rows.start = 0;}
+            else if (rows.end == std::numeric_limits<int64_t>::max()) {n_rows = rows_ - rows.start;}
             else {
                 if (rows.start < 0) rows.start = rows_ + rows.start;
                 if (rows.end < 0) rows.end = rows_ + rows.end;
                 n_rows = rows.end - rows.start;
             }
-            if (cols.start == std::numeric_limits<int>::min() && cols.end == std::numeric_limits<int>::max()) {n_cols = cols_; cols.start = 0;}
+            if (cols.start == std::numeric_limits<int64_t>::min() && cols.end == std::numeric_limits<int64_t>::max()) {n_cols = cols_; cols.start = 0;}
+            else if (cols.end == std::numeric_limits<int64_t>::max()) {n_cols = cols_ - cols.start;}
             else {
                 if (cols.start < 0) cols.start = cols_ + cols.start;
                 if (cols.end < 0) cols.end = cols_ + cols.end;
                 n_cols = cols.end - cols.start;
             }
             if (n_rows <= 0 || n_cols <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions for MatrixView");
+                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(n_rows) + "x" + std::to_string(n_cols) + "\n "
+                                            "Requested slice: rows(" + std::to_string(rows.start) + ":" + std::to_string(rows.end) + "), "
+                                            "cols(" + std::to_string(cols.start) + ":" + std::to_string(cols.end) + ")");
             }
             auto offset = cols.start * ld_ + rows.start;
             return MatrixView<T, MType>(data_ptr() + offset, n_rows, n_cols, ld_, stride_, batch_size_,
@@ -411,117 +427,117 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event symmetrize(const Queue& ctx, Uplo uplo);
+        Event symmetrize(const Queue& ctx, Uplo uplo) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event symmetrize(Uplo uplo) {
+        Event symmetrize(Uplo uplo) const {
             return symmetrize(Queue(), uplo);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event hermitize(const Queue& ctx, Uplo uplo);
+        Event hermitize(const Queue& ctx, Uplo uplo) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event hermitize(Uplo uplo) {
+        Event hermitize(Uplo uplo) const {
             return hermitize(Queue(), uplo);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event transpose(const Queue& ctx, bool conjugate = false);
+        Event transpose(const Queue& ctx, bool conjugate = false) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event transpose(bool conjugate = false) {
+        Event transpose(bool conjugate = false) const {
             return transpose(Queue(), conjugate);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event triangularize(const Queue& ctx, Uplo uplo, Diag diag);
+        Event triangularize(const Queue& ctx, Uplo uplo, Diag diag) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event triangularize(Uplo uplo, Diag diag) {
+        Event triangularize(Uplo uplo, Diag diag) const {
             return triangularize(Queue(), uplo, diag);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned int seed = 42);
+        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned int seed = 42) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_random(bool hermitian = false, unsigned int seed = 42) {
+        Event fill_random(bool hermitian = false, unsigned int seed = 42) const {
             return fill_random(Queue(), hermitian, seed);
         }
 
-        Event fill(const Queue& ctx, T value);
+        Event fill(const Queue& ctx, T value) const;
 
-        Event fill(T value) {
+        Event fill(T value) const {
             return fill(Queue(), value);
         }
 
-        Event fill_zeros(const Queue& ctx) {
+        Event fill_zeros(const Queue& ctx) const {
             return fill(ctx, T(0));
         }
 
-        Event fill_zeros() {
+        Event fill_zeros() const {
             return fill_zeros(Queue());
         }
 
-        Event fill_ones(const Queue& ctx) {
+        Event fill_ones(const Queue& ctx) const {
             return fill(ctx, T(1));
         }
 
-        Event fill_ones() {
+        Event fill_ones() const {
             return fill_ones(Queue());
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values);
+        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const Span<T>& diag_values) {
+        Event fill_diagonal(const Span<T>& diag_values) const {
             return fill_diagonal(Queue(), diag_values);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const Queue& ctx, const T& value);
+        Event fill_diagonal(const Queue& ctx, const T& value) const;
         
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const T& value) {
+        Event fill_diagonal(const T& value) const {
             return fill_diagonal(Queue(), value);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value = T(1), 
-                              T non_diagonal_value = T(0.5));
+                              T non_diagonal_value = T(0.5)) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_triangular(Uplo uplo, T diagonal_value = T(1), 
-                              T non_diagonal_value = T(0.5)) {
+                              T non_diagonal_value = T(0.5)) const {
             return fill_triangular(Queue(), uplo, diagonal_value, non_diagonal_value);
         }
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_tridiag_toeplitz(const Queue& ctx, T diag = T(1), 
-                                    T sub_diag = T(-0.5), T super_diag = T(0.5));
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_tridiag_toeplitz(T diag = T(1), 
-                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) {
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) const {
             return fill_tridiag_toeplitz(Queue(), diag, sub_diag, super_diag);
         }
 
@@ -529,13 +545,13 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                      Diag diag = Diag::Unit, 
-                                     unsigned int seed = 42);
+                                     unsigned int seed = 42) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_triangular_random(Uplo uplo, 
                                      Diag diag = Diag::Unit,
-                                     unsigned int seed = 42) {
+                                     unsigned int seed = 42) const {
             return fill_triangular_random(Queue(), uplo, diag, seed);
         }
 
