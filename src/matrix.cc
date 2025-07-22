@@ -2,6 +2,7 @@
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
 #include <util/mempool.hh>
+#include <util/kernel-heuristics.hh>
 #include <sycl/sycl.hpp>
 #include <oneapi/dpl/algorithm>
 #include <oneapi/dpl/execution>
@@ -137,8 +138,8 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         auto row_nnz_counts = row_nnz_counts_mem.to_span();
         auto batch_nnz_counts = batch_nnz_counts_mem.to_span();
         
-        // Calculate best work-group size (can be tuned based on hardware)
-        const int wg_size = std::min(32, rows); 
+        // Calculate optimal work-group size for reduction operations
+        const int wg_size = compute_optimal_wg_size(q.device(), KernelType::REDUCTION, rows, batch_size); 
         
         // First kernel: Count non-zeros per row
         q->submit([&](sycl::handler& cgh) {
@@ -233,7 +234,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             auto row_offsets_acc = result.row_offsets().data();
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_offsets_acc = batch_offsets.data();
-            auto wgs = std::min(rows + 1, 128); // Work-group size for scan
+            auto wgs = compute_optimal_wg_size(q.device(), KernelType::SCAN, rows + 1, batch_size);
             cgh.parallel_for(
                 sycl::nd_range<1>(batch_size * wgs, 
                                  wgs),
@@ -263,7 +264,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
             // Use atomic to track position within each row
             auto row_counters_acc = row_counters.to_span();
-            auto wgs = std::min(rows , 128); // Work-group size for counting non-zeros
+            auto wgs = compute_optimal_wg_size(q.device(), KernelType::SPARSE, rows, batch_size);
             cgh.parallel_for(
                 sycl::nd_range<1>(batch_size * wgs, wgs),
                 [=](sycl::nd_item<1> item) {
@@ -463,17 +464,26 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
     
+    // Use batched matrix decomposition strategy
+    auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
+        batch_size, n * n, q.device(), KernelType::ELEMENTWISE);
+    
     // Submit a kernel to initialize the identity matrix
-    q -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
-        // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
+    q -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t global_id = item.get_global_id(0);
+        size_t total_work_items = item.get_global_range(0);
         
-        // Set diagonal elements to 1, others to 0
-        data_ptr[b * n * n + i * n + j] = (i == j) ? T(1) : T(0);
+        // Grid-stride loop to handle large matrices
+        for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (n * n);          // batch index
+            size_t remainder = flat_idx % (n * n);
+            size_t i = remainder / n;               // row index
+            size_t j = remainder % n;               // column index
+            
+            // Set diagonal elements to 1, others to 0
+            data_ptr[b * n * n + i * n + j] = (i == j) ? T(1) : T(0);
+        }
     }).wait();
     
     return result;
@@ -492,30 +502,46 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
-                                             T non_diagonal_value) {
+                                             T non_diagonal_value) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
+    auto stride = stride_; // Stride for batched matrices
+    auto ld = ld_; // Leading dimension
 
-    ctx -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
-        // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
-        
-        if (i == j) {
-            // Diagonal elements
-            data_ptr[b * n * n + i * n + j] = diagonal_value;
-        } else if ((uplo == Uplo::Lower && i > j) || 
-                  (uplo == Uplo::Upper && i < j)) {
-            // Lower or upper triangular elements (Left = lower, Right = upper)
-            data_ptr[b * n * n + i * n + j] = non_diagonal_value;
-        } else {
-            // Zero elements
-            data_ptr[b * n * n + i * n + j] = T(0);
+    // Use batched matrix decomposition strategy
+    auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
+        batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        // Grid-stride loop to handle large matrices
+        auto bid = item.get_group(0);
+        auto bdim = item.get_local_range(0);
+        auto n_wgs = item.get_group_range(0);
+        auto grid_stride = n_wgs / wg_per_matrix;
+        auto batch_id = bid / wg_per_matrix;
+        auto matrix_wg_ix = bid % wg_per_matrix;
+        for (batch_id; 
+             batch_id < batch_size; 
+             batch_id += grid_stride) {
+            for (auto flat_idx = matrix_wg_ix; 
+                 flat_idx < n*n; 
+                 flat_idx += bdim * wg_per_matrix) {
+                auto i = flat_idx / n; // row index
+                auto j = flat_idx % n; // column index
+                if (i == j) {
+                    // Diagonal elements
+                    data_ptr[batch_id * stride + i * ld + j] = diagonal_value;
+                } else if ((uplo == Uplo::Lower && i > j) || 
+                        (uplo == Uplo::Upper && i < j)) {
+                    // Lower or upper triangular elements (Left = lower, Right = upper)
+                    data_ptr[batch_id * stride + i * ld + j] = non_diagonal_value;
+                } else {
+                    // Zero elements
+                    data_ptr[batch_id * stride + i * ld + j] = T(0);
+                }
+            }
         }
     });
     return ctx.get_event();
@@ -525,42 +551,52 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                                     Diag diag,
-                                                    unsigned int seed){
+                                                    unsigned int seed) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
 
-    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
-        // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
-        oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-        oneapi::dpl::minstd_rand engine(seed, remainder);
-        T rand_value;
-        if constexpr (std::is_same_v<T, std::complex<float>> || 
-                      std::is_same_v<T, std::complex<double>>) {
-            // For complex numbers, generate both real and imaginary parts
-            auto r1 = dist(engine);
-            auto r2 = dist(engine);
-            rand_value = T(r1, r2);
-        } else {
-            // For real numbers
-            rand_value = dist(engine);
-        }
-        if (i == j) {
-            // Diagonal elements
-            data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
-        } else if ((uplo == Uplo::Lower && i > j) || 
-                  (uplo == Uplo::Upper && i < j)) {
-            // Lower or upper triangular elements
-            data_ptr[b * n * n + i * n + j] = rand_value;
-        } else {
-            // Zero elements
-            data_ptr[b * n * n + i * n + j] = T(0);
+    // Use batched matrix decomposition strategy
+    auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
+        batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t global_id = item.get_global_id(0);
+        size_t total_work_items = item.get_global_range(0);
+        
+        // Grid-stride loop to handle large matrices
+        for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (n * n);          // batch index
+            size_t remainder = flat_idx % (n * n);
+            size_t i = remainder / n;               // row index
+            size_t j = remainder % n;               // column index
+            
+            oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
+            oneapi::dpl::minstd_rand engine(seed, remainder);
+            T rand_value;
+            if constexpr (std::is_same_v<T, std::complex<float>> || 
+                          std::is_same_v<T, std::complex<double>>) {
+                // For complex numbers, generate both real and imaginary parts
+                auto r1 = dist(engine);
+                auto r2 = dist(engine);
+                rand_value = T(r1, r2);
+            } else {
+                // For real numbers
+                rand_value = dist(engine);
+            }
+            if (i == j) {
+                // Diagonal elements
+                data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
+            } else if ((uplo == Uplo::Lower && i < j) || 
+                      (uplo == Uplo::Upper && i > j)) {
+                // Lower or upper triangular elements
+                data_ptr[b * n * n + i * n + j] = rand_value;
+            } else {
+                // Zero elements
+                data_ptr[b * n * n + i * n + j] = T(0);
+            }
         }
     });
     return ctx.get_event();
@@ -569,25 +605,36 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
-                                                    Diag diag) {
+                                                    Diag diag) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
+    auto stride = stride_; // Stride for batched matrices
+    auto ld = ld_; // Leading dimension
 
-    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
-        // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
+    // Use batched matrix decomposition strategy
+    auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
+        batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t global_id = item.get_global_id(0);
+        size_t total_work_items = item.get_global_range(0);
         
-        if (i == j && diag == Diag::Unit) {
-            data_ptr[b * n * n + i * n + j] = T(1);
-        } else if ((uplo == Uplo::Lower && i < j) || (uplo == Uplo::Upper && i > j)) {
-            // Zero out elements above or below the diagonal depending on Uplo
-            data_ptr[b * n * n + i * n + j] = T(0);
+        // Grid-stride loop to handle large matrices
+        for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (n * n);          // batch index
+            size_t remainder = flat_idx % (n * n);
+            size_t i = remainder / n;               // row index
+            size_t j = remainder % n;               // column index
+            
+            if (i == j && diag == Diag::Unit) {
+                data_ptr[b * stride + i * ld + j] = T(1);
+            } else if ((uplo == Uplo::Lower && i < j) || (uplo == Uplo::Upper && i > j)) {
+                // Zero out elements above or below the diagonal depending on Uplo
+                data_ptr[b * stride + i * ld + j] = T(0);
+            }
         }
     });
     return ctx.get_event();
@@ -595,7 +642,7 @@ Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo,
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) {
+Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
@@ -603,9 +650,17 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) {
     auto ld = ld_; // Leading dimension
     auto stride = stride_; // Stride for batched matrices
 
-    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t flat_idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat_idx >= total_elements) return;
+        
         // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
         size_t b = flat_idx / (n * n);          // batch index
         size_t remainder = flat_idx % (n * n);
         size_t i = remainder / n;               // row index
@@ -632,7 +687,7 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) {
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) {
+Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
@@ -640,9 +695,17 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) {
     auto ld = ld_; // Leading dimension
     auto stride = stride_; // Stride for batched matrices
 
-    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t flat_idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat_idx >= total_elements) return;
+        
         // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
         size_t b = flat_idx / (n * n);          // batch index
         size_t remainder = flat_idx % (n * n);
         size_t i = remainder / n;               // row index
@@ -686,23 +749,32 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) {
+Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto rows = rows_;
     auto cols = cols_;
     auto batch_size = batch_size_;
 
-    ctx->parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
+
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (idx >= total_elements) return;
+        
         oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-        oneapi::dpl::minstd_rand engine(seed, idx[0]);
+        oneapi::dpl::minstd_rand engine(seed, idx);
         auto r1 = dist(engine);
         if constexpr (std::is_same_v<T, std::complex<float>> ||
                       std::is_same_v<T, std::complex<double>>) {
             auto r2 = dist(engine);
-            data_ptr[idx[0]] = T(r1, r2);
+            data_ptr[idx] = T(r1, r2);
         } else {
-            data_ptr[idx[0]] = T(r1);
+            data_ptr[idx] = T(r1);
         }
     });
     
@@ -714,9 +786,19 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
 
         int ld = ld_;
         int stride = stride_;
-        ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * rows * cols),
-                        [=](sycl::id<1> idx) {
-            size_t flat = idx[0];
+        size_t hermitian_elements = static_cast<size_t>(batch_size) * rows * cols;
+        
+        // Compute optimal work-group size for the hermitian operation
+        auto [herm_global_size, herm_local_size] = compute_nd_range_sizes(
+            hermitian_elements, ctx.device(), KernelType::ELEMENTWISE);
+        
+        ctx->parallel_for(sycl::nd_range<1>(herm_global_size, herm_local_size),
+                        [=](sycl::nd_item<1> item) {
+            size_t flat = item.get_global_id(0);
+            
+            // Bounds check
+            if (flat >= hermitian_elements) return;
+            
             size_t b = flat / (rows * cols);
             size_t rem = flat % (rows * cols);
             size_t j = rem / rows; // column index
@@ -745,10 +827,22 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
 
 
 template <typename T, MatrixFormat MType>
-Event MatrixView<T, MType>::fill(const Queue& ctx, T value) {
+Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     auto data_ptr = data_.data();
-    ctx->parallel_for(sycl::range<1>(data_.size()), [=](sycl::id<1> idx) {
-        data_ptr[idx[0]] = value;
+    size_t total_elements = data_.size();
+    
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
+    
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t global_id = item.get_global_id(0);
+        size_t total_work_items = item.get_global_range(0);
+        
+        // Grid-stride loop to handle large data
+        for (size_t idx = global_id; idx < total_elements; idx += total_work_items) {
+            data_ptr[idx] = value;
+        }
     });
     return ctx.get_event();
 }
@@ -787,16 +881,26 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values) {
+Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values) const {
     T* data_ptr = data_.data();
     const T* diag_ptr = diag_values.data();
     int ld = ld_;
     int stride = stride_;
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
+    
+    size_t total_elements = static_cast<size_t>(batch_size) * n;
+    
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
-        size_t flat = idx[0];
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
+        size_t flat = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat >= total_elements) return;
+        
         size_t b = flat / n;
         size_t i = flat % n;
         data_ptr[b * stride + i * ld + i] = diag_ptr[i];
@@ -806,15 +910,25 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) {
+Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) const {
     T* data_ptr = data_.data();
     int ld = ld_;
     int stride = stride_;
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
+    
+    size_t total_elements = static_cast<size_t>(batch_size) * n;
+    
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::range<1>(static_cast<size_t>(batch_size) * n), [=](sycl::id<1> idx){
-        size_t flat = idx[0];
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
+        size_t flat = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat >= total_elements) return;
+        
         size_t b = flat / n;
         size_t i = flat % n;
         data_ptr[b * stride + i * ld + i] = diag_value;
@@ -832,7 +946,7 @@ Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T sub_diag, T super_diag) {
+Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T sub_diag, T super_diag) const{
     T* data_ptr = data().data();
     int n = rows_; // Assuming square matrix
     int batch_size = batch_size_;
@@ -840,10 +954,18 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
     
+    // Compute optimal work-group size for element-wise operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, ctx.device(), KernelType::ELEMENTWISE);
+    
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
-    ctx -> parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t flat_idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat_idx >= total_elements) return;
+        
         // Calculate 3D coordinates from flat index
-        int64_t flat_idx = idx[0];
         int64_t b = flat_idx / (n * n);          // batch index
         int64_t remainder = flat_idx % (n * n);
         int64_t i = remainder % n;               // row index
@@ -869,7 +991,7 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
     Matrix<T, MType> col_major(rows_, cols_, batch_size_);
     
     // Create a queue to submit work to
-    sycl::queue q;
+    Queue q;
     
     // Get pointers to source and destination data
     const T* src_ptr = data_.data();
@@ -884,10 +1006,18 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(rows_) * cols_ * batch_size_;
     
+    // Compute optimal work-group size for memory-bound operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, q.device(), KernelType::MEMORY_BOUND);
+    
     // Submit a kernel to convert from row-major to column-major
-    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    q->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t flat_idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat_idx >= total_elements) return;
+        
         // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
         size_t b = flat_idx / (rows * cols);    // batch index
         size_t remainder = flat_idx % (rows * cols);
         size_t i = remainder / cols;            // row index
@@ -908,7 +1038,7 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     Matrix<T, MType> row_major(rows_, cols_, batch_size_);
     
     // Create a queue to submit work to
-    sycl::queue q;
+    Queue q;
     
     // Get pointers to source and destination data
     const T* src_ptr = data_.data();
@@ -923,10 +1053,18 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(rows_) * cols_ * batch_size_;
     
+    // Compute optimal work-group size for memory-bound operations
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        total_elements, q.device(), KernelType::MEMORY_BOUND);
+    
     // Submit a kernel to convert from column-major to row-major
-    q.parallel_for(sycl::range<1>(total_elements), [=](sycl::id<1> idx) {
+    q->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t flat_idx = item.get_global_id(0);
+        
+        // Bounds check
+        if (flat_idx >= total_elements) return;
+        
         // Calculate 3D coordinates from flat index
-        size_t flat_idx = idx[0];
         size_t b = flat_idx / (rows * cols);    // batch index
         size_t remainder = flat_idx % (rows * cols);
         size_t i = remainder / cols;            // row index
@@ -1247,6 +1385,51 @@ template MatrixView<float, MatrixFormat::Dense> MatrixView<float, MatrixFormat::
 template MatrixView<double, MatrixFormat::Dense> MatrixView<double, MatrixFormat::Dense>::deep_copy(const MatrixView<double, MatrixFormat::Dense>&, double*, double**);
 template MatrixView<std::complex<float>, MatrixFormat::Dense> MatrixView<std::complex<float>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>*, std::complex<float>**);
 template MatrixView<std::complex<double>, MatrixFormat::Dense> MatrixView<std::complex<double>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>*, std::complex<double>**);
+
+// fill instantiations
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, float, float) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, double, double) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, std::complex<float>, std::complex<float>) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, std::complex<double>, std::complex<double>) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, float, float, float) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, double, double, double) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, std::complex<float>, std::complex<float>, std::complex<float>) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, std::complex<double>, std ::complex<double>, std::complex<double>) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<float>&) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<double>&) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<float>>&) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<double>>&) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const float&) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const double&) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const std::complex<float>&) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const std::complex<double>&) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
+template Event MatrixView<double, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
+
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
+template Event MatrixView<double, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
+
 
 // Dense MatrixView constructors instantiations
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(float*, int, int, int, int, int, float**);
