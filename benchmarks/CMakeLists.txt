@@ -1,6 +1,7 @@
 set(BENCHMARK_TARGETS
     geqrf_benchmark
     gemm_benchmark
+    trmm_benchmark
     gemv_benchmark
     spmm_benchmark
     trsm_benchmark
