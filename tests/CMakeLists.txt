@@ -39,6 +39,7 @@ set(TEST_TARGETS
     transpose_tests
     syev_tests
     steqr_tests
+    trmm_tests
 )
 
 # Create test executables
