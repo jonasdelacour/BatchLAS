@@ -35,27 +35,54 @@ Event trmm(Queue& ctx,
     auto mid_row = n / 2;
     auto mid_col = n / 2;
 
-    //Partition A into four sub-matrices: (Assuming A is lower triangular)
-    // A11 | 0  
-    // ----+----  
-    // A21 | A22  
+    //Partition A into four sub-matrices: 
+    // A11 | 0        A11 | A12
+    // ----+----  or  ----+-----   depending on uplo (Lower, Upper)
+    // A21 | A22       0  | A22
     
     // Create sub-matrices for the recursive calls
     auto A11 = A({0, mid_row}, {0, mid_col});
+    auto A12 = A({0, mid_row}, {mid_col, SliceEnd()});
     auto A21 = A({mid_row, SliceEnd()}, {0, mid_col});
     auto A22 = A({mid_row, SliceEnd()}, {mid_col, SliceEnd()});
 
-    auto C1 = C({0, mid_row}, Slice());
-    auto C2 = C({mid_row, SliceEnd()}, Slice());
+    
+    //If side is left, we need to partition B and C into two row-blocks:
+    //  B1   C1
+    // -+-   -+-
+    //  B2   C2
+    
+    // If side is right, we need to partition B and C into two column-blocks:
+    // B1 | B2
+    // 
+    // C1 | C2
 
-    // Partition B conformably with the split of A on the rows
-    auto B1 = B({0, mid_row}, Slice());
-    auto B2 = B({mid_row, SliceEnd()}, Slice());
+    auto C1 = side == Side::Left ? C({0, mid_row}, Slice()) : C(Slice(), {0, mid_col});
+    auto C2 = side == Side::Left ? C({mid_row, SliceEnd()}, Slice()) : C(Slice(), {mid_col, SliceEnd()});
 
+    auto B1 = side == Side::Left ? B({0, mid_row}, Slice()) : B(Slice(), {0, mid_col});
+    auto B2 = side == Side::Left ? B({mid_row, SliceEnd()}, Slice()) : B(Slice(), {mid_col, SliceEnd()});
+
+    bool is_transposed = (transA  == Transpose::ConjTrans) || (transA == Transpose::Trans);
+    bool is_ll_or_ur = (uplo == Uplo::Lower && side == Side::Left) || (uplo == Uplo::Upper && side == Side::Right);
+    
     // Call trmm recursively on the sub-matrices
-    trmm<Ba>(ctx, A11, B1, C1, alpha, side, uplo, transA, diag);
     trmm<Ba>(ctx, A22, B2, C2, alpha, side, uplo, transA, diag);
-    gemm<Ba>(ctx, A21, B1, C2, alpha, T(1.0), transA, Transpose::NoTrans);
+    trmm<Ba>(ctx, A11, B1, C1, alpha, side, uplo, transA, diag);
+    if (!ctx.in_order()) ctx.wait();
+    auto B_block = is_ll_or_ur ?
+        (is_transposed ? B2 : B1) :
+        (is_transposed ? B1 : B2);
+    auto C_block = is_ll_or_ur ?
+        (is_transposed ? C1 : C2) :
+        (is_transposed ? C2 : C1);
+    auto A_block = uplo == Uplo::Lower ? A21 : A12;
+    return gemm<Ba>(ctx, side == Side::Left ? A_block : B_block, 
+                    side == Side::Left ? B_block : A_block, 
+                    C_block, alpha, T(1.0), 
+                    side == Side::Left ? transA : Transpose::NoTrans, 
+                    side == Side::Left ? Transpose::NoTrans : transA);
+            
 
     return ctx.get_event();
 }
