@@ -528,8 +528,8 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
             for (auto flat_idx = matrix_wg_ix; 
                  flat_idx < n*n; 
                  flat_idx += bdim * wg_per_matrix) {
-                auto i = flat_idx / n; // row index
-                auto j = flat_idx % n; // column index
+                auto i = flat_idx % n; // row index
+                auto j = flat_idx / n; // column index
                 if (i == j) {
                     // Diagonal elements
                     data_ptr[batch_id * stride + i * ld + j] = diagonal_value;
@@ -570,8 +570,8 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
             // Calculate 3D coordinates from flat index
             size_t b = flat_idx / (n * n);          // batch index
             size_t remainder = flat_idx % (n * n);
-            size_t i = remainder / n;               // row index
-            size_t j = remainder % n;               // column index
+            size_t i = remainder % n;               // row index
+            size_t j = remainder / n;               // column index
             
             oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
             oneapi::dpl::minstd_rand engine(seed, remainder);
