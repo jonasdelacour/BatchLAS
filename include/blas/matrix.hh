@@ -396,15 +396,19 @@ namespace batchlas {
             // Create a new view based on the slices
             int64_t n_rows, n_cols;
             if (rows.start == std::numeric_limits<int64_t>::min() && rows.end == std::numeric_limits<int64_t>::max()) {n_rows = rows_; rows.start = 0;}
-            else if (rows.end == std::numeric_limits<int64_t>::max()) {n_rows = rows_ - rows.start;}
-            else {
+            else if (rows.end == std::numeric_limits<int64_t>::max()) {
+                rows.start = rows.start < 0 ? rows_ + rows.start : rows.start;
+                n_rows = rows_ - rows.start;
+            } else {
                 if (rows.start < 0) rows.start = rows_ + rows.start;
                 if (rows.end < 0) rows.end = rows_ + rows.end;
                 n_rows = rows.end - rows.start;
             }
             if (cols.start == std::numeric_limits<int64_t>::min() && cols.end == std::numeric_limits<int64_t>::max()) {n_cols = cols_; cols.start = 0;}
-            else if (cols.end == std::numeric_limits<int64_t>::max()) {n_cols = cols_ - cols.start;}
-            else {
+            else if (cols.end == std::numeric_limits<int64_t>::max()) {
+                cols.start = cols.start < 0 ? cols_ + cols.start : cols.start;
+                n_cols = cols_ - cols.start;
+            } else {
                 if (cols.start < 0) cols.start = cols_ + cols.start;
                 if (cols.end < 0) cols.end = cols_ + cols.end;
                 n_cols = cols.end - cols.start;
