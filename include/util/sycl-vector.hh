@@ -1,6 +1,7 @@
 #pragma once
 #include <cassert>
 #include <util/sycl-span.hh>
+#include <util/sycl-device-queue.hh>
 template <typename T>
 struct UnifiedVector
 {   

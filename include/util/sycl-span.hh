@@ -2,6 +2,7 @@
 #include <cassert>
 #include <iterator>
 #include <array>
+#include <util/sycl-device-queue.hh>
 
 template <typename T>
 struct is_std_array : std::false_type {};
@@ -23,6 +24,14 @@ struct Span
     inline constexpr Span(const Span<T>& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
     inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
     inline constexpr Span(T& value) : data_(&value), size_(1) {}
+
+    Event set_read_mostly(const Queue &ctx = Queue());
+    Event unset_read_mostly(const Queue &ctx = Queue());
+    Event set_preferred_location(const Queue &ctx = Queue());
+    Event clear_preferred_location(const Queue &ctx = Queue());
+    Event set_access_device(const Queue &ctx = Queue());
+    Event clear_access_device(const Queue &ctx = Queue());
+    Event prefetch(const Queue &ctx = Queue());
     
     template <typename U>
     inline constexpr Span<U> as_span() const {

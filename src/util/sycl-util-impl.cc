@@ -8,6 +8,7 @@
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
 #include <util/reference-wrapper.hh>
+#include "queue-impl.cc"
 
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
@@ -64,6 +65,41 @@ void UnifiedVector<T>::resize(size_t new_size) {
         capacity_ = new_size;
     }
     size_ = new_size;
+}
+
+template <typename T>
+Event Span<T>::set_read_mostly(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY));
+}
+
+template <typename T>
+Event Span<T>::unset_read_mostly(const Queue &ctx){
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY));
+}
+
+template <typename T>
+Event Span<T>::set_preferred_location(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION));
+}
+
+template <typename T>
+Event Span<T>::clear_preferred_location(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION));
+}
+
+template <typename T>
+Event Span<T>::set_access_device(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE));
+}
+
+template <typename T>
+Event Span<T>::clear_access_device(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE));
+}
+
+template <typename T>
+Event Span<T>::prefetch(const Queue &ctx) {
+    return static_cast<EventImpl>(ctx -> prefetch(data_, this->size_bytes()));
 }
 
 template <typename T>

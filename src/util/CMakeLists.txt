@@ -1,5 +1,5 @@
 set(UTIL_SOURCES
-    queue-impl.cc
+    #queue-impl.cc
     sycl-util-impl.cc
 )
 
