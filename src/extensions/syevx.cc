@@ -276,10 +276,8 @@ namespace batchlas {
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
-            
-            if (batch_size > 1) {
-                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
-            }
+                        
+            work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
