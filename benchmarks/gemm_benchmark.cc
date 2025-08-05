@@ -16,17 +16,16 @@ static void BM_GEMM(minibench::State& state) {
     auto A = Matrix<T>::Random(m, k, false, batch);
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
-
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
 
     state.ResetTiming(); state.ResumeTiming();
     for (auto _ : state) {
-        gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(1), Transpose::NoTrans, Transpose::NoTrans);
     }
     queue.wait();
     auto time = state.StopTiming();
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 
