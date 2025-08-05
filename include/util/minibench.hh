@@ -30,10 +30,11 @@ constexpr const char* kColorHeader = "\033[1;36m";
 constexpr const char* kColorName   = "\033[1m";
 
 struct Config {
-    size_t warmup_runs = 2;          // number of warmup executions
-    size_t min_iters = 5;            // minimum measurement iterations
-    size_t max_iters = 100;          // safety cap on iterations
-    double min_time_ms = 200.0;      // target minimum total measurement time
+    size_t warmup_runs = 2;              // number of warmup executions
+    size_t warmup_internal_iterations = 1; // internal iterations for warmup
+    size_t min_iters = 5;                // minimum measurement iterations
+    size_t max_iters = 100;              // safety cap on iterations
+    double min_time_ms = 200.0;          // target minimum total measurement time
 };
 
 struct Result {
@@ -45,9 +46,15 @@ struct Result {
     std::unordered_map<std::string, double> metrics; // all metrics
 };
 
+enum MetricType {
+    Rate,        // divide by time
+    Reciprocal,  // multiply by time (reciprocal rate)
+    Normal       // no special handling
+};
+
 struct Metric {
     double value = 0.0;
-    bool rate = false;  // divide by time if true
+    MetricType type = Normal; // type of metric handling
 };
 
 // Helper to parse a single integer or a range/list specification of the form
@@ -107,9 +114,9 @@ struct State {
     explicit State(const std::vector<int>& ranges) : ranges_(ranges) {}
 
     std::vector<int> ranges_;
-    size_t iter_limit_ = 1;
+    size_t internal_iterations_ = 1;  // number of internal iterations per benchmark call
 
-    using clock = std::chrono::high_resolution_clock;
+    using clock = std::chrono::steady_clock;
     clock::time_point start_;
     std::chrono::duration<double> elapsed_{0};
     bool running_ = false;
@@ -126,8 +133,8 @@ struct State {
         State& operator*() { return *state; }
     };
 
-    iterator begin() { return {0, iter_limit_, this}; }
-    iterator end() { return {iter_limit_, iter_limit_, this}; }
+    iterator begin() { return {0, internal_iterations_, this}; }
+    iterator end() { return {internal_iterations_, internal_iterations_, this}; }
 
     int range(size_t idx) const { return idx < ranges_.size() ? ranges_[idx] : 0; }
 
@@ -160,8 +167,12 @@ struct State {
         return std::chrono::duration<double, std::milli>(elapsed_).count();
     }
 
-    void SetMetric(const std::string& name, double value, bool rate = false) {
-        metrics_[name] = {value, rate};
+    void SetMetric(const std::string& name, double value, MetricType type = Normal) {
+        metrics_[name] = {value, type};
+    }
+
+    void SetInternalIterations(size_t iterations) {
+        internal_iterations_ = iterations;
     }
 
     void SetMetricsFunc(MetricsFunc fn) { metrics_fn_ = std::move(fn); }
@@ -235,25 +246,48 @@ inline Result run_benchmark(const Benchmark& b,
 
     State state(args);
 
+    // Warmup with internal iterations
     for (size_t i = 0; i < cfg.warmup_runs; ++i) {
-        state.iter_limit_ = 1;
+        state.internal_iterations_ = cfg.warmup_internal_iterations;
         state.ResetTiming();
         state.ResumeTiming();
         b.func(state);
         state.StopTiming();
     }
 
+    // Determine optimal internal iterations for measurement
+    // Start with a single iteration and increase if timing is too short
+    size_t measurement_internal_iters = 1;
+    state.internal_iterations_ = measurement_internal_iters;
+    state.ResetTiming();
+    state.ResumeTiming();
+    b.func(state);
+    double sample_time = state.StopTiming();
+    
+    // Scale up internal iterations if single iteration is too fast
+    while (sample_time < 1.0 && measurement_internal_iters < 10000) {
+        measurement_internal_iters *= 10;
+        state.internal_iterations_ = measurement_internal_iters;
+        state.ResetTiming();
+        state.ResumeTiming();
+        b.func(state);
+        sample_time = state.StopTiming();
+    }
+
+    // Now perform the actual measurements
     std::vector<double> times;
     double total_ms = 0.0;
     while (res.iterations < cfg.max_iters &&
            (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
-        state.iter_limit_ = 1;
+        state.internal_iterations_ = measurement_internal_iters;
         state.ResetTiming();
         state.ResumeTiming();
         b.func(state);
         double t = state.StopTiming();
-        times.push_back(t);
-        total_ms += t;
+        // Normalize time per internal iteration
+        double time_per_iter = t / measurement_internal_iters;
+        times.push_back(time_per_iter);
+        total_ms += time_per_iter;
         ++res.iterations;
     }
 
@@ -269,8 +303,10 @@ inline Result run_benchmark(const Benchmark& b,
     double secs = res.avg_ms / 1000.0;
     for (const auto& kv : state.metrics_) {
         double v = kv.second.value;
-        if (kv.second.rate && secs > 0.0)
+        if (kv.second.type == MetricType::Rate && secs > 0.0)
             v /= secs;
+        else if (kv.second.type == MetricType::Reciprocal && secs > 0.0)
+            v *= secs;
         res.metrics[kv.first] = v;
     }
     if (state.metrics_fn_) {
@@ -475,6 +511,8 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
         std::string s(argv[i]);
         if (s.rfind("--warmup=", 0) == 0) {
             opt.cfg.warmup_runs = std::stoul(s.substr(9));
+        } else if (s.rfind("--warmup_internal=", 0) == 0) {
+            opt.cfg.warmup_internal_iterations = std::stoul(s.substr(18));
         } else if (s.rfind("--min_iters=", 0) == 0) {
             opt.cfg.min_iters = std::stoul(s.substr(12));
         } else if (s.rfind("--max_iters=", 0) == 0) {
@@ -490,13 +528,14 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
         } else if (s == "--help" || s == "-h") {
             std::cout << "Usage: benchmark [options] [ARGS...]\n";
             std::cout << "Options:\n";
-            std::cout << "  --warmup=N       warmup iterations (default 2)\n";
-            std::cout << "  --min_iters=N    minimum measured iterations\n";
-            std::cout << "  --max_iters=N    maximum measured iterations\n";
-            std::cout << "  --min_time=MS    minimum total measurement time\n";
-            std::cout << "  --csv=FILE       write results to CSV file\n";
-            std::cout << "  --backend=LIST   comma separated backends to run\n";
-            std::cout << "  --type=LIST      comma separated floating point types\n";
+            std::cout << "  --warmup=N           warmup iterations (default 2)\n";
+            std::cout << "  --warmup_internal=N  internal iterations for warmup (default 1)\n";
+            std::cout << "  --min_iters=N        minimum measured iterations\n";
+            std::cout << "  --max_iters=N        maximum measured iterations\n";
+            std::cout << "  --min_time=MS        minimum total measurement time\n";
+            std::cout << "  --csv=FILE           write results to CSV file\n";
+            std::cout << "  --backend=LIST       comma separated backends to run\n";
+            std::cout << "  --type=LIST          comma separated floating point types\n";
             std::cout << "  ARGS can be integers, comma lists or start:end:num ranges\n";
             exit(0);
         } else {
