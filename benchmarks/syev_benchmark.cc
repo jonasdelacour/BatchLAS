@@ -24,10 +24,10 @@ static void BM_SYEV(minibench::State& state) {
                 JobType::NoEigenVectors, Uplo::Lower, workspace.to_span());
     }
     queue.wait();
-    auto time = state.StopTiming();
+    state.StopTiming();
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

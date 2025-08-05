@@ -24,10 +24,11 @@ static void BM_GEMV(minibench::State& state) {
                  Transpose::NoTrans);
     }
     queue.wait();
-    auto time = state.StopTiming();
+    state.StopTiming();
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
-                    true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+                    minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6,
+                    minibench::Reciprocal);
 }
 
 

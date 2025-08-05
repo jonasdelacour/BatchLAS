@@ -21,9 +21,8 @@ static void BM_Ortho(minibench::State& state) {
         ortho<B>(queue, A.view(), Transpose::NoTrans, workspace.to_span(), algo);
     }
     queue.wait();
-    auto time = state.StopTiming();
-
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.StopTiming();
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK(BM_Ortho, OrthoBenchSizes);

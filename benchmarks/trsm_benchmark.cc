@@ -20,9 +20,9 @@ static void BM_TRSM(minibench::State& state) {
                 Transpose::NoTrans, Diag::NonUnit, T(1));
     }
     queue.wait();
-    auto time = state.StopTiming();
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n), true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.StopTiming();
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n), minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK(BM_TRSM, SquareBatchSizes);

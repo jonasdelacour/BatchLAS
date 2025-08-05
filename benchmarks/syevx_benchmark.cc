@@ -36,8 +36,8 @@ static void BM_SYEVX(minibench::State& state) {
                  JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
     }
     queue.wait();
-    auto time = state.StopTiming();
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.StopTiming();
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

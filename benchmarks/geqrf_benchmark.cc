@@ -31,9 +31,9 @@ static void BM_GEQRF(minibench::State& state) {
         geqrf<B>(queue, matrices.view(), tau.to_span(), workspace.to_span());
     }
     queue.wait();
-    auto time = state.StopTiming();
-    state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch_size) * time * 1e3, false);
+    state.StopTiming();
+    state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch_size) * 1e6, minibench::Reciprocal);
 
 }
 

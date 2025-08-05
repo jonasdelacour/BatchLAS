@@ -30,9 +30,10 @@ static void BM_ORMQR(minibench::State& state) {
                  tau.to_span(), ws.to_span());
     }
     queue.wait();
-    auto time = state.StopTiming();
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (4 * m * n * n - 2 * n * n * n + 3 * n * n)), true);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * time * 1e3, false);
+    state.StopTiming();
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (4 * m * n * n - 2 * n * n * n + 3 * n * n)), minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+
     //Appendix C https://www.netlib.org/lapack/lawnspdf/lawn18.pdf
 }
 
