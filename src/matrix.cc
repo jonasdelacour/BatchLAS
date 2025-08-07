@@ -881,29 +881,32 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values) const {
+Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k) const {
     T* data_ptr = data_.data();
     const T* diag_ptr = diag_values.data();
     int ld = ld_;
     int stride = stride_;
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
+    bool batch_diagonals = (diag_values.size() == (n - std::abs(k)) * batch_size);
     
-    size_t total_elements = static_cast<size_t>(batch_size) * n;
+    size_t total_elements = static_cast<size_t>(batch_size) * (n - std::abs(k));
     
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
+    auto col_offset = (k >= 0) ? k : 0; // Adjust column offset based on k
+    auto row_offset = (k < 0) ? -k : 0; // Adjust row offset based on k
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
         size_t flat = item.get_global_id(0);
         
         // Bounds check
         if (flat >= total_elements) return;
         
-        size_t b = flat / n;
-        size_t i = flat % n;
-        data_ptr[b * stride + i * ld + i] = diag_ptr[i];
+        size_t b = flat / (n - std::abs(k));
+        size_t i = flat % (n - std::abs(k));
+        data_ptr[b * stride + (i + col_offset) * ld + i + row_offset] = diag_ptr[batch_diagonals ? b * (n - std::abs(k)) + i : i];
     });
     return ctx.get_event();
 }
@@ -1407,10 +1410,10 @@ template Event MatrixView<double, MatrixFormat::Dense>::fill_tridiag_toeplitz(co
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, std::complex<float>, std::complex<float>, std::complex<float>) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, std::complex<double>, std ::complex<double>, std::complex<double>) const;
 
-template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<float>&) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<double>&) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<float>>&) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<double>>&) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<float>&, int64_t) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<double>&, int64_t) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<float>>&, int64_t) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<double>>&, int64_t) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const float&) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const double&) const;
