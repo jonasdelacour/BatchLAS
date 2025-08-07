@@ -74,7 +74,7 @@ namespace batchlas {
             CUSPARSE_SPMM_ALG_DEFAULT,
             &size
         );
-        return size;
+        return BumpAllocator::allocation_size<std::byte>(ctx, size);
     }
 
     #define SPMM_INSTANTIATE(fp, F) \
