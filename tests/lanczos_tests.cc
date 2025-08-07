@@ -133,7 +133,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
 
     
     LanczosParams<float> params;
-    params.sort_enabled = false;
+    params.sort_enabled = true;
     params.sort_order = SortOrder::Descending;
     params.reorthogonalization_iterations = 2;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
