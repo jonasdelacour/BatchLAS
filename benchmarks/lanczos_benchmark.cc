@@ -27,7 +27,7 @@ static void BM_LANCZOS(minibench::State& state) {
 
     state.ResetTiming(); state.ResumeTiming();
     for (auto _ : state) {
-        lanczos<B>(queue, A.view(), W.to_span(),workspace.to_span(),
+        lanczos<B>(queue, Acsr.view(), W.to_span(),workspace.to_span(),
                    JobType::NoEigenVectors, V.view(), params);
     }
     queue.wait();
