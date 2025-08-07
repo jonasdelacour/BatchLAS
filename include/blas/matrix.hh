@@ -503,12 +503,12 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values) const;
+        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k = 0) const;
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Event fill_diagonal(const Span<T>& diag_values) const {
-            return fill_diagonal(Queue(), diag_values);
+        Event fill_diagonal(const Span<T>& diag_values, int64_t k = 0) const {
+            return fill_diagonal(Queue(), diag_values, k);
         }
 
         template <MatrixFormat M = MType, 
