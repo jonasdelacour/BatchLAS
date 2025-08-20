@@ -503,6 +503,10 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_identity(const Queue& ctx, T value = T(1)) const;
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k = 0) const;
 
         template <MatrixFormat M = MType, 
@@ -681,24 +685,25 @@ namespace batchlas {
 
         Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
         Vector(int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(stride > 0 ? stride * batch_size : size * batch_size),
+            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * batch_size)),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
         Vector(int size, T value, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(stride > 0 ? stride * batch_size : size * batch_size, value),
+            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * batch_size), value),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
 
         // Convenience vectors
-        static Vector<T> zeros(int size, int batch_size = 1, int stride = 0) {
-            return Vector<T>(size, T(0), batch_size, stride);
+        static Vector<T> zeros(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            return Vector<T>(size, T(0), inc, stride, batch_size);
         }
-        static Vector<T> ones(int size, int batch_size = 1, int stride = 0) {
-            return Vector<T>(size, T(1), batch_size, stride);
+        static Vector<T> ones(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            return Vector<T>(size, T(1), inc, stride, batch_size);
         }
-        static Vector<T> random(int size, int batch_size = 1, int stride = 0) {
-            Vector<T> vec(size, batch_size, stride);
+        static Vector<T> random(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            Vector<T> vec(size, inc, stride, batch_size);
+
             for (int b = 0; b < batch_size; ++b) {
                 for (int i = 0; i < size; ++i) {
-                    vec.at(i, b) = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
+                    vec(i, b) = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
                 }
             }
             return vec;
@@ -706,15 +711,13 @@ namespace batchlas {
         static Vector<T> standard_basis(int size, int index, int batch_size = 1, int stride = 0) {
             Vector<T> vec(size, T(0), batch_size, stride);
             for (int b = 0; b < batch_size; ++b) {
-                vec.at(index, b) = T(1);
+                vec(index, b) = T(1);
             }
             return vec;
         }
 
-        Span<T> data() { return data_.to_span(); }
-        Span<const T> data() const { return data_.to_span(); }
-        T* data_ptr() { return data_.data(); }
-        const T* data_ptr() const { return data_.data(); }
+        Span<T> data() const { return data_.to_span(); }
+        T* data_ptr() const { return data_.data(); }
         int size() const { return size_; }
         int inc() const { return inc_; }
         int stride() const { return stride_; }
@@ -722,15 +725,20 @@ namespace batchlas {
 
         // Access element at (i, batch)
         T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
-        const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
+        //const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
 
         // Flat indexing (for backward compatibility)
         T& operator[](int i) { return data_[i]; }
-        const T& operator[](int i) const { return data_[i]; }
+
+        T& operator()(int i, int batch = 0) { return at(i, batch); }
 
         // Get a view of a single batch
         VectorView<T> batch_item(int batch_index) const {
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_, inc_), size_, 1, inc_, stride_);
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, stride_*batch_size_), size_, 1, inc_, stride_);
+        }
+
+        operator VectorView<T>() const {
+            return VectorView<T>(data(), size_, inc_, stride_, batch_size_);
         }
 
         BackendVectorHandle<T>* operator->();
@@ -745,7 +753,7 @@ namespace batchlas {
         int stride_ = 0;
         int batch_size_ = 1;
 
-        std::shared_ptr<BackendVectorHandle<T>> backend_handle_;
+        //std::shared_ptr<BackendVectorHandle<T>> backend_handle_;
     };
 
     // VectorView class - non-owning view of a (possibly batched) vector with stride
@@ -768,7 +776,7 @@ namespace batchlas {
 
         // Construct from Vector
         VectorView(const Vector<T>& vec)
-            : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()), backend_handle_(vec.backend_handle_) {}
+            : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()) {}
 
         // Copy and move
         VectorView(const VectorView<T>&) = default;
@@ -785,12 +793,11 @@ namespace batchlas {
         int batch_size() const { return batch_size_; }
 
         // Access element at (i, batch)
-        T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
-        const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
+        T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
 
-        // Flat indexing (for backward compatibility)
-        T& operator[](int i) { return data_[i]; }
-        const T& operator[](int i) const { return data_[i]; }
+        T& operator[](int i) const { return data_[i * inc_]; }
+
+        T& operator()(int i, int batch = 0) const {return at(i, batch);}
 
         // Subview (single batch)
         VectorView<T> batch_item(int batch_index) const {
@@ -800,6 +807,26 @@ namespace batchlas {
         // Subview (range within a batch)
         VectorView<T> subview(int offset, int count, int batch = 0) const {
             return VectorView<T>(Span<T>(data_.data() + batch * stride_ + offset * inc_, count, inc_), count, 1, inc_, stride_);
+        }
+
+        VectorView<T> operator()(Slice slice) const {
+            // Create a new view based on the slice
+            int64_t n;
+            if (slice.start == std::numeric_limits<int64_t>::min() && slice.end == std::numeric_limits<int64_t>::max()) {
+                n = size_;
+            } else if (slice.end == std::numeric_limits<int64_t>::max()) {
+                slice.start = slice.start < 0 ? size_ + slice.start : slice.start;
+                n = size_ - slice.start;
+            } else {
+                if (slice.start < 0) slice.start = size_ + slice.start;
+                if (slice.end < 0) slice.end = size_ + slice.end;
+                n = slice.end - slice.start;
+            }
+            if (n <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(n) + "\n "
+                                            "Requested slice: " + std::to_string(slice.start) + ":" + std::to_string(slice.end));
+            }
+            return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, stride_ * batch_size_), n, inc_, stride_, batch_size_);
         }
 
         BackendVectorHandle<T>* operator->();
@@ -813,7 +840,7 @@ namespace batchlas {
         int inc_ = 1;
         int stride_ = 0;
         int batch_size_ = 1;
-        std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
+        //std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
     };
 
     // Helper utility to get effective dimensions accounting for transpose
