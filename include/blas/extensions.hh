@@ -220,6 +220,16 @@ namespace batchlas {
 
     template <Backend B, typename T>
     size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
+
+
+
+    template <typename T>
+    Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<T, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1);
+
+    template <typename T>
+    Event steqr(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
+                const VectorView<T>& eigenvalues, const MatrixView<T, MatrixFormat::Dense>& eigvects);
+
     /**
      * @brief Computes the explicit inverse of a dense matrix
      *
