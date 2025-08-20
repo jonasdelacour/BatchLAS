@@ -26,12 +26,22 @@ namespace batchlas {
         }
 
         template <typename T>
+        bool is_numerically_zero(const T& value) {
+            return abs(value) < std::numeric_limits<base_float_t<T>>::epsilon();
+        }
+
+        template <typename T>
         base_float_t<T> norm_squared(const T& value) {
             if constexpr (is_complex<T>::value) {
                 return std::real(std::conj(value) * value); // For complex numbers, return the squared norm
             } else {
                 return value * value;
             }
+        }
+
+        template <typename K>
+        K ceil_div(K num, K denom) {
+            return (num + denom - 1) / denom;
         }
     }
 
