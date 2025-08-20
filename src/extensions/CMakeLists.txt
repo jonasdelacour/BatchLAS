@@ -5,6 +5,7 @@ set(EXTENSIONS_SOURCES
     tridiag_solver.cc
     lanczos.cc
     trmm.cc
+    steqr.cc
 )
 
 target_sources(batchlas PRIVATE ${EXTENSIONS_SOURCES})

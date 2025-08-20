@@ -11,6 +11,7 @@ set(BENCHMARK_TARGETS
     syevx_benchmark
     lanczos_benchmark
     ortho_benchmark
+    steqr_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})
