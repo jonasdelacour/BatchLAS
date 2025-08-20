@@ -847,6 +847,14 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     return ctx.get_event();
 }
 
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
+    fill_zeros(ctx);
+    fill_diagonal(ctx, value);
+    return ctx.get_event();
+}
+
 // Factory method to create zeros matrix
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
@@ -1419,6 +1427,11 @@ template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue
 template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const double&) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const std::complex<float>&) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const std::complex<double>&) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_identity(const Queue&, float) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_identity(const Queue&, double) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_identity(const Queue&, std::complex<float>) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_identity(const Queue&, std::complex<double>) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
 template Event MatrixView<double, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
