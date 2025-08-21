@@ -64,9 +64,12 @@ auto eigenvalues_2x2(const KernelMatrixView<T, MatrixFormat::Dense>& A) {
 
 template <typename T>
 auto wilkinson_shift(const T& a, const T& b, const T& c) {
-    // Compute the Wilkinson shift for a 2x2 symmetric matrix
-    // |a, b|
-    // |b, c|
+    // Compute the Wilkinson shift assuming that a, b, c represents the
+    // bottom-right 2x2 block of a matrix
+    // |     :  :|
+    // |     :  :|
+    // |.... a, b|
+    // |.... b, c|
     // Returns the eigenvalue closest to c
     const auto [lambda1, lambda2] = eigenvalues_2x2(a, b, c);
     return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
