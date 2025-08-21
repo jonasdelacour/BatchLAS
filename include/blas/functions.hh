@@ -20,6 +20,20 @@ Event spmm(Queue& ctx,
     Transpose transB,
     Span<std::byte> workspace);
 
+// Forwarding overload for owning matrices (A, B, C)
+template <Backend B, typename T, MatrixFormat MFormat>
+inline Event spmm(Queue& ctx,
+        const Matrix<T, MFormat>& A,
+        const Matrix<T, MatrixFormat::Dense>& Bmat,
+        const Matrix<T, MatrixFormat::Dense>& Cmat,
+        T alpha,
+        T beta,
+        Transpose transA,
+        Transpose transB,
+        Span<std::byte> workspace) {
+        return spmm<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, workspace);
+}
+
 
 template <Backend B, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx,
@@ -30,6 +44,19 @@ size_t spmm_buffer_size(Queue& ctx,
                         T beta,
                         Transpose transA,
                         Transpose transB);
+
+// Forwarding overload for buffer size (owning matrices)
+template <Backend B, typename T, MatrixFormat MFormat>
+inline size_t spmm_buffer_size(Queue& ctx,
+                                                const Matrix<T, MFormat>& A,
+                                                const Matrix<T, MatrixFormat::Dense>& Bmat,
+                                                const Matrix<T, MatrixFormat::Dense>& Cmat,
+                                                T alpha,
+                                                T beta,
+                                                Transpose transA,
+                                                Transpose transB) {
+        return spmm_buffer_size<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB);
+}
 
 template <Backend Ba, typename T>
 Event trmm(Queue& ctx,
@@ -42,6 +69,19 @@ Event trmm(Queue& ctx,
                 Transpose transA,
                 Diag diag);
 
+template <Backend Ba, typename T>
+inline Event trmm(Queue& ctx,
+                                 const Matrix<T, MatrixFormat::Dense>& A,
+                                 const Matrix<T, MatrixFormat::Dense>& Bmat,
+                                 const Matrix<T, MatrixFormat::Dense>& Cmat,
+                                 T alpha,
+                                 Side side,
+                                 Uplo uplo,
+                                 Transpose transA,
+                                 Diag diag) {
+        return trmm<Ba,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, side, uplo, transA, diag);
+}
+
 template <Backend Back, typename T>
 Event gemm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -53,6 +93,19 @@ Event gemm(Queue& ctx,
            Transpose transB,
            ComputePrecision precision = ComputePrecision::Default);
 
+template <Backend Back, typename T>
+inline Event gemm(Queue& ctx,
+                   const Matrix<T, MatrixFormat::Dense>& A,
+                   const Matrix<T, MatrixFormat::Dense>& Bmat,
+                   const Matrix<T, MatrixFormat::Dense>& Cmat,
+                   T alpha,
+                   T beta,
+                   Transpose transA,
+                   Transpose transB,
+                   ComputePrecision precision = ComputePrecision::Default) {
+        return gemm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, precision);
+}
+
 template <Backend B, typename T>
 Event gemv(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -61,6 +114,21 @@ Event gemv(Queue& ctx,
            T alpha,
            T beta,
            Transpose transA);
+
+// Forwarding overload to allow passing owning Vector<T> directly
+template <Backend B, typename T>
+inline Event gemv(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const Vector<T>& X,
+            const Vector<T>& Y,
+            T alpha,
+            T beta,
+            Transpose transA) {
+    return gemv<B, T>(ctx, A,
+                         static_cast<VectorView<T>>(X),
+                         static_cast<VectorView<T>>(Y),
+                         alpha, beta, transA);
+}
 
 template <typename T>
 inline void trsm_validate_params(
@@ -135,6 +203,18 @@ Event trsm(Queue& ctx,
            T alpha);
 
 template <Backend Back, typename T>
+inline Event trsm(Queue& ctx,
+                   const Matrix<T, MatrixFormat::Dense>& A,
+                   const Matrix<T, MatrixFormat::Dense>& Bmat,
+                   Side side,
+                   Uplo uplo,
+                   Transpose transA,
+                   Diag diag,
+                   T alpha) {
+        return trsm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), side, uplo, transA, diag, alpha);
+}
+
+template <Backend Back, typename T>
 Event getrs(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
            const MatrixView<T, MatrixFormat::Dense>& B,
@@ -143,10 +223,28 @@ Event getrs(Queue& ctx,
            Span<std::byte> work_space);
 
 template <Backend Back, typename T>
+inline Event getrs(Queue& ctx,
+                   const Matrix<T, MatrixFormat::Dense>& A,
+                   const Matrix<T, MatrixFormat::Dense>& Bmat,
+                   Transpose transA,
+                   Span<int64_t> pivots,
+                   Span<std::byte> work_space) {
+        return getrs<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), transA, pivots, work_space);
+}
+
+template <Backend Back, typename T>
 size_t getrs_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          Transpose transA);
+
+template <Backend Back, typename T>
+inline size_t getrs_buffer_size(Queue& ctx,
+                                                 const Matrix<T, MatrixFormat::Dense>& A,
+                                                 const Matrix<T, MatrixFormat::Dense>& Bmat,
+                                                 Transpose transA) {
+        return getrs_buffer_size<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), transA);
+}
 
 template <Backend B, typename T>
 Event getrf(Queue& ctx,
@@ -155,8 +253,22 @@ Event getrf(Queue& ctx,
             Span<std::byte> work_space);
 
 template <Backend B, typename T>
+inline Event getrf(Queue& ctx,
+                        const Matrix<T, MatrixFormat::Dense>& A,
+                        Span<int64_t> pivots,
+                        Span<std::byte> work_space) {
+        return getrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), pivots, work_space);
+}
+
+template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A);
+
+template <Backend B, typename T>
+inline size_t getrf_buffer_size(Queue& ctx,
+                                                 const Matrix<T, MatrixFormat::Dense>& A) {
+        return getrf_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
+}
 
 template <Backend B, typename T>
 Event getri(Queue& ctx,
@@ -166,8 +278,23 @@ Event getri(Queue& ctx,
             Span<std::byte> work_space);
 
 template <Backend B, typename T>
+inline Event getri(Queue& ctx,
+                        const Matrix<T, MatrixFormat::Dense>& A,
+                        const Matrix<T, MatrixFormat::Dense>& Cmat,
+                        Span<int64_t> pivots,
+                        Span<std::byte> work_space) {
+        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space);
+}
+
+template <Backend B, typename T>
 size_t getri_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A);
+
+template <Backend B, typename T>
+inline size_t getri_buffer_size(Queue& ctx,
+                                                 const Matrix<T, MatrixFormat::Dense>& A) {
+        return getri_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
+}
 
 template <Backend B, typename T>
 Event geqrf(Queue& ctx,
@@ -176,9 +303,24 @@ Event geqrf(Queue& ctx,
             Span<std::byte> work_space);
 
 template <Backend B, typename T>
+inline Event geqrf(Queue& ctx,
+                        const Matrix<T,MatrixFormat::Dense>& A,
+                        Span<T> tau,
+                        Span<std::byte> work_space) {
+        return geqrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau, work_space);
+}
+
+template <Backend B, typename T>
 size_t geqrf_buffer_size(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          Span<T> tau);
+
+template <Backend B, typename T>
+inline size_t geqrf_buffer_size(Queue& ctx,
+                                                 const Matrix<T,MatrixFormat::Dense>& A,
+                                                 Span<T> tau) {
+        return geqrf_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau);
+}
 
 template <Backend B, typename T>
 Event orgqr(Queue& ctx,
@@ -187,9 +329,24 @@ Event orgqr(Queue& ctx,
             Span<std::byte> workspace);
 
 template <Backend B, typename T>
+inline Event orgqr(Queue& ctx,
+                        const Matrix<T, MatrixFormat::Dense>& A,
+                        Span<T> tau,
+                        Span<std::byte> workspace) {
+        return orgqr<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau, workspace);
+}
+
+template <Backend B, typename T>
 size_t orgqr_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau);
+
+template <Backend B, typename T>
+inline size_t orgqr_buffer_size(Queue& ctx,
+                                                 const Matrix<T, MatrixFormat::Dense>& A,
+                                                 Span<T> tau) {
+        return orgqr_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau);
+}
 
 template <Backend B, typename T>
 Event ormqr(Queue& ctx,
@@ -201,12 +358,33 @@ Event ormqr(Queue& ctx,
             Span<std::byte> workspace);
 
 template <Backend B, typename T>
+inline Event ormqr(Queue& ctx,
+                        const Matrix<T, MatrixFormat::Dense>& A,
+                        const Matrix<T, MatrixFormat::Dense>& Cmat,
+                        Side side,
+                        Transpose trans,
+                        Span<T> tau,
+                        Span<std::byte> workspace) {
+        return ormqr<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), side, trans, tau, workspace);
+}
+
+template <Backend B, typename T>
 size_t ormqr_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          Side side,
                          Transpose trans,
                          Span<T> tau);
+
+template <Backend B, typename T>
+inline size_t ormqr_buffer_size(Queue& ctx,
+                                                 const Matrix<T, MatrixFormat::Dense>& A,
+                                                 const Matrix<T, MatrixFormat::Dense>& Cmat,
+                                                 Side side,
+                                                 Transpose trans,
+                                                 Span<T> tau) {
+        return ormqr_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), side, trans, tau);
+}
 
 
 template <Backend B, typename T>
@@ -218,6 +396,20 @@ Event potrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         Uplo uplo,
         Span<std::byte> workspace);
+
+template <Backend B, typename T>
+inline size_t potrf_buffer_size(Queue& ctx,
+                                        const Matrix<T, MatrixFormat::Dense>& A,
+                                        Uplo uplo) {
+        return potrf_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), uplo);
+}
+template <Backend B, typename T>
+inline Event potrf(Queue& ctx,
+                const Matrix<T, MatrixFormat::Dense>& descrA,
+                Uplo uplo,
+                Span<std::byte> workspace) {
+        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace);
+}
 
         template <Backend B, typename T>
 Event syev(Queue& ctx,
@@ -233,6 +425,24 @@ size_t syev_buffer_size(Queue& ctx,
         Span<typename base_type<T>::type> eigenvalues,
         JobType jobtype,
         Uplo uplo);
+
+template <Backend B, typename T>
+inline Event syev(Queue& ctx,
+                const Matrix<T, MatrixFormat::Dense>& descrA,
+                Span<typename base_type<T>::type> eigenvalues,
+                JobType jobtype,
+                Uplo uplo,
+                Span<std::byte> workspace) {
+        return syev<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), eigenvalues, jobtype, uplo, workspace);
+}
+template <Backend B, typename T>
+inline size_t syev_buffer_size(Queue& ctx,
+                const Matrix<T, MatrixFormat::Dense>& A,
+                Span<typename base_type<T>::type> eigenvalues,
+                JobType jobtype,
+                Uplo uplo) {
+        return syev_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), eigenvalues, jobtype, uplo);
+}
 
 
 } // namespace batchlas
