@@ -105,7 +105,7 @@ T apply_givens_rotation(const VectorView<T>& d, const VectorView<T>& e, const T&
 
 template <typename T>
 Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, 
-                    const MatrixView<T, MatrixFormat::Dense>& givens_rotations, size_t n_sweeps) {
+                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, size_t n_sweeps) {
     // Perform the Francis sweep for the i-th step
     // This function will apply a francis sweep of Givens rotations
     auto n = d.size();
@@ -165,7 +165,7 @@ Event steqr_impl(const Queue& ctx,const VectorView<T>& d, const VectorView<T>& e
     int64_t n = d.size();
     int64_t batch_size = d.batch_size();   
     for (int64_t i = 0; i < n - 1; ++i) {
-        francis_sweep(ctx, d(Slice{0, n - i}), e(Slice{0, n - i - 1}), eigvects, 5);
+        francis_sweep(ctx, d(Slice{0, n - i}), e(Slice{0, n - i - 1}), MatrixView<std::array<T,2>, MatrixFormat::Dense>(), 5);
     }
     ctx -> submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
@@ -194,8 +194,8 @@ Event steqr(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, co
     return steqr_impl(ctx, d, e, eigenvalues, eigvects);
 }
 
-template Event francis_sweep<float>(const Queue&, const VectorView<float>&, const VectorView<float>&, const MatrixView<float, MatrixFormat::Dense>&, size_t);
-template Event francis_sweep<double>(const Queue&, const VectorView<double>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, size_t);
+template Event francis_sweep<float>(const Queue&, const VectorView<float>&, const VectorView<float>&, const MatrixView<std::array<float,2>, MatrixFormat::Dense>&, size_t);
+template Event francis_sweep<double>(const Queue&, const VectorView<double>&, const VectorView<double>&, const MatrixView<std::array<double,2>, MatrixFormat::Dense>&, size_t);
 template Event steqr<float>(const Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const MatrixView<float>&);
 template Event steqr<double>(const Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const MatrixView<double>&); 
 
