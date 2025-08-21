@@ -1456,6 +1456,10 @@ template MatrixView<double, MatrixFormat::Dense>::MatrixView(double*, int, int, 
 template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(std::complex<float>*, int, int, int, int, int, std::complex<float>**);
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(std::complex<double>*, int, int, int, int, int, std::complex<double>**);
 
+template MatrixView<std::array<float, 2>, MatrixFormat::Dense>::MatrixView(std::array<float, 2>*, int, int, int, int, int, std::array<float, 2>**);
+template MatrixView<std::array<double, 2>, MatrixFormat::Dense>::MatrixView(std::array<double, 2>*, int, int, int, int, int, std::array<double, 2>**);
+
+
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
     const Matrix<float, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(
@@ -1465,6 +1469,10 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
     const Matrix<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int);
 
+template MatrixView<std::array<float, 2>, MatrixFormat::Dense>::MatrixView(
+    const Matrix<std::array<float, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
+template MatrixView<std::array<double, 2>, MatrixFormat::Dense>::MatrixView(
+    const Matrix<std::array<double, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
 
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
     const MatrixView<float, MatrixFormat::Dense>&, int, int, int, int, int);
@@ -1474,6 +1482,9 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
     const MatrixView<std::complex<float>, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int);
+
+template MatrixView<std::array<float, 2>, MatrixFormat::Dense>::MatrixView(const MatrixView<std::array<float, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
+template MatrixView<std::array<double, 2>, MatrixFormat::Dense>::MatrixView(const MatrixView<std::array<double, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
 
 /* template MatrixView<float, MatrixFormat::Dense>::MatrixView(Span<float>, int, int, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(Span<double>, int, int, int, int, int, int, int);
@@ -1492,9 +1503,16 @@ template double& MatrixView<double, MatrixFormat::Dense>::at<MatrixFormat::Dense
 template std::complex<float>& MatrixView<std::complex<float>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
 template std::complex<double>& MatrixView<std::complex<double>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
 
+template std::array<float, 2>& MatrixView<std::array<float, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+template std::array<double, 2>& MatrixView<std::array<double, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int);
+
 template const float& MatrixView<float, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const double& MatrixView<double, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const std::complex<float>& MatrixView<std::complex<float>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const std::complex<double>& MatrixView<std::complex<double>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+
+template const std::array<float, 2>& MatrixView<std::array<float, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+template const std::array<double, 2>& MatrixView<std::array<double, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
+
 
 } // namespace batchlas
