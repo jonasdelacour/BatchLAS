@@ -224,7 +224,7 @@ namespace batchlas {
 
 
     template <typename T>
-    Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<T, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1);
+    Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1);
 
     template <typename T>
     Event steqr(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
