@@ -1310,6 +1310,9 @@ template class MatrixView<double, MatrixFormat::Dense>;
 template class MatrixView<std::complex<float>, MatrixFormat::Dense>;
 template class MatrixView<std::complex<double>, MatrixFormat::Dense>;
 
+template class MatrixView<std::array<float, 2>, MatrixFormat::Dense>;
+template class MatrixView<std::array<double, 2>, MatrixFormat::Dense>;
+
 // CSR MatrixView instantiations
 template class MatrixView<float, MatrixFormat::CSR>;
 template class MatrixView<double, MatrixFormat::CSR>;
