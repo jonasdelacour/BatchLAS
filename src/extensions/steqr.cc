@@ -54,10 +54,7 @@ auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
 }
 
 template <typename T>
-auto eigenvalues_2x2(const MatrixView<T>& A) {
-    if (A.rows() != 2 || A.cols() != 2) {
-        throw std::invalid_argument("Matrix must be 2x2 for eigenvalue computation.");
-    }
+auto eigenvalues_2x2(const KernelMatrixView<T, MatrixFormat::Dense>& A) {
     const auto a = A(0, 0);
     const auto b = A(0, 1);
     const auto c = A(1, 0);
