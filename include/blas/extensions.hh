@@ -221,14 +221,30 @@ namespace batchlas {
     template <Backend B, typename T>
     size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
 
-
+    template <typename T>
+    Event francis_sweep(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1, T zero_threshold = std::numeric_limits<T>::epsilon());
 
     template <typename T>
-    Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1);
+    struct SteqrParams {
+        //Givens rotations are applied in blocks of this size, increasing this number will lead to excess FLOPs but memory reuse and hence arithmetic intensity improves.
+        //Setting this number to 1 is equivalent to full serialization of givens rotation applications, i.e. rotations are applied 1 at a time in the order they were applied to the tridiagonal matrix.
+        size_t block_size = 32;
+        //Maximum number of sweeps in each Francis QR iteration on average 2-3 iteartions are sufficient to converge to an eigenvalue. 
+        size_t max_sweeps = 5; 
+        //Threshold for regarding off-diagonal elements as zero
+        T zero_threshold = std::numeric_limits<T>::epsilon(); 
+        //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
+        bool back_transform = false; 
+    };
 
     template <typename T>
-    Event steqr(const Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                const VectorView<T>& eigenvalues, const MatrixView<T, MatrixFormat::Dense>& eigvects);
+    Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
+                const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
+                const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
+
+    template <typename T>
+    size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
+                            const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
 
     /**
      * @brief Computes the explicit inverse of a dense matrix
