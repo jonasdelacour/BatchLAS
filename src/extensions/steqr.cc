@@ -85,21 +85,21 @@ auto givens_rotation(const T& a, const T& b) {
 }
 
 template <typename T>
-T apply_givens_rotation(const VectorView<T>& d, const VectorView<T>& e, const T& prev_bulge, size_t i, size_t j, size_t bid, const std::array<T, 2>& givens) {
+T apply_givens_rotation(const VectorView<T>& d, const VectorView<T>& e, const T& prev_bulge, size_t i, size_t j, const std::array<T, 2>& givens) {
     // Apply similarity transform to rows/cols i and j of tridiagonal matrix T
     // G^T @ T @ G
     // Returns the bulge element introduced by the rotation
     T c = givens[0]; //Gamma
     T s = givens[1]; //Sigma
-    T di = d(i,bid);
-    T dj = d(j,bid);
-    T ei = e(i,bid);
-    T ej = j < e.size() ? e(j,bid) : T(0);
-    d(i, bid) = c * (c * di - ei * s) - s * (ei * c - s * dj);
-    d(j, bid) = c * (c * dj + ei * s) + s * (ei * c + s * di);
-    if (i > 0) e(i - 1, bid) = e(i - 1, bid) * c - prev_bulge * s;
-    e(i, bid) = c * (c * ei + s * di) - s * (c * dj + s * ei);
-    if (j < e.size()) e(j, bid) = c * ej;
+    T di = d(i);
+    T dj = d(j);
+    T ei = e(i);
+    T ej = j < e.size() ? e(j) : T(0);
+    d(i) = c * (c * di - ei * s) - s * (ei * c - s * dj);
+    d(j) = c * (c * dj + ei * s) + s * (ei * c + s * di);
+    if (i > 0) e(i - 1) = e(i - 1) * c - prev_bulge * s;
+    e(i) = c * (c * ei + s * di) - s * (c * dj + s * ei);
+    if (j < e.size()) e(j) = c * ej;
     return -ej * s; // Return the bulge element
 }
 
@@ -110,23 +110,29 @@ Event francis_sweep(const Queue& ctx, const VectorView<T>& d, const VectorView<T
     // This function will apply a francis sweep of Givens rotations
     auto n = d.size();
     auto batch_size = d.batch_size();
+    bool store_givens = givens_rotations.rows() > 0;
     auto event = ctx->submit([&](sycl::handler& cgh) {
+        auto givens_view = givens_rotations.kernel_view();
         cgh.parallel_for(sycl::nd_range(sycl::range(internal::ceil_div(batch_size,128) * 128), sycl::range(128)), [=](sycl::nd_item<1> item) {
             auto i = item.get_global_id(0);
             if (i >= batch_size) return;
+            auto d_ = d.batch_item(i);
+            auto e_ = e.batch_item(i);
             for (size_t k = 0; k < n_sweeps; ++k) {
-                auto shift = wilkinson_shift(   d(n - 2, i), 
-                                                e(n - 2, i), 
-                                                d(n - 1, i));
-                T a = d(0, i);
-                T b = e(0, i);
+                auto shift = wilkinson_shift(d_(n - 2), 
+                                             e_(n - 2), 
+                                             d_(n - 1));
+                T a = d_(0);
+                T b = e_(0);
                 auto [c, s] = givens_rotation(a - shift, b);
-                auto bulge = apply_givens_rotation(d, e, T(0.), 0, 1, i, {c, s});
+                if (store_givens) { givens_view(0, k, i) = {c, s};}
+                auto bulge = apply_givens_rotation(d_, e_, T(0.), 0, 1, {c, s});
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [c, s] = givens_rotation(e(j - 1, i), bulge);
-                    bulge = apply_givens_rotation(d, e, bulge, j, j + 1, i, {c, s});
+                    auto [c, s] = givens_rotation(e_(j - 1), bulge);
+                    if (store_givens) { givens_view(j, k, i) = {c, s};}
+                    bulge = apply_givens_rotation(d_, e_, bulge, j, j + 1, {c, s});
                 }
-                if (internal::is_numerically_zero(e(n - 2, i))) {
+                if (internal::is_numerically_zero(e_(n - 2))) {
                     // If the sub-diagonal element is zero, we can skip further sweeps
                     break;
                 }
