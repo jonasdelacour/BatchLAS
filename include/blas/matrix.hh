@@ -1,9 +1,13 @@
 #pragma once
 #include <memory>
 #include <complex>
+#include <type_traits>
 #include <iostream> // Added for std::ostream, std::cout
 #include <iomanip>  // Added for std::setw, std::scientific, etc.
 #include <algorithm> // Added for std::min
+#include <tuple>
+#include <array>    // Added for std::array element types
+#include <sstream>  // Added for temporary string formatting of non-streamable types
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
@@ -22,16 +26,194 @@ namespace batchlas {
     class BackendMatrixHandle;
 
     struct SliceEnd {};
-
     struct Slice { //Default Slice selects entire matrix
-        int64_t start = std::numeric_limits<int64_t>::min(); // Use min to indicate start from the beginning
-        int64_t end = std::numeric_limits<int64_t>::max();   // Use max to indicate end
-
+        int64_t start = std::numeric_limits<int64_t>::min();
+        int64_t end = std::numeric_limits<int64_t>::max();
         Slice(int64_t start, SliceEnd) : start(start), end(std::numeric_limits<int64_t>::max()) {}
         Slice(int64_t start, int64_t end) : start(start), end(end) {}
-        Slice(int64_t start) : Slice(start, SliceEnd()) {} // Single argument constructor
-        Slice() : Slice(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()) {} // Default constructor
+        Slice(int64_t start) : Slice(start, SliceEnd()) {}
+        Slice() = default;
     };
+
+    // ------------------------------------------------------------------
+    // KernelMatrixView<T, MType>: device-passing trivial view mirroring
+    // a subset of MatrixView functionality. It is template-specialized by
+    // MatrixFormat so we avoid a runtime tag and allow the compiler to
+    // optimize format-specific paths. Slicing operators mimic those of
+    // MatrixView but (like MatrixView) are only defined for dense format.
+    // CSR variant intentionally omits slicing to match existing MatrixView.
+    // ------------------------------------------------------------------
+    template <typename T, MatrixFormat MType>
+    struct KernelMatrixView {
+        // Common fields
+        T*   data = nullptr;
+        int  rows = 0;
+        int  cols = 0;
+        int  batch_size = 1;
+
+        // Dense specific
+        int  ld = 0;      // leading dimension
+        int  stride = 0;  // batch stride (elements)
+
+        // CSR specific (only meaningful if MType == MatrixFormat::CSR)
+        int* row_offsets = nullptr;  // length rows+1 per batch
+        int* col_indices = nullptr;  // length nnz per batch
+        int  nnz = 0;
+        int  matrix_stride = 0;      // stride between value arrays
+        int  offset_stride = 0;      // stride between offset arrays
+
+        // Element access (Dense only)
+        template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
+        inline T& operator()(int i, int j, int b = 0) const { return data[b * stride + j * ld + i]; }
+
+        // CSR coefficient lookup (returns zero if absent)
+        template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::CSR, int>::type = 0>
+        inline T get(int i, int j, int b = 0) const {
+            const int ro_base = b * offset_stride;
+            const int val_base = b * matrix_stride;
+            int rs = row_offsets[ro_base + i];
+            int re = row_offsets[ro_base + i + 1];
+            for (int p = rs; p < re; ++p) {
+                if (col_indices[val_base + p] == j) return data[val_base + p];
+            }
+            return T(0);
+        }
+
+        // Batch item extraction - works for both formats
+        inline KernelMatrixView batch_item(int b) const {
+            KernelMatrixView out = *this;
+            if (b < 0 || b >= batch_size) { out.rows = out.cols = 0; return out; }
+            if constexpr (MType == MatrixFormat::Dense) {
+                out.data += b * stride;
+            } else if constexpr (MType == MatrixFormat::CSR) {
+                out.data        += b * matrix_stride;
+                out.row_offsets += b * offset_stride;
+                out.col_indices += b * matrix_stride; // assumes same stride
+            }
+            out.batch_size = 1;
+            return out;
+        }
+
+        // Dense slicing operators (host-side; mirror MatrixView logic)
+        template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
+        KernelMatrixView operator()(Slice rows_slice, Slice cols_slice = {}) const;
+        template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
+        KernelMatrixView operator()(Slice rows_slice) const { return (*this)(rows_slice, {}); }
+    };
+
+    // (Slice already defined earlier)
+
+    // --- Slice utilities (de-duplication) ---------------------------------
+    namespace detail {
+        inline std::pair<int64_t,int64_t> normalize_slice_component(Slice s, int64_t dim) {
+            int64_t len;
+            if (s.start == std::numeric_limits<int64_t>::min() && s.end == std::numeric_limits<int64_t>::max()) { s.start = 0; len = dim; }
+            else if (s.end == std::numeric_limits<int64_t>::max()) { s.start = s.start < 0 ? dim + s.start : s.start; len = dim - s.start; }
+            else { if (s.start < 0) s.start = dim + s.start; if (s.end < 0) s.end = dim + s.end; len = s.end - s.start; }
+            return {s.start, len};
+        }
+
+        template <typename T>
+        inline void apply_dense_slice_pointer_arithmetic(T*& base, int ld, int64_t row_start, int64_t col_start) {
+            base += col_start * ld + row_start; // column-major offset
+        }
+
+        
+        template <typename T>
+        T convert_to_fill_value(int64_t value) {
+            if constexpr (std::is_floating_point_v<T>) {
+                return static_cast<T>(value);
+            } else if constexpr (std::is_integral_v<T>) {
+                return static_cast<T>(value);
+            } else if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                    std::is_same_v<T, std::complex<double>> ||
+                                    std::is_same_v<T, std::complex<long double>>) {
+                using Real = typename T::value_type;
+                return T(static_cast<Real>(value));
+            } else if constexpr (
+                // Detect std::array<T, N>
+                std::is_class_v<T> &&
+                std::is_same_v<T, std::array<typename T::value_type,
+                                                std::tuple_size<T>::value>>
+            ) {
+                T result{};
+                for (auto &elem : result) {
+                    using Elem = typename T::value_type;
+                    elem = convert_to_fill_value<Elem>(value);
+                }
+                return result;
+            } else {
+                return T{};
+            }
+        }
+
+        // Detection idiom for streamability
+        template <typename U, typename = void>
+        struct is_streamable : std::false_type {};
+        template <typename U>
+        struct is_streamable<U, std::void_t<decltype(std::declval<std::ostream&>() << std::declval<const U&>())>> : std::true_type {};
+
+        // Trait to detect std::array
+        template <typename U>
+        struct is_std_array : std::false_type {};
+        template <typename V, std::size_t N>
+        struct is_std_array<std::array<V, N>> : std::true_type {};
+
+        // Generic element printer (no width handling)
+        template <typename U>
+        inline void print_value(std::ostream& os, const U& value) {
+            if constexpr (is_streamable<U>::value) {
+                os << value;
+            } else if constexpr (is_std_array<U>::value) {
+                os << '[';
+                for (std::size_t i = 0; i < value.size(); ++i) {
+                    if (i) os << ',';
+                    os << value[i];
+                }
+                os << ']';
+            } else {
+                os << "{?}"; // Fallback for unknown, non-streamable types
+            }
+        }
+
+        // Width-aware printer used in formatted matrix printing
+        template <typename U>
+        inline void print_with_width(std::ostream& os, const U& value, int width) {
+            if constexpr (is_streamable<U>::value) {
+                os << std::setw(width) << value;
+            } else {
+                std::ostringstream tmp;
+                print_value(tmp, value);
+                const std::string s = tmp.str();
+                if ((int)s.size() < width) {
+                    os << std::setw(width) << s;
+                } else {
+                    // If the representation is wider than the field, print as-is to retain info
+                    os << s;
+                }
+            }
+        }
+    }
+
+    // Implement dense slicing operator outside struct for clarity using helpers
+    template <typename T, MatrixFormat MType>
+    template <MatrixFormat MF, typename std::enable_if<MF == MatrixFormat::Dense, int>::type>
+    KernelMatrixView<T, MType> KernelMatrixView<T, MType>::operator()(Slice rows_slice, Slice cols_slice) const {
+        KernelMatrixView<T, MType> out = *this;
+        auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows);
+        auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols);
+        if (r_len <= 0 || c_len <= 0) {
+            throw std::invalid_argument("Invalid slice dimensions in KernelMatrixView");
+        }
+        detail::apply_dense_slice_pointer_arithmetic(out.data, ld, r_start, c_start);
+        out.rows = static_cast<int>(r_len);
+        out.cols = static_cast<int>(c_len);
+        return out;
+    }
+
+    // Static asserts for dense and CSR instantiations
+    static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::Dense>>, "KernelMatrixView Dense must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::CSR>>,   "KernelMatrixView CSR must be trivially copyable");
 
     // Matrix class - owning container for matrix data
     template <typename T, MatrixFormat MType>
@@ -152,6 +334,20 @@ namespace batchlas {
         MatrixView<T, MType> view() const;
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
+        // Dense-only slicing operators producing MatrixView (non-owning)
+        template <MatrixFormat M = MType, typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
+            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            if (r_len <= 0 || c_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+            }
+            auto offset = c_start * ld_ + r_start;
+            return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, nullptr);
+        }
+        template <MatrixFormat M = MType, typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView<T, MType> operator()(Slice rows) const { return (*this)(rows, {}); }
+
 
         // Methods to initialize backend
         void init() const;
@@ -185,6 +381,25 @@ namespace batchlas {
         int rows() const { return rows_; }
         int cols() const { return cols_; }
         int batch_size() const { return batch_size_; }
+
+        // Build a KernelMatrixView (device POD) for this owning Matrix
+        KernelMatrixView<T, MType> kernel_view() const noexcept {
+            KernelMatrixView<T, MType> kv;
+            kv.data       = const_cast<T*>(data_.data());
+            kv.rows       = rows_;
+            kv.cols       = cols_;
+            kv.ld         = ld_;
+            kv.stride     = stride_;
+            kv.batch_size = batch_size_;
+            if constexpr (MType == MatrixFormat::CSR) {
+                kv.row_offsets   = const_cast<int*>(row_offsets_.data());
+                kv.col_indices   = const_cast<int*>(col_indices_.data());
+                kv.nnz           = nnz_;
+                kv.matrix_stride = matrix_stride_;
+                kv.offset_stride = offset_stride_;
+            }
+            return kv;
+        }
 
         // Dense matrix specific accessors
         template <MatrixFormat M = MType, 
@@ -393,34 +608,13 @@ namespace batchlas {
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
-            // Create a new view based on the slices
-            int64_t n_rows, n_cols;
-            if (rows.start == std::numeric_limits<int64_t>::min() && rows.end == std::numeric_limits<int64_t>::max()) {n_rows = rows_; rows.start = 0;}
-            else if (rows.end == std::numeric_limits<int64_t>::max()) {
-                rows.start = rows.start < 0 ? rows_ + rows.start : rows.start;
-                n_rows = rows_ - rows.start;
-            } else {
-                if (rows.start < 0) rows.start = rows_ + rows.start;
-                if (rows.end < 0) rows.end = rows_ + rows.end;
-                n_rows = rows.end - rows.start;
+            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            if (r_len <= 0 || c_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
-            if (cols.start == std::numeric_limits<int64_t>::min() && cols.end == std::numeric_limits<int64_t>::max()) {n_cols = cols_; cols.start = 0;}
-            else if (cols.end == std::numeric_limits<int64_t>::max()) {
-                cols.start = cols.start < 0 ? cols_ + cols.start : cols.start;
-                n_cols = cols_ - cols.start;
-            } else {
-                if (cols.start < 0) cols.start = cols_ + cols.start;
-                if (cols.end < 0) cols.end = cols_ + cols.end;
-                n_cols = cols.end - cols.start;
-            }
-            if (n_rows <= 0 || n_cols <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(n_rows) + "x" + std::to_string(n_cols) + "\n "
-                                            "Requested slice: rows(" + std::to_string(rows.start) + ":" + std::to_string(rows.end) + "), "
-                                            "cols(" + std::to_string(cols.start) + ":" + std::to_string(cols.end) + ")");
-            }
-            auto offset = cols.start * ld_ + rows.start;
-            return MatrixView<T, MType>(data_ptr() + offset, n_rows, n_cols, ld_, stride_, batch_size_,
-                                        data_ptrs_.data());
+            auto offset = c_start * ld_ + r_start;
+            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
         }
 
         template <MatrixFormat M = MType, 
@@ -486,7 +680,7 @@ namespace batchlas {
         }
 
         Event fill_zeros(const Queue& ctx) const {
-            return fill(ctx, T(0));
+            return fill(ctx, detail::convert_to_fill_value<T>(0));
         }
 
         Event fill_zeros() const {
@@ -494,7 +688,7 @@ namespace batchlas {
         }
 
         Event fill_ones(const Queue& ctx) const {
-            return fill(ctx, T(1));
+            return fill(ctx, detail::convert_to_fill_value<T>(1));
         }
 
         Event fill_ones() const {
@@ -584,7 +778,7 @@ namespace batchlas {
                     for (int r = 0; r < std::min(current_item_view.rows_, max_rows_to_print); ++r) {
                         os << "  ";
                         for (int c = 0; c < std::min(current_item_view.cols_, max_cols_to_print); ++c) {
-                            os << std::setw(13) << current_item_view.at(r, c, 0); // batch is 0 for current_item_view
+                            detail::print_with_width(os, current_item_view.at(r, c, 0), 13); // Supports non-streamable element types
                         }
                         if (current_item_view.cols_ > max_cols_to_print) {
                             os << " ...";
@@ -633,6 +827,25 @@ namespace batchlas {
         // Convenience print function
         void print(std::ostream& os = std::cout, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
             stream_formatted_to(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
+        }
+
+        // Build a KernelMatrixView (device POD) from this non-owning view
+        KernelMatrixView<T, MType> kernel_view() const noexcept {
+            KernelMatrixView<T, MType> kv;
+            kv.data       = const_cast<T*>(data_.data());
+            kv.rows       = rows_;
+            kv.cols       = cols_;
+            kv.ld         = ld_;
+            kv.stride     = stride_;
+            kv.batch_size = batch_size_;
+            if constexpr (MType == MatrixFormat::CSR) {
+                kv.row_offsets   = const_cast<int*>(row_offsets_.data());
+                kv.col_indices   = const_cast<int*>(col_indices_.data());
+                kv.nnz           = nnz_;
+                kv.matrix_stride = matrix_stride_;
+                kv.offset_stride = offset_stride_;
+            }
+            return kv;
         }
 
     private:
