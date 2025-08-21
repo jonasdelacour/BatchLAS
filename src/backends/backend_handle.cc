@@ -33,12 +33,12 @@ struct BackendMatrixHandle {
 
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) {
         #ifdef BATCHLAS_HAS_CUDA_BACKEND
-            if constexpr (MType == MatrixFormat::Dense) {
+            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
                 if (matrix.batch_size() > 1) {
                     cusparseDnMatSetStridedBatch(cusparse_descr_, matrix.batch_size(), matrix.stride());
                 }
-            } else if constexpr (MType == MatrixFormat::CSR) {
+            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<T>::value) {
                 cusparseCreateCsr(&cusparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(), matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
                                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<T, BackendLibrary::CUSPARSE>::type);
                 if (matrix.batch_size() > 1) {
@@ -47,7 +47,7 @@ struct BackendMatrixHandle {
             }
         #endif
         #ifdef BATCHLAS_HAS_ROCM_BACKEND
-            if constexpr (MType == MatrixFormat::Dense) {
+            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 rocsparse_create_dnmat_descr(&rocsparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(),
                                             std::is_same_v<T, float> ? rocsparse_datatype_f32_r :
                                             std::is_same_v<T, double> ? rocsparse_datatype_f64_r :
@@ -57,7 +57,7 @@ struct BackendMatrixHandle {
                 if (matrix.batch_size() > 1) {
                     rocsparse_dnmat_set_strided_batch(rocsparse_descr_, matrix.batch_size(), matrix.stride());
                 }
-            } else if constexpr (MType == MatrixFormat::CSR) {
+            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<T>::value) {
                 rocsparse_create_csr_descr( &rocsparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(),
                                             matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
                                             rocsparse_indextype_i32, rocsparse_indextype_i32, rocsparse_index_base_zero,
