@@ -21,9 +21,11 @@ static void BM_STEQR(minibench::State& state) {
     auto eigvects = Matrix<T>::Identity(n, batch);
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
 
+    UnifiedVector<std::byte> ws(steqr_buffer_size<T>(queue, diags, off_diags, eigvals, JobType::EigenVectors, SteqrParams<T>{}));
+
     state.ResetTiming(); state.ResumeTiming();
     for (auto _ : state) {
-        steqr(queue, (VectorView<T>)diags, (VectorView<T>)off_diags, (VectorView<T>)eigvals, eigvects.view());
+        steqr<B>(queue, diags, off_diags, eigvals, ws.to_span());
     }
     queue.wait();
     state.StopTiming();
