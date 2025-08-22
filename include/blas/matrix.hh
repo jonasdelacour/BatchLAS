@@ -470,7 +470,7 @@ namespace batchlas {
         // This enables direct use of the pointers in batched operations
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        MatrixView(T* data, int rows, int cols, int ld,
+        MatrixView(T* data, int rows, int cols, int ld = 0,
                   int stride = 0, int batch_size = 1, T** data_ptrs = nullptr);
 
         // Constructors for CSR sparse matrix view

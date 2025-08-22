@@ -1098,9 +1098,10 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                   int stride, int batch_size, T** data_ptrs) :
-                data_(data, (stride > 0 ? stride : ld * cols) * batch_size),
+                data_(data, (stride > 0 ? stride : 
+                            ld > 0 ? ld * cols : rows * cols) * batch_size),
                 rows_(rows), cols_(cols), batch_size_(batch_size),
-                ld_(ld), stride_(stride > 0 ? stride : ld * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {}
+                ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {}
 
 
 //----------------------------------------------------------------------
