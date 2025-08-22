@@ -76,10 +76,25 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
 TYPED_TEST(SteqrTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 4;
-    const int batch = 3;
+    const int n = 5;
+    const int batch = 1;
+    using float_type = typename base_type<T>::type;
 
+    auto a = Vector<float_type>::ones(n, batch);
+    auto b = Vector<float_type>::ones(n - 1, batch);
+    auto c = Vector<float_type>::zeros(n, batch);
+    auto eigvects = Matrix<float_type>::Identity(n, batch);
+    auto params = SteqrParams<float_type>();
+    params.block_size = 2;
+    params.max_sweeps = 4;
 
+    UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
+
+    steqr<B, float_type>(*this->ctx, a, b, c,
+                      ws.to_span(), JobType::EigenVectors, params, eigvects);
+    this->ctx->wait();
+
+    std::cout << eigvects << std::endl;
 }
 
 int main(int argc, char **argv) {
