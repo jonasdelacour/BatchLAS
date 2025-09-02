@@ -99,6 +99,16 @@ namespace batchlas {
         KernelMatrixView operator()(Slice rows_slice, Slice cols_slice = {}) const;
         template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
         KernelMatrixView operator()(Slice rows_slice) const { return (*this)(rows_slice, {}); }
+
+        KernelMatrixView() = default;
+        KernelMatrixView(const KernelMatrixView&) = default;
+        KernelMatrixView& operator=(const KernelMatrixView&) = default;
+        KernelMatrixView(KernelMatrixView&&) = default;
+        KernelMatrixView& operator=(KernelMatrixView&&) = default;
+
+        KernelMatrixView(T* data, int rows, int cols, int ld = 0, int stride = 0, int batch_size = 1)
+            : data(data), rows(rows), cols(cols), batch_size(batch_size),
+              ld(ld > 0 ? ld : rows), stride(stride > 0 ? stride : ld * cols) {}
     };
 
     // (Slice already defined earlier)
@@ -511,6 +521,8 @@ namespace batchlas {
                                                 T* data, int* row_offsets, int* col_indices, //storage for the new view
                                                 T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
                                                 );
+        
+        static Event copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src);
 
         // Copy and move
         MatrixView(const MatrixView&) = default;
