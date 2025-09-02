@@ -59,9 +59,9 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
 
 TYPED_TEST(TransposeTest, SimpleTranspose) {
     using T = TypeParam;
-    constexpr int m = 8;
-    constexpr int k = 4;
-    constexpr int batch_size = 2;
+    constexpr int m = 256;
+    constexpr int k = 128;
+    constexpr int batch_size = 1024;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, false, batch_size);
     this->ctx->wait();
