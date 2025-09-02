@@ -1,3 +1,4 @@
+#pragma once
 #include <blas/matrix.hh>
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
@@ -14,6 +15,8 @@
 #include <stdexcept> // Include for std::runtime_error
 #include <vector>    // Include for std::vector used in scan
 #include "backends/backend_handle.cc"
+#include "util/queue-impl.cc"
+#include "util/sycl-util-impl.cc"
 
 namespace batchlas {
 
@@ -1235,6 +1238,53 @@ MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>&
     return result;
 }
 
+template <typename T, MatrixFormat MType>
+Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src) {
+    if (src.rows() != dest.rows() || src.cols() != dest.cols() || src.batch_size() != dest.batch_size()) {
+        throw std::invalid_argument("Copy called on incompatible matrices");
+    }
+    if constexpr(MType == MatrixFormat::Dense) {
+        if (src.data() == dest.data()) return ctx.get_event(); // No-op if same data
+        if (src.stride() == src.rows() * src.cols() && dest.stride() == dest.rows() * dest.cols()) {
+            //If the stride is the same as the size of each matrix just do a straight memcpy
+            auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
+            return event;
+        } else if (src.ld() == src.rows() && dest.ld() == dest.rows()){
+            //If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
+            auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
+                                                    dest.stride() * sizeof(T),
+                                                    static_cast<void*>(src.data_ptr()),
+                                                    src.stride() * sizeof(T),
+                                                    src.rows()*src.cols()*sizeof(T), src.batch_size()));
+            return event;
+        } else if (src.stride() == src.ld()* src.cols() && dest.stride() == dest.ld()* dest.cols()) {
+            // If both the strides and leading dimensions are the same as the size of each matrix just do a straight memcpy
+            auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
+                                                    dest.ld() * sizeof(T),
+                                                    static_cast<void*>(src.data_ptr()),
+                                                    src.ld() * sizeof(T),
+                                                    src.rows()*sizeof(T), src.cols() * src.batch_size()));
+            return event;
+        } else {
+            //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
+            auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+                auto dest_view = dest.kernel_view();
+                auto src_view = src.kernel_view();
+                cgh.parallel_for(sycl::range<3>(src.batch_size(), src.cols(), src.rows()), [=](sycl::id<3> idx) {
+                    size_t b = idx[0];
+                    size_t j = idx[1];
+                    size_t i = idx[2];
+                    dest_view(b, i, j) = src_view(b, i, j);
+                });
+            }));
+            return event;
+        }
+    } else if constexpr(MType == MatrixFormat::CSR) {
+        throw std::runtime_error("CSR copy not implemented yet");
+    }
+    return ctx.get_event();
+}
+
 // Element access operator - returns view of a single batch item
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> MatrixView<T, MType>::operator[](int i) const {
@@ -1393,6 +1443,9 @@ template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::co
 template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
 template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
 template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
+
+//----------------------------------------------------------------------
+
 
 //----------------------------------------------------------------------
 // Deep copy instantiations
