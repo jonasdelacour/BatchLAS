@@ -80,8 +80,8 @@ std::string Device::get_name() const  {
     return QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).get_info<sycl::info::device::name>();
 }
 
-std::string Device::get_vendor() const {
-    return QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).get_info<sycl::info::device::vendor>();
+Vendor Device::get_vendor() const {
+    return str_to_vendor(QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).get_info<sycl::info::device::vendor>());
 }
 
 size_t Device::get_property(DeviceProperty property) const {
@@ -99,6 +99,7 @@ size_t Device::get_property(DeviceProperty property) const {
         case 9: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
         case 10: return d.get_info<sycl::info::device::mem_base_addr_align>();
         case 11: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
+        case 12: return d.get_info<sycl::info::device::global_mem_cache_size>();
         default: std::cerr << "Unknown property" << std::endl; return 0;
     }
 }

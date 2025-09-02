@@ -21,6 +21,31 @@ enum class DeviceType
     NUM_DEV_TYPES
 };
 
+enum class Vendor
+{
+    AMD,
+    ARM,
+    INTEL,
+    NVIDIA,
+    OTHER
+};
+
+inline Vendor str_to_vendor(const std::string_view& vendor_str) {
+    auto v = vendor_str;
+    std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+    if (v.find("amd") != std::string::npos || v.find("advanced micro devices") != std::string::npos) {
+        return Vendor::AMD;
+    } else if (v.find("arm") != std::string::npos) {
+        return Vendor::ARM;
+    } else if (v.find("intel") != std::string::npos) {
+        return Vendor::INTEL;
+    } else if (v.find("nvidia") != std::string::npos) {
+        return Vendor::NVIDIA;
+    } else {
+        return Vendor::OTHER;
+    }
+}
+
 enum class DeviceProperty
 {
     MAX_WORK_GROUP_SIZE,
@@ -34,6 +59,7 @@ enum class DeviceProperty
     MAX_SUB_GROUP_SIZE,
     MEM_BASE_ADDR_ALIGN,
     GLOBAL_MEM_CACHE_LINE_SIZE,
+    GLOBAL_MEM_CACHE_SIZE,
     NUMBER_OF_PROPERTIES
 };
 
@@ -74,7 +100,7 @@ struct Device{
     inline static std::vector<Device> accelerators_ = get_devices(DeviceType::ACCELERATOR);
 
     std::string get_name() const;
-    std::string get_vendor() const;
+    Vendor get_vendor() const;
     size_t get_property(DeviceProperty property) const;
     
 
