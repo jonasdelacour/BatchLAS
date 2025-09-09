@@ -910,10 +910,10 @@ namespace batchlas {
 
         Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
         Vector(int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * batch_size)),
+            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * size)),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
         Vector(int size, T value, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * batch_size), value),
+            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * size), value),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
 
         // Convenience vectors
