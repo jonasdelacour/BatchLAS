@@ -16,12 +16,10 @@ static void BM_Ortho(minibench::State& state) {
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
     auto workspace = UnifiedVector<std::byte>(ortho_buffer_size<B>(queue, A.view(), Transpose::NoTrans, algo));
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
+    state.SetKernel([&]{
         ortho<B>(queue, A.view(), Transpose::NoTrans, workspace.to_span(), algo);
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEnd([&]{ queue.wait(); });
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

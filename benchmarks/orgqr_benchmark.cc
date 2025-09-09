@@ -21,12 +21,10 @@ static void BM_ORGQR(minibench::State& state) {
 
     size_t org_ws = orgqr_buffer_size<B>(queue, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws(org_ws);
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
+    state.SetKernel([&]{
         orgqr<B>(queue, A.view(), tau.to_span(), ws.to_span());
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEnd([&]{ queue.wait(); });
     //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
@@ -37,4 +35,3 @@ static void BM_ORGQR(minibench::State& state) {
 BATCHLAS_REGISTER_BENCHMARK(BM_ORGQR, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();
-

@@ -11,20 +11,19 @@ static void BM_SYEV(minibench::State& state) {
     const size_t batch = state.range(2);
 
     auto A = Matrix<T>::Random(n, n, true, batch);
+    //auto Q = Matrix<T>::Zeros(n, n, batch);
     Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     size_t ws_size = syev_buffer_size<B>(queue, A.view(), W.to_span(),
-                                         JobType::NoEigenVectors, Uplo::Lower);
+                                         JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
+    state.SetKernel([&]{
         syev<B>(queue, A.view(), W.to_span(),
-                JobType::NoEigenVectors, Uplo::Lower, workspace.to_span());
-    }
-    queue.wait();
-    state.StopTiming();
+                JobType::EigenVectors, Uplo::Lower, workspace.to_span());
+    });
+    state.SetBatchEnd([&]{ queue.wait(); });
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);

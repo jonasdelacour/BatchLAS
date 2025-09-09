@@ -30,13 +30,11 @@ static void BM_SYEVX(minibench::State& state) {
                                          MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
+    state.SetKernel([&]{
         syevx<B>(queue, A.view(), W.to_span(), neigs, workspace.to_span(),
                  JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEnd([&]{ queue.wait(); });
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
