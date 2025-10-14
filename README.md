@@ -56,6 +56,11 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
     - Supports sparse and dense matrices
     - Configurable orthogonalization and sorting options
   - Specialized tridiagonal eigensolvers for Lanczos
+  - Ritz values computation (ritz_values)
+    - Computes eigenvalue approximations from trial vectors
+    - Uses Rayleigh quotient for each trial vector
+    - Supports both sparse and dense matrices
+    - See [RITZ_VALUES.md](RITZ_VALUES.md) for detailed usage
 
 ### Advanced Features
 - **Batched operations**: All operations support processing multiple matrices simultaneously
