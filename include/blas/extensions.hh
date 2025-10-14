@@ -445,6 +445,98 @@ namespace batchlas {
     }
 
     /**
+     * @brief Computes the Ritz values given a matrix and trial vectors
+     * 
+     * Ritz values are approximations to eigenvalues computed from the Rayleigh quotient:
+     * For each column v_j of V: ritz_value[j] = (v_j^T * A * v_j) / (v_j^T * v_j)
+     * 
+     * @param ctx Execution context/device queue
+     * @param A Matrix (can be sparse or dense)
+     * @param V Trial vectors (dense matrix, columns are trial eigenvectors)
+     * @param ritz_vals Output vector for Ritz values
+     * @param workspace Pre-allocated workspace buffer
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event ritz_values(Queue& ctx,
+                      const MatrixView<T, MFormat>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& V,
+                      const VectorView<typename base_type<T>::type>& ritz_vals,
+                      Span<std::byte> workspace);
+
+    // Forwarding overload (owning A and V)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event ritz_values(Queue& ctx,
+                            const Matrix<T, MFormat>& A,
+                            const Matrix<T, MatrixFormat::Dense>& V,
+                            const VectorView<typename base_type<T>::type>& ritz_vals,
+                            Span<std::byte> workspace) {
+        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), ritz_vals, workspace);
+    }
+
+    // Forwarding overload (owning ritz_vals)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event ritz_values(Queue& ctx,
+                            const MatrixView<T, MFormat>& A,
+                            const MatrixView<T, MatrixFormat::Dense>& V,
+                            const Vector<typename base_type<T>::type>& ritz_vals,
+                            Span<std::byte> workspace) {
+        return ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<typename base_type<T>::type>>(ritz_vals), workspace);
+    }
+
+    // Forwarding overload (owning A, V, and ritz_vals)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event ritz_values(Queue& ctx,
+                            const Matrix<T, MFormat>& A,
+                            const Matrix<T, MatrixFormat::Dense>& V,
+                            const Vector<typename base_type<T>::type>& ritz_vals,
+                            Span<std::byte> workspace) {
+        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals), workspace);
+    }
+
+    /**
+     * @brief Computes the required workspace size for ritz_values
+     * 
+     * @param ctx Execution context/device queue
+     * @param A Matrix (can be sparse or dense)
+     * @param V Trial vectors (dense matrix)
+     * @param ritz_vals Output vector for Ritz values
+     * @return size_t Required workspace size in bytes
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t ritz_values_workspace(Queue& ctx,
+                                 const MatrixView<T, MFormat>& A,
+                                 const MatrixView<T, MatrixFormat::Dense>& V,
+                                 const VectorView<typename base_type<T>::type>& ritz_vals);
+
+    // Forwarding overload (owning A and V)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t ritz_values_workspace(Queue& ctx,
+                                       const Matrix<T, MFormat>& A,
+                                       const Matrix<T, MatrixFormat::Dense>& V,
+                                       const VectorView<typename base_type<T>::type>& ritz_vals) {
+        return ritz_values_workspace<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), ritz_vals);
+    }
+
+    // Forwarding overload (owning ritz_vals)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t ritz_values_workspace(Queue& ctx,
+                                       const MatrixView<T, MFormat>& A,
+                                       const MatrixView<T, MatrixFormat::Dense>& V,
+                                       const Vector<typename base_type<T>::type>& ritz_vals) {
+        return ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
+    }
+
+    // Forwarding overload (owning A, V, and ritz_vals)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t ritz_values_workspace(Queue& ctx,
+                                       const Matrix<T, MFormat>& A,
+                                       const Matrix<T, MatrixFormat::Dense>& V,
+                                       const Vector<typename base_type<T>::type>& ritz_vals) {
+        return ritz_values_workspace<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
+    }
+
+    /**
      * @brief Computes the explicit inverse of a dense matrix
      *
      * @param ctx Execution context/device queue

@@ -6,6 +6,7 @@ set(EXTENSIONS_SOURCES
     lanczos.cc
     trmm.cc
     steqr.cc
+    ritz_values.cc
 )
 
 target_sources(batchlas PRIVATE ${EXTENSIONS_SOURCES})
