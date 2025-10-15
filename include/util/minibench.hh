@@ -186,11 +186,18 @@ struct State {
 
     // Structured mode: register the kernel body and optional end-of-batch hook
     // (e.g., to insert a single queue.wait() after a batch of internal iters).
-    void SetKernel(std::function<void()> kernel_once) { kernel_once_ = std::move(kernel_once); }
-    void SetBatchEnd(std::function<void()> fn) { batch_end_fn_ = std::move(fn); }
+    void SetKernel(std::function<void()> kernel_once) { kernel_once_ = (kernel_once); }
+    void SetBatchEnd(std::function<void()> fn) { batch_end_fn_ = (fn); }
     bool HasKernel() const { return static_cast<bool>(kernel_once_); }
     void RunKernelOnce() { if (kernel_once_) kernel_once_(); }
     void RunBatchEnd() { if (batch_end_fn_) batch_end_fn_(); }
+
+    // Convenience: set batch end to a simple wait() on a shared queue-like
+    // object without needing to write a lambda at each callsite.
+    template <typename Q>
+    void SetBatchEndWait(std::shared_ptr<Q> q) {
+        batch_end_fn_ = [q]{ q->wait(); };
+    }
 };
 
 // Benchmark representation and registry
