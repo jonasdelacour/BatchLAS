@@ -379,6 +379,7 @@ namespace batchlas {
         T zero_threshold = std::numeric_limits<T>::epsilon(); 
         //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
         bool back_transform = false; 
+        bool block_rotations = false;
     };
 
     template <Backend B, typename T>
