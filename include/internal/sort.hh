@@ -5,7 +5,8 @@
 #include <blas/matrix.hh>
 #include "../../src/queue.hh"
 
-using namespace batchlas;
+namespace batchlas {
+
 template <typename T, typename K>
 Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
     auto n = data.size();
@@ -330,3 +331,5 @@ size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat:
     size += BumpAllocator::allocation_size<T>(ctx, jobz == JobType::EigenVectors ? V.rows() * V.batch_size() : 0); // For eigenvectors if needed
     return size;
 }
+
+} // namespace batchlas
