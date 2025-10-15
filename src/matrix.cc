@@ -1269,12 +1269,14 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
             auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
                 auto dest_view = dest.kernel_view();
-                auto src_view = src.kernel_view();
-                cgh.parallel_for(sycl::range<3>(src.batch_size(), src.cols(), src.rows()), [=](sycl::id<3> idx) {
-                    size_t b = idx[0];
-                    size_t j = idx[1];
-                    size_t i = idx[2];
-                    dest_view(b, i, j) = src_view(b, i, j);
+                auto src_view  = src.kernel_view();
+
+                cgh.parallel_for(sycl::range<3>(src.rows(), src.cols(), src.batch_size()),
+                                [=](sycl::id<3> idx) {
+                    size_t i = idx[0]; // row
+                    size_t j = idx[1]; // col
+                    size_t b = idx[2]; // batch
+                    dest_view(i, j, b) = src_view(i, j, b);
                 });
             }));
             return event;
