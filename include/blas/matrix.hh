@@ -1054,6 +1054,31 @@ namespace batchlas {
             return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, stride_ * batch_size_), n, inc_, stride_, batch_size_);
         }
 
+        std::ostream& stream_formatted_to(std::ostream& os, int max_elements = 10, int max_cols_to_print = 10) const {
+            std::ios_base::fmtflags original_flags = os.flags();
+            os << std::scientific << std::setprecision(4);
+
+            for (int b_idx = 0; b_idx < batch_size_; ++b_idx) {
+                if (batch_size_ > 1) {
+                    os << "Batch " << b_idx << ":\n";
+                }
+                os << "  [";
+                for (int i = 0; i < std::min(size_, max_elements); ++i) {
+                    detail::print_with_width(os, at(i, b_idx), 13); // Supports non-streamable element types
+                }
+                if (size_ > max_elements) {
+                    os << " ...";
+                }
+                os << " ]\n";
+            }
+            os.flags(original_flags); // Reset stream flags
+            return os;
+        }
+
+        void print(std::ostream& os = std::cout, int max_elements = 10) const {
+            stream_formatted_to(os, max_elements);
+        }
+
         BackendVectorHandle<T>* operator->();
         BackendVectorHandle<T>& operator*();
         const BackendVectorHandle<T>* operator->() const;
@@ -1085,6 +1110,17 @@ namespace batchlas {
     template <typename T, MatrixFormat MType>
     std::ostream& operator<<(std::ostream& os, const Matrix<T, MType>& matrix) {
         os << matrix.view(); // Leverages MatrixView's operator<<
+        return os;
+    }
+
+    template <typename T>
+    std::ostream& operator<<(std::ostream& os, const VectorView<T>& view) {
+        return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
+    }
+
+    template <typename T>
+    std::ostream& operator<<(std::ostream& os, const Vector<T>& vec) {
+        os << static_cast<const VectorView<T>&>(vec); // Leverages VectorView's operator<<
         return os;
     }
 
