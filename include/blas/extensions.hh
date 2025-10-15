@@ -385,37 +385,14 @@ namespace batchlas {
     Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                 const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
                 const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
-    // Forwarding overload (owning eigvects)
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                JobType jobz,
-                SteqrParams<T> params,
-                const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
-    // Combined forwarding overload (owning vectors and eigvects)
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                JobType jobz,
-                SteqrParams<T> params,
-                const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr<B, T>(ctx,
-                        static_cast<VectorView<T>>(d),
-                        static_cast<VectorView<T>>(e),
-                        static_cast<VectorView<T>>(eigenvalues),
-                        ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
+  
     // Forwarding overload for steqr taking owning Vectors
     template <Backend B, typename T>
     inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
                        const Vector<T>& eigenvalues, const Span<std::byte>& ws,
                        JobType jobz = JobType::NoEigenVectors,
                        SteqrParams<T> params = SteqrParams<T>(),
-                       const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>()) {
+                       const Matrix<T, MatrixFormat::Dense>& eigvects = Matrix<T, MatrixFormat::Dense>()) {
         return steqr<B, T>(ctx,
                         static_cast<VectorView<T>>(d),
                         static_cast<VectorView<T>>(e),
@@ -423,7 +400,7 @@ namespace batchlas {
                         ws,
                         jobz,
                         params,
-                        eigvects);
+                        MatrixView<T, MatrixFormat::Dense>(eigvects));
     }
 
     template <typename T>
