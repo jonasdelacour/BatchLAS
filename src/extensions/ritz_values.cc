@@ -60,56 +60,83 @@ namespace batchlas {
         }
         
         // Compute Ritz values as (v_j^T * (A*v_j)) / (v_j^T * v_j) for each column j
+        // using work-group parallelism with SYCL reductions for better performance
         auto real_part = [](T value) { 
             if constexpr (sycl::detail::is_complex<T>::value) return value.real(); 
             else return value; 
         };
         
+        // Determine work-group size for dot product reductions
+        size_t wg_size = std::min(size_t(256), ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+        wg_size = std::min(wg_size, size_t(n)); // Don't use more threads than vector length
+        
         last_event = ctx.submit([&](sycl::handler& h) {
             h.depends_on(last_event);
-            auto V_span = V.data();
-            auto AV_span = AV.data();
-            auto ritz_span = ritz_vals.data();
-            auto V_stride = V.stride();
-            auto AV_stride = AV.stride();
-            auto ritz_stride = ritz_vals.stride();
-            auto V_ld = V.ld();
-            auto AV_ld = AV.ld();
+            
+            // Create VectorViews for accessing columns with proper stride/increment handling
+            auto V_data = V.data();
+            auto AV_data = AV.data();
+            auto ritz_data = ritz_vals.data();
+            
+            // Allocate local memory for partial sums
+            auto dot_mem = sycl::local_accessor<T>(wg_size, h);
             
             h.parallel_for<RitzValuesKernel<B, T, MFormat>>(
                 sycl::nd_range<2>(
-                    sycl::range<2>(batch_size, k),
-                    sycl::range<2>(1, 1)
+                    sycl::range<2>(batch_size * k, wg_size),
+                    sycl::range<2>(1, wg_size)
                 ),
                 [=](sycl::nd_item<2> item) {
-                    int b = item.get_global_id(0);
-                    int j = item.get_global_id(1);
+                    auto group_id = item.get_group(0); // Which batch*k combination
+                    auto tid = item.get_local_id(1);    // Thread within work-group
+                    auto wg = item.get_local_range(1);  // Work-group size
+                    auto cta = item.get_group();        // Work-group for reductions
                     
-                    // Compute v_j^T * (A*v_j)
-                    T numerator = T(0);
-                    for (int i = 0; i < n; ++i) {
-                        T v_ij = V_span[b * V_stride + j * V_ld + i];
-                        T av_ij = AV_span[b * AV_stride + j * AV_ld + i];
+                    // Decompose group_id into batch and trial vector indices
+                    int b = group_id / k;
+                    int j = group_id % k;
+                    
+                    // Create VectorViews for column j of V and AV in batch b
+                    // V is stored column-major: column j starts at offset j * n
+                    auto v_j = VectorView<T>(V_data.data() + b * V.stride() + j * n, n, 1, 0, 1);
+                    auto av_j = VectorView<T>(AV_data.data() + b * AV.stride() + j * n, n, 1, 0, 1);
+                    
+                    // Compute v_j^T * (A*v_j) using work-group reduction
+                    // Each thread computes partial sum for its assigned elements
+                    T numerator_partial = T(0);
+                    for (int i = tid; i < n; i += wg) {
+                        T v_i = v_j(i, 0);
+                        T av_i = av_j(i, 0);
                         if constexpr (sycl::detail::is_complex<T>::value) {
-                            numerator += sycl::conj(v_ij) * av_ij;
+                            numerator_partial += sycl::conj(v_i) * av_i;
                         } else {
-                            numerator += v_ij * av_ij;
+                            numerator_partial += v_i * av_i;
                         }
                     }
+                    dot_mem[tid] = numerator_partial;
                     
-                    // Compute v_j^T * v_j
-                    T denominator = T(0);
-                    for (int i = 0; i < n; ++i) {
-                        T v_ij = V_span[b * V_stride + j * V_ld + i];
+                    // Reduce across work-group
+                    T numerator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
+                    
+                    // Compute v_j^T * v_j using work-group reduction
+                    T denominator_partial = T(0);
+                    for (int i = tid; i < n; i += wg) {
+                        T v_i = v_j(i, 0);
                         if constexpr (sycl::detail::is_complex<T>::value) {
-                            denominator += sycl::conj(v_ij) * v_ij;
+                            denominator_partial += sycl::conj(v_i) * v_i;
                         } else {
-                            denominator += v_ij * v_ij;
+                            denominator_partial += v_i * v_i;
                         }
                     }
+                    dot_mem[tid] = denominator_partial;
                     
-                    // Store Ritz value
-                    ritz_span[b * ritz_stride + j] = real_part(numerator / denominator);
+                    // Reduce across work-group
+                    T denominator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
+                    
+                    // Only the first thread in the work-group writes the result
+                    if (tid == 0) {
+                        ritz_data[b * ritz_vals.stride() + j * ritz_vals.inc()] = real_part(numerator / denominator);
+                    }
                 }
             );
         });
