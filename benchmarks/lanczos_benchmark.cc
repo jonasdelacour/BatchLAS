@@ -14,22 +14,22 @@ static void BM_LANCZOS(minibench::State& state) {
 
     auto A = Matrix<T>::TriDiagToeplitz(m, 1.0, 0.5, 0.5, batch);
     auto Acsr = A.template convert_to<MatrixFormat::CSR>();
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     auto V = Matrix<T>::Zeros(n, batch);
     LanczosParams<T> params;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
 
-    size_t ws_size = lanczos_buffer_size<B>(queue, A.view(), W.to_span(),
+    size_t ws_size = lanczos_buffer_size<B>(*q, Acsr.view(), W.to_span(),
                                             JobType::NoEigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.SetKernel([&]{
-        lanczos<B>(queue, Acsr.view(), W.to_span(), workspace.to_span(),
-                   JobType::NoEigenVectors, V.view(), params);
+    state.SetKernel([=]() {
+        lanczos<B>(*q, Acsr, W.to_span(), workspace.to_span(),
+                   JobType::NoEigenVectors, V, params);
     });
-    state.SetBatchEnd([&]{ queue.wait(); });
+    state.SetBatchEndWait(q);
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);

@@ -18,11 +18,10 @@ static void BM_STEQR(minibench::State& state) {
     auto vec1 = Vector<T>::random(n, batch, stride, inc);
     auto vec2 = Vector<T>::random(n, batch, stride, inc);
 
-    
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
 
-    state.SetKernel([&]{
-        queue -> submit([&](sycl::handler& cgh) {
+    state.SetKernel([=]() {
+        (*q) -> submit([&](sycl::handler& cgh) {
             auto v1 = VectorView<T>(vec1);
             auto v2 = VectorView<T>(vec2);
             cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(internal::ceil_div(batch, size_t(64)) * 64), sycl::range<1>(64)), [=](sycl::nd_item<1> item) {
@@ -36,7 +35,7 @@ static void BM_STEQR(minibench::State& state) {
             });
         });
     });
-    state.SetBatchEnd([&]{ queue.wait(); });
+    state.SetBatchEnd([q]{ q->wait(); });
     state.SetMetric("TFLOPS", static_cast<double>(batch) * (1e-12 * double(n) * double(n_writes) * 3.0), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
