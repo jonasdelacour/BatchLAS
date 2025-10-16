@@ -70,16 +70,17 @@ namespace batchlas {
         size_t wg_size = std::min(size_t(256), ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
         wg_size = std::min(wg_size, size_t(n)); // Don't use more threads than vector length
         
-        last_event = ctx.submit([&](sycl::handler& h) {
-            h.depends_on(last_event);
+        last_event = ctx -> submit([&](sycl::handler& h) {
+            h.depends_on(*last_event);
             
             // Create VectorViews for accessing columns with proper stride/increment handling
             auto V_data = V.data();
             auto AV_data = AV.data();
-            auto ritz_data = ritz_vals.data();
             
             // Allocate local memory for partial sums
             auto dot_mem = sycl::local_accessor<T>(wg_size, h);
+            auto AV_view = AV.kernel_view();
+            auto V_view = V.kernel_view();
             
             h.parallel_for<RitzValuesKernel<B, T, MFormat>>(
                 sycl::nd_range<2>(
@@ -96,19 +97,14 @@ namespace batchlas {
                     int b = group_id / k;
                     int j = group_id % k;
                     
-                    // Create VectorViews for column j of V and AV in batch b
-                    // V is stored column-major: column j starts at offset j * n
-                    auto v_j = VectorView<T>(V_data.data() + b * V.stride() + j * n, n, 1, 0, 1);
-                    auto av_j = VectorView<T>(AV_data.data() + b * AV.stride() + j * n, n, 1, 0, 1);
-                    
                     // Compute v_j^T * (A*v_j) using work-group reduction
                     // Each thread computes partial sum for its assigned elements
                     T numerator_partial = T(0);
                     for (int i = tid; i < n; i += wg) {
-                        T v_i = v_j(i, 0);
-                        T av_i = av_j(i, 0);
+                        T v_i = V_view(i, j, b);
+                        T av_i = AV_view(i, j, b);
                         if constexpr (sycl::detail::is_complex<T>::value) {
-                            numerator_partial += sycl::conj(v_i) * av_i;
+                            numerator_partial += std::conj(v_i) * av_i;
                         } else {
                             numerator_partial += v_i * av_i;
                         }
@@ -121,9 +117,9 @@ namespace batchlas {
                     // Compute v_j^T * v_j using work-group reduction
                     T denominator_partial = T(0);
                     for (int i = tid; i < n; i += wg) {
-                        T v_i = v_j(i, 0);
+                        T v_i = V_view(i, j, b);
                         if constexpr (sycl::detail::is_complex<T>::value) {
-                            denominator_partial += sycl::conj(v_i) * v_i;
+                            denominator_partial += std::conj(v_i) * v_i;
                         } else {
                             denominator_partial += v_i * v_i;
                         }
@@ -135,7 +131,7 @@ namespace batchlas {
                     
                     // Only the first thread in the work-group writes the result
                     if (tid == 0) {
-                        ritz_data[b * ritz_vals.stride() + j * ritz_vals.inc()] = real_part(numerator / denominator);
+                        ritz_vals(j, b) = real_part(numerator / denominator);
                     }
                 }
             );
@@ -195,10 +191,6 @@ namespace batchlas {
 
     #if BATCHLAS_HAS_HOST_BACKEND
         RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-    #endif
-
-    #if BATCHLAS_HAS_GPU_BACKEND
-        RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::SYCL)
     #endif
 
     #if BATCHLAS_HAS_CUDA_BACKEND
