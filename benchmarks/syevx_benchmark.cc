@@ -14,7 +14,7 @@ static void BM_SYEVX(minibench::State& state) {
     const size_t neigs = state.range(2);
 
     auto A = Matrix<T>::Random(n, n, true, batch);
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<typename base_type<T>::type> W(neigs * batch);
 
     SyevxParams<T> params;
@@ -25,18 +25,16 @@ static void BM_SYEVX(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size<B>(queue, A.view(), W.to_span(), neigs,
-                                         JobType::NoEigenVectors,
-                                         MatrixView<T, MatrixFormat::Dense>(), params);
+    size_t ws_size = syevx_buffer_size<B>(*q, A.view(), W.to_span(), neigs,
+                                          JobType::NoEigenVectors,
+                                          MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
-        syevx<B>(queue, A.view(), W.to_span(), neigs, workspace.to_span(),
+    state.SetKernel([=]() {
+        syevx<B>(*q, A.view(), W.to_span(), neigs, workspace.to_span(),
                  JobType::NoEigenVectors, MatrixView<T, MatrixFormat::Dense>(), params);
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

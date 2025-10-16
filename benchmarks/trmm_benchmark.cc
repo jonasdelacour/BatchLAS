@@ -14,17 +14,16 @@ static void BM_TRMM(minibench::State& state) {
     const size_t k = state.range(2);
     const size_t batch = state.range(3);
 
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu", false);
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu", false);
     auto C = Matrix<T>::Random(m, n, false, batch);
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto A = Matrix<T>::RandomTriangular(n, Uplo::Lower, Diag::NonUnit, batch);
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
-        trmm<B>(queue, A.view(), Bm.view(), C.view(), T(1), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit);
-    }
-    queue.wait();
-    state.StopTiming();
+    state.SetKernel([=]() {
+        trmm<B>(*q, A, Bm, C, T(1), Side::Left, Uplo::Lower,
+                Transpose::NoTrans, Diag::NonUnit);
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

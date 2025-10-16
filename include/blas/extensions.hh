@@ -379,43 +379,21 @@ namespace batchlas {
         T zero_threshold = std::numeric_limits<T>::epsilon(); 
         //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
         bool back_transform = false; 
+        bool block_rotations = false;
     };
 
     template <Backend B, typename T>
     Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                 const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
                 const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
-    // Forwarding overload (owning eigvects)
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                JobType jobz,
-                SteqrParams<T> params,
-                const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
-    // Combined forwarding overload (owning vectors and eigvects)
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                JobType jobz,
-                SteqrParams<T> params,
-                const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr<B, T>(ctx,
-                        static_cast<VectorView<T>>(d),
-                        static_cast<VectorView<T>>(e),
-                        static_cast<VectorView<T>>(eigenvalues),
-                        ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
+  
     // Forwarding overload for steqr taking owning Vectors
     template <Backend B, typename T>
     inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
                        const Vector<T>& eigenvalues, const Span<std::byte>& ws,
                        JobType jobz = JobType::NoEigenVectors,
                        SteqrParams<T> params = SteqrParams<T>(),
-                       const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>()) {
+                       const Matrix<T, MatrixFormat::Dense>& eigvects = Matrix<T, MatrixFormat::Dense>()) {
         return steqr<B, T>(ctx,
                         static_cast<VectorView<T>>(d),
                         static_cast<VectorView<T>>(e),
@@ -423,7 +401,7 @@ namespace batchlas {
                         ws,
                         jobz,
                         params,
-                        eigvects);
+                        MatrixView<T, MatrixFormat::Dense>(eigvects));
     }
 
     template <typename T>
@@ -443,6 +421,25 @@ namespace batchlas {
                                     jobz,
                                     params);
     }
+
+    template <typename T>
+    struct StedcParams {
+        int64_t recursion_threshold = 32; //Threshold below which the algorithm switches to a non-recursive method such as STEQR
+    };
+
+    template <Backend B, typename T>
+    Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
+
+    template <Backend B, typename T>
+    inline Event stedc(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
+        return stedc<B,T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), static_cast<VectorView<T>>(eigenvalues), ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
+    }
+    
+    template <Backend B, typename T>
+    size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
+
 
     /**
      * @brief Computes the Ritz values given a matrix and trial vectors

@@ -21,17 +21,15 @@ static void BM_GEQRF(minibench::State& state) {
     UnifiedVector<T> tau(batch_size * std::min(m, n));
 
     // Create queue based on backend parameter
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
 
     // Get buffer size and allocate workspace
-    size_t buffer_size = geqrf_buffer_size<B>(queue, matrices.view(), tau.to_span());
+    size_t buffer_size = geqrf_buffer_size<B>(*q, matrices.view(), tau.to_span());
     UnifiedVector<std::byte> workspace(buffer_size);
-    state.ResetTiming(); state.ResumeTiming();    
-    for (auto _ : state) {
-        geqrf<B>(queue, matrices.view(), tau.to_span(), workspace.to_span());
-    }
-    queue.wait();
-    state.StopTiming();
+    state.SetKernel([=]() {
+        geqrf<B>(*q, matrices, tau.to_span(), workspace.to_span());
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("GFLOPS", batch_size * (1e-9 * (2 * m * n * n + (2.0 / 3.0) * n * n * n)), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch_size) * 1e6, minibench::Reciprocal);
 

@@ -13,17 +13,15 @@ static void BM_TRANSPOSE(minibench::State& state) {
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
 
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
 
     auto A = Matrix<T>::Random(m, n, false, batch);
     auto B_mat = Matrix<T>::Zeros(n, m, batch);
 
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
-        batchlas::transpose(queue, A, B_mat);
-    }
-    queue.wait();
-    state.StopTiming();
+    state.SetKernel([=]() {
+        batchlas::transpose(*q, A, B_mat);
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * 4), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

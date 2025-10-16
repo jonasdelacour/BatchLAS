@@ -124,6 +124,13 @@ struct State {
     std::unordered_map<std::string, Metric> metrics_;
     MetricsFunc metrics_fn_;
 
+    // Optional: user can register a single "kernel" (work unit) to run.
+    // If provided, the framework will: call the benchmark once to perform setup
+    // and register the kernel, then execute warmups and measurements by calling
+    // only this kernel repeatedly (avoiding re-doing setup each time).
+    std::function<void()> kernel_once_;
+    std::function<void()> batch_end_fn_;
+
     struct iterator {
         size_t i;
         size_t limit;
@@ -176,6 +183,21 @@ struct State {
     }
 
     void SetMetricsFunc(MetricsFunc fn) { metrics_fn_ = std::move(fn); }
+
+    // Structured mode: register the kernel body and optional end-of-batch hook
+    // (e.g., to insert a single queue.wait() after a batch of internal iters).
+    void SetKernel(std::function<void()> kernel_once) { kernel_once_ = (kernel_once); }
+    void SetBatchEnd(std::function<void()> fn) { batch_end_fn_ = (fn); }
+    bool HasKernel() const { return static_cast<bool>(kernel_once_); }
+    void RunKernelOnce() { if (kernel_once_) kernel_once_(); }
+    void RunBatchEnd() { if (batch_end_fn_) batch_end_fn_(); }
+
+    // Convenience: set batch end to a simple wait() on a shared queue-like
+    // object without needing to write a lambda at each callsite.
+    template <typename Q>
+    void SetBatchEndWait(std::shared_ptr<Q> q) {
+        batch_end_fn_ = [q]{ q->wait(); };
+    }
 };
 
 // Benchmark representation and registry
@@ -246,49 +268,100 @@ inline Result run_benchmark(const Benchmark& b,
 
     State state(args);
 
-    // Warmup with internal iterations
-    for (size_t i = 0; i < cfg.warmup_runs; ++i) {
-        state.internal_iterations_ = cfg.warmup_internal_iterations;
-        state.ResetTiming();
-        state.ResumeTiming();
-        b.func(state);
-        state.StopTiming();
-    }
-
-    // Determine optimal internal iterations for measurement
-    // Start with a single iteration and increase if timing is too short
-    size_t measurement_internal_iters = 1;
-    state.internal_iterations_ = measurement_internal_iters;
-    state.ResetTiming();
-    state.ResumeTiming();
+    // First call gives the benchmark a chance to perform setup and optionally
+    // register a kernel for structured execution. This call is not timed here.
     b.func(state);
-    double sample_time = state.StopTiming();
-    
-    // Scale up internal iterations if single iteration is too fast
-    while (sample_time < 1.0 && measurement_internal_iters < 10000) {
-        measurement_internal_iters *= 10;
-        state.internal_iterations_ = measurement_internal_iters;
-        state.ResetTiming();
-        state.ResumeTiming();
-        b.func(state);
-        sample_time = state.StopTiming();
-    }
 
-    // Now perform the actual measurements
     std::vector<double> times;
     double total_ms = 0.0;
-    while (res.iterations < cfg.max_iters &&
-           (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
+
+    if (state.HasKernel()) {
+        // Structured mode: warm up and measure by calling the registered kernel
+        // repeatedly without re-running setup, which is critical for USM.
+
+        // Warmup calls (not timed). Ensure completion after each warmup batch
+        // and once more before starting timed measurement to avoid contamination
+        // from any outstanding async work (e.g., USM migrations).
+        for (size_t i = 0; i < cfg.warmup_runs; ++i) {
+            for (size_t j = 0; j < cfg.warmup_internal_iterations; ++j) {
+                state.RunKernelOnce();
+            }
+            state.RunBatchEnd();
+        }
+
+        // Determine optimal internal iterations for measurement by sampling
+        size_t measurement_internal_iters = 1;
+        state.ResetTiming();
+        state.ResumeTiming();
+        state.RunKernelOnce();
+        state.RunBatchEnd();
+        double sample_time = state.StopTiming();
+
+        while (sample_time < 1.0 && measurement_internal_iters < 10000) {
+            measurement_internal_iters *= 10;
+            state.ResetTiming();
+            state.ResumeTiming();
+            for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
+            state.RunBatchEnd();
+            sample_time = state.StopTiming();
+        }
+
+        // Measurements
+        while (res.iterations < cfg.max_iters &&
+               (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
+            state.ResetTiming();
+            state.ResumeTiming();
+            for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
+            state.RunBatchEnd();
+            double t = state.StopTiming();
+            double time_per_iter = t / measurement_internal_iters;
+            times.push_back(time_per_iter);
+            total_ms += time_per_iter;
+            ++res.iterations;
+        }
+    } else {
+        // Legacy mode: the benchmark function controls timing and iterations.
+        // We perform warmup and measurement by calling the function as before.
+
+        // Warmup with internal iterations
+        for (size_t i = 0; i < cfg.warmup_runs; ++i) {
+            state.internal_iterations_ = cfg.warmup_internal_iterations;
+            state.ResetTiming();
+            state.ResumeTiming();
+            b.func(state);
+            state.StopTiming();
+        }
+
+        // Determine optimal internal iterations for measurement
+        size_t measurement_internal_iters = 1;
         state.internal_iterations_ = measurement_internal_iters;
         state.ResetTiming();
         state.ResumeTiming();
         b.func(state);
-        double t = state.StopTiming();
-        // Normalize time per internal iteration
-        double time_per_iter = t / measurement_internal_iters;
-        times.push_back(time_per_iter);
-        total_ms += time_per_iter;
-        ++res.iterations;
+        double sample_time = state.StopTiming();
+
+        while (sample_time < 1.0 && measurement_internal_iters < 10000) {
+            measurement_internal_iters *= 10;
+            state.internal_iterations_ = measurement_internal_iters;
+            state.ResetTiming();
+            state.ResumeTiming();
+            b.func(state);
+            sample_time = state.StopTiming();
+        }
+
+        // Measurements
+        while (res.iterations < cfg.max_iters &&
+               (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
+            state.internal_iterations_ = measurement_internal_iters;
+            state.ResetTiming();
+            state.ResumeTiming();
+            b.func(state);
+            double t = state.StopTiming();
+            double time_per_iter = t / measurement_internal_iters;
+            times.push_back(time_per_iter);
+            total_ms += time_per_iter;
+            ++res.iterations;
+        }
     }
 
     if (!times.empty()) {
@@ -685,4 +758,3 @@ inline void OrthoBenchSizesNetlib(Benchmark* b) {
 }
 
 } // namespace minibench
-

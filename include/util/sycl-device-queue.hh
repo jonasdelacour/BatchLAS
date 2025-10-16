@@ -30,8 +30,7 @@ enum class Vendor
     OTHER
 };
 
-inline Vendor str_to_vendor(const std::string_view& vendor_str) {
-    auto v = vendor_str;
+inline Vendor str_to_vendor(std::string&& v) {
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v.find("amd") != std::string::npos || v.find("advanced micro devices") != std::string::npos) {
         return Vendor::AMD;

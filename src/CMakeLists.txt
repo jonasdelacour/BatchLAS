@@ -2,6 +2,7 @@
 add_library(batchlas SHARED
     linalg-impl.hh
     matrix.cc
+    #util/sycl-util-impl.cc
 )
 
 # Add source files from subdirectories

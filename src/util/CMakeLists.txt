@@ -1,6 +1,6 @@
 set(UTIL_SOURCES
     #queue-impl.cc
-    sycl-util-impl.cc
+    #sycl-util-impl.cc
 )
 
 target_sources(batchlas PRIVATE ${UTIL_SOURCES})

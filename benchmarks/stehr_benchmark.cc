@@ -7,12 +7,10 @@ using namespace batchlas;
 
 // Batched STEQR benchmark
 template <typename T, Backend B>
-static void BM_STEQR(minibench::State& state) {
+static void BM_STEHR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
-    const size_t block_size = state.range(2);
-    const size_t n_sweeps = state.range(3);
-    const int use_block_rotations = state.range(4);
+
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
     const double flops_eigvals = avg_deflations_per_eigenvalue * double(n) * double(n) * 35.0/2.0; // Approximate number of flops to compute all eigenvalues.
@@ -20,26 +18,17 @@ static void BM_STEQR(minibench::State& state) {
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
 
-
-    SteqrParams<T> params;
-    params.block_size = block_size;
-    params.max_sweeps = n_sweeps;
-    params.back_transform = true;
-    params.block_rotations = (use_block_rotations != 0);
-
-    Vector<T> diags = Vector<T>::random(n, batch, 1, batch);
-    Vector<T> off_diags = Vector<T>::random(n - 1, batch, 1, batch);
+    Vector<T> diags = Vector<T>::random(n, batch);
+    Vector<T> off_diags = Vector<T>::random(n, batch);
 
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    UnifiedVector<std::byte> ws(steqr_buffer_size<T>(*q, diags, off_diags, eigvals,
-                                                    jobz, params));
+    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, T>(*q, n, batch, jobz));
 
     // Register kernel-only runner so warmup uses the same USM allocations.
     state.SetKernel([=]() {
-        steqr<B>(*q, diags, off_diags, eigvals,
-                 ws.to_span(), jobz, params, eigvects);
+        tridiagonal_solver<B>(*q, diags.data(), off_diags.data(), eigvals.data(), ws.to_span(), jobz, eigvects, n, batch);
     });
     // Single wait after each batch of internal iterations to mirror prior behavior.
     state.SetBatchEndWait(q);
@@ -51,6 +40,6 @@ static void BM_STEQR(minibench::State& state) {
 
 // Register size/batch combinations at static‑init time using macro
 
-BATCHLAS_REGISTER_BENCHMARK(BM_STEQR, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK(BM_STEHR, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

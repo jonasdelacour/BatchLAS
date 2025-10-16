@@ -20,7 +20,8 @@ enum class KernelType {
     COMPUTE_BOUND,  ///< Compute intensive
     SPARSE,         ///< Sparse matrix operations
     GEMM,          ///< General matrix multiply
-    SMALL_MATRIX   ///< Small matrix operations
+    SMALL_MATRIX,   ///< Small matrix operations
+    TASK_BASED     ///< Task-based parallelism, e.g. no fine-grained parallelism, each thread solves one problem
 };
 
 /**
@@ -33,7 +34,7 @@ enum class KernelType {
  * @return Optimal work-group size
  */
 inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_type, 
-                                      size_t problem_size = 0, size_t batch_size = 1) {
+                                      size_t problem_size = 0, size_t batch_size = 1, size_t memory_per_problem = 0) {
     const size_t max_wg_size = device.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
     const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
     const DeviceType dev_type = device.type;
@@ -50,7 +51,7 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
             base_wg_size = std::min(size_t(64), max_compute_units * 2);
             break;
         case DeviceType::ACCELERATOR:
-            // Intel GPUs and other accelerators
+            // Other accelerators
             base_wg_size = 128;
             break;
         default:
@@ -112,6 +113,10 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
             // For small matrices, use smaller work-groups
             base_wg_size = std::min({base_wg_size, problem_size, size_t(64)});
             break;
+
+        case KernelType::TASK_BASED:
+            // Each thread handles one task, so smaller work-groups
+            base_wg_size = std::min(base_wg_size, size_t(32));
     }
     
     // Final constraint based on problem size
@@ -121,6 +126,10 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
     
     // Ensure we don't exceed device limits
     base_wg_size = std::min(base_wg_size, max_wg_size);
+
+    if (memory_per_problem > 0) {
+
+    }
     
     // Ensure at least work-group size of 1
     return std::max(base_wg_size, size_t(1));
@@ -141,22 +150,46 @@ inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t to
                                                                        const Device& device,
                                                                        KernelType kernel_type,
                                                                        size_t batch_size,
-                                                                       size_t elements_per_matrix,
-                                                                       size_t preferred_wg_size = 0) {
+                                                                       size_t problem_size,
+                                                                       size_t preferred_wg_size = 0,
+                                                                       size_t footprint_per_problem = 0,
+                                                                       size_t max_wg_size_for_kernel = 0
+                                                                    ) {
     const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
     
     // Check if we need grid-stride approach due to int32 overflow
     const size_t INT32_MAX_SAFE = static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 2;
     bool use_grid_stride = total_work > INT32_MAX_SAFE;
+    auto num_cus = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
+    auto vendor = device.get_vendor();
+    auto shedulers_per_cu = 2; //Default to 2 schedulers per CU
+    if ((vendor == Vendor::NVIDIA || vendor == Vendor::AMD) && device.type == DeviceType::GPU) {
+        shedulers_per_cu = 4; 
+        //NVIDIA GPUs have 4 warp engines per CU / SM (Streaming Multiprocessor)
+        //AMD GPUs have 4 SIMD lanes per CU
+    } else if (vendor == Vendor::INTEL && device.type == DeviceType::GPU) {
+        shedulers_per_cu = 8; //Intel GPUs have 8 or 16 "Vector Engines" per CU / Xe Core
+    }
+
+    //auto L1_cache_size = device.get_property(DeviceProperty::LOCAL_MEM_SIZE); //Assume local mem is L1 cache size
+    auto L2_cache_size = device.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE); //L2 cache size
+
     
+
     size_t local_size;
     if (preferred_wg_size > 0) {
         local_size = preferred_wg_size;
     } else {
-        local_size = compute_optimal_wg_size(device, kernel_type, elements_per_matrix, batch_size);
+        local_size = compute_optimal_wg_size(device, kernel_type, problem_size, batch_size);
     }
     
     size_t global_size;
+
+    if (footprint_per_problem > 0) {
+        //Estimate how many problems fit in L2 cache
+        size_t problems_in_L2 = L2_cache_size / footprint_per_problem;
+        global_size = std::min(batch_size, problems_in_L2) * local_size;   
+    }
     
     if (use_grid_stride) {
         // Use grid-stride approach: limit global size to prevent overflow
@@ -170,9 +203,9 @@ inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t to
         // Batch-aware decomposition strategy
         if (batch_size >= max_compute_units) {
             // Enough matrices for 1 work-group per matrix
-            // Each work-group handles elements_per_matrix elements
+            // Each work-group handles problem_size elements
             size_t workgroups_per_matrix = 1;
-            size_t target_elements_per_workgroup = elements_per_matrix;
+            size_t target_elements_per_workgroup = problem_size;
             
             // Adjust work-group size if needed
             if (target_elements_per_workgroup > local_size) {
@@ -185,7 +218,7 @@ inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t to
             size_t workgroups_per_matrix = (max_compute_units + batch_size - 1) / batch_size;
             
             // Don't create more work-groups than needed per matrix
-            size_t max_workgroups_per_matrix = (elements_per_matrix + local_size - 1) / local_size;
+            size_t max_workgroups_per_matrix = (problem_size + local_size - 1) / local_size;
             workgroups_per_matrix = std::min(workgroups_per_matrix, max_workgroups_per_matrix);
             
             global_size = batch_size * workgroups_per_matrix * local_size;

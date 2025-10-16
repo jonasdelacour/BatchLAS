@@ -13,24 +13,22 @@ static void BM_ORMQR(minibench::State& state) {
     const size_t batch = state.range(2);
 
     auto A = Matrix<T>::Random(m, n, false, batch);
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<T> tau(m * batch);
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
-    size_t geqrf_ws = geqrf_buffer_size<B>(queue, A.view(), tau.to_span());
+    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf<B>(queue, A.view(), tau.to_span(), ws_geqrf.to_span());
-    queue.wait();
+    geqrf<B>(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    q->wait();
 
     auto Q = Matrix<T>::Identity(m, batch);
-    size_t orm_ws = ormqr_buffer_size<B>(queue, A.view(), Q.view(), Side::Left,
+    size_t orm_ws = ormqr_buffer_size<B>(*q, A.view(), Q.view(), Side::Left,
                                          Transpose::NoTrans, tau.to_span());
     UnifiedVector<std::byte> ws(orm_ws);
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
-        ormqr<B>(queue, A.view(), Q.view(), Side::Left, Transpose::NoTrans,
+    state.SetKernel([=]() {
+        ormqr<B>(*q, A, Q, Side::Left, Transpose::NoTrans,
                  tau.to_span(), ws.to_span());
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (4 * m * n * n - 2 * n * n * n + 3 * n * n)), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 

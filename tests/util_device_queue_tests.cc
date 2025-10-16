@@ -48,7 +48,7 @@ TEST(DeviceTest, DeviceProperties) {
         
         // Device name and vendor should return something
         EXPECT_FALSE(device.get_name().empty());
-        EXPECT_FALSE(device.get_vendor().empty());
+        EXPECT_FALSE(device.get_vendor() == Vendor::OTHER);
     } catch (const std::exception& e) {
         GTEST_SKIP() << "Skipping device property tests due to no devices available";
     }

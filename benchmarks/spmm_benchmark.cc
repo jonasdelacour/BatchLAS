@@ -18,18 +18,16 @@ static void BM_SPMM(minibench::State& state) {
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
 
-    Queue queue(B == Backend::NETLIB ? "cpu" : "gpu");
-    size_t ws_size = spmm_buffer_size<B>(queue, A.view(), Bm.view(), C.view(),
-                                        T(1), T(0), Transpose::NoTrans,
-                                        Transpose::NoTrans);
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    size_t ws_size = spmm_buffer_size<B>(*q, A.view(), Bm.view(), C.view(),
+                                         T(1), T(0), Transpose::NoTrans,
+                                         Transpose::NoTrans);
     UnifiedVector<std::byte> workspace(ws_size);
-    state.ResetTiming(); state.ResumeTiming();
-    for (auto _ : state) {
-        spmm<B>(queue, A.view(), Bm.view(), C.view(), T(1), T(0),
+    state.SetKernel([=]() {
+        spmm<B>(*q, A, Bm, C, T(1), T(0),
                 Transpose::NoTrans, Transpose::NoTrans, workspace.to_span());
-    }
-    queue.wait();
-    state.StopTiming();
+    });
+    state.SetBatchEndWait(q);
     state.SetMetric("GFLOPS", static_cast<double>(batch) *
                         (1e-9 * 2.0 * A.nnz() * n), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);

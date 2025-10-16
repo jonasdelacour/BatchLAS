@@ -6,6 +6,7 @@ set(EXTENSIONS_SOURCES
     lanczos.cc
     trmm.cc
     steqr.cc
+    stedc.cc
     ritz_values.cc
 )
 

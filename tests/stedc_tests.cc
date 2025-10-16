@@ -5,16 +5,16 @@
 using namespace batchlas;
 
 template <typename T, Backend B>
-struct SteqrConfig {
+struct StedcConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
 };
 
 #include "test_utils.hh"
-using SteqrTestTypes = typename test_utils::backend_types<SteqrConfig>::type;
+using StedcTestTypes = typename test_utils::backend_types<StedcConfig>::type;
 
 template <typename Config>
-class SteqrTest : public ::testing::Test {
+class StedcTest : public ::testing::Test {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
@@ -43,60 +43,30 @@ protected:
     }
 };
 
-TYPED_TEST_SUITE(SteqrTest, SteqrTestTypes);
+TYPED_TEST_SUITE(StedcTest, StedcTestTypes);
 
-TYPED_TEST(SteqrTest, SingleMatrix) {
-    using T = typename TestFixture::ScalarType;
-    using float_type = typename base_type<T>::type;
-    constexpr Backend B = TestFixture::BackendType;
-    const int n = 4;
-
-    float_type a = 1.0f;
-    float_type b = 0.5f;
-    float_type c = 0.5f;
-    UnifiedVector<float_type> diag(n, float_type(a));
-    UnifiedVector<float_type> sub_diag(n, float_type(b));
-    UnifiedVector<float_type> eigenvalues(n);
-    UnifiedVector<float_type> expected_eigenvalues(n);
-
-    for (int i = 1; i <= n; ++i) {
-        expected_eigenvalues[i-1] = float_type(a - 2.0f * std::sqrt(b * c) * std::cos(M_PI * i / (n + 1)));
-    }
-
-    auto ws = UnifiedVector<std::byte>(tridiagonal_solver_buffer_size<B, float_type>(*this->ctx, n, 1, JobType::NoEigenVectors));
-    tridiagonal_solver<B>(*this->ctx, diag.to_span(), sub_diag.to_span(), eigenvalues.to_span(), ws.to_span(), JobType::NoEigenVectors, MatrixView<float_type, MatrixFormat::Dense>(nullptr, n, n ,n), n, 1);
-    this->ctx->wait();
-    std::sort(eigenvalues.begin(), eigenvalues.end(), std::less<float_type>());
-    for (int i = 0; i < n; ++i) {
-        EXPECT_NEAR(eigenvalues[i], expected_eigenvalues[i], 1e-5) << "Eigenvalue mismatch at index " << i;
-    }
-
-}
-
-TYPED_TEST(SteqrTest, BatchedMatrices) {
+TYPED_TEST(StedcTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 64;
+    const int n = 8;
     const int batch = 1;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
     auto b = Vector<float_type>::ones(n - 1, batch);
-    auto c = Vector<float_type>::zeros(n, batch);
+    auto eigvals = Vector<float_type>::zeros(n, batch);
     auto eigvects = Matrix<float_type>::Identity(n, batch);
-    SteqrParams<float_type> params= {};
-    params.block_size = 16;
-    params.max_sweeps = 5;
-    params.block_rotations = true;
+    StedcParams<float_type> params= {.recursion_threshold = 2};
 
-    UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
+    UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
 
-    steqr<B, float_type>(*this->ctx, a, b, c,
+    stedc<B>(*this->ctx, a, b, eigvals,
                       ws.to_span(), JobType::EigenVectors, params, eigvects);
     
     this->ctx->wait();
 
-    std::cout << eigvects << std::endl;
+    std::cout << "Eigenvalues:\n" << VectorView<float_type>(eigvals) << std::endl;
+    std::cout << "Eigenvectors:\n" << eigvects << std::endl;
 }
 
 int main(int argc, char **argv) {
