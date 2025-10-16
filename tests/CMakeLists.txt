@@ -40,6 +40,7 @@ set(TEST_TARGETS
     syev_tests
     steqr_tests
     trmm_tests
+    stedc_tests
 )
 
 # Create test executables
