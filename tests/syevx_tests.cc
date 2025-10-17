@@ -234,16 +234,14 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
             << "Eigenvalue mismatch at index " << i << ": expected " << expected[i] << ", got " << W[i];
     }
 
-    auto ritz_values = Vector<float>(neig, 1, neig, batch);
-    auto ritz_ws = UnifiedVector<std::byte>(ritz_values_workspace<test_utils::gpu_backend>(
-        *ctx, A_view, V.view(), ritz_values));
-    batchlas::ritz_values<test_utils::gpu_backend>(*ctx, A_view, V.view(), ritz_values, ritz_ws);
+
+    auto ritz_vals = ritz_values<test_utils::gpu_backend>(*ctx, A_view, V.view());
 
     ctx->wait();
     for (int i = 0; i < neig; ++i) {
-        auto rel_err = std::abs(ritz_values[i] - expected[i]) / std::abs(expected[i]);
+        auto rel_err = std::abs(ritz_vals[i] - expected[i]) / std::abs(expected[i]);
         EXPECT_NEAR(rel_err, 0.0f, 3e-4f)
-            << "Ritz value mismatch at index " << i << ": expected " << expected[i] << ", got " << ritz_values[i];
+            << "Ritz value mismatch at index " << i << ": expected " << expected[i] << ", got " << ritz_vals[i];
     }
 }
 

@@ -461,26 +461,6 @@ namespace batchlas {
                       const VectorView<typename base_type<T>::type>& ritz_vals,
                       Span<std::byte> workspace);
 
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event ritz_values(Queue& ctx,
-                            const Matrix<T, MFormat>& A,
-                            const Matrix<T, MatrixFormat::Dense>& V,
-                            const VectorView<typename base_type<T>::type>& ritz_vals,
-                            Span<std::byte> workspace) {
-        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), ritz_vals, workspace);
-    }
-
-    // Forwarding overload (owning ritz_vals)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event ritz_values(Queue& ctx,
-                            const MatrixView<T, MFormat>& A,
-                            const MatrixView<T, MatrixFormat::Dense>& V,
-                            const Vector<typename base_type<T>::type>& ritz_vals,
-                            Span<std::byte> workspace) {
-        return ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<typename base_type<T>::type>>(ritz_vals), workspace);
-    }
-
     // Forwarding overload (owning A, V, and ritz_vals)
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event ritz_values(Queue& ctx,
@@ -490,6 +470,29 @@ namespace batchlas {
                             Span<std::byte> workspace) {
         return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals), workspace);
     }
+
+    //Convenience overload allocating workspace internally
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline auto ritz_values(Queue& ctx,
+                            const MatrixView<T, MFormat>& A,
+                            const MatrixView<T, MatrixFormat::Dense>& V) {
+        using float_type = typename base_type<T>::type;
+        size_t nRitz = V.cols();
+        Vector<float_type> ritz_vals(nRitz, 1, nRitz, V.batch_size());
+        size_t workspace_size = ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
+        UnifiedVector<std::byte> workspace(workspace_size);
+        ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
+        ctx.wait();
+        return ritz_vals;
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline auto ritz_values(Queue& ctx,
+                            const Matrix<T, MFormat>& A,
+                            const Matrix<T, MatrixFormat::Dense>& V) {
+        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V));
+    }
+
 
     /**
      * @brief Computes the required workspace size for ritz_values
@@ -505,24 +508,6 @@ namespace batchlas {
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals);
-
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t ritz_values_workspace(Queue& ctx,
-                                       const Matrix<T, MFormat>& A,
-                                       const Matrix<T, MatrixFormat::Dense>& V,
-                                       const VectorView<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_workspace<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), ritz_vals);
-    }
-
-    // Forwarding overload (owning ritz_vals)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t ritz_values_workspace(Queue& ctx,
-                                       const MatrixView<T, MFormat>& A,
-                                       const MatrixView<T, MatrixFormat::Dense>& V,
-                                       const Vector<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
-    }
 
     // Forwarding overload (owning A, V, and ritz_vals)
     template <Backend B, typename T, MatrixFormat MFormat>
