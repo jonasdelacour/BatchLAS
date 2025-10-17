@@ -252,6 +252,10 @@ namespace batchlas {
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
         }
+        //Copy back the eigenvectors if needed
+        if (jobz == JobType::EigenVectors){
+            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X({0,n}, {0,int64_t(neigs)}));
+        }
        return ctx.get_event();
 
     }
