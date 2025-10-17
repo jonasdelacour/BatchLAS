@@ -83,17 +83,15 @@ TEST_F(RitzValuesTest, TridiagonalMatrix) {
     // For a tridiagonal Toeplitz matrix, eigenvector j has components:
     // v_i = sin(j*(i+1)*pi/(n+1))
     Matrix<float, MatrixFormat::Dense> V(n, k, batch);
-    auto V_data = V.data().to_vector();
     
     for (int bat = 0; bat < batch; ++bat) {
         for (int j = 0; j < k; ++j) {
             for (int i = 0; i < n; ++i) {
                 // Eigenvector j+1 (1-indexed): v_i = sin((j+1)*(i+1)*pi/(n+1))
-                V_data[bat * n * k + j * n + i] = std::sin((j + 1) * (i + 1) * M_PI / (n + 1));
+                V.view()(i, j, bat) = std::sin((j + 1) * (i + 1) * M_PI / (n + 1));
             }
         }
     }
-    V.data().copy_from(V_data.data(), V_data.size());
     
     // Compute expected Ritz values (eigenvalues)
     std::vector<float> expected(k);
@@ -102,7 +100,7 @@ TEST_F(RitzValuesTest, TridiagonalMatrix) {
     }
     
     // Allocate output for Ritz values
-    Vector<float> ritz_vals(k, batch);
+    Vector<float> ritz_vals(k, 1, k, batch);
     
     // Compute workspace size and allocate
     size_t workspace_size = ritz_values_workspace<test_utils::gpu_backend, float, MatrixFormat::Dense>(
