@@ -4,12 +4,6 @@
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
 
-struct EventImpl : public sycl::event{
-    using sycl::event::event;
-
-    EventImpl(sycl::event&& event) : sycl::event(event) {}
-};
-
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
 Event::Event(EventImpl&& impl) : impl_(std::make_unique<EventImpl>(std::move(impl))) {}
 Event& Event::operator=(Event&& other) {

@@ -41,6 +41,7 @@ set(TEST_TARGETS
     steqr_tests
     trmm_tests
     stedc_tests
+    ritz_values_tests
 )
 
 # Create test executables

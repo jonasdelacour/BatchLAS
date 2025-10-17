@@ -17,3 +17,9 @@ struct QueueImpl : public sycl::queue{
     QueueImpl() : sycl::queue( device_arrays.at((int)DeviceType::CPU).at(0)), device_(Device{0, DeviceType::CPU}) {}
     const Device device_;
 };
+
+struct EventImpl : public sycl::event{
+    using sycl::event::event;
+
+    EventImpl(sycl::event&& event) : sycl::event(event) {}
+};
