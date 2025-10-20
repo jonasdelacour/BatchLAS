@@ -832,21 +832,44 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     auto data_ptr = data_.data();
-    size_t total_elements = data_.size();
+    size_t total_elements = batch_size_ * rows_ * cols_;
+    bool contiguous = (stride_ == rows_ * cols_) && (ld_ == rows_);
     
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
-    
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t global_id = item.get_global_id(0);
-        size_t total_work_items = item.get_global_range(0);
-        
-        // Grid-stride loop to handle large data
-        for (size_t idx = global_id; idx < total_elements; idx += total_work_items) {
-            data_ptr[idx] = value;
-        }
-    });
+    if (contiguous) {
+        ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            size_t global_id = item.get_global_id(0);
+            size_t total_work_items = item.get_global_range(0);
+            
+            // Grid-stride loop to handle large data
+            for (size_t idx = global_id; idx < total_elements; idx += total_work_items) {
+                data_ptr[idx] = value;
+            }
+        });
+    } else {
+        auto batch_size = batch_size_;
+        auto stride = stride_; // Stride for batched matrices
+        auto ld = ld_; // Leading dimension
+        auto rows = rows_;
+        auto cols = cols_;
+        ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            size_t global_id = item.get_global_id(0);
+            size_t total_work_items = item.get_global_range(0);
+            
+            // Grid-stride loop to handle large data
+            for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
+                // Calculate 3D coordinates from flat index
+                size_t b = flat_idx / (cols * rows);          // batch index
+                size_t remainder = flat_idx % (cols * rows);
+                size_t col = remainder / rows;               // column index
+                size_t row = remainder % rows;               // row index
+
+                data_ptr[b * stride + col * ld + row] = value;
+            }
+        });
+    }
     return ctx.get_event();
 }
 
