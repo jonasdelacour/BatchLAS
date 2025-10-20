@@ -324,21 +324,20 @@ Event block_rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dens
 }
 
 template <Backend B, typename T>
-Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, const MatrixView<T, MatrixFormat::Dense>& eigvects) {
-    auto G = eigvects;
+Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, const MatrixView<T, MatrixFormat::Dense>& Q) {
     ctx -> submit([&](sycl::handler& cgh) {
-        auto G_view = G.kernel_view();
+        auto Q_ = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        cgh.parallel_for(sycl::nd_range(sycl::range(G.rows()*G.batch_size()), sycl::range(G.rows())), [=](sycl::nd_item<1> item) {
+        cgh.parallel_for(sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
             for (int i = 0; i < rotations_view.cols; ++i) {
                 for (int j = 0; j < rotations_view.rows; ++j) {
                     auto [c, s] = rotations_view(j, i, bid);
                     if (c == T(1) && s == T(0)) continue; //Skip identity rotations
-                    T temp = c * G_view(k, j, bid) - s * G_view(k, j + 1, bid);
-                    G_view(k, j + 1, bid) = s * G_view(k, j, bid) + c * G_view(k, j + 1, bid);
-                    G_view(k, j, bid) = temp;
+                    T temp = c * Q_(k, j, bid) - s * Q_(k, j + 1, bid);
+                    Q_(k, j + 1, bid) = s * Q_(k, j, bid) + c * Q_(k, j + 1, bid);
+                    Q_(k, j, bid) = temp;
                 }
             }
         });
