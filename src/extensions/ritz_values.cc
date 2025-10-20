@@ -113,6 +113,7 @@ namespace batchlas {
                         }
                     }
                     dot_mem[tid] = numerator_partial;
+                    sycl::group_barrier(cta);
                     
                     // Reduce across work-group
                     T numerator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
@@ -128,6 +129,7 @@ namespace batchlas {
                         }
                     }
                     dot_mem[tid] = denominator_partial;
+                    sycl::group_barrier(cta);
                     
                     // Reduce across work-group
                     T denominator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
