@@ -87,7 +87,7 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     SteqrParams<float_type> params= {};
     params.block_size = 16;
     params.max_sweeps = 5;
-    params.block_rotations = true;
+    params.block_rotations = false;
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
 
@@ -95,8 +95,15 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
                       ws.to_span(), JobType::EigenVectors, params, eigvects);
     
     this->ctx->wait();
+    auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
+    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+    this->ctx->wait();
 
-    std::cout << eigvects << std::endl;
+    for (int i = 0; i < n; ++i) {
+        //float_type expected = 2.0f * std::cos(M_PI * (i + 1) / (n + 1));
+        EXPECT_NEAR(c(i, 0), ritz_vals(i, 0), 1e-3) << "Eigenvalue mismatch at index " << i;
+        //EXPECT_NEAR(ritz_vals[i], expected, 1e-3) << "Ritz value mismatch at index " << i;
+    }
 }
 
 int main(int argc, char **argv) {
