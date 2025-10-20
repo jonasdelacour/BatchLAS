@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
+#include <blas/extensions.hh>
 
 using namespace batchlas;
 
@@ -76,8 +77,8 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
 TYPED_TEST(SteqrTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 64;
-    const int batch = 1;
+    const int n = 512;
+    const int batch = 32;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
@@ -86,23 +87,32 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     SteqrParams<float_type> params= {};
     params.block_size = 16;
-    params.max_sweeps = 5;
     params.block_rotations = false;
+    params.max_sweeps = 5;
+    params.sort = true;
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
 
     steqr<B, float_type>(*this->ctx, a, b, c,
-                      ws.to_span(), JobType::EigenVectors, params, eigvects);
-    
-    this->ctx->wait();
-    auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        ws.to_span(), JobType::EigenVectors, params, eigvects);
+        
     this->ctx->wait();
 
-    for (int i = 0; i < n; ++i) {
-        //float_type expected = 2.0f * std::cos(M_PI * (i + 1) / (n + 1));
-        EXPECT_NEAR(c(i, 0), ritz_vals(i, 0), 1e-3) << "Eigenvalue mismatch at index " << i;
-        //EXPECT_NEAR(ritz_vals[i], expected, 1e-3) << "Ritz value mismatch at index " << i;
+    auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
+    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+    
+    this->ctx->wait();
+    UnifiedVector<float> expected(n);
+    for (int k = 1; k <= n; ++k) {
+        expected[k-1] = float_type(1.0 - 2.0 * std::sqrt(1.0 * 1.0) * std::cos(double(k) * M_PI / double(n + 1)));
+    }
+    std::sort(expected.begin(), expected.end(), std::less<float>());
+
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(c(i, j), ritz_vals(i, j), 1e-3) << "Ritz value mismatch at index " << i << ", batch " << j;
+            EXPECT_NEAR(c(i, j), expected[i], 1e-3) << "Eigenvalue value mismatch at index " << i << ", batch " << j;
+        }
     }
 }
 
