@@ -29,6 +29,7 @@ auto psi_terms(const sycl::group<1>& cta, const VectorView<T>& v, const VectorVi
     auto psi1 = sycl::joint_reduce(cta, psi_buffer.get_pointer(), psi_buffer.get_pointer() + i + 1, sycl::plus<T>());
     auto psi2 = (i + 1) < n ? sycl::joint_reduce(cta, psi_buffer.get_pointer() + i + 1, psi_buffer.get_pointer() + n, sycl::plus<T>()) : T(0);
     for (int k = tid; k < n; k += bdim) { psi_buffer[k] = v(k, bid) / ( (d(k, bid) - (lam + shift)) * (d(k, bid) - (lam + shift))); }
+    sycl::group_barrier(cta);
     auto psi1_prime = sycl::joint_reduce(cta, psi_buffer.get_pointer(), psi_buffer.get_pointer() + i + 1, sycl::plus<T>());
     auto psi2_prime = (i + 1) < n ? sycl::joint_reduce(cta, psi_buffer.get_pointer() + i + 1, psi_buffer.get_pointer() + n, sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
@@ -150,10 +151,11 @@ template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q)
 {
+    constexpr auto steqr_params = SteqrParams<T>{32, 5, std::numeric_limits<T>::epsilon(), false, false, false};
     auto n = d.size();
     auto batch_size = d.batch_size();
     if (n <= params.recursion_threshold){
-        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, SteqrParams<T>(), eigvects);
+        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
     }
 
     //Split the matrix into two halves
