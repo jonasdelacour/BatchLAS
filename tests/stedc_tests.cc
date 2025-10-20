@@ -48,25 +48,36 @@ TYPED_TEST_SUITE(StedcTest, StedcTestTypes);
 TYPED_TEST(StedcTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 8;
-    const int batch = 1;
+    const int n = 128;
+    const int batch = 128;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
     auto b = Vector<float_type>::ones(n - 1, batch);
     auto eigvals = Vector<float_type>::zeros(n, batch);
     auto eigvects = Matrix<float_type>::Identity(n, batch);
-    StedcParams<float_type> params= {.recursion_threshold = 2};
+    StedcParams<float_type> params= {.recursion_threshold = 4};
 
     UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
 
     stedc<B>(*this->ctx, a, b, eigvals,
-                      ws.to_span(), JobType::EigenVectors, params, eigvects);
+                      ws, JobType::EigenVectors, params, eigvects);
     
     this->ctx->wait();
 
-    std::cout << "Eigenvalues:\n" << VectorView<float_type>(eigvals) << std::endl;
-    std::cout << "Eigenvectors:\n" << eigvects << std::endl;
+    UnifiedVector<float_type> ref_eigvals(n * batch);
+
+    Matrix<float_type> reconstructed = Matrix<float_type>::TriDiagToeplitz(n, float_type(1), float_type(1), float_type(1), batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+
+    auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
+    syev<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    this->ctx->wait();
+    auto tol = test_utils::tolerance<float_type>();
+    for (int i = 0; i < n * batch; ++i) {
+        EXPECT_NEAR(eigvals[i], ref_eigvals[i], tol);
+        EXPECT_NEAR(ref_eigvals[i], ritz_vals[i], tol);
+    }
 }
 
 int main(int argc, char **argv) {
