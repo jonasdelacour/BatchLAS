@@ -6,6 +6,7 @@
 #include <util/mempool.hh>
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include <internal/sort.hh>
 
 namespace batchlas {
 
@@ -383,6 +384,11 @@ Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
             eigenvalues(intra, bid) = d(intra, bid);
         });
     });
+
+    if (params.sort){
+        auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
+        sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
+    }
     return ctx.get_event();
 }
 
@@ -396,6 +402,7 @@ size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * params.block_size * params.block_size * 4);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * 8 * params.block_size * d.size());
     }
+    size += sort_buffer_size<T>(ctx, eigenvalues.data(), MatrixView<T, MatrixFormat::Dense>(nullptr, d.size(), d.size(), d.size(), d.size() * d.size(), d.batch_size()), jobz);
     return size;
 }
 
