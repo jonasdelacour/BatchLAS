@@ -14,7 +14,7 @@ auto givens_rotation_r(const T& a, const T& b) {
     if (internal::is_numerically_zero(r)) {
         return std::array<T, 3>{T(1), T(0), T(0)};
     }
-    return std::array<T, 3>{a / r,  - b / r, r};
+    return std::array<T, 3>{a / r, b / r, r};
 }
 
 
@@ -208,16 +208,14 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
             }
         });
     });
-
     argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
     permuted_copy(ctx, eigvects, temp_Q, permutation);
+    //std::cout << "Post divide and sort temp_Q matrix:\n" << temp_Q << std::endl;
 
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
-
-    ctx -> wait();
     //Deflation scheme
     T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
     ctx -> submit([&](sycl::handler& h) {
@@ -229,7 +227,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
         auto cta = item.get_group();
-        auto i = 0;
+        
         for (int k = tid; k < n; k += bdim){
             keep_indices(k, bid) = 0;
             scan_mem_exclude[k] = 0;
@@ -238,25 +236,21 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 
 
         sycl::group_barrier(cta);
-
-        while (i < n){
-            auto j = i;            
-            auto b = v(i, bid);
-            while (j < n - 1 && std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= reltol * std::max(T(1), std::max(std::abs(eigenvalues(j + 1, bid)), std::abs(eigenvalues(j, bid))))) {
-                j++;
-                auto a = v(j, bid);
-                auto [c, s, r] = givens_rotation_r(a, b);
+        for (int j = 0; j < n - 1; j++) {
+            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= reltol * std::max(T(1), std::max(std::abs(eigenvalues(j + 1, bid)), std::abs(eigenvalues(j, bid))))) {
+                auto f = v(j + 1, bid);
+                auto g = v(j, bid);
+                auto [c, s, r] = givens_rotation_r(f, g);
                 if (tid == 0) {
-                    v(i, bid) = r;
                     v(j, bid) = T(0.0);
+                    v(j + 1, bid) = r;
                 }
                 for (int k = tid; k < n; k += bdim) {
-                    auto Qi = Q(k,i,bid), Qj = Q(k,j,bid);
-                    Q(k,i,bid) = c*Qi + s*Qj;
-                    Q(k,j,bid) = -s*Qi + c*Qj;
+                    auto Qi = Q(k,j,bid), Qj = Q(k,j + 1,bid);
+                    Q(k,j,bid) = Qi*c - Qj*s;
+                    Q(k,j + 1,bid) = Qj*c + Qi*s;
                 }
             }
-            i = j + 1;
         }
 
         sycl::group_barrier(cta);
@@ -295,9 +289,9 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         
         });
     });
-    ctx -> wait();
 
     permute(ctx, temp_Q, eigvects, permutation);
+
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
@@ -309,7 +303,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, T(10.0));
 
     gemm<B>(ctx, temp_Q, Qprime, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-    
     ctx -> submit([&](sycl::handler& h) {
         h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
@@ -327,8 +320,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     permute(ctx, eigenvalues, permutation);
     permute(ctx, eigvects, temp_Q, permutation);
 
-    ctx -> wait();
-    std::cout << "Finished STEDC of size " << n << " with the following eigenvectors:\n" << eigvects << "\nAnd eigenvalues:\n" << eigenvalues << "\n";
     return ctx.get_event();
 }
 
