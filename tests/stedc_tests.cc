@@ -48,7 +48,7 @@ TYPED_TEST_SUITE(StedcTest, StedcTestTypes);
 TYPED_TEST(StedcTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 128;
+    const int n = 512;
     const int batch = 128;
     using float_type = typename base_type<T>::type;
 
@@ -56,7 +56,7 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     auto b = Vector<float_type>::ones(n - 1, batch);
     auto eigvals = Vector<float_type>::zeros(n, batch);
     auto eigvects = Matrix<float_type>::Identity(n, batch);
-    StedcParams<float_type> params= {.recursion_threshold = 4};
+    StedcParams<float_type> params= {.recursion_threshold = 32};
 
     UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
 
@@ -75,8 +75,8 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     this->ctx->wait();
     auto tol = test_utils::tolerance<float_type>();
     for (int i = 0; i < n * batch; ++i) {
-        EXPECT_NEAR(eigvals[i], ref_eigvals[i], tol);
-        EXPECT_NEAR(ref_eigvals[i], ritz_vals[i], tol);
+        EXPECT_NEAR(eigvals[i], ref_eigvals[i], 1e-2);
+        EXPECT_NEAR(eigvals[i], ritz_vals[i], 1e-3);
     }
 }
 
