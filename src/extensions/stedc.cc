@@ -40,19 +40,28 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
     //Solve the secular equation for each row in d and v
     ctx -> wait();
     auto N_max = d.size();
+    const T safe_min = std::numeric_limits<T>::min();
+    const T safe_denorm = std::numeric_limits<T>::denorm_min() > T(0) ? std::numeric_limits<T>::denorm_min() : safe_min;
+    const T log_upper_bound = static_cast<T>(std::log(static_cast<double>(std::numeric_limits<T>::max())));
+    const T log_lower_bound = static_cast<T>(std::log(static_cast<double>(safe_denorm)));
     ctx -> submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
         auto shared_mem = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto vhat = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto vsign = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
-        auto numerators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
-        auto denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
+        auto log_numerators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
+        auto log_denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         h.parallel_for(sycl::nd_range<1>(d.batch_size()*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
             auto cta = item.get_group();
             auto n = n_reduced[bid];
+            for (int k = tid; k < n; k += bdim) {
+                log_numerators[k] = T(0);
+                log_denominators[k] = T(0);
+            }
+            sycl::group_barrier(cta);
             for (int k = tid; k < n; k += bdim) { vsign[k] = (v(k, bid) >= T(0)) ? T(1) : T(-1); }
             for (int k = tid; k < n; k += bdim) { auto v_temp = v(k, bid); v(k, bid) *= v_temp; }
             
@@ -94,16 +103,34 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     Qview(k, i, bid) = d(k, bid) - (lam + shift);
                 }
 
-                if (i == 0) {for (int k = tid; k < n; k += bdim) numerators[k] = std::abs(Qview(k, i, bid));}
-                else {for (int k = tid; k < n; k += bdim) numerators[k] *= std::abs(Qview(k, i, bid));}
+                for (int k = tid; k < n; k += bdim) {
+                    auto diff = sycl::fabs(Qview(k, i, bid));
+                    diff = sycl::fmax(diff, safe_denorm);
+                    auto log_term = sycl::log(diff);
+                    if (i == 0) {
+                        log_numerators[k] = log_term;
+                    } else {
+                        log_numerators[k] += log_term;
+                    }
+                }
 
-                for (int k = tid; k < i; k += bdim) shared_mem[k] = d(i, bid) - d(k, bid);
-                auto den2 = i > 0 ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + i, sycl::multiplies<T>()) : T(1);
+                for (int k = tid; k < i; k += bdim) {
+                    auto diff = sycl::fabs(d(i, bid) - d(k, bid));
+                    diff = sycl::fmax(diff, safe_denorm);
+                    shared_mem[k] = sycl::log(diff);
+                }
+                sycl::group_barrier(cta);
+                auto log_den2 = i > 0 ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + i, sycl::plus<T>()) : T(0);
 
-                for (int k = tid; k < n - i - 1; k += bdim) shared_mem[k] = d(k + i + 1, bid) - d(i, bid);
-                auto den1 = (i + 1) < n ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + n - i - 1, sycl::multiplies<T>()) : T(1);
+                for (int k = tid; k < n - i - 1; k += bdim) {
+                    auto diff = sycl::fabs(d(k + i + 1, bid) - d(i, bid));
+                    diff = sycl::fmax(diff, safe_denorm);
+                    shared_mem[k] = sycl::log(diff);
+                }
+                sycl::group_barrier(cta);
+                auto log_den1 = (i + 1) < n ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + (n - i - 1), sycl::plus<T>()) : T(0);
 
-                if (tid == 0) denominators[i] = den1 * den2;
+                if (tid == 0) log_denominators[i] = log_den1 + log_den2;
                 
                 
                 // $$v_i =  \frac{ \prod_{j=1}^n |d_j - \lambda_i| }{ \prod_{j=1}^{i-1} (d_j - d_i) \prod_{j=i+1}^{n} (d_j - d_i) } $$
@@ -113,7 +140,12 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
             }
 
             sycl::group_barrier(cta);
-            for (int k = tid; k < n; k += bdim) vhat[k] = vsign[k] * std::sqrt(numerators[k] / denominators[k]);
+            for (int k = tid; k < n; k += bdim) {
+                auto exponent = T(0.5) * (log_numerators[k] - log_denominators[k]);
+                exponent = sycl::fmax(log_lower_bound, sycl::fmin(log_upper_bound, exponent));
+                auto magnitude = sycl::exp(exponent);
+                vhat[k] = vsign[k] * magnitude;
+            }
 
             
             
