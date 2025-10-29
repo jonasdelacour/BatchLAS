@@ -209,6 +209,21 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
 }
 
 template <typename T>
+Event sort(Queue& ctx, const VectorView<T>& data, SortOrder order){
+    auto ws = UnifiedVector<std::byte>(sort_buffer_size<T>(ctx, data.data(), MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0), JobType::NoEigenVectors));
+    sort<T>(ctx, data, MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0), JobType::NoEigenVectors, order, ws).wait();
+    return ctx.get_event();
+}
+
+template <typename T>
+Event sort(Queue& ctx, const VectorView<T>& data, const MatrixView<T, MatrixFormat::Dense>& eigvects, SortOrder order){
+    auto ws = UnifiedVector<std::byte>(sort_buffer_size<T>(ctx, data.data(), eigvects, JobType::EigenVectors));
+    sort<T>(ctx, data, eigvects, JobType::EigenVectors, order, ws).wait();
+    return ctx.get_event();
+}
+
+
+template <typename T>
 size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz) {
     size_t size = 0;
     size += BumpAllocator::allocation_size<T>(ctx, W.size() * V.batch_size()); // For eigenvalues
