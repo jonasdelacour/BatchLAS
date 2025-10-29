@@ -362,6 +362,17 @@ namespace batchlas {
         template <MatrixFormat M = MType, typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView<T, MType> operator()(Slice rows) const { return (*this)(rows, {}); }
 
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        U& operator()(int row, int col, int batch) {
+            return data_.at(batch * stride_ + col * ld_ + row);
+        }
+
+        template <typename U = T, MatrixFormat M = MType, 
+                typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        const U& operator()(int row, int col, int batch) const {
+            return data_.at(batch * stride_ + col * ld_ + row);
+        }
 
         // Methods to initialize backend
         void init() const;
