@@ -1320,6 +1320,100 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
     return ctx.get_event();
 }
 
+template <typename T>
+Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src) {
+    if (src.size() != dest.size() || src.batch_size() != dest.batch_size()) {
+        throw std::invalid_argument("Copy called on incompatible vectors");
+    }
+    if (src.data() == dest.data()) return ctx.get_event(); // No-op if same data
+    if ((src.stride() == src.size() && dest.stride() == dest.size() && src.inc() == 1 && dest.inc() == 1) ||
+        (src.stride() == 1 && dest.stride() == 1 && src.inc() == src.size() && dest.inc() == dest.size())) {
+        //If the stride is the same as the size of each vector just do a straight memcpy
+        auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.size() * src.batch_size() * sizeof(T)));
+        return event;
+    } else if (src.stride() == src.inc() * src.size() && dest.stride() == dest.inc() * dest.size()) {
+        // If both the strides and increments are the same as the size of each vector just do a straight 2D memcpy
+        auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
+                                                dest.inc() * sizeof(T),
+                                                static_cast<void*>(src.data_ptr()),
+                                                src.inc() * sizeof(T),
+                                                sizeof(T), src.size() * src.batch_size()));
+        return event;
+    } else if (src.inc() == 1 && dest.inc() == 1 && src.stride() >= src.size() && dest.stride() >= dest.size()) {
+        // If both increments are 1, we can do a 2D memcpy with the strides
+        auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
+                                                dest.stride() * sizeof(T),
+                                                static_cast<void*>(src.data_ptr()),
+                                                src.stride() * sizeof(T),
+                                                src.size() * sizeof(T), src.batch_size()));
+        return event;
+    } else if (src.inc() == src.stride() * src.size() && dest.inc() == dest.stride() * dest.size()) {
+        // If both the increments are the same as the size of each vector just do a straight 2D memcpy
+        auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
+                                                dest.stride() * sizeof(T),
+                                                static_cast<void*>(src.data_ptr()),
+                                                src.stride() * sizeof(T),
+                                                sizeof(T), src.size() * src.batch_size()));
+        return event;
+    } else {
+        //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
+        auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<2>(src.size(), src.batch_size()),
+                            [=](sycl::id<2> idx) {
+                size_t i = idx[0]; // index
+                size_t b = idx[1]; // batch
+                dest(i, b) = src(i, b);
+            });
+        }));
+        return event;
+    }
+}
+
+template <typename T>
+bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol) {
+    if (a.size() != b.size() || a.batch_size() != b.batch_size()) {
+        throw std::invalid_argument("all_close called on incompatible vectors");
+    }
+    UnifiedVector<bool> batch_results(a.batch_size());
+
+    ctx -> submit([&](sycl::handler& cgh) {
+        auto results = batch_results.data();
+        cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(a.batch_size() * a.size()), sycl::range<1>(a.size())), [=](sycl::nd_item<1> item) {
+            auto bid = item.get_group(0);
+            auto lid = item.get_local_id(0);
+            bool is_close = true;
+            auto compare = [=](const auto& x,const auto& y) { 
+                auto max_val = std::max(std::abs(x), std::abs(y));
+                auto diff = std::abs(x - y);
+                diff / (max_val > tol ? max_val : 1) <= tol;
+
+                return diff / (max_val > tol ? max_val : 1) <= tol;
+            };
+            if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+                is_close = compare(a(lid, bid).real(), b(lid, bid).real()) &&
+                           compare(a(lid, bid).imag(), b(lid, bid).imag());
+            } else {
+                is_close = compare(a(lid, bid), b(lid, bid));   
+            }
+            
+            results[bid] = sycl::all_of_group(item.get_group(), is_close);
+        });
+    }).wait();
+
+    ctx -> submit([&](sycl::handler& cgh) {
+        auto results = batch_results.data();
+        cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(std::min(1024, a.batch_size())), sycl::range<1>(std::min(1024, a.batch_size()))), [=](sycl::nd_item<1> item) {
+            auto cta = item.get_group();
+            bool result = sycl::joint_reduce(cta, results, results + a.batch_size(), sycl::logical_and<bool>());
+            if (item.get_local_id(0) == 0) {
+                results[0] = result;
+            }
+        });
+
+    }).wait();
+    return batch_results[0];
+}
+
 // Element access operator - returns view of a single batch item
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> MatrixView<T, MType>::operator[](int i) const {
@@ -1405,11 +1499,16 @@ template class MatrixView<double, MatrixFormat::CSR>;
 template class MatrixView<std::complex<float>, MatrixFormat::CSR>;
 template class MatrixView<std::complex<double>, MatrixFormat::CSR>;
 
-// Dense constructor instantiations 
-template Matrix<float, MatrixFormat::Dense>::Matrix(int, int, int);
-template Matrix<double, MatrixFormat::Dense>::Matrix(int, int, int);
-template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(int, int, int);
-template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(int, int, int);
+template class VectorView<float>;
+template class VectorView<double>;
+template class VectorView<std::complex<float>>;
+template class VectorView<std::complex<double>>;
+
+// Dense constructor instantiations
+template Matrix<float, MatrixFormat::Dense>::Matrix(int, int, int, int, int);
+template Matrix<double, MatrixFormat::Dense>::Matrix(int, int, int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(int, int, int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(int, int, int, int, int);
 
 template Matrix<float, MatrixFormat::Dense>::Matrix(const float*, int, int, int, int, int);
 template Matrix<double, MatrixFormat::Dense>::Matrix(const double*, int, int, int, int, int);
@@ -1514,6 +1613,11 @@ template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue
 template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<double>&, int64_t) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<float>>&, int64_t) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const Span<std::complex<double>>&, int64_t) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const VectorView<float>&, int64_t) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const VectorView<double>&, int64_t) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const VectorView<std::complex<float>>&, int64_t) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_diagonal(const Queue&, const VectorView<std::complex<double>>&, int64_t) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_diagonal(const Queue&, const float&) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_diagonal(const Queue&, const double&) const;

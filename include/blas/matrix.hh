@@ -1041,6 +1041,10 @@ namespace batchlas {
         int stride() const { return stride_; }
         int batch_size() const { return batch_size_; }
 
+        static Event copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src);
+
+        static bool all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()); 
+
         // Access element at (i, batch)
         T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
 
