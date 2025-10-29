@@ -347,7 +347,7 @@ Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& gi
 }
 
 template <Backend B, typename T>
-Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects) {
     // Ensure the matrix is square
     if (eigvects.rows() != eigvects.cols()) {
@@ -356,10 +356,16 @@ Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
     if (!params.back_transform) {
         eigvects.fill_identity(ctx);
     }
-
-    int64_t n = d.size();
-    int64_t batch_size = d.batch_size();   
+    
+    int64_t n = d_in.size();
+    int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
+    auto d = VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, 1, n, batch_size);
+    auto e = VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, 1, n - 1, batch_size);
+    //Copy inputs to working buffers
+    VectorView<T>::copy(ctx, d, d_in);
+    VectorView<T>::copy(ctx, e, e_in);
+
     auto apply_Q_ws = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? (batch_size * params.block_size*2 * params.block_size*2 + batch_size*n*params.block_size*4) : 0);
     auto n_sweeps_to_store = (jobz == JobType::EigenVectors && params.block_rotations)? std::max(params.block_size * 2, params.max_sweeps) : params.max_sweeps;
     auto stride = (n - 1) * n_sweeps_to_store;
@@ -396,7 +402,8 @@ template <typename T>
 size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                             const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
     // Calculate the required buffer size for the workspace
-    size_t size = 0;
+    size_t size = BumpAllocator::allocation_size<T>(ctx, d.batch_size() * d.size()) // For d
+                + BumpAllocator::allocation_size<T>(ctx, d.batch_size() * (d.size() - 1)); // For e
     if (jobz == JobType::EigenVectors) {
         size += BumpAllocator::allocation_size<std::array<T,2>>(ctx, d.batch_size() * d.size() * params.max_sweeps);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * params.block_size * params.block_size * 4);
