@@ -27,11 +27,11 @@ namespace batchlas {
 // Basic constructor for dense matrix (allocates uninitialized memory)
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
-Matrix<T, MType>::Matrix(int rows, int cols, int batch_size)
+Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     : rows_(rows), cols_(cols), batch_size_(batch_size),
-      ld_(rows), stride_(rows * cols) {
+      ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols) {
     // Allocate memory for the matrix data
-    data_.resize(static_cast<size_t>(rows) * cols * batch_size);
+    data_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
     
     // If batched, set up the data pointers
     if (batch_size > 1) {

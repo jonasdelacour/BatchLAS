@@ -21,6 +21,10 @@ namespace batchlas {
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class MatrixView;
 
+    //Forward declare VectorView with default parameter
+    template <typename T = float>
+    struct VectorView;
+
     // Forward declare the backend handle - implementation will be in src/ folder
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class BackendMatrixHandle;
@@ -235,7 +239,7 @@ namespace batchlas {
         // Basic constructors for dense matrix (allocate uninitialized memory)
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
-        Matrix(int rows, int cols, int batch_size = 1);
+        Matrix(int rows, int cols, int batch_size = 1, int ld = 0, int stride = 0);
 
         // Basic constructors for CSR sparse matrix (allocate uninitialized memory)
         template <typename U = T, MatrixFormat M = MType, 
@@ -909,10 +913,6 @@ namespace batchlas {
     template <typename T = float>
     class BackendVectorHandle; // Forward declaration with default parameter
 
-    //Forward declare VectorView with default parameter
-    template <typename T = float>
-    struct VectorView;
-
     // Vector class with batched support and stride between vectors
     template <typename T>
     struct Vector {
@@ -1042,11 +1042,6 @@ namespace batchlas {
             return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_), size_, inc_, stride_, 1);
         }
 
-        // Subview (range within a batch)
-        VectorView<T> subview(int offset, int count, int batch = 0) const {
-            return VectorView<T>(Span<T>(data_.data() + batch * stride_ + offset * inc_, count, inc_), count, 1, inc_, stride_);
-        }
-
         VectorView<T> operator()(Slice slice) const {
             // Create a new view based on the slice
             int64_t n;
@@ -1133,7 +1128,7 @@ namespace batchlas {
 
     template <typename T>
     std::ostream& operator<<(std::ostream& os, const Vector<T>& vec) {
-        os << static_cast<const VectorView<T>&>(vec); // Leverages VectorView's operator<<
+        os << VectorView(vec); // Leverages VectorView's operator<<
         return os;
     }
 
