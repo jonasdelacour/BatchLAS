@@ -7,6 +7,80 @@
 
 using namespace batchlas;
 
+TEST (MatrixDenseTest, StridedConstruction) {
+    constexpr int rows = 3;
+    constexpr int cols = 2;
+    constexpr int batch = 2;
+    constexpr int ld = 4;      // leading dimension greater than rows
+    constexpr int stride = 10; // stride greater than ld * cols
+
+    Matrix<float, MatrixFormat::Dense> mat(rows, cols, batch, ld, stride);
+    EXPECT_EQ(mat.rows_, rows);
+    EXPECT_EQ(mat.cols_, cols);
+    EXPECT_EQ(mat.batch_size_, batch);
+    EXPECT_EQ(mat.ld(), ld);
+    EXPECT_EQ(mat.stride(), stride);
+    EXPECT_EQ(mat.data().size(), stride * batch);
+
+    //Ensure that the underlying data is zero'd first:
+    for (auto v : mat.data()) {
+        EXPECT_FLOAT_EQ(v, 0.0f);
+    }
+
+    //Now use matrix fill function (shouldn't fill the padding areas)
+    mat.fill(1.0f);
+    for (int k = 0; k < batch; ++k) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                mat(i, j, k) = 1.0f;
+                EXPECT_FLOAT_EQ(mat.data()[k * stride + j * ld + i], 1.0f);
+            }
+        }
+    }
+
+    for (int k = 0; k < batch; ++k) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = rows; i < ld; ++i) {
+                // Padding area in leading dimension should remain zero
+                EXPECT_FLOAT_EQ(mat.data()[k * stride + j * ld + i], 0.0f);
+            }
+        }
+    }
+
+    for (int k = 0; k < batch; ++k) {
+        for (int j = cols; j < stride / ld; ++j) {
+            for (int i = 0; i < ld; ++i) {
+                // Padding area in stride should remain zero
+                EXPECT_FLOAT_EQ(mat.data()[k * stride + j * ld + i], 0.0f);
+            }
+        }
+    }
+}
+
+
+TEST (MatrixDenseTest, StridedIdentity) {
+    constexpr int n = 4;
+    constexpr int batch = 2;
+    constexpr int ld = 6;
+    constexpr int stride = 30;
+
+    Queue ctx;
+
+    Matrix<float, MatrixFormat::Dense> mat(n, n, batch, ld, stride);
+    auto view = mat.view();
+    view.fill_identity(ctx, 1.0f).wait();
+
+    for (int k = 0; k < batch; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                float v = mat.data()[k * stride + j * ld + i];
+                if (i == j) EXPECT_FLOAT_EQ(v, 1.0f);
+                else EXPECT_FLOAT_EQ(v, 0.0f);
+            }
+        }
+    }
+}
+
 TEST(MatrixDenseTest, BasicConstructionAndFill) {
     constexpr int rows = 4;
     constexpr int cols = 3;
