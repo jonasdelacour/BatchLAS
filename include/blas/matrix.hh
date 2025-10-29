@@ -745,6 +745,15 @@ namespace batchlas {
 
         template <MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Event fill_tridiag(const Queue& ctx, VectorView<T> sub_diag, 
+                            VectorView<T> diag, VectorView<T> super_diag) const {
+                                fill_diagonal(ctx, diag);
+                                fill_diagonal(ctx, sub_diag, -1);
+                                return fill_diagonal(ctx, super_diag, 1);
+                            }
+
+        template <MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_tridiag_toeplitz(const Queue& ctx, T diag = T(1), 
                                     T sub_diag = T(-0.5), T super_diag = T(0.5)) const;
 
