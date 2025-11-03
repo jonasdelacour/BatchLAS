@@ -800,6 +800,11 @@ namespace batchlas {
 
         // Create a new view into a single batch item
         MatrixView<T, MType> batch_item(int batch_index) const;
+
+        static bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const MatrixView<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon());
+        static inline bool all_close(Queue& ctx, const Matrix<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a.view(), b.view(), tol);}
+        static inline bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a, b.view(), tol);}
+        static inline bool all_close(Queue& ctx, const Matrix<T, MType>& a, const MatrixView<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a.view(), b, tol);}
         
         // Print the matrix view content to a stream
         // Returns the ostream to allow chaining and use in operator<<
@@ -986,10 +991,6 @@ namespace batchlas {
             return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, stride_*batch_size_), size_, 1, inc_, stride_);
         }
 
-        operator VectorView<T>() const {
-            return VectorView<T>(data(), size_, inc_, stride_, batch_size_);
-        }
-
         BackendVectorHandle<T>* operator->();
         BackendVectorHandle<T>& operator*();
         const BackendVectorHandle<T>* operator->() const;
@@ -1044,6 +1045,15 @@ namespace batchlas {
         static Event copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src);
 
         static bool all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()); 
+        static bool all_close(Queue& ctx, const Vector<T>& a, const Vector<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, VectorView<T>(a), VectorView<T>(b), tol);
+        }
+        static bool all_close(Queue& ctx, const VectorView<T>& a, const Vector<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, a, VectorView<T>(b), tol);
+        }
+        static bool all_close(Queue& ctx, const Vector<T>& a, const VectorView<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, VectorView<T>(a), b, tol);
+        }
 
         // Access element at (i, batch)
         T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
