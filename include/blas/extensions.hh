@@ -483,6 +483,7 @@ namespace batchlas {
         Vector<float_type> ritz_vals(nRitz, 1, nRitz, V.batch_size());
         size_t workspace_size = ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
         UnifiedVector<std::byte> workspace(workspace_size);
+        ctx.wait();
         ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
         ctx.wait();
         return ritz_vals;
