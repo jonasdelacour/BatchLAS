@@ -854,6 +854,8 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         auto ld = ld_; // Leading dimension
         auto rows = rows_;
         auto cols = cols_;
+        auto data_view = this->kernel_view();
+        if constexpr (MType == MatrixFormat::Dense) {
         ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             size_t global_id = item.get_global_id(0);
             size_t total_work_items = item.get_global_range(0);
@@ -866,9 +868,10 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
                 size_t col = remainder / rows;               // column index
                 size_t row = remainder % rows;               // row index
 
-                data_ptr[b * stride + col * ld + row] = value;
+                data_view(row, col, b) = value;
             }
         });
+        }
     }
     return ctx.get_event();
 }
