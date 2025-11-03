@@ -38,7 +38,6 @@ auto psi_terms(const sycl::group<1>& cta, const VectorView<T>& v, const VectorVi
 template <typename T>
 Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v, const MatrixView<T, MatrixFormat::Dense>& Qprime, const VectorView<T>& lambdas, const Span<int32_t>& n_reduced, const T& tol_factor = 10.0) {
     //Solve the secular equation for each row in d and v
-    ctx -> wait();
     auto N_max = d.size();
     const T safe_min = std::numeric_limits<T>::min();
     const T safe_denorm = std::numeric_limits<T>::denorm_min() > T(0) ? std::numeric_limits<T>::denorm_min() : safe_min;
@@ -51,7 +50,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
         auto vsign = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto log_numerators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto log_denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
-        h.parallel_for(sycl::nd_range<1>(d.batch_size()*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for(sycl::nd_range<1>(d.batch_size()*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
@@ -202,6 +201,8 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto E2 = eigvects(Slice{m, SliceEnd()}, Slice(m, SliceEnd()));
     auto Q1 = temp_Q(Slice{0, m}, Slice(0, m));
     auto Q2 = temp_Q(Slice{m, SliceEnd()}, Slice(m, SliceEnd()));
+    auto lambda1 = eigenvalues(Slice(0, m));
+    auto lambda2 = eigenvalues(Slice(m, SliceEnd()));
 
     auto pool = BumpAllocator(ws);
     auto rho = pool.allocate<T>(ctx, batch_size);
@@ -219,8 +220,8 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         auto pool = BumpAllocator(ws.subspan(BumpAllocator::allocation_size<T>(ctx, batch_size)));
         auto ws1 = pool.allocate<std::byte>(ctx, stedc_internal_workspace_size<B, T>(ctx, m, batch_size, jobz, params));
         auto ws2 = pool.allocate<std::byte>(ctx, stedc_internal_workspace_size<B, T>(ctx, n - m, batch_size, jobz, params));
-        stedc_impl<B, T>(ctx, d1, e1, eigenvalues(Slice(0, m)), ws1, jobz, params, E1, Q1);
-        stedc_impl<B, T>(ctx, d2, e2, eigenvalues(Slice(m, SliceEnd())), ws2, jobz, params, E2, Q2);
+        stedc_impl<B, T>(ctx, d1, e1, lambda1, ws1, jobz, params, E1, Q1);
+        stedc_impl<B, T>(ctx, d2, e2, lambda2, ws2, jobz, params, E2, Q2);
     }
     
     //Once permutations are done we can free the memory once again
@@ -246,7 +247,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
     permuted_copy(ctx, eigvects, temp_Q, permutation);
-    //std::cout << "Post divide and sort temp_Q matrix:\n" << temp_Q << std::endl;
 
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
@@ -268,13 +268,13 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
             permutation(k, bid) = -1;
         }
 
-
         sycl::group_barrier(cta);
         for (int j = 0; j < n - 1; j++) {
             if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= reltol * std::max(T(1), std::max(std::abs(eigenvalues(j + 1, bid)), std::abs(eigenvalues(j, bid))))) {
                 auto f = v(j + 1, bid);
                 auto g = v(j, bid);
                 auto [c, s, r] = givens_rotation_r(f, g);
+                sycl::group_barrier(cta);
                 if (tid == 0) {
                     v(j, bid) = T(0.0);
                     v(j + 1, bid) = r;
@@ -325,7 +325,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     });
 
     permute(ctx, temp_Q, eigvects, permutation);
-
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
@@ -333,7 +332,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     Qprime.fill_identity(ctx);
     //Problem: We ultimately need to compute Q1 ⨂ Q2 * Qprime, however since we are deflating the columns of Q1 ⨂ Q2 we need to be careful about how we form Qprime.
     //Idea: As long as the columns of Qprime are the euclidean basis vectors, multiplying by Qprime is just a permutation of the columns of Q1 ⨂ Q2
-
     secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, T(10.0));
 
     gemm<B>(ctx, temp_Q, Qprime, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
@@ -349,7 +347,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         }
         });
     });
-    
     argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
     permute(ctx, eigenvalues, permutation);
     permute(ctx, eigvects, temp_Q, permutation);
