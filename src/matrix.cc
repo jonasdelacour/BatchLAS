@@ -1387,9 +1387,10 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
             bool is_close = true;
             auto compare = [=](const auto& x,const auto& y) { 
                 auto max_val = std::max(std::abs(x), std::abs(y));
+                if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
+                    return true; // Both values are effectively zero
+                }
                 auto diff = std::abs(x - y);
-                diff / (max_val > tol ? max_val : 1) <= tol;
-
                 return diff / (max_val > tol ? max_val : 1) <= tol;
             };
             if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
@@ -1413,6 +1414,71 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
             }
         });
 
+    }).wait();
+    return batch_results[0];
+}
+
+template <typename T, MatrixFormat MType>
+bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, const MatrixView<T, MType>& B, float_t<T> tol) {
+    if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
+        throw std::invalid_argument("all_close called on incompatible matrices");
+    }
+    UnifiedVector<bool> batch_results(A.batch_size());
+    if constexpr (MType == MatrixFormat::Dense) {
+        
+    
+        ctx -> submit([&](sycl::handler& cgh) {
+            auto results = batch_results.data();
+            auto Aview = A.kernel_view();
+            auto Bview = B.kernel_view();
+
+            cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(A.batch_size() *  A.rows()), sycl::range<1>(A.rows())), [=](sycl::nd_item<1> item) {
+                auto bid = item.get_group(0);
+                auto lid = item.get_local_id(0);
+                bool is_close = true;
+                auto compare = [=](const auto& x,const auto& y) { 
+                    auto max_val = std::max(std::abs(x), std::abs(y));
+                    if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
+                        return true; // Both values are effectively zero
+                    }
+                    auto diff = std::abs(x - y);
+                    return diff / (max_val > tol ? max_val : 1) <= tol;
+                };
+                results[bid] = true; // Initialize to true
+
+                for (int col = 0; col < Aview.cols; ++col) {
+                    auto a_element = Aview(lid, col, bid);
+                    auto b_element = Bview(lid, col, bid);
+                    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+                        is_close = is_close && compare(a_element.real(), b_element.real()) &&
+                                        compare(a_element.imag(), b_element.imag());
+                    } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                        is_close = is_close && compare(a_element, b_element);
+                    } else {
+                        is_close = is_close && a_element == b_element;
+                    }
+                    results[bid] &= sycl::all_of_group(item.get_group(), is_close);
+                    if (!results[bid]) {
+                        break; // Early exit if already false
+                    }
+                }
+            });
+        }).wait();
+    } else {
+        throw std::runtime_error("all_close not implemented for this matrix format");
+    }
+
+    ctx -> submit([&](sycl::handler& cgh) {
+        auto results = batch_results.data();
+        auto Aview = A.kernel_view();
+        auto batch_size = A.batch_size();
+        cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(std::min(1024, batch_size)), sycl::range<1>(std::min(1024, batch_size))), [=](sycl::nd_item<1> item) {
+            auto cta = item.get_group();
+            bool result = sycl::joint_reduce(cta, results, results + batch_size, sycl::logical_and<bool>());
+            if (item.get_local_id(0) == 0) {
+                results[0] = result;
+            }
+        });
     }).wait();
     return batch_results[0];
 }
