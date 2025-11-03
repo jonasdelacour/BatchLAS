@@ -18,7 +18,7 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
 
     ctx -> submit([&](sycl::handler& h) {
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
@@ -45,7 +45,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
@@ -79,7 +79,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
         auto temp_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto temp_vec = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         auto data_view = data.kernel_view();
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto cta = item.get_group();
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range()[0];
@@ -146,14 +146,13 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
         
         sycl::local_accessor<std::byte, 1> scratch(sycl::range<1>(sort_mem_size), h);
         
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
             
             // Set up pointers to the batch-specific data
-            T* batch_data = data.batch_item(bid).data_ptr();
             K* batch_indices = indices.batch_item(bid).data_ptr();
 
             // Create group helper with scratch memory
@@ -176,12 +175,12 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
                 group_helper, 
                 batch_indices, 
                 batch_indices + n,
-                [batch_data, order](auto idx_a, auto idx_b) {
+                [data, order, bid](auto idx_a, auto idx_b) {
                     // Sort by value in ascending order
                     if (order == SortOrder::Descending) {
-                        return batch_data[idx_a] > batch_data[idx_b];
+                        return data(idx_a, bid) > data(idx_b, bid);
                     } else {
-                        return batch_data[idx_a] < batch_data[idx_b];
+                        return data(idx_a, bid) < data(idx_b, bid);
                     }
                 }
             );
