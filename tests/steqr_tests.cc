@@ -77,14 +77,15 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
 TYPED_TEST(SteqrTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 512;
+    const int n = 1024;
     const int batch = 32;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
     auto b = Vector<float_type>::ones(n - 1, batch);
     auto c = Vector<float_type>::zeros(n, batch);
-    auto eigvects = Matrix<float_type>::Identity(n, batch);
+
+    auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
     SteqrParams<float_type> params= {};
     params.block_size = 16;
     params.block_rotations = false;

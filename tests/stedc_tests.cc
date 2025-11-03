@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
-
 using namespace batchlas;
 
 template <typename T, Backend B>
@@ -75,8 +74,8 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     this->ctx->wait();
     auto tol = test_utils::tolerance<float_type>();
     for (int i = 0; i < n * batch; ++i) {
-        EXPECT_NEAR(eigvals[i], ref_eigvals[i], 1e-2);
-        EXPECT_NEAR(eigvals[i], ritz_vals[i], 1e-3);
+        ASSERT_NEAR(eigvals[i], ref_eigvals[i], 1e-3);
+        ASSERT_NEAR(eigvals[i], ritz_vals[i], 1e-3);
     }
 }
 
