@@ -35,6 +35,7 @@ struct Config {
     size_t min_iters = 5;                // minimum measurement iterations
     size_t max_iters = 100;              // safety cap on iterations
     double min_time_ms = 200.0;          // target minimum total measurement time
+    bool metric_stddev = false;          // show metric stddev columns scaled from time stddev
 };
 
 struct Result {
@@ -44,6 +45,7 @@ struct Result {
     double stddev_ms = 0.0;                 // standard deviation of times
     size_t iterations = 0;                  // number of measured iterations
     std::unordered_map<std::string, double> metrics; // all metrics
+    std::unordered_map<std::string, double> metrics_stddev; // stddev derived from timing
 };
 
 enum MetricType {
@@ -386,11 +388,18 @@ inline Result run_benchmark(const Benchmark& b,
         state.metrics_fn_(res);
     }
 
+    // Propagate timing variability into metrics for optional display
+    double rel_time_std = (res.avg_ms > 0.0) ? (res.stddev_ms / res.avg_ms) : 0.0;
+    for (const auto& kv : res.metrics) {
+        res.metrics_stddev[kv.first] = kv.second * rel_time_std;
+    }
+
     return res;
 }
 
 inline void print_header(const std::vector<std::string>& metric_names,
-                        size_t max_args) {
+                        size_t max_args,
+                        bool show_metric_stddev) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
     std::cout << std::showpoint << std::setprecision(5);
@@ -405,6 +414,7 @@ inline void print_header(const std::vector<std::string>& metric_names,
               << std::setw(12) << "Std(ms)";
     for (const auto& m : metric_names) {
         std::cout << std::setw(12) << m;
+        if (show_metric_stddev) std::cout << std::setw(12) << (m + " (±)");
     }
     std::cout << kColorReset << '\n';
 
@@ -413,7 +423,8 @@ inline void print_header(const std::vector<std::string>& metric_names,
 
 inline void print_row(const Result& r,
                       const std::vector<std::string>& metric_names,
-                      size_t max_args) {
+                      size_t max_args,
+                      bool show_metric_stddev) {
     std::ios orig_state(nullptr);
     orig_state.copyfmt(std::cout);
     std::cout << std::showpoint << std::setprecision(5);
@@ -440,6 +451,15 @@ inline void print_row(const Result& r,
                 std::cout << std::setw(12) << v;
         } else {
             std::cout << std::setw(12) << "";
+        }
+
+        if (show_metric_stddev) {
+            auto it_std = r.metrics_stddev.find(m);
+            if (it_std != r.metrics_stddev.end()) {
+                std::cout << std::setw(12) << it_std->second;
+            } else {
+                std::cout << std::setw(12) << "";
+            }
         }
     }
     std::cout << '\n';
@@ -542,7 +562,7 @@ inline int RunRegisteredBenchmarks(const Config& cfg = {},
         }
         if (!header_printed || changed) {
             if (header_printed) std::cout << "\n";
-            print_header(metric_names, max_args);
+            print_header(metric_names, max_args, cfg.metric_stddev);
             header_printed = true;
         }
     };
@@ -553,13 +573,13 @@ inline int RunRegisteredBenchmarks(const Config& cfg = {},
         if (b.args_list.empty()) {
             auto r = run_benchmark(b, {}, cfg);
             update_header(r);
-            print_row(r, metric_names, max_args);
+            print_row(r, metric_names, max_args, cfg.metric_stddev);
             results.push_back(r);
         } else {
             for (const auto& a : b.args_list) {
                 auto r = run_benchmark(b, a, cfg);
                 update_header(r);
-                print_row(r, metric_names, max_args);
+                print_row(r, metric_names, max_args, cfg.metric_stddev);
                 results.push_back(r);
             }
         }
@@ -592,6 +612,8 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             opt.cfg.max_iters = std::stoul(s.substr(12));
         } else if (s.rfind("--min_time=", 0) == 0) {
             opt.cfg.min_time_ms = std::stod(s.substr(11));
+        } else if (s == "--metric_stddev") {
+            opt.cfg.metric_stddev = true;
         } else if (s.rfind("--csv=", 0) == 0) {
             opt.csv_file = s.substr(6);
         } else if (s.rfind("--backend=", 0) == 0) {
@@ -606,6 +628,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             std::cout << "  --min_iters=N        minimum measured iterations\n";
             std::cout << "  --max_iters=N        maximum measured iterations\n";
             std::cout << "  --min_time=MS        minimum total measurement time\n";
+            std::cout << "  --metric_stddev      print metric stddev columns (scaled from timing stddev)\n";
             std::cout << "  --csv=FILE           write results to CSV file\n";
             std::cout << "  --backend=LIST       comma separated backends to run\n";
             std::cout << "  --type=LIST          comma separated floating point types\n";
