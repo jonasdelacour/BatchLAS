@@ -1,4 +1,5 @@
 #pragma once
+#include <random>
 #include <memory>
 #include <complex>
 #include <type_traits>
@@ -1022,10 +1023,11 @@ namespace batchlas {
         }
         static Vector<T> random(int size, int batch_size = 1, int stride = 0, int inc = 1) {
             Vector<T> vec(size, inc, stride, batch_size);
-
+            std::mt19937 rng(42); // Mersenne Twister engine with fixed seed
+            std::uniform_real_distribution<float_t<T>> dist(0.0f, 1.0f);
             for (int b = 0; b < batch_size; ++b) {
                 for (int i = 0; i < size; ++i) {
-                    vec(i, b) = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
+                    vec(i, b) = static_cast<T>(dist(rng));
                 }
             }
             return vec;
@@ -1057,6 +1059,10 @@ namespace batchlas {
         // Get a view of a single batch
         VectorView<T> batch_item(int batch_index) const {
             return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, stride_*batch_size_), size_, 1, inc_, stride_);
+        }
+
+        void print(std::ostream& os = std::cout, int max_elements = 10) const {
+            VectorView<T>(*this).stream_formatted_to(os, max_elements);
         }
 
         BackendVectorHandle<T>* operator->();
