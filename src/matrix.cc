@@ -944,14 +944,15 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
     ctx->submit([=](sycl::handler& cgh) {
         auto view = this->kernel_view();
         cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
-            size_t flat = item.get_global_id(0);
+            size_t gid = item.get_global_id(0);
             
             // Bounds check
-            if (flat >= total_elements) return;
-            
-            size_t b = flat / (n - std::abs(k));
-            size_t i = flat % (n - std::abs(k));
-            view(i + row_offset, i + col_offset, b) = diag_values(i, batch_diagonals ? b : 0);
+            if (gid >= total_elements) return;
+            for (int flat = gid; flat < total_elements; flat += item.get_global_range(0)) {
+                size_t b = flat / (n - std::abs(k));
+                size_t i = flat % (n - std::abs(k));
+                view(i + row_offset, i + col_offset, b) = diag_values(i, batch_diagonals ? b : 0);
+            }
         });
     });
     
