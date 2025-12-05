@@ -68,6 +68,11 @@ namespace batchlas {
         Ascending,
         Descending
     };
+
+    enum class ApplyOrder {
+        Forward,
+        Backward
+    };
     
     enum class OrthoAlgorithm {
         Chol2,          //Default
@@ -88,6 +93,11 @@ namespace batchlas {
         F16,
         BF16,
         TF32
+    };
+
+    enum class VectorOrientation {
+        Row,
+        Column
     };
 
     enum class MatrixFormat {
