@@ -11,7 +11,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # Define compile flags for different build types
-set(CMAKE_CXX_FLAGS_DEBUG "-g -DDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
