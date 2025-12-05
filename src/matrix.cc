@@ -398,6 +398,41 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
     }
 }
 
+
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrientation orientation)
+    : rows_(orientation == VectorOrientation::Column ? vector_view.size() : 1),
+      cols_(orientation == VectorOrientation::Row ? vector_view.size() : 1),
+      ld_(orientation == VectorOrientation::Column ? vector_view.size() : vector_view.inc()),
+      stride_(vector_view.stride()),
+      batch_size_(vector_view.batch_size()),
+      data_(vector_view.data()) {
+    if (orientation == VectorOrientation::Column && vector_view.inc() != 1) {
+        throw std::runtime_error("Cannot create column matrix view from vector with inc != 1");
+    }
+}
+
+template <typename T>
+template <typename BinaryOperatorOp>
+Event VectorView<T>::hadamard_product(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z, BinaryOperatorOp op) {
+    // Implementation of hadamard product
+    // z = a*x .* b*y
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        z.size() * z.batch_size(), ctx.device(), KernelType::ELEMENTWISE);
+
+    return static_cast<EventImpl>(ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        size_t global_id = item.get_global_id(0);
+        size_t total_work_items = item.get_global_range(0);
+        for (size_t idx = global_id; idx < x.size() * x.batch_size(); idx += total_work_items) {
+            size_t bid = idx / x.size();
+            size_t i = idx % x.size();
+            z(i, bid) = op(a * x(i, bid), b * y(i, bid));
+        }
+    }));
+}
+
+
 // Copy from another matrix view
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
@@ -954,8 +989,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
                 view(i + row_offset, i + col_offset, b) = diag_values(i, batch_diagonals ? b : 0);
             }
         });
-    });
-    
+    });    
     return ctx.get_event();
 }
 
@@ -1447,7 +1481,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                 };
                 results[bid] = true; // Initialize to true
 
-                for (int col = 0; col < Aview.cols; ++col) {
+                for (int col = 0; col < Aview.cols(); ++col) {
                     auto a_element = Aview(lid, col, bid);
                     auto b_element = Bview(lid, col, bid);
                     if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
@@ -1495,6 +1529,47 @@ template <typename T, MatrixFormat MType>
 void MatrixView<T, MType>::init() const {
     if (backend_handle_) return;
     backend_handle_ = createBackendHandle(*this);
+}
+
+template <typename T, MatrixFormat MType>
+Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        static_cast<size_t>(matrix.rows()) * matrix.cols() * matrix.batch_size(),
+        ctx.device(), KernelType::ELEMENTWISE);
+    if constexpr (MType == MatrixFormat::CSR) {
+        throw std::runtime_error("scale not implemented for CSR matrices yet");
+    } else if constexpr (MType == MatrixFormat::Dense) {
+        return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+            auto view = matrix.kernel_view();
+            cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+                size_t gid = item.get_global_id(0);
+                if (gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size()) {
+                    size_t b = gid / (view.rows() * view.cols());
+                    size_t rem = gid % (view.rows() * view.cols());
+                    size_t j = rem / view.rows();
+                    size_t i = rem % view.rows();
+                    view(i, j, b) *= alpha;
+                }
+            });
+        }));
+    }
+}
+
+template <typename T, MatrixFormat MType>
+Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
+    auto [global_size, local_size] = compute_nd_range_sizes(
+        static_cast<size_t>(vector.size()) * vector.batch_size(),
+        ctx.device(), KernelType::ELEMENTWISE);
+    return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            size_t gid = item.get_global_id(0);
+            if (gid < static_cast<size_t>(vector.size()) * vector.batch_size()) {
+                size_t b = gid / vector.size();
+                size_t i = gid % vector.size();
+                vector(i, b) *= alpha;
+            }
+        });
+    }));
 }
 
 
@@ -1658,6 +1733,11 @@ template MatrixView<double, MatrixFormat::Dense> MatrixView<double, MatrixFormat
 template MatrixView<std::complex<float>, MatrixFormat::Dense> MatrixView<std::complex<float>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>*, std::complex<float>**);
 template MatrixView<std::complex<double>, MatrixFormat::Dense> MatrixView<std::complex<double>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>*, std::complex<double>**);
 
+template Event VectorView<float>::hadamard_product<std::plus<float>>(const Queue&, float a, float b, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, std::plus<float>) ;
+template Event VectorView<double>::hadamard_product<std::plus<double>>(const Queue&, double a, double b, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, std::plus<double>) ;
+template Event VectorView<std::complex<float>>::hadamard_product<std::plus<std::complex<float>>>(const Queue&, std::complex<float> a, std::complex<float> b, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, std::plus<std::complex<float>>) ;
+template Event VectorView<std::complex<double>>::hadamard_product<std::plus<std::complex<double>>>(const Queue&, std::complex<double> a, std::complex<double> b, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, std::plus<std::complex<double>>) ;  
+
 // fill instantiations
 template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
@@ -1712,6 +1792,14 @@ template Event MatrixView<double, MatrixFormat::Dense>::symmetrize(const Queue&,
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::symmetrize(const Queue&, Uplo) const;
 
+template Event scale<float, MatrixFormat::Dense>(Queue&, const float&, const MatrixView<float, MatrixFormat::Dense>&);
+template Event scale<double, MatrixFormat::Dense>(Queue&, const double&, const MatrixView<double, MatrixFormat::Dense>&);
+template Event scale<std::complex<float>, MatrixFormat::Dense>(Queue&, const std::complex<float>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&);
+template Event scale<std::complex<double>, MatrixFormat::Dense>(Queue&, const std::complex<double>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&);
+template Event scale<float, MatrixFormat::Dense>(Queue&, const float&, const VectorView<float>&);
+template Event scale<double, MatrixFormat::Dense>(Queue&, const double&, const VectorView<double>&);
+template Event scale<std::complex<float>, MatrixFormat::Dense>(Queue&, const std::complex<float>&, const VectorView<std::complex<float>>&);
+template Event scale<std::complex<double>, MatrixFormat::Dense>(Queue&, const std::complex<double>&, const VectorView<std::complex<double>>&);
 
 // Dense MatrixView constructors instantiations
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(float*, int, int, int, int, int, float**);
@@ -1721,6 +1809,15 @@ template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(std::
 
 template MatrixView<std::array<float, 2>, MatrixFormat::Dense>::MatrixView(std::array<float, 2>*, int, int, int, int, int, std::array<float, 2>**);
 template MatrixView<std::array<double, 2>, MatrixFormat::Dense>::MatrixView(std::array<double, 2>*, int, int, int, int, int, std::array<double, 2>**);
+
+template MatrixView<float, MatrixFormat::Dense>::MatrixView(
+    const VectorView<float>&, VectorOrientation);
+template MatrixView<double, MatrixFormat::Dense>::MatrixView(
+    const VectorView<double>&, VectorOrientation);
+template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
+    const VectorView<std::complex<float>>&, VectorOrientation);
+template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
+    const VectorView<std::complex<double>>&, VectorOrientation);
 
 
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(

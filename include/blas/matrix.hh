@@ -550,6 +550,11 @@ namespace batchlas {
 
         // Constructors from Matrix objects - view entire matrix
         MatrixView(const Matrix<T, MType>& matrix);
+
+        // Constructs from VectorView - for creating a matrix view of a vector
+        template <typename U = T, MatrixFormat M = MType, 
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView(const VectorView<T>& vector_view, VectorOrientation orientation = VectorOrientation::Column);
         
         // Constructors from Matrix objects - view subset of matrix
         template <typename U = T, MatrixFormat M = MType, 
@@ -1153,6 +1158,18 @@ namespace batchlas {
             return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, stride_ * batch_size_), n, inc_, stride_, batch_size_);
         }
 
+        //Computes z = a*x .* b*y + c*z
+        template <typename BinaryOperatorOp = std::multiplies<T>>
+        static Event hadamard_product(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z, BinaryOperatorOp op = BinaryOperatorOp());
+
+        //Computes z = a*x + b*y + c*z
+        static Event add(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z) {
+            return hadamard_product(ctx, a, b, x, y, z, std::plus<T>());
+        }
+
+        //Computes result = x' * y
+        //Event dot(const Queue& ctx, const VectorView<T>& x, const VectorView<T>& y, T& result);
+
         std::ostream& stream_formatted_to(std::ostream& os, int max_elements = 10, int max_cols_to_print = 10) const {
             std::ios_base::fmtflags original_flags = os.flags();
             os << std::scientific << std::setprecision(4);
@@ -1222,5 +1239,11 @@ namespace batchlas {
         os << VectorView(vec); // Leverages VectorView's operator<<
         return os;
     }
+
+    template <typename T, MatrixFormat MType>
+    Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
+
+    template <typename T>
+    Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
 
 } // namespace batchlas
