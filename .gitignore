@@ -1,5 +1,6 @@
 # Build directories
 build/
+output/
 cmake-build*/
 out/
 .vs/
@@ -7,6 +8,8 @@ out/
 # Output files
 scripts/plots/
 scripts/*.csv
+output/*.csv
+output/plots/
 
 # Compiled Object files
 *.o
