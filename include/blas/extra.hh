@@ -1,3 +1,4 @@
+#pragma once
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
 #include <util/sycl-vector.hh>
