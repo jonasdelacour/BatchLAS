@@ -10,6 +10,7 @@ template <typename T, Backend B>
 static void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
+    const size_t rec_threshold = state.range(2);
     
     JobType jobz = JobType::EigenVectors;
 
@@ -17,7 +18,7 @@ static void BM_STEQR(minibench::State& state) {
     auto off_diags = Vector<T>::ones(n - 1, batch);
 
     StedcParams<T> params;
-    params.recursion_threshold = 2;
+    params.recursion_threshold = rec_threshold;
 
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
