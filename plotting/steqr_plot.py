@@ -1,12 +1,8 @@
 from __future__ import annotations
-
 import argparse
 import os
 from typing import Optional, Sequence
-
 import pandas as pd
-
-import stylesheet  # applies global matplotlib styling
 from bench_common import load_results, plot_metric, run_benchmark, save_figure
 
 
@@ -21,7 +17,7 @@ def _default_csv_path() -> str:
 
 def _default_plot_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, "..", "build", "plots", "steqr.png")
+    return os.path.join(here, "..", "output", "plots", "steqr.png")
 
 
 def _default_plot_batch_path(n_values: Optional[Sequence[int]]) -> str:
@@ -30,7 +26,7 @@ def _default_plot_batch_path(n_values: Optional[Sequence[int]]) -> str:
         fname = f"steqr_by_batch_N{n_values[0]}.png"
     else:
         fname = "steqr_by_batch.png"
-    return os.path.join(here, "..", "build", "plots", fname)
+    return os.path.join(here, "..", "output", "plots", fname)
 
 
 def plot_steqr_benchmark(df: pd.DataFrame, savepath: Optional[str] = None) -> None:

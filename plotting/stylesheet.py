@@ -7,8 +7,10 @@ import matplotlib.ticker as ticker
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1.inset_locator import (inset_axes, mark_inset)
 from os.path import relpath
+from cycler import cycler
 
 Fontsize = 30
+rc["lines.markersize"] = 10
 rc["legend.markerscale"] = 2.0
 rc["legend.framealpha"] = 0
 rc["legend.labelspacing"] = 0.1
@@ -54,14 +56,14 @@ MarkerScales = np.array([1.1, 1.25, 1., 1.5, 1.])
 
 
 #Color dictionary
-CD = { 
-  "C0" : 'r', 
+"""   "C0" : 'r', 
   "C1" :    "#FDEE00", 
   "C2" :    "#06D6A0", 
   "C3" :    "#FF4365", 
   "C4" :    "#14080E", 
   "C5" :    "#6320EE",
-  "C6" :    "#963D5A", 
+  "C6" :    "#963D5A",  """
+CD = { 
 
   "C7" :    "#7570b3", 
   "C8" :    "#d95f02", 
@@ -74,3 +76,8 @@ CD = {
   "C14" :   "#0D9276",
   "C15" :   "#8c564b",
 }
+
+
+rc["axes.prop_cycle"] = cycler(
+    color=[CD[k] for k in sorted(CD.keys(), key=lambda k: int(k[1:]))]
+)

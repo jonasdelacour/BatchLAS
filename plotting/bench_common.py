@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import stylesheet
 import os
 import subprocess
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
@@ -8,7 +8,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-_MARKERS = ["o", "s", "^", "D", "v", "x", "P", "*", "h", "+"]
+_MARKERS = stylesheet.Markers
+_MARKERS_SCALES = stylesheet.MarkerScales
+from matplotlib import rcParams as rc
 
 
 def _ensure_dir_for(path: str) -> str:
@@ -71,20 +73,34 @@ def plot_metric(
     else:
         fig = ax.figure
 
+    x_ticks: list = []
     for idx, (group_value, g) in enumerate(df.groupby(group_by)):
         g_sorted = g.sort_values(x_field)
         yerr = g_sorted[metric_std] if metric_std and metric_std in g_sorted else None
-        ax.errorbar(
+        ax.plot(
             g_sorted[x_field],
             g_sorted[metric],
-            yerr=yerr,
             marker=_MARKERS[idx % len(_MARKERS)],
-            linestyle="-",
+            markersize=_MARKERS_SCALES[idx % len(_MARKERS_SCALES)]*rc["lines.markersize"],
+            linestyle=":",
             label=label_fmt.format(group=group_value, size=group_value),
         )
+        if yerr is not None:
+            ax.fill_between(
+                g_sorted[x_field],
+                g_sorted[metric] - yerr,
+                g_sorted[metric] + yerr,
+                alpha=0.15,
+                joinstyle='bevel',
+            )
+        x_ticks.extend(g_sorted[x_field].tolist())
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel or metric)
+    if x_ticks:
+        # Use unique, sorted x positions to align ticks with data points.
+        xs_sorted = sorted(set(x_ticks))
+        ax.set_xticks(xs_sorted)
     if logy:
         ax.set_yscale("log")
     if title:
