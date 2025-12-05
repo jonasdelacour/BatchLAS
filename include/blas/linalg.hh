@@ -6,4 +6,5 @@
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
 #include <blas/functions.hh>
+#include <blas/extra.hh>
 #include <blas/extensions.hh>
