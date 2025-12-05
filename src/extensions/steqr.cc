@@ -9,61 +9,6 @@
 #include <internal/sort.hh>
 
 namespace batchlas {
-
-template <typename T>
-auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
-    // LAPACK SLAE2/DLAE2-style stable computation of eigenvalues of a 2x2
-    // symmetric matrix [[A, B], [B, C]]. If (b != c), we symmetrize.
-    const auto one  = T(1);
-    const auto two  = T(2);
-    const auto zero = T(0);
-    const auto half = T(0.5);
-
-    const auto sm  = a + c;          // sum (trace)
-    const auto df  = a - c;          // difference
-    const auto adf = std::abs(df);
-    const auto tb  = b + b;          // 2*B
-    const auto ab  = std::abs(tb);
-
-    // Select larger/smaller of A and C by magnitude as in LAPACK
-    const auto acmx = (std::abs(a) > std::abs(c)) ? a : c;
-    const auto acmn = (std::abs(a) > std::abs(c)) ? c : a;
-
-    T rt; // sqrt(adf^2 + (2B)^2) without overflow/underflow
-    if (adf > ab) {
-        rt = adf * std::sqrt(one + (ab / adf) * (ab / adf));
-    } else if (adf < ab) {
-        rt = ab * std::sqrt(one + (adf / ab) * (adf / ab));
-    } else { // includes case ab = adf = 0
-        rt = ab * std::sqrt(two);
-    }
-
-    T rt1, rt2;
-    if (sm < zero) {
-        rt1 = half * (sm - rt);
-        // Order of operations important for an accurate smaller eigenvalue
-        rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-    } else if (sm > zero) {
-        rt1 = half * (sm + rt);
-        rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-    } else {
-        // includes case rt1 = rt2 = 0
-        rt1 = half * rt;
-        rt2 = -half * rt;
-    }
-
-    return std::make_pair(rt1, rt2);
-}
-
-template <typename T>
-auto eigenvalues_2x2(const KernelMatrixView<T, MatrixFormat::Dense>& A) {
-    const auto a = A(0, 0);
-    const auto b = A(0, 1);
-    const auto c = A(1, 0);
-    const auto d = A(1, 1);
-    return eigenvalues_2x2(a, b, c);
-}
-
 template <typename T>
 auto wilkinson_shift(const T& a, const T& b, const T& c) {
     // Compute the Wilkinson shift assuming that a, b, c represents the
@@ -73,78 +18,299 @@ auto wilkinson_shift(const T& a, const T& b, const T& c) {
     // |.... a, b|
     // |.... b, c|
     // Returns the eigenvalue closest to c
-    const auto [lambda1, lambda2] = eigenvalues_2x2(a, b, c);
+    const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
     return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
 }
 
 template <typename T>
 auto givens_rotation(const T& a, const T& b) {
-    T r = std::hypot(a, b);
-    if (internal::is_numerically_zero(r)) {
-        return std::array<T, 2>{T(1), T(0)};
+    auto [c_l, s_l, r] = internal::lartg(a, b);
+    return std::array<T, 2>{c_l, -s_l};
+}
+
+template <typename T>
+T apply_givens_rotation(const VectorView<T>& d,
+                        const VectorView<T>& e,
+                        const T& prev_bulge,
+                        size_t i,
+                        size_t j,
+                        const std::array<T, 2>& givens,
+                        bool QR) {
+    // Apply similarity transform to rows/cols i and j of a tridiagonal matrix T
+    // in a virtual indexing:
+    //   - if QR == true:  virtual index k == physical index k  (top-down QR)
+    //   - if QR == false: virtual index k == physical index (n-1-k) (bottom-up QL)
+    // This way, the same bulge-chasing logic implements both QR and QL iterations.
+    const T c = givens[0]; // Gamma
+    const T s = givens[1]; // Sigma
+
+    const size_t n  = d.size();      // number of diagonal entries
+    const size_t ne = e.size();      // number of off-diagonal entries (n-1)
+
+    // Virtual -> physical index mapping helpers
+    auto d_get = [&](size_t k) -> T {
+        return QR ? d(k) : d(n - 1 - k);
+    };
+    auto d_set = [&](size_t k, T val) {
+        if (QR) {
+            d(k) = val;
+        } else {
+            d(n - 1 - k) = val;
+        }
+    };
+    auto e_get = [&](size_t k) -> T {
+        // e(k) couples d(k) and d(k+1) in virtual indexing
+        return QR ? e(k) : e(ne - 1 - k);
+    };
+    auto e_set = [&](size_t k, T val) {
+        if (QR) {
+            e(k) = val;
+        } else {
+            e(ne - 1 - k) = val;
+        }
+    };
+
+    // Read current 2x2/3x3 “front” of the bulge in virtual indexing
+    T di = d_get(i);
+    T dj = d_get(j);
+    T ei = e_get(i);
+    T ej = (j < ne) ? e_get(j) : T(0);
+
+    // Update diagonal entries
+    T di_new = c * (c * di - ei * s) - s * (ei * c - s * dj);
+    T dj_new = c * (c * dj + ei * s) + s * (ei * c + s * di);
+    d_set(i, di_new);
+    d_set(j, dj_new);
+
+    // Update off-diagonals adjacent to rows/cols i,j in virtual indexing
+    if (i > 0) {
+        T e_im1 = e_get(i - 1);
+        e_set(i - 1, e_im1 * c - prev_bulge * s);
     }
-    return std::array<T, 2>{a / r,  - b / r};
+
+    T ei_new = c * (c * ei + s * di) - s * (c * dj + s * ei);
+    e_set(i, ei_new);
+
+    if (j < ne) {
+        e_set(j, c * ej);
+    }
+
+    // Return the new bulge element in virtual indexing
+    return -ej * s;
 }
 
 template <typename T>
-T apply_givens_rotation(const VectorView<T>& d, const VectorView<T>& e, const T& prev_bulge, size_t i, size_t j, const std::array<T, 2>& givens) {
-    // Apply similarity transform to rows/cols i and j of tridiagonal matrix T
-    // G^T @ T @ G
-    // Returns the bulge element introduced by the rotation
-    T c = givens[0]; //Gamma
-    T s = givens[1]; //Sigma
-    T di = d(i);
-    T dj = d(j);
-    T ei = e(i);
-    T ej = j < e.size() ? e(j) : T(0);
-    d(i) = c * (c * di - ei * s) - s * (ei * c - s * dj);
-    d(j) = c * (c * dj + ei * s) + s * (ei * c + s * di);
-    if (i > 0) e(i - 1) = e(i - 1) * c - prev_bulge * s;
-    e(i) = c * (c * ei + s * di) - s * (c * dj + s * ei);
-    if (j < e.size()) e(j) = c * ej;
-    return -ej * s; // Return the bulge element
-}
-
-template <typename T>
-Event francis_sweep(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, JobType jobz,
-                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, size_t max_sweeps, T zero_threshold) {
+Event steqr_impl(Queue& ctx, 
+                    const VectorView<T>& d, //Diagonal elements
+                    const VectorView<T>& e, //Off-diagonal elements
+                    JobType jobz, //Eigenvector computation flag
+                    const MatrixView<T, MatrixFormat::Dense>& Q, //Eigenvector storage
+                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, //Storage for Givens rotations
+                    const Span<std::array<int32_t,3>>& deflation_indices, //#sub_problems deflation indices i.e. where e is zero
+                    const Span<ApplyOrder>& order_view, //Order of application of rotations, has #sub_problems number of entries
+                    BumpAllocator& allocator,
+                    size_t max_sweeps, //Maximum number of sweeps to perform
+                    T zero_threshold) {
     // Perform the Francis sweep for the i-th step
     // This function will apply a francis sweep of Givens rotations
     auto n = d.size();
     auto batch_size = d.batch_size();
     bool store_givens = jobz == JobType::EigenVectors;
     auto ncus = ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS);
-    auto bsize = batch_size < ncus ? 1 : internal::ceil_div(size_t(batch_size), ncus);
-    auto event = ctx->submit([&](sycl::handler& cgh) {
-        auto rotations_view = givens_rotations.kernel_view();
-        cgh.parallel_for(sycl::nd_range(sycl::range(internal::ceil_div(batch_size, int(bsize)) * bsize), sycl::range(bsize)), [=](sycl::nd_item<1> item) {
-            auto i = item.get_global_id(0);
-            if (i >= batch_size) return;
-            auto d_ = d.batch_item(i);
-            auto e_ = e.batch_item(i);
-            for (size_t k = 0; k < max_sweeps; ++k) {
-                auto shift = wilkinson_shift(d_(n - 2), 
-                                             e_(n - 2), 
-                                             d_(n - 1));
-                T a = d_(0);
-                T b = e_(0);
-                auto [c, s] = givens_rotation(a - shift, b);
-                if (store_givens) { rotations_view(0, k, i) = {c, s};}
-                //if (store_givens) { givens_rotations.data()[(k * (n - 1))  + max_sweeps * (n-1) *i] = {c, s};}
-                auto bulge = apply_givens_rotation(d_, e_, T(0.), 0, 1, {c, s});
-                for (size_t j = 1; j < n - 1; ++j) {
-                    auto [c, s] = givens_rotation(e_(j - 1), bulge);
-                    if (store_givens) { rotations_view(j, k, i) = {c, s};}
-                    //if (store_givens) { givens_rotations.data()[(k * (n - 1) + j)  + max_sweeps * (n-1) *i] = {c, s};}
-                    bulge = apply_givens_rotation(d_, e_, bulge, j, j + 1, {c, s});
+    auto scan_view = allocator.allocate<int32_t>(ctx, batch_size);
+    //UnifiedVector<int32_t> scan_array(batch_size, int32_t(0)); //Max number of subproblems is n/2
+    //Vector<std::array<int32_t, 2>> temp_deflation_indices(n / 2, batch_size, 1, batch_size);
+    auto temp_deflation_indices = VectorView<std::array<int32_t, 2>>(allocator.allocate<std::array<int32_t, 2>>(ctx, (n / 2) * batch_size), n / 2, batch_size, 1, batch_size);
+    
+    
+    ctx -> submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+            auto i = id[0];
+            auto ebid = e.batch_item(i);
+            auto dbid = d.batch_item(i);
+            auto ix = 0;
+            auto sub_problem_ix = 0;
+            while (ix < n - 1) {
+                auto start_ix = ix;
+                if (ebid(ix) != T(0)) {
+                    for (ix = ix + 1; ix < n - 1; ++ix) {
+                        if (ebid(ix) == T(0)) break;
+                    }
+                } else {
+                    ix++;
+                    continue;
                 }
-                if (std::abs(e_(n - 2)) < zero_threshold) {
-                    // If the sub-diagonal element is zero, we can skip further sweeps
-                    break;
-                }
+                auto end_ix = ix + 1;
+                temp_deflation_indices(sub_problem_ix, i) = {start_ix, end_ix};
+                sub_problem_ix++;
+            }
+            scan_view[i] = sub_problem_ix;
+        });
+    });
+
+    internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+    
+    ctx -> submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+            auto i = id[0];
+            auto num_sub_problems = scan_view[i] - (i == 0 ? 0 : scan_view[i - 1]);
+            auto offset = (i == 0 ? 0 : scan_view[i - 1]);
+            for (size_t j = 0; j < num_sub_problems; ++j) {
+                deflation_indices[offset + j] = {static_cast<int32_t>(i), temp_deflation_indices(j, i)[0], temp_deflation_indices(j, i)[1]};
             }
         });
     });
+
+    ctx->submit([&](sycl::handler& cgh) {
+        auto rotations_view = givens_rotations.kernel_view();
+        //auto bsize = n_problems < ncus ? 1 : internal::ceil_div(size_t(n_problems), ncus);
+        cgh.parallel_for(sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+            auto i = item.get_global_id(0);
+            auto n_problems = scan_view[batch_size - 1];
+
+            for (int gid = i; gid < n_problems; gid += item.get_global_range(0)) {
+            auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
+
+            auto dbid = d.batch_item(batch_ix);
+            auto ebid = e.batch_item(batch_ix);
+            auto d_ = dbid(Slice(start_ix, end_ix));
+            auto e_ = ebid(Slice(start_ix, end_ix - 1));
+            auto n = end_ix - start_ix;
+
+            if (n == 1) continue; //Nothing to do for 1x1 blocks
+            if (n == 2) { //Analytically compute eigenvalues for 2x2 blocks
+                if (store_givens) {
+                    auto [rt1, rt2, c, s] = internal::slaev2(d_(0), e_(0), d_(1));
+                    d_(0) = rt1;
+                    d_(1) = rt2;
+                    e_(0) = T(0);
+                    rotations_view(0, 0, gid) = {c, -s};
+                    order_view[gid] = ApplyOrder::Forward;
+                } else {
+                    auto [rt1, rt2] = internal::eigenvalues_2x2(d_(0), e_(0), d_(1));
+                    d_(0) = rt1;
+                    d_(1) = rt2;
+                    e_(0) = T(0);
+                }
+                continue;
+            }
+            // QR / QL switch: QR sweeps from top, QL sweeps from bottom.
+            // We implement QL by viewing (d_, e_) in reversed order via virtual indices.
+            bool QR = std::abs(d_(0)) <= std::abs(d_(n - 1));
+            order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
+            for (size_t k = 0; k < max_sweeps; ++k) {
+                auto anorm = std::abs(d_(n - 1));
+                for (size_t idx = 0; idx < n - 1; ++idx) 
+                    anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
+
+                if (anorm > internal::ssfmax<T>()) {
+                    auto alpha = anorm / internal::ssfmax<T>();
+                    // Scale down to avoid overflow
+                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
+                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
+                } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                    // Scale up to avoid underflow
+                    auto alpha = anorm / internal::ssfmin<T>();
+                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
+                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
+                }
+
+                // Virtual accessors (see apply_givens_rotation for the same mapping)
+                auto d_get = [&](size_t idx) -> T {
+                    return QR ? d_(idx) : d_(n - 1 - idx);
+                };
+                auto e_get = [&](size_t idx) -> T {
+                    // idx is in [0, n-2] in virtual indexing
+                    return QR ? e_(idx) : e_(n - 2 - idx);
+                };
+
+                // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
+                const auto shift = wilkinson_shift(d_get(n - 2),
+                                                   e_get(n - 2),
+                                                   d_get(n - 1));
+
+                // First Givens rotation eliminates the first subdiagonal in virtual indexing
+                auto [c0, s0] = givens_rotation(d_get(0) - shift, e_get(0));
+                if (store_givens) {
+                    rotations_view(0, k, gid) = {c0, s0};
+                }
+                auto bulge = apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+
+                // Chase the bulge across the block in virtual indexing
+                for (size_t j = 1; j < n - 1; ++j) {
+                    auto [cj, sj] = givens_rotation(e_get(j - 1), bulge);
+                    if (store_givens) {
+                        rotations_view(j, k, gid) = {cj, sj};
+                    }
+                    bulge = apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                }
+
+                bool deflatable = false;
+                for (size_t j = 0; j < n - 1; ++j) {
+                    // Check for deflation
+                    if (std::abs(e_(j)) * std::abs(e_(j)) <= internal::eps2<T>() * std::abs(d_(j))*std::abs(d_(j + 1)) +
+                        internal::safmin<T>()) {
+                        e_(j) = T(0);
+                        deflatable = true;
+                    }
+                }
+
+                if (anorm > internal::ssfmax<T>()) {
+                    auto alpha = internal::ssfmax<T>() / anorm;
+                    // Scale back up
+                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
+                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
+                } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                    auto alpha = internal::ssfmin<T>() / anorm;
+                    // Scale back down
+                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
+                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
+                }
+
+                if (deflatable) break;
+            }
+        }
+        });
+    });
+
+    ctx -> submit([&](sycl::handler& cgh) {
+        auto Qview = Q.kernel_view();
+        auto rotations_view = givens_rotations.kernel_view();
+        cgh.parallel_for(sycl::nd_range(sycl::range(Q.rows()*ncus*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+            auto bid = item.get_group(0);
+            auto k = item.get_local_linear_id();
+            auto n_problems = scan_view[batch_size - 1];
+            for (int gid = bid; gid < n_problems; gid += item.get_group_range(0)) {
+            auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
+            auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
+            const int ncols = static_cast<int>(Q_.cols());
+
+            for (int i = 0; i < rotations_view.cols(); ++i) {
+                for (int j = 0; j < rotations_view.rows(); ++j) {
+                    auto [c, s] = rotations_view(j, i, gid);
+                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+
+                    // Map virtual indices (j, j+1) to physical column indices.
+                    auto col_index = [&](int v) -> int {
+                        return (order_view[gid] == ApplyOrder::Forward)
+                               ? v
+                               : (ncols - 1 - v);
+                    };
+
+                    // Only act on rotations that fall inside the current sub-block.
+                    if (j + 1 >= ncols) continue;
+                    int ix1 = col_index(j);
+                    int ix2 = col_index(j + 1);
+
+                    T temp = c * Q_(k, ix1) - s * Q_(k, ix2);
+                    Q_(k, ix2) = s * Q_(k, ix1) + c * Q_(k, ix2);
+                    Q_(k, ix1) = temp;
+                }
+            }
+            }
+        });
+    });
+
     return ctx.get_event();
 }
 
@@ -325,20 +491,31 @@ Event block_rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dens
 }
 
 template <Backend B, typename T>
-Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, const MatrixView<T, MatrixFormat::Dense>& Q) {
+Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, const MatrixView<T, MatrixFormat::Dense>& Q, const Span<ApplyOrder>& order_view) {
     ctx -> submit([&](sycl::handler& cgh) {
         auto Q_ = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
         cgh.parallel_for(sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
-            for (int i = 0; i < rotations_view.cols; ++i) {
-                for (int j = 0; j < rotations_view.rows; ++j) {
+            for (int i = 0; i < rotations_view.cols(); ++i) {
+                for (int j = 0; j < rotations_view.rows(); ++j) {
                     auto [c, s] = rotations_view(j, i, bid);
-                    if (c == T(1) && s == T(0)) continue; //Skip identity rotations
-                    T temp = c * Q_(k, j, bid) - s * Q_(k, j + 1, bid);
-                    Q_(k, j + 1, bid) = s * Q_(k, j, bid) + c * Q_(k, j + 1, bid);
-                    Q_(k, j, bid) = temp;
+                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+
+                    const int ncols = static_cast<int>(Q_.cols());
+                    auto col_index = [&](int v) -> int {
+                        return (order_view[bid] == ApplyOrder::Forward)
+                               ? v
+                               : (ncols - 1 - v);
+                    };
+                    if (j + 1 >= ncols) continue;
+                    int ix1 = col_index(j);
+                    int ix2 = col_index(j + 1);
+
+                    T temp = c * Q_(k, ix1, bid) - s * Q_(k, ix2, bid);
+                    Q_(k, ix2, bid) = s * Q_(k, ix1, bid) + c * Q_(k, ix2, bid);
+                    Q_(k, ix1, bid) = temp;
                 }
             }
         });
@@ -356,7 +533,7 @@ Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, co
     if (!params.back_transform) {
         eigvects.fill_identity(ctx);
     }
-    
+
     int64_t n = d_in.size();
     int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
@@ -369,18 +546,22 @@ Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, co
     auto apply_Q_ws = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? (batch_size * params.block_size*2 * params.block_size*2 + batch_size*n*params.block_size*4) : 0);
     auto n_sweeps_to_store = (jobz == JobType::EigenVectors && params.block_rotations)? std::max(params.block_size * 2, params.max_sweeps) : params.max_sweeps;
     auto stride = (n - 1) * n_sweeps_to_store;
-    auto givens_rotations = jobz == JobType::EigenVectors ?  MatrixView<std::array<T,2>>(pool.allocate<std::array<T,2>>(ctx, stride * batch_size).data(), n - 1, n_sweeps_to_store, n - 1, stride, batch_size) : MatrixView<std::array<T,2>>();
+    auto max_subproblems = n / 2 + 1;
+    auto givens_rotations = jobz == JobType::EigenVectors ?  
+                            MatrixView<std::array<T,2>>(pool.allocate<std::array<T,2>>(ctx, stride * max_subproblems * batch_size).data(), n - 1, n_sweeps_to_store, n - 1, stride, max_subproblems * batch_size) : MatrixView<std::array<T,2>>();
+    auto apply_order = pool.allocate<ApplyOrder>(ctx, batch_size * max_subproblems);
+    auto deflation_indices = pool.allocate<std::array<int32_t,3>>(ctx, batch_size * max_subproblems); //Max n/2 subproblems
     //auto mock_eigen = Matrix<T>::Identity(n, batch_size);
     for (int64_t i = 0; i < n - 1; ++i) {
         givens_rotations.fill(ctx, std::array<T,2>{1, 0}); //Fill with identity rotations
-        francis_sweep(ctx, d(Slice{0, n - i}), e(Slice{0, n - i - 1}), jobz, givens_rotations, params.max_sweeps, params.zero_threshold);
-        if (jobz == JobType::EigenVectors) {
-            if (params.block_rotations) {
-                block_rot<B>(ctx, givens_rotations, eigvects, apply_Q_ws.template as_span<std::byte>(), params.block_size);
-            } else {
-                rot<B>(ctx, givens_rotations, eigvects);
-            }
-        }
+        steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, pool, params.max_sweeps, params.zero_threshold);
+        //if (jobz == JobType::EigenVectors) {
+        //    if (params.block_rotations) {
+        //        block_rot<B>(ctx, givens_rotations, eigvects, apply_Q_ws.template as_span<std::byte>(), params.block_size);
+        //    } else {
+        //        //rot<B>(ctx, givens_rotations, eigvects, apply_order);
+        //    }
+        //}
     }
 
     ctx -> submit([&](sycl::handler& cgh) {
@@ -403,11 +584,15 @@ size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>
                             const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
     // Calculate the required buffer size for the workspace
     size_t size = BumpAllocator::allocation_size<T>(ctx, d.batch_size() * d.size()) // For d
-                + BumpAllocator::allocation_size<T>(ctx, d.batch_size() * (d.size() - 1)); // For e
+                + BumpAllocator::allocation_size<T>(ctx, d.batch_size() * (d.size() - 1)) // For e
+                + BumpAllocator::allocation_size<std::array<int32_t,3>>(ctx, d.batch_size() * (d.size() / 2 + 1)) // For deflation indices
+                + BumpAllocator::allocation_size<int32_t>(ctx, d.batch_size()) // For scan array
+                + BumpAllocator::allocation_size<std::array<int32_t,2>>(ctx, (d.size() / 2) * d.batch_size()); // For temp deflation indices
     if (jobz == JobType::EigenVectors) {
-        size += BumpAllocator::allocation_size<std::array<T,2>>(ctx, d.batch_size() * d.size() * params.max_sweeps);
+        size += BumpAllocator::allocation_size<std::array<T,2>>(ctx, (d.size() / 2 + 1) * d.batch_size() * d.size() * params.max_sweeps);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * params.block_size * params.block_size * 4);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * 8 * params.block_size * d.size());
+        size += BumpAllocator::allocation_size<ApplyOrder>(ctx, d.batch_size());
     }
     size += sort_buffer_size<T>(ctx, eigenvalues.data(), MatrixView<T, MatrixFormat::Dense>(nullptr, d.size(), d.size(), d.size(), d.size() * d.size(), d.batch_size()), jobz);
     return size;
