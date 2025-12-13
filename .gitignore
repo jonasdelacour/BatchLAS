@@ -11,6 +11,10 @@ scripts/*.csv
 output/*.csv
 output/plots/
 
+# Profile data
+*.nsys-rep
+*.sqlite
+
 # Compiled Object files
 *.o
 *.obj
