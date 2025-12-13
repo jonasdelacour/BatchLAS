@@ -17,6 +17,7 @@
 #include "backends/backend_handle.cc"
 #include "util/queue-impl.cc"
 #include "util/sycl-util-impl.cc"
+#include <cuda_runtime.h>
 
 namespace batchlas {
 
@@ -863,18 +864,27 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
     return ctx.get_event();
 }
 
+template <typename T, MatrixFormat MType> struct FillContiguousKernel {};
+template <typename T, MatrixFormat MType> struct FillNonContiguousKernel {};
 
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     auto data_ptr = data_.data();
     size_t total_elements = batch_size_ * rows_ * cols_;
     bool contiguous = (stride_ == rows_ * cols_) && (ld_ == rows_);
-    
+    bool char_val = 0;
+    bool fill_val_is_zero = value == detail::convert_to_fill_value<T>(0);
+    if constexpr (sizeof(T) == sizeof(char)) {
+        char_val = static_cast<char>(value);
+    }
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
-    if (contiguous) {
-        ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+
+    if (fill_val_is_zero && contiguous) {
+        ctx->memset(data_ptr, char_val, total_elements * sizeof(T));
+    } else if (contiguous) {
+        ctx->parallel_for<FillContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             size_t global_id = item.get_global_id(0);
             size_t total_work_items = item.get_global_range(0);
             
@@ -891,7 +901,7 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         auto cols = cols_;
         auto data_view = this->kernel_view();
         if constexpr (MType == MatrixFormat::Dense) {
-        ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        ctx->parallel_for<FillNonContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             size_t global_id = item.get_global_id(0);
             size_t total_work_items = item.get_global_range(0);
             
@@ -908,8 +918,6 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         });
         }
         
-    } else {
-        throw std::runtime_error("Fill operation not implemented for this matrix format");
     }
     return ctx.get_event();
 }
@@ -996,6 +1004,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
     return ctx.get_event();
 }
 
+template <typename T, MatrixFormat MType> struct FillDiagonalKernel {};
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) const {
@@ -1011,7 +1020,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
+    ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
         size_t flat = item.get_global_id(0);
         
         // Bounds check
@@ -1312,13 +1321,14 @@ MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>&
     return result;
 }
 
+template <typename T, MatrixFormat MType> struct CopyKernel3D {};
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src) {
     if (src.rows() != dest.rows() || src.cols() != dest.cols() || src.batch_size() != dest.batch_size()) {
         throw std::invalid_argument("Copy called on incompatible matrices");
     }
     if constexpr(MType == MatrixFormat::Dense) {
-        if (src.data() == dest.data()) return ctx.get_event(); // No-op if same data
+        if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
         if (src.stride() == src.rows() * src.cols() && dest.stride() == dest.rows() * dest.cols()) {
             //If the stride is the same as the size of each matrix just do a straight memcpy
             auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
@@ -1341,22 +1351,35 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             return event;
         } else {
             //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
+            auto [ global_size, local_size ] = compute_nd_range_sizes(
+                    static_cast<size_t>(src.rows()) * src.cols() * src.batch_size(),
+                    ctx.device(), KernelType::MEMORY_BOUND);
             auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
                 auto dest_view = dest.kernel_view();
                 auto src_view  = src.kernel_view();
+                
 
-                cgh.parallel_for(sycl::range<3>(src.rows(), src.cols(), src.batch_size()),
-                                [=](sycl::id<3> idx) {
-                    size_t i = idx[0]; // row
-                    size_t j = idx[1]; // col
-                    size_t b = idx[2]; // batch
-                    dest_view(i, j, b) = src_view(i, j, b);
+                cgh.parallel_for<CopyKernel3D<T, MType>>(sycl::nd_range<1>(global_size, local_size),
+                                [=](sycl::nd_item<1> item) {
+                    size_t gid = item.get_global_id(0);
+                    
+                    // Calculate 3D coordinates from flat index
+                    for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += item.get_global_range(0)) {
+                        size_t b = idx / (src_view.rows() * src_view.cols());    // batch index
+                        size_t remainder = idx % (src_view.rows() * src_view.cols());
+                        size_t i = remainder % src_view.cols();            // row index
+                        size_t j = remainder / src_view.cols();            // column index
+                        
+                        dest_view(i, j, b) = src_view(i, j, b);
+                    }
                 });
             }));
             return event;
         }
     } else if constexpr(MType == MatrixFormat::CSR) {
         throw std::runtime_error("CSR copy not implemented yet");
+    } else {
+        throw std::runtime_error("Unsupported matrix format in copy");
     }
     return ctx.get_event();
 }
@@ -1366,7 +1389,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
     if (src.size() != dest.size() || src.batch_size() != dest.batch_size()) {
         throw std::invalid_argument("Copy called on incompatible vectors");
     }
-    if (src.data() == dest.data()) return ctx.get_event(); // No-op if same data
+    if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
     if ((src.stride() == src.size() && dest.stride() == dest.size() && src.inc() == 1 && dest.inc() == 1) ||
         (src.stride() == 1 && dest.stride() == 1 && src.inc() == src.size() && dest.inc() == dest.size())) {
         //If the stride is the same as the size of each vector just do a straight memcpy
