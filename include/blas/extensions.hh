@@ -381,6 +381,7 @@ namespace batchlas {
         bool back_transform = false; 
         bool block_rotations = false;
         bool sort = true;
+        bool transpose_working_vectors = true;
         SortOrder sort_order = SortOrder::Ascending;
     };
 
@@ -433,10 +434,21 @@ namespace batchlas {
     Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
 
+        // Flattened STEDC (non-recursive) for testing/comparison; kept separate from the default path.
+        template <Backend B, typename T>
+        Event stedc_flat(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
+
     template <Backend B, typename T>
     inline Event stedc(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
         return stedc<B,T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), static_cast<VectorView<T>>(eigenvalues), ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
+    }
+
+    template <Backend B, typename T>
+    inline Event stedc_flat(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
+        return stedc_flat<B,T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), static_cast<VectorView<T>>(eigenvalues), ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
     }
     
     template <Backend B, typename T>
@@ -580,4 +592,7 @@ namespace batchlas {
         const Matrix<T, MatrixFormat::Dense>& A) {
         return inv<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
     }
+
+    template <MatrixFormat MType, typename T>
+    Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto);
 }
