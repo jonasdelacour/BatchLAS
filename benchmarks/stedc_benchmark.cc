@@ -11,6 +11,7 @@ static void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
+    const bool flat = state.range(3) != 0;
     
     JobType jobz = JobType::EigenVectors;
 
@@ -27,7 +28,11 @@ static void BM_STEQR(minibench::State& state) {
 
     // Register kernel-only runner so warmup uses the same USM allocations.
     state.SetKernel([=]() {
-        stedc<B>(*q, diags, off_diags, eigvals, ws.to_span(), jobz, params, eigvects);    
+        if (flat) {
+            stedc_flat<B>(*q, diags, off_diags, eigvals, ws.to_span(), jobz, params, eigvects);
+        } else {
+            stedc<B>(*q, diags, off_diags, eigvals, ws.to_span(), jobz, params, eigvects);    
+        }
     });
     // Single wait after each batch of internal iterations to mirror prior behavior.
     state.SetBatchEndWait(q);
