@@ -114,10 +114,10 @@ auto sec_eval_roc(const int32_t type, const int32_t k, const int32_t dd, const V
 }
 
 template <typename T>
-auto sec_solve_ext_roc(const int32_t dd,
-                        const VectorView<T>& D,
-                        const VectorView<T>& z,
-                        const T p)
+SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
+                                  const VectorView<T>& D,
+                                  const VectorView<T>& z,
+                                  const T p)
 {
     bool converged = false;
     T lowb, uppb, aa, bb, cc, x;
@@ -257,7 +257,7 @@ auto sec_solve_ext_roc(const int32_t dd,
             lowb = (fx <= 0) ? std::max(lowb, tau) : lowb;
             uppb = (fx > 0) ? std::min(uppb, tau) : uppb;
 
-            // calculate step correction
+                // calculate step correction
             ddk = D(k);
             ddkm1 = D(km1);
             cc = fx - ddkm1 * gdx - ddk * hdx;
@@ -300,7 +300,7 @@ auto sec_solve_ext_roc(const int32_t dd,
 }
 
 template <typename T>
-auto sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, const T& rho, const int32_t k){
+SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, const T& rho, const int32_t k){
     bool converged = false;
     bool up, fixed;
     T lowb, uppb, aa, bb, cc, x;
@@ -549,6 +549,27 @@ auto sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, c
     assert(converged && "sec_solve_roc did not converge!");
     return x; // return the computed root (k^{th} eigenvalue)
 }
+
+// Explicit instantiations to ensure device symbols are emitted for SYCL_EXTERNAL calls
+template float sec_solve_ext_roc<float>(const int32_t dd,
+                                        const VectorView<float>& D,
+                                        const VectorView<float>& z,
+                                        const float p);
+template double sec_solve_ext_roc<double>(const int32_t dd,
+                                          const VectorView<double>& D,
+                                          const VectorView<double>& z,
+                                          const double p);
+
+template float sec_solve_roc<float>(int32_t dd,
+                                    const VectorView<float>& d,
+                                    const VectorView<float>& z,
+                                    const float& rho,
+                                    const int32_t k);
+template double sec_solve_roc<double>(int32_t dd,
+                                      const VectorView<double>& d,
+                                      const VectorView<double>& z,
+                                      const double& rho,
+                                      const int32_t k);
 
 template <typename T>
 Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v, const MatrixView<T, MatrixFormat::Dense>& Qprime, const VectorView<T>& lambdas, const Span<int32_t>& n_reduced, const Span<T> rho, const T& tol_factor = 10.0) {
@@ -825,11 +846,17 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         //LAPACK LAED8 based tolerance:
         
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max = sycl::joint_reduce(cta, norm_mem.get_pointer(), norm_mem.get_pointer() + n, sycl::maximum<T>());
+        auto eig_max = sycl::joint_reduce(cta,
+                          norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                          norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
+                          sycl::maximum<T>());
 
         auto v_norm = internal::nrm2<T>(cta, v);
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid) / v_norm); }
-        auto v_max = sycl::joint_reduce(cta, norm_mem.get_pointer(), norm_mem.get_pointer() + n, sycl::maximum<T>());
+        auto v_max = sycl::joint_reduce(cta,
+                        norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                        norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
+                        sycl::maximum<T>());
         auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max);
 
         //if(tid == 0) sycl::ext::oneapi::experimental::printf("Tolerance for deflation: %e\n", tol);
@@ -845,8 +872,18 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         sycl::group_barrier(cta);
 
         //Exclusive scan to determine the indices to keep
-        sycl::joint_exclusive_scan(cta, keep_indices.batch_item(bid).data_ptr(), keep_indices.batch_item(bid).data_ptr() + n, scan_mem_include.get_pointer(), 0, sycl::plus<int32_t>());
-        sycl::joint_exclusive_scan(cta, scan_mem_exclude.get_pointer(), scan_mem_exclude.get_pointer() + n, scan_mem_exclude.get_pointer(), 0, sycl::plus<int32_t>());
+        sycl::joint_exclusive_scan(cta,
+                       keep_indices.batch_item(bid).data_ptr(),
+                       keep_indices.batch_item(bid).data_ptr() + n,
+                       scan_mem_include.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                       0,
+                       sycl::plus<int32_t>());
+        sycl::joint_exclusive_scan(cta,
+                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
+                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                       0,
+                       sycl::plus<int32_t>());
 
         //sycl::group_barrier(cta);
         for (int k = tid; k < n; k += bdim) {
