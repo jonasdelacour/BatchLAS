@@ -6,9 +6,8 @@ using namespace batchlas;
 // Symmetric eigenvalue decomposition benchmark
 template <typename T, Backend B>
 static void BM_SYEV(minibench::State& state) {
-    const size_t m = state.range(0);
-    const size_t n = state.range(1);
-    const size_t batch = state.range(2);
+    const size_t n = state.range(0);
+    const size_t batch = state.range(1);
 
     auto A = Matrix<T>::Random(n, n, true, batch);
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
@@ -29,6 +28,6 @@ static void BM_SYEV(minibench::State& state) {
 }
 
 
-BATCHLAS_REGISTER_BENCHMARK(BM_SYEV, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK(BM_SYEV, SteqrBenchSizes);
 
 MINI_BENCHMARK_MAIN();
