@@ -9,6 +9,10 @@
 #include <internal/sort.hh>
 
 namespace batchlas {
+
+template <typename T> struct FrancisKernel {};
+template <typename T> struct RotationKernel {};
+
 template <typename T>
 auto wilkinson_shift(const T& a, const T& b, const T& c) {
     // Compute the Wilkinson shift assuming that a, b, c represents the
@@ -164,7 +168,7 @@ Event steqr_impl(Queue& ctx,
     ctx->submit([&](sycl::handler& cgh) {
         auto rotations_view = givens_rotations.kernel_view();
         //auto bsize = n_problems < ncus ? 1 : internal::ceil_div(size_t(n_problems), ncus);
-        cgh.parallel_for(sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+        cgh.parallel_for<FrancisKernel<T>>(sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
             auto i = item.get_global_id(0);
             auto n_problems = scan_view[batch_size - 1];
 
@@ -196,7 +200,7 @@ Event steqr_impl(Queue& ctx,
             }
             // QR / QL switch: QR sweeps from top, QL sweeps from bottom.
             // We implement QL by viewing (d_, e_) in reversed order via virtual indices.
-            bool QR = std::abs(d_(0)) <= std::abs(d_(n - 1));
+            bool QR = true; //std::abs(d_(0)) <= std::abs(d_(n - 1));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             for (size_t k = 0; k < max_sweeps; ++k) {
                 auto anorm = std::abs(d_(n - 1));
@@ -276,7 +280,7 @@ Event steqr_impl(Queue& ctx,
     ctx -> submit([&](sycl::handler& cgh) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        cgh.parallel_for(sycl::nd_range(sycl::range(Q.rows()*ncus*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+        cgh.parallel_for<RotationKernel<T>>(sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
             auto n_problems = scan_view[batch_size - 1];
@@ -284,21 +288,19 @@ Event steqr_impl(Queue& ctx,
             auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
             auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
             const int ncols = static_cast<int>(Q_.cols());
+            bool forward = order_view[gid] == ApplyOrder::Forward;
+            auto col_index = [&](int v) -> int {
+                return (forward)
+                        ? v
+                        : (ncols - 1 - v);
+            };
 
             for (int i = 0; i < rotations_view.cols(); ++i) {
-                for (int j = 0; j < rotations_view.rows(); ++j) {
+                for (int j = 0; j < ncols - 1; ++j) {
                     auto [c, s] = rotations_view(j, i, gid);
-                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+                    //if (c == T(1) && s == T(0)) continue; // Skip identity rotations
 
                     // Map virtual indices (j, j+1) to physical column indices.
-                    auto col_index = [&](int v) -> int {
-                        return (order_view[gid] == ApplyOrder::Forward)
-                               ? v
-                               : (ncols - 1 - v);
-                    };
-
-                    // Only act on rotations that fall inside the current sub-block.
-                    if (j + 1 >= ncols) continue;
                     int ix1 = col_index(j);
                     int ix2 = col_index(j + 1);
 
@@ -537,8 +539,10 @@ Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, co
     int64_t n = d_in.size();
     int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
-    auto d = VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, 1, n, batch_size);
-    auto e = VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, 1, n - 1, batch_size);
+    auto d = params.transpose_working_vectors ? VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, batch_size, 1, batch_size) 
+                                                : VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, 1, n, batch_size);
+    auto e = params.transpose_working_vectors ? VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, batch_size, 1, batch_size)
+                                                : VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, 1, n - 1, batch_size);
     //Copy inputs to working buffers
     VectorView<T>::copy(ctx, d, d_in);
     VectorView<T>::copy(ctx, e, e_in);
