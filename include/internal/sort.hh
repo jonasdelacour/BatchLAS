@@ -4,6 +4,7 @@
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
 #include "../../src/queue.hh"
+#include <util/kernel-heuristics.hh>
 
 namespace batchlas {
 
@@ -30,8 +31,17 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
     return ctx.get_event();
 }
 
+struct PermutedCopyParams {
+    std::pair<int32_t, int32_t> work_group_size_range = {-1, -1}; // Use default
+};
+
 template <typename T, typename K>
-Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices){
+Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const Matrix<T, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}){
+    return permuted_copy(ctx, src.view(), dst.view(), VectorView<K>(indices), params);
+}
+
+template <typename T, typename K>
+Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
     auto n = src.rows();
     auto batch_size = src.batch_size();
     if(src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1){
@@ -40,20 +50,26 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
     if(src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()){
         throw std::runtime_error("permute: src, dst and indices must have the same dimensions");
     }
+    auto total_work_items = src.rows() * src.cols() * batch_size;
+    bool use_default_work_group_size = (params.work_group_size_range.first == -1 && params.work_group_size_range.second == -1);
+    auto [global_size, local_size] = use_default_work_group_size ?
+        compute_nd_range_sizes(
+            total_work_items,
+            ctx.device(), KernelType::MEMORY_BOUND) :
+        std::pair<size_t, size_t>(params.work_group_size_range.first, params.work_group_size_range.second);
 
     ctx -> submit([&](sycl::handler& h) {
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
-            auto bid = item.get_group_linear_id();
-            auto bdim = item.get_local_range()[0];
-            auto tid = item.get_local_linear_id();
-            for (int col = 0; col < cols; col++) {
-                auto src_ix = indices(col, bid);
-                for (int i = tid; i < n; i += bdim) {
-                    dst_view(i, col, bid) = src_view(i, src_ix, bid);
-                }
+        h.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            auto gid = item.get_global_linear_id();
+            for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
+                int batch_id = index / (cols * n);
+                int rem = index % (cols * n);
+                int col = rem / n;
+                int row = rem % n;
+                dst_view(row, col, batch_id) = src_view(row, indices(col, batch_id), batch_id);
             }
         });
     });
@@ -62,9 +78,9 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
 
 //Out of place permutation
 template <typename T, typename K>
-Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices){
+Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
     MatrixView<T>::copy(ctx, temp_storage, data);
-    return permuted_copy(ctx, temp_storage, data, indices);
+    return permuted_copy(ctx, temp_storage, data, indices, params);
 }
 
 template <typename T, typename K>
@@ -157,7 +173,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
             // Create group helper with scratch memory
             auto group_helper = sycl::ext::oneapi::experimental::group_with_scratchpad(
-                cta, sycl::span<std::byte>(scratch.get_pointer(), scratch.size()));
+                cta, sycl::span<std::byte>(scratch.get_multi_ptr<sycl::access::decorated::no>().get(), scratch.size()));
             
             // Initialize indices - each thread handles a portion
             if (fill_indices) {
