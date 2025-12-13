@@ -907,6 +907,9 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
             }
         });
         }
+        
+    } else {
+        throw std::runtime_error("Fill operation not implemented for this matrix format");
     }
     return ctx.get_event();
 }
