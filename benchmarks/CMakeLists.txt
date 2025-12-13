@@ -13,6 +13,8 @@ set(BENCHMARK_TARGETS
     ortho_benchmark
     steqr_benchmark
     transpose_benchmark
+    permuted_copy_benchmark
+    matrix_copy_benchmark
     vector_benchmark
     stehr_benchmark
     stedc_benchmark
