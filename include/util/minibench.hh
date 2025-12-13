@@ -467,7 +467,8 @@ inline void print_row(const Result& r,
     std::cout.copyfmt(orig_state);
 }
 
-inline void write_csv(const std::string& path, const std::vector<Result>& results) {
+inline void write_csv(const std::string& path, const std::vector<Result>& results,
+                      bool include_metric_stddev) {
     std::ofstream f(path);
     if (!f.is_open()) {
         std::cerr << "Failed to open CSV file: " << path << '\n';
@@ -488,10 +489,15 @@ inline void write_csv(const std::string& path, const std::vector<Result>& result
     f << "name";
     for (size_t i = 0; i < max_args; ++i) f << ",arg" << i;
     f << ",iterations,avg_ms,stddev_ms";
-    for (const auto& m : metric_names) f << ',' << m;
+    for (const auto& m : metric_names) {
+        f << ',' << m;
+        if (include_metric_stddev) f << ',' << m << "_std";
+    }
     f << '\n';
     for (const auto& r : results) {
-        f << r.name;
+        // Quote the name to avoid commas splitting the field
+        std::string quoted_name = '"' + r.name + '"';
+        f << quoted_name;
         for (size_t i = 0; i < max_args; ++i) {
             if (i < r.args.size()) f << ',' << r.args[i];
             else f << ',';
@@ -502,6 +508,10 @@ inline void write_csv(const std::string& path, const std::vector<Result>& result
         for (const auto& m : metric_names) {
             auto it = r.metrics.find(m);
             if (it != r.metrics.end()) f << ',' << it->second; else f << ',';
+            if (include_metric_stddev) {
+                auto it_std = r.metrics_stddev.find(m);
+                if (it_std != r.metrics_stddev.end()) f << ',' << it_std->second; else f << ',';
+            }
         }
         f << '\n';
     }
@@ -585,7 +595,7 @@ inline int RunRegisteredBenchmarks(const Config& cfg = {},
         }
     }
 
-    if (!csv_path.empty()) write_csv(csv_path, results);
+    if (!csv_path.empty()) write_csv(csv_path, results, cfg.metric_stddev);
     return 0;
 }
 
@@ -687,6 +697,23 @@ inline void SquareBatchSizes(Benchmark* b) {
     for (int s : {64, 128, 256, 512, 1024}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
             b->Args({s, s, bs});
+        }
+    }
+}
+
+template <typename Benchmark>
+inline void SteqrBenchSizes(Benchmark* b) {
+    for (int s : {8, 16, 32, 64}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+            b->Args({s, bs});
+        }
+    }
+}
+template <typename Benchmark>
+inline void SteqrBenchSizesNetlib(Benchmark* b) {
+    for (int s : {8, 16, 32, 64}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+            b->Args({s, bs});
         }
     }
 }
