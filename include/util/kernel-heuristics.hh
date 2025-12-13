@@ -327,8 +327,7 @@ inline std::pair<size_t, size_t> compute_nd_range_sizes(size_t total_work,
     size_t global_size;
     if (total_work > max_safe_work_items) {
         // Use grid-stride approach - limit to a reasonable number of work-groups
-        const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
-        size_t max_work_groups = std::min(max_compute_units * 4, max_safe_work_items / local_size);
+        size_t max_work_groups = std::min(device.get_property(DeviceProperty::MAX_COMPUTE_UNITS) * 16, max_safe_work_items / local_size);
         global_size = max_work_groups * local_size;
     } else {
         // Round up global size to be a multiple of local size
