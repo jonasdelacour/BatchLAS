@@ -141,6 +141,51 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     } */
 }
 
+TYPED_TEST(StedcTest, FlatMatchesRecursive) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 128;
+    const int batch = 16;
+    using float_type = typename base_type<T>::type;
+
+    // Generate identical inputs for both paths (stedc mutates its inputs)
+    auto a_ref = Vector<float_type>::random(n, batch);
+    auto b_ref = Vector<float_type>::random(n - 1, batch);
+    auto a_flat = a_ref;
+    auto b_flat = b_ref;
+    
+
+
+    auto eigvals_ref = Vector<float_type>::zeros(n, batch);
+    auto eigvals_flat = Vector<float_type>::zeros(n, batch);
+    auto eigvecs_ref = Matrix<float_type>::Identity(n, batch);
+    auto eigvecs_flat = Matrix<float_type>::Identity(n, batch);
+
+    StedcParams<float_type> params{.recursion_threshold = 16};
+    UnifiedVector<std::byte> ws_ref(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
+    UnifiedVector<std::byte> ws_flat(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
+
+    // Baseline recursive path
+    stedc<B>(*this->ctx, a_ref, b_ref, eigvals_ref, ws_ref, JobType::EigenVectors, params, eigvecs_ref);
+
+    // Flattened path
+    stedc_flat<B>(*this->ctx, a_flat, b_flat, eigvals_flat, ws_flat, JobType::EigenVectors, params, eigvecs_flat);
+
+    this->ctx->wait();
+
+    auto tol = std::numeric_limits<float_type>::epsilon() * float_type(1e3);
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            float_type diff = std::abs(eigvals_ref(i, j) - eigvals_flat(i, j));
+            if (diff > tol) {
+                FAIL() << "Eigenvalue mismatch at (" << i << ", batch " << j << ") : recursive="
+                       << eigvals_ref(i, j) << " flat=" << eigvals_flat(i, j) << " diff=" << diff
+                       << " tol=" << tol;
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
