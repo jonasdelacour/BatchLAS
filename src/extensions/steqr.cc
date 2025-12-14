@@ -115,6 +115,7 @@ Event steqr_impl(Queue& ctx,
                     BumpAllocator& allocator,
                     size_t max_sweeps, //Maximum number of sweeps to perform
                     T zero_threshold) {
+    BATCHLAS_KERNEL_TRACE_SCOPE("steqr");
     // Perform the Francis sweep for the i-th step
     // This function will apply a francis sweep of Givens rotations
     auto n = d.size();
@@ -127,7 +128,9 @@ Event steqr_impl(Queue& ctx,
     auto temp_deflation_indices = VectorView<std::array<int32_t, 2>>(allocator.allocate<std::array<int32_t, 2>>(ctx, (n / 2) * batch_size), n / 2, batch_size, 1, batch_size);
     
     
-    ctx -> submit([&](sycl::handler& cgh) {
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
+        ctx -> submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto ebid = e.batch_item(i);
@@ -150,11 +153,17 @@ Event steqr_impl(Queue& ctx,
             }
             scan_view[i] = sub_problem_ix;
         });
-    });
+        });
+    }
 
-    internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_scan");
+        internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+    }
     
-    ctx -> submit([&](sycl::handler& cgh) {
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_writeout");
+        ctx -> submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto num_sub_problems = scan_view[i] - (i == 0 ? 0 : scan_view[i - 1]);
@@ -163,9 +172,12 @@ Event steqr_impl(Queue& ctx,
                 deflation_indices[offset + j] = {static_cast<int32_t>(i), temp_deflation_indices(j, i)[0], temp_deflation_indices(j, i)[1]};
             }
         });
-    });
+        });
+    }
 
-    ctx->submit([&](sycl::handler& cgh) {
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("steqr:francis_sweep");
+        ctx->submit([&](sycl::handler& cgh) {
         auto rotations_view = givens_rotations.kernel_view();
         //auto bsize = n_problems < ncus ? 1 : internal::ceil_div(size_t(n_problems), ncus);
         cgh.parallel_for<FrancisKernel<T>>(sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
@@ -311,7 +323,8 @@ Event steqr_impl(Queue& ctx,
             }
             }
         });
-    });
+        });
+    }
 
     return ctx.get_event();
 }

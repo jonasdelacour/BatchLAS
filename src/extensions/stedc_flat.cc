@@ -7,6 +7,7 @@
 #include <util/mempool.hh>
 #include <internal/sort.hh>
 #include "../math-helpers.hh"
+#include "../util/kernel-trace.hh"
 
 namespace batchlas {
 
@@ -55,6 +56,7 @@ static Event stedc_merge_flat(
     auto batch_size = d.batch_size();
     auto rho = pool.allocate<T>(ctx, batch_size);
 
+    BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:rho_copy");
     ctx->parallel_for(sycl::range(batch_size), [=](sycl::id<1> idx) {
         auto ix = idx[0];
         rho[ix] = e(offset + n_left - 1, ix);
@@ -64,6 +66,8 @@ static Event stedc_merge_flat(
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
     auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
 
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:build_v");
     ctx->submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
@@ -79,19 +83,34 @@ static Event stedc_merge_flat(
             }
         });
     });
+    }
 
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:argsort_eigs");
     argsort(ctx, eigenvalues(Slice(s(offset), s(offset + n))), permutation, SortOrder::Ascending, true);
+    }
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permute_eigs");
     permute(ctx, eigenvalues(Slice(s(offset), s(offset + n))), permutation);
+    }
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permute_v");
     permute(ctx, v, permutation);
+    }
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permuted_copy_eigvects");
     permuted_copy(ctx,
                   eigvects(Slice{s(offset), s(offset + n)}, Slice(s(offset), s(offset + n))),
                   temp_Q(Slice{s(offset), s(offset + n)}, Slice(s(offset), s(offset + n))),
                   permutation);
+    }
 
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
 
     T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:reduce_deflate");
     ctx->submit([&](sycl::handler& h) {
         auto Q = temp_Q(Slice{s(offset), s(offset + n)}, Slice(s(offset), s(offset + n))).kernel_view();
         auto scan_mem_include = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
@@ -170,15 +189,31 @@ static Event stedc_merge_flat(
             }
         });
     });
+    }
 
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permute_Q");
     permute(ctx, temp_Q(Slice{s(offset), s(offset + n)}, Slice(s(offset), s(offset + n))), eigvects(Slice{s(offset), s(offset + n)}, Slice(s(offset), s(offset + n))), permutation);
+    }
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permute_eigs2");
     permute(ctx, eigenvalues(Slice(s(offset), s(offset + n))), permutation);
+    }
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:permute_v2");
     permute(ctx, v, permutation);
+    }
 
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), static_cast<int64_t>(n), static_cast<int64_t>(n), static_cast<int64_t>(n), static_cast<int64_t>(n * n), batch_size);
-    Qprime.fill_identity(ctx);
 
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:Qprime_identity");
+    Qprime.fill_identity(ctx);
+    }
+
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:Qprime_init");
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
         h.parallel_for(sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
@@ -272,6 +307,8 @@ static Event stedc_merge_flat(
             }
         });
     });
+
+    }
 
     argsort(ctx, eigenvalues(Slice(s(offset), s(offset + n))), permutation, SortOrder::Ascending, true);
     permute(ctx, eigenvalues(Slice(s(offset), s(offset + n))), permutation);
