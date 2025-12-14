@@ -135,6 +135,9 @@ struct Queue{
     ~Queue();
 
     Queue(Device device, bool in_order = true);
+    // Create a new queue sharing the same SYCL context/device as an existing queue.
+    // Useful when using USM pointers/workspaces created for the base queue.
+    Queue(const Queue& base, bool in_order);
     Queue(Queue&& other); //= default;
     Queue& operator=(Queue&& other);// = default;
     Queue(const Queue& other) = delete;

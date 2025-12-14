@@ -34,6 +34,10 @@ Queue::Queue(Device dev, bool in_order) : device_(dev), in_order_(in_order) {
     impl_ = std::make_unique<QueueImpl>(dev, in_order);
 }
 
+Queue::Queue(const Queue& base, bool in_order) : device_(base.device_), in_order_(in_order) {
+    impl_ = std::make_unique<QueueImpl>(base.impl_->get_context(), base.impl_->get_device(), device_, in_order_);
+}
+
 Queue::~Queue() = default;
 Queue::Queue(Queue&& other) = default;
 Queue& Queue::operator=(Queue&& other) = default;

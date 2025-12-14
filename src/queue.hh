@@ -33,6 +33,23 @@ struct QueueImpl : public sycl::queue{
           device_(dev),
           trace_tid_(batchlas_kernel_trace::enabled() ? ++trace_tid_counter_ : 0) {}
 
+    QueueImpl(const sycl::context& ctx, const sycl::device& dev, Device logical_dev, bool in_order)
+        : sycl::queue(ctx,
+                      dev,
+                      [&] {
+                          const bool prof = batchlas_kernel_trace::enabled();
+                          if (in_order && prof)
+                              return sycl::property_list{sycl::property::queue::in_order{},
+                                                        sycl::property::queue::enable_profiling{}};
+                          if (in_order && !prof)
+                              return sycl::property_list{sycl::property::queue::in_order{}};
+                          if (!in_order && prof)
+                              return sycl::property_list{sycl::property::queue::enable_profiling{}};
+                          return sycl::property_list{};
+                      }()),
+          device_(logical_dev),
+          trace_tid_(batchlas_kernel_trace::enabled() ? ++trace_tid_counter_ : 0) {}
+
     QueueImpl()
         : sycl::queue(device_arrays.at((int)DeviceType::CPU).at(0),
                       batchlas_kernel_trace::enabled()
