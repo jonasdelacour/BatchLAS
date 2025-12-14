@@ -5,9 +5,9 @@
 
 using namespace batchlas;
 
-// Batched STEQR benchmark
+// Batched STEDC benchmark
 template <typename T, Backend B>
-static void BM_STEQR(minibench::State& state) {
+static void BM_STEDC(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
@@ -43,6 +43,6 @@ static void BM_STEQR(minibench::State& state) {
 
 // Register size/batch combinations at static‑init time using macro
 
-BATCHLAS_REGISTER_BENCHMARK(BM_STEQR, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK(BM_STEDC, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();
