@@ -38,6 +38,20 @@ By default it fails if any metric regresses by more than 5%.
 - Change tolerance: `--tolerance 0.10` (10%)
 - Use a different build dir: `--build-dir /path/to/build`
 - Override cases: `--cases evaluation/perf_cases.json`
+- Emit a Chrome trace: `--trace evaluation/trace.json`
+
+### Kernel-level traces (SYCL event profiling)
+
+BatchLAS can emit a kernel/command-level Chrome trace using SYCL event profiling.
+
+Options:
+
+- Via perf runner (recommended):
+	- `python3 evaluation/perf_eval.py --check --kernel-trace-dir evaluation/trace/kernels`
+
+- Or manually via env vars when running any executable that uses `Queue`:
+	- `BATCHLAS_KERNEL_TRACE=1`
+	- `BATCHLAS_KERNEL_TRACE_PATH=path/to/kernels.trace.json`
 
 ### Default cases
 

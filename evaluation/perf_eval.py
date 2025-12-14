@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -50,8 +51,40 @@ def _default_benchmark_path(build_dir: Path, exe_name: str) -> Path:
     return build_dir / "benchmarks" / exe_name
 
 
-def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None) -> None:
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
+def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
+    subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, check=True)
+
+
+def _now_us() -> float:
+    # Chrome trace expects microseconds.
+    return time.perf_counter_ns() / 1000.0
+
+
+def _append_trace_event(
+    trace_events: Optional[List[Dict[str, Any]]],
+    *,
+    name: str,
+    cat: str,
+    ts_us: float,
+    dur_us: float,
+    args: Optional[Dict[str, Any]] = None,
+    pid: int = 1,
+    tid: int = 1,
+) -> None:
+    if trace_events is None:
+        return
+    trace_events.append(
+        {
+            "name": name,
+            "cat": cat,
+            "ph": "X",
+            "ts": ts_us,
+            "dur": dur_us,
+            "pid": pid,
+            "tid": tid,
+            "args": args or {},
+        }
+    )
 
 
 def _guess_backend_and_type_from_name(name: str) -> Tuple[str, str]:
@@ -151,6 +184,8 @@ def _run_one_benchmark(
     min_time_ms: float,
     min_iters: int,
     max_iters: int,
+    trace_events: Optional[List[Dict[str, Any]]] = None,
+    kernel_trace_dir: Optional[Path] = None,
 ) -> List[Measurement]:
     if not exe.exists():
         raise FileNotFoundError(
@@ -185,7 +220,36 @@ def _run_one_benchmark(
                 f"--max_iters={max_iters}",
             ] + [str(x) for x in case.args]
 
-            _run_cmd(cmd)
+            child_env: Optional[Dict[str, str]] = None
+            kernel_trace_path: Optional[Path] = None
+            if kernel_trace_dir is not None:
+                kernel_trace_dir.mkdir(parents=True, exist_ok=True)
+                safe_args = "_".join(str(a) for a in case.args)
+                kernel_trace_path = kernel_trace_dir / f"kernels_{bench}_{backend}_{dtype}_{safe_args}.trace.json"
+                child_env = dict(os.environ)
+                child_env["BATCHLAS_KERNEL_TRACE"] = "1"
+                child_env["BATCHLAS_KERNEL_TRACE_PATH"] = str(kernel_trace_path)
+
+            t0 = _now_us()
+            _run_cmd(cmd, env=child_env)
+            t1 = _now_us()
+            _append_trace_event(
+                trace_events,
+                name=f"{bench}_benchmark",
+                cat="minibench",
+                ts_us=t0,
+                dur_us=(t1 - t0),
+                tid=1 if bench == "stedc" else 2,
+                args={
+                    "exe": str(exe),
+                    "bench": bench,
+                    "backend": backend,
+                    "type": dtype,
+                    "case_args": list(case.args),
+                    "cmd": cmd,
+                    "kernel_trace": str(kernel_trace_path) if kernel_trace_path else "",
+                },
+            )
 
             parsed = _parse_minibench_csv(csv_path, expected_metric=expected_metric, bench=bench)
             # With explicit ARGS we expect exactly one result row.
@@ -212,6 +276,16 @@ def _load_cases(path: Path) -> List[Case]:
 def _save_results_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _save_chrome_trace(path: Path, trace_events: List[Dict[str, Any]], *, meta: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "traceEvents": trace_events,
+        "displayTimeUnit": "ms",
+        "metadata": meta,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
 
 
 def _measurements_to_payload(measurements: List[Measurement], *, meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -338,6 +412,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=0.05,
         help="Allowed relative regression (default: 0.05 = 5%%)",
     )
+    p.add_argument(
+        "--trace",
+        default="",
+        help="Write a Chrome trace JSON file for the run (wall-time around each benchmark invocation)",
+    )
+    p.add_argument(
+        "--kernel-trace-dir",
+        default="",
+        help=(
+            "Enable BatchLAS SYCL event profiling and write per-case kernel traces into this directory "
+            "(Chrome trace JSON)."
+        ),
+    )
 
     # Benchmark knobs
     p.add_argument("--backend", default="CUDA", help="minibench backend filter (default CUDA)")
@@ -363,6 +450,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     steqr_exe = _default_benchmark_path(build_dir, "steqr_benchmark")
 
     measurements: List[Measurement] = []
+    trace_events: Optional[List[Dict[str, Any]]] = [] if args.trace else None
+    kernel_trace_dir = Path(args.kernel_trace_dir) if args.kernel_trace_dir else None
     measurements += _run_one_benchmark(
         exe=stedc_exe,
         bench="stedc",
@@ -373,6 +462,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_time_ms=args.min_time,
         min_iters=args.min_iters,
         max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
     )
     measurements += _run_one_benchmark(
         exe=steqr_exe,
@@ -384,6 +475,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_time_ms=args.min_time,
         min_iters=args.min_iters,
         max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
     )
 
     meta = {
@@ -401,6 +494,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
 
     payload = _measurements_to_payload(measurements, meta=meta)
+
+    if args.trace and trace_events is not None:
+        _save_chrome_trace(Path(args.trace), trace_events, meta=meta)
+        print(f"Wrote trace: {args.trace}")
 
     if args.record:
         _save_results_json(baseline_path, payload)

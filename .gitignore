@@ -89,3 +89,9 @@ __pycache__/
 
 # Evaluation artifacts
 evaluation/baselines/*.json
+evaluation/*.trace.json
+evaluation/traces/*.json
+
+# Kernel trace output (default name + common folders)
+batchlas_kernels.trace.json
+evaluation/trace/
