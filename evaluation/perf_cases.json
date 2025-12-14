@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {"bench": "stedc", "args": [256, 256, 16, 0]},
+    {"bench": "stedc", "args": [256, 256, 16, 1]},
+    {"bench": "steqr", "args": [64, 1024, 10, 0]},
+    {"bench": "steqr", "args": [64, 1024, 10, 1]},
+    {"bench": "steqr", "args": [16, 2048, 10, 0]},
+    {"bench": "steqr", "args": [16, 2048, 10, 1]}
+  ]
+}
