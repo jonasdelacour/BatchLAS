@@ -86,3 +86,6 @@ test_results/
 # Python cache files
 *.pyc
 __pycache__/
+
+# Evaluation artifacts
+evaluation/baselines/*.json
