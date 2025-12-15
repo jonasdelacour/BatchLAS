@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.14)
 project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
 
-# Set default build type to Release if not specified
+# Set default build type for developer iteration.
+# (Users building packages/benchmarks can still pass -DCMAKE_BUILD_TYPE=Release.)
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING
         "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 endif()
 
@@ -26,6 +27,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Options
 option(BATCHLAS_BUILD_TESTS "Build BatchLAS tests" ON)
+option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
 option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
@@ -763,7 +765,9 @@ add_subdirectory(src)
 if(BATCHLAS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-    add_subdirectory(benchmarks)
+    if(BATCHLAS_BUILD_BENCHMARKS)
+        add_subdirectory(benchmarks)
+    endif()
 endif()
 
 # Python bindings
