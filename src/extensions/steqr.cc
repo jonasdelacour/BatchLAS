@@ -4,6 +4,7 @@
 #include <blas/extra.hh>
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
+#include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include <internal/sort.hh>
@@ -617,10 +618,15 @@ size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>
 
 
 
+#if BATCHLAS_HAS_CUDA_BACKEND
 template Event steqr<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, SteqrParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
 template Event steqr<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, SteqrParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+#endif
+
+#if BATCHLAS_HAS_HOST_BACKEND
 template Event steqr<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, SteqrParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
 template Event steqr<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, SteqrParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+#endif
 template size_t steqr_buffer_size<float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, JobType, SteqrParams<float>);
 template size_t steqr_buffer_size<double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, JobType, SteqrParams<double>); 
 
