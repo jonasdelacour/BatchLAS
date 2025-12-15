@@ -113,7 +113,7 @@ Event steqr_impl(Queue& ctx,
                     const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, //Storage for Givens rotations
                     const Span<std::array<int32_t,3>>& deflation_indices, //#sub_problems deflation indices i.e. where e is zero
                     const Span<ApplyOrder>& order_view, //Order of application of rotations, has #sub_problems number of entries
-                    BumpAllocator& allocator,
+                    BumpAllocator allocator,
                     size_t max_sweeps, //Maximum number of sweeps to perform
                     T zero_threshold) {
     BATCHLAS_KERNEL_TRACE_SCOPE("steqr");
