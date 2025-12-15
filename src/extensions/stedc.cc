@@ -3,6 +3,7 @@
 #include <blas/extensions.hh>
 #include <util/mempool.hh>
 #include <internal/sort.hh>
+#include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #define DEBUG_STEDC 0
 
@@ -1132,15 +1133,21 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     return (size * n_rec) + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
 }
 
+#if BATCHLAS_HAS_HOST_BACKEND
 template Event stedc<Backend::NETLIB, float>(Queue& ctx, const VectorView<float>& d, const VectorView<float>& e, const VectorView<float>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<float> params, const MatrixView<float, MatrixFormat::Dense>& eigvects);
 template Event stedc<Backend::NETLIB, double>(Queue& ctx, const VectorView<double>& d, const VectorView<double>& e, const VectorView<double>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<double> params, const MatrixView<double, MatrixFormat::Dense>& eigvects);
+
+template size_t stedc_workspace_size<Backend::NETLIB, float>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<float> params);
+template size_t stedc_workspace_size<Backend::NETLIB, double>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<double> params);
+#endif
+
+#if BATCHLAS_HAS_CUDA_BACKEND
 template Event stedc<Backend::CUDA, float>(Queue& ctx, const VectorView<float>& d, const VectorView<float>& e, const VectorView<float>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<float> params, const MatrixView<float, MatrixFormat::Dense>& eigvects);
 template Event stedc<Backend::CUDA, double>(Queue& ctx, const VectorView<double>& d, const VectorView<double>& e, const VectorView<double>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<double> params, const MatrixView<double, MatrixFormat::Dense>& eigvects);
 
 template size_t stedc_workspace_size<Backend::CUDA, float>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<float> params);
 template size_t stedc_workspace_size<Backend::CUDA, double>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<double> params);
-template size_t stedc_workspace_size<Backend::NETLIB, float>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<float> params);
-template size_t stedc_workspace_size<Backend::NETLIB, double>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<double> params);
+#endif
 
 
 }

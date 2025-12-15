@@ -2,7 +2,7 @@
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
-#include "../src/util/queue-impl.cc"
+#include <util/sycl-device-queue.hh>
 #include "../src/math-helpers.hh"
 
 using namespace batchlas;
