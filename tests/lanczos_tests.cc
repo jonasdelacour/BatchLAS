@@ -136,7 +136,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
     params.sort_enabled = true;
     params.sort_order = SortOrder::Descending;
     params.reorthogonalization_iterations = 2;
-    params.ortho_algorithm = OrthoAlgorithm::CGS2;
+    params.ortho_algorithm = OrthoAlgorithm::SVQB2;
     
     
     UnifiedVector<float> eigenvector_memory(rows * rows * batch_size);
@@ -219,7 +219,7 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     LanczosParams<float> params;
     params.reorthogonalization_iterations = 2;
     params.sort_enabled = true;
-    params.ortho_algorithm = OrthoAlgorithm::CGS2;
+    params.ortho_algorithm = OrthoAlgorithm::SVQB2;
     params.sort_order = SortOrder::Descending;
 
     size_t buf_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);

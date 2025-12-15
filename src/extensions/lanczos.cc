@@ -162,13 +162,20 @@ namespace batchlas {
 
         //Allocate workspace and compute eigenvalues/eigenvectors of the tridiagonal matrix
         auto Q_eigenvectors = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? n * n * batch_size : 0);
-        auto qr_workspace = pool.allocate<std::byte>(ctx, tridiagonal_solver_buffer_size<B,T>(ctx, n, batch_size, jobz));
+        const auto steqr_params = SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true, true, SortOrder::Descending};
+        auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
+                                                    ctx, 
+                                                    VectorView<real_t>(alphas.data(), n, 1, n, batch_size),
+                                                    VectorView<real_t>(betas.data(), n-1, 1, n, batch_size),
+                                                    VectorView<real_t>(W.data(), n, 1, n, batch_size),
+                                                    jobz,
+                                                    steqr_params));
         
         init();
         lanczos_iteration(n);
 
 
-        tridiagonal_solver<B>(ctx,
+        /* tridiagonal_solver<B>(ctx,
                 alphas,
                 betas,
                 W,
@@ -176,7 +183,18 @@ namespace batchlas {
                 jobz,
                 MatrixView<T, MatrixFormat::Dense>(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
                 n,
-                batch_size);
+                batch_size); */
+        
+        
+        steqr<B> (ctx,
+            VectorView<real_t>(alphas.data(), n, 1, n, batch_size),
+            VectorView<real_t>(betas.data(), n-1, 1, n, batch_size),
+            VectorView<real_t>(W.data(), n, 1, n, batch_size),
+            steqr_ws,
+            jobz,
+            steqr_params,
+            MatrixView<T, MatrixFormat::Dense>(Q_eigenvectors.data(), n, n, n, n*n, batch_size)
+        );
 
         if (jobz == JobType::EigenVectors) {
             gemm<B>(ctx,
@@ -223,7 +241,12 @@ namespace batchlas {
         }
         // Additional memory required for the tridiagonal solver
         basic_size += BumpAllocator::allocation_size<std::byte>(ctx,
-                        tridiagonal_solver_buffer_size<B,T>(ctx, n, batch_size, jobz));
+                        steqr_buffer_size<T>(ctx, 
+                            VectorView<typename base_type<T>::type>(nullptr, n, 1, n, batch_size),
+                            VectorView<typename base_type<T>::type>(nullptr, n-1, 1, n, batch_size),
+                            VectorView<typename base_type<T>::type>(W.data(), n, 1, n, batch_size),
+                            jobz,
+                            SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true}));
 
         // Eigenvector memory (only if needed)
         size_t eigenvectors_size = (jobz == JobType::EigenVectors) ? 
