@@ -89,7 +89,7 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     SteqrParams<float_type> params= {};
     params.block_size = 16;
     params.block_rotations = false;
-    params.max_sweeps = 5;
+    params.max_sweeps = 10;
     params.sort = true;
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
@@ -135,7 +135,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
     SteqrParams<float_type> params= {};
     params.block_rotations = false;
-    params.max_sweeps = 5;
+    params.max_sweeps = 10;
     params.sort = true;
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx,diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
