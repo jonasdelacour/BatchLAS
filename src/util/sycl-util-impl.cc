@@ -9,7 +9,7 @@
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
 #include <util/reference-wrapper.hh>
-#include "queue-impl.cc"
+#include "../queue.hh"
 
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])

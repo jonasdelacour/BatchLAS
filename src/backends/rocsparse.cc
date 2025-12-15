@@ -5,7 +5,7 @@
 #include <sycl/sycl.hpp>
 #include <blas/linalg.hh>
 #include <complex>
-#include "backend_handle.cc"
+#include "backend_handle_impl.hh"
 
 namespace batchlas {
 

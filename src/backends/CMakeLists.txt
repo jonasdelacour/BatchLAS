@@ -1,4 +1,6 @@
-set(BACKEND_SOURCES)
+set(BACKEND_SOURCES
+    backend_handle_instantiations.cc
+)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     list(APPEND BACKEND_SOURCES
@@ -12,7 +14,7 @@ if(BATCHLAS_HAS_MKL_BACKEND)
     #)
 endif()
 
-if(BATCHLAS_ENABLE_CUDA)
+if(BATCHLAS_HAS_CUDA_BACKEND)
     list(APPEND BACKEND_SOURCES
         cublas.cc
         cusparse.cc

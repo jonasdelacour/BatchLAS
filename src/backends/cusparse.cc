@@ -6,7 +6,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <blas/linalg.hh>
-#include "backend_handle.cc"
+#include "backend_handle_impl.hh"
 #include <complex>
 #include <ios>
 
