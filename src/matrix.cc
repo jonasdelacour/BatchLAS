@@ -1,4 +1,3 @@
-#pragma once
 #include <blas/matrix.hh>
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
@@ -14,10 +13,7 @@
 #include <numeric>
 #include <stdexcept> // Include for std::runtime_error
 #include <vector>    // Include for std::vector used in scan
-#include "backends/backend_handle.cc"
-#include "util/queue-impl.cc"
-#include "util/sycl-util-impl.cc"
-#include <cuda_runtime.h>
+#include "backends/backend_handle_impl.hh"
 
 namespace batchlas {
 
@@ -870,8 +866,15 @@ template <typename T, MatrixFormat MType> struct FillNonContiguousKernel {};
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     auto data_ptr = data_.data();
-    size_t total_elements = batch_size_ * rows_ * cols_;
-    bool contiguous = (stride_ == rows_ * cols_) && (ld_ == rows_);
+    size_t total_elements = 0;
+    bool contiguous = false;
+    if constexpr (MType == MatrixFormat::CSR) {
+        total_elements = static_cast<size_t>(data_.size());
+        contiguous = true;
+    } else {
+        total_elements = static_cast<size_t>(batch_size_) * static_cast<size_t>(rows_) * static_cast<size_t>(cols_);
+        contiguous = (stride_ == rows_ * cols_) && (ld_ == rows_);
+    }
     bool char_val = 0;
     bool fill_val_is_zero = value == detail::convert_to_fill_value<T>(0);
     if constexpr (sizeof(T) == sizeof(char)) {
