@@ -553,10 +553,11 @@ Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, co
     int64_t n = d_in.size();
     int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
-    const auto d_stride = d_in.stride() > 0 ? d_in.stride() : n * d_in.inc();
-    const auto e_stride = e_in.stride() > 0 ? e_in.stride() : (n - 1) * e_in.inc();
-    auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, d_in.inc(), d_stride, batch_size)).data(), n, batch_size, d_in.inc(), d_stride);
-    auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, e_in.inc(), e_stride, batch_size)).data(), n - 1, batch_size, e_in.inc(), e_stride);
+    const auto increment = params.transpose_working_vectors ? batch_size : 1;
+    const auto d_stride = params.transpose_working_vectors ? 1 : n;
+    const auto e_stride = params.transpose_working_vectors ? 1 : n - 1;
+    auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, increment, d_stride, batch_size)), n, batch_size, increment, d_stride);
+    auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)), n - 1, batch_size, increment, e_stride);
     //Copy inputs to working buffers
     VectorView<T>::copy(ctx, d, d_in);
     VectorView<T>::copy(ctx, e, e_in);
