@@ -18,8 +18,9 @@ static void BM_GEMV(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     state.SetKernel([=]() {
-        gemv<B>(*q, A.view(), VectorView<T>(x.data(), n, 1, n, batch),
-                 VectorView<T>(y.data(), m, 1, m, batch), T(1), T(0),
+        // Use new VectorView parameter order: (ptr, size, batch_size, inc, stride)
+        gemv<B>(*q, A.view(), VectorView<T>(x.data(), n, batch),
+             VectorView<T>(y.data(), m, batch), T(1), T(0),
                  Transpose::NoTrans);
     });
     state.SetBatchEndWait(q);
