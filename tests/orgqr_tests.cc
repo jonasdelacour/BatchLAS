@@ -14,33 +14,9 @@ struct OrgqrConfig {
 using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
 
 template <typename Config>
-class OrgqrTest : public ::testing::Test {
+class OrgqrTest : public test_utils::BatchLASTest<Config> {
 protected:
-    using ScalarType = typename Config::ScalarType;
-    static constexpr Backend BackendType = Config::BackendVal;
-    std::shared_ptr<Queue> ctx;
-    Transpose trans_op = test_utils::is_complex<ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
-
-    void SetUp() override {
-        if constexpr (BackendType != Backend::NETLIB) {
-            try {
-                ctx = std::make_shared<Queue>("gpu");
-                if (!(ctx->device().type == DeviceType::GPU)) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
-                }
-            } catch (const sycl::exception& e) {
-                if (e.code() == sycl::errc::runtime || e.code() == sycl::errc::feature_not_supported) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
-                } else {
-                    throw;
-                }
-            } catch (const std::exception& e) {
-                GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
-            }
-        } else {
-            ctx = std::make_shared<Queue>("cpu");
-        }
-    }
+    Transpose trans_op = test_utils::is_complex<typename Config::ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
 };
 
 TYPED_TEST_SUITE(OrgqrTest, OrgqrTestTypes);

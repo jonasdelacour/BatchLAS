@@ -1,93 +1,75 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
-#include <blas/matrix.hh> // Include the new matrix handle
+#include <blas/matrix.hh>
 #include <sycl/sycl.hpp>
 #include <iostream>
 #include <vector>
 #include <cmath>
 #include <random>
-#include <type_traits> // Required for std::is_same_v
+#include <type_traits>
+#include "test_utils.hh"
 
 using namespace batchlas;
 
-// Configuration struct for parameterized tests
 template <typename T, Backend B>
 struct TestConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
 };
 
-// Define the types to be tested
-#include "test_utils.hh"
 using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
-// Test fixture for GEMV operations using MatrixView/VectorView, now templated
 template <typename Config>
-class GemvMatrixViewTest : public ::testing::Test {
+class GemvMatrixViewTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
+    
+    const int rows = 10; 
+    const int cols = 10;
+    const int batch_size = 5;
+    UnifiedVector<ScalarType> A_data;
+    UnifiedVector<ScalarType> x_data; 
+    UnifiedVector<ScalarType> y_data; 
+    UnifiedVector<ScalarType> y_expected;
 
     void SetUp() override {
-        // Create a SYCL queue based on BackendType
-        if constexpr (BackendType != Backend::NETLIB) {
-            try {
-                this->ctx = std::make_shared<Queue>("gpu");
-                // Check if a GPU device was actually obtained
-                if (!(this->ctx->device().type == DeviceType::GPU)) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
-                }
-            } catch (const sycl::exception& e) {
-                // Common errors indicating no GPU or CUDA setup issues
-                if (e.code() == sycl::errc::runtime || 
-                    e.code() == sycl::errc::feature_not_supported) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
-                } else {
-                    throw; // Re-throw unexpected SYCL exceptions
-                }
-            } catch (const std::exception& e) { // Catch other potential errors from Queue constructor
-                 GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
-            }
-        } else { // For NETLIB, use CPU
-            this->ctx = std::make_shared<Queue>("cpu");
+        test_utils::BatchLASTest<Config>::SetUp();
+        
+        if (!this->ctx) {
+            return;
         }
-        if (!this->ctx) { // Should be caught by GTEST_SKIP or an exception, but as a fallback
-            GTEST_FAIL() << "Queue context is null after setup.";
-            return; // Avoid further execution if ctx is null
-        }
-
 
         // Initialize test matrices and vectors
         this->A_data = UnifiedVector<ScalarType>(this->rows * this->cols * this->batch_size);
-        this->x_data = UnifiedVector<ScalarType>(std::max(this->rows, this->cols) * this->batch_size); // Use max for transpose case
+        this->x_data = UnifiedVector<ScalarType>(std::max(this->rows, this->cols) * this->batch_size);
         this->y_data = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
         this->y_expected = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
 
         // Initialize matrix with deterministic values (Column Major for BLAS)
         for (int b = 0; b < this->batch_size; ++b) {
-            for (int j = 0; j < this->cols; ++j) { // Column index
-                for (int i = 0; i < this->rows; ++i) { // Row index
-                    this->A_data[b * this->rows * this->cols + j * this->rows + i] = static_cast<ScalarType>(i + j * this->rows + 1 + b * 100);
+            for (int j = 0; j < this->cols; ++j) {
+                for (int i = 0; i < this->rows; ++i) {
+                    this->A_data[b * this->rows * this->cols + j * this->rows + i] = 
+                        static_cast<ScalarType>(i + j * this->rows + 1 + b * 100);
                 }
             }
         }
 
         // Initialize x vector with sequential values
         for (int b = 0; b < this->batch_size; ++b) {
-            int vec_dim = this->cols; // Dimension for NoTrans
+            int vec_dim = this->cols;
             for (int j = 0; j < vec_dim; ++j) {
                 this->x_data[b * std::max(this->rows, this->cols) + j] = static_cast<ScalarType>(j + 1 + b * 10);
             }
         }
-         // Initialize y vector (if needed, e.g., for beta != 0)
+        
+        // Initialize y vector
         for (int b = 0; b < this->batch_size; ++b) {
-             for (int i = 0; i < this->rows; ++i) {
-                 this->y_data[b * this->rows + i] = static_cast<ScalarType>(0.0); // Initialize y to zero for simplicity first
-             }
+            for (int i = 0; i < this->rows; ++i) {
+                this->y_data[b * this->rows + i] = static_cast<ScalarType>(0.0);
+            }
         }
-    }
-
-    void TearDown() override {
     }
 
     // Helper function to compute expected y = alpha*A*x + beta*y
@@ -126,6 +108,7 @@ protected:
     typename base_type<ScalarType>::type get_tolerance() {
         return test_utils::tolerance<ScalarType>();
     }
+    
     typename base_type<ScalarType>::type get_rel_error_floor() {
         if constexpr (std::is_same_v<ScalarType, float>) {
             return 1e-6f;
@@ -133,16 +116,6 @@ protected:
             return 1e-9;
         }
     }
-
-
-    std::shared_ptr<Queue> ctx;
-    const int rows = 10; 
-    const int cols = 10;
-    const int batch_size = 5;
-    UnifiedVector<ScalarType> A_data;
-    UnifiedVector<ScalarType> x_data; 
-    UnifiedVector<ScalarType> y_data; 
-    UnifiedVector<ScalarType> y_expected; 
 };
 
 TYPED_TEST_SUITE(GemvMatrixViewTest, MyTypes);

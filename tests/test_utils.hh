@@ -5,6 +5,10 @@
 #include <blas/enums.hh>
 #include <complex>
 #include <type_traits>
+#include <cstdlib>
+#include <string>
+#include <algorithm>
+#include <iostream>
 
 namespace test_utils {
 
@@ -13,7 +17,106 @@ template <class Tuple> struct tuple_to_types;
 template <class... Ts>
 struct tuple_to_types<std::tuple<Ts...>> { using type = ::testing::Types<Ts...>; };
 
-// Helper to gather types for all enabled backends
+// Backend name lookup for error messages
+inline const char* backend_to_string(batchlas::Backend backend) {
+    switch (backend) {
+        case batchlas::Backend::CUDA: return "CUDA";
+        case batchlas::Backend::ROCM: return "ROCM";
+        case batchlas::Backend::MKL: return "MKL";
+        case batchlas::Backend::NETLIB: return "NETLIB";
+        default: return "UNKNOWN";
+    }
+}
+
+// Runtime filtering support with error handling
+inline bool should_run_backend(batchlas::Backend backend) {
+    const char* env = std::getenv("BATCHLAS_TEST_BACKEND");
+    if (!env) return true;  // No filter, run all
+    
+    std::string backend_filter(env);
+    std::transform(backend_filter.begin(), backend_filter.end(), backend_filter.begin(), ::toupper);
+    
+    // Check if filter matches a known backend
+    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" || 
+                       backend_filter == "MKL" || backend_filter == "NETLIB");
+    
+    if (!recognized) {
+        std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
+                  << " is not recognized. Valid values are: CUDA, ROCM, MKL, NETLIB. "
+                  << "Skipping all tests." << std::endl;
+        return false;
+    }
+    
+    // Match backend to filter
+    if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
+    if (backend == batchlas::Backend::ROCM && backend_filter == "ROCM") return true;
+    if (backend == batchlas::Backend::MKL && backend_filter == "MKL") return true;
+    if (backend == batchlas::Backend::NETLIB && backend_filter == "NETLIB") return true;
+    
+    return false;  // Filter doesn't match, skip
+}
+
+// Portable type name checking using template specialization instead of typeid().name()
+template <typename T> struct is_float_type : std::false_type {};
+template <> struct is_float_type<float> : std::true_type {};
+template <> struct is_float_type<std::complex<float>> : std::true_type {};
+
+template <typename T> struct is_double_type : std::false_type {};
+template <> struct is_double_type<double> : std::true_type {};
+template <> struct is_double_type<std::complex<double>> : std::true_type {};
+
+template <typename T> struct is_complex_type : std::false_type {};
+template <> struct is_complex_type<std::complex<float>> : std::true_type {};
+template <> struct is_complex_type<std::complex<double>> : std::true_type {};
+
+// Runtime filtering for float types - portable version using template specialization
+template <typename T>
+inline bool should_run_float_type() {
+    const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
+    if (!env) return true;  // No filter, run all
+    
+    std::string type_filter(env);
+    std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
+    
+    if (type_filter == "float") {
+        return is_float_type<T>::value;
+    } else if (type_filter == "double") {
+        return is_double_type<T>::value;
+    } else if (type_filter == "complex") {
+        return is_complex_type<T>::value;
+    }
+    
+    return false;  // Filter doesn't match, skip
+}
+
+// Deprecated: non-template version kept for backward compatibility
+inline bool should_run_float_type(const std::string& type_name) {
+    const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
+    if (!env) return true;  // No filter, run all
+    
+    std::string type_filter(env);
+    std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
+    
+    // typeid().name() returns mangled names (compiler-specific):
+    // GCC/Clang: f, d, St7complexIfE, St7complexIdE
+    // MSVC: float, double, complex<float>, complex<double> (different format)
+    // This fallback supports GCC/Clang but may not work on all compilers
+    
+    if (type_filter == "float") {
+        return type_name == "f" || type_name == "St7complexIfE" ||
+               type_name.find("complex<float>") != std::string::npos;
+    } else if (type_filter == "double") {
+        return type_name == "d" || type_name == "St7complexIdE" ||
+               type_name.find("complex<double>") != std::string::npos;
+    } else if (type_filter == "complex") {
+        return type_name == "St7complexIfE" || type_name == "St7complexIdE" ||
+               type_name.find("complex") != std::string::npos;
+    }
+    
+    return false;  // Filter doesn't match, skip
+}
+
+// Helper to gather types for all enabled backends (runtime filtering via environment variables)
 template <template <typename, batchlas::Backend> class Config>
 struct backend_types {
     using tuple_type = decltype(std::tuple_cat(
@@ -94,5 +197,52 @@ inline void assert_near(const T& a, const T& b, typename batchlas::base_type<T>:
         ASSERT_NEAR(a, b, tol);
     }
 }
+
+// Unified base test fixture for all BatchLAS tests
+template <typename Config>
+class BatchLASTest : public ::testing::Test {
+protected:
+    using ScalarType = typename Config::ScalarType;
+    static constexpr batchlas::Backend BackendType = Config::BackendVal;
+    std::shared_ptr<Queue> ctx;
+    
+    void SetUp() override {
+        // Runtime filtering
+        if (!should_run_backend(BackendType)) {
+            GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+        }
+        
+        // Use portable template-based type filtering instead of typeid().name()
+        if (!should_run_float_type<ScalarType>()) {
+            GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+        }
+        
+        // GPU backends require GPU device
+        if constexpr (BackendType != batchlas::Backend::NETLIB) {
+            try {
+                ctx = std::make_shared<Queue>("gpu", true);
+                if (ctx->device().type != DeviceType::GPU) {
+                    GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
+                }
+            } catch (const sycl::exception& e) {
+                if (e.code() == sycl::errc::runtime || 
+                    e.code() == sycl::errc::feature_not_supported) {
+                    GTEST_SKIP() << "GPU queue creation failed: " << e.what();
+                }
+                throw;
+            } catch (const std::exception& e) {
+                GTEST_SKIP() << "Queue construction failed: " << e.what();
+            }
+        } else {
+            ctx = std::make_shared<Queue>("cpu");
+        }
+    }
+    
+    void TearDown() override {
+        if (ctx) {
+            ctx->wait();
+        }
+    }
+};
 
 } // namespace test_utils

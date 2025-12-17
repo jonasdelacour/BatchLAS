@@ -9,6 +9,7 @@
 #include <cmath>
 #include <random>
 #include <type_traits>
+#include "test_utils.hh"
 
 using namespace batchlas;
 
@@ -18,44 +19,33 @@ struct TestConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
 using TrsmTestTypes = typename test_utils::backend_types<TestConfig>::type;
 
-// Template test fixture for TRSM operations
 template<typename Config>
-class TrsmOperationsTest : public ::testing::Test {
+class TrsmOperationsTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
+    
+    const int rows = 8;
+    const int cols = 8;
+    const int ld = 8;
+    const int batch_size = 3;
+    const ScalarType alpha = static_cast<ScalarType>(1.0);
+
+    UnifiedVector<ScalarType> A_data;
+    UnifiedVector<ScalarType> B_data;
+    UnifiedVector<ScalarType> B_data_original;
+    
     void SetUp() override {
-        // Create a SYCL queue based on BackendType
-        if constexpr (BackendType != Backend::NETLIB) {
-            try {
-                ctx = std::make_shared<Queue>("gpu");
-                if (!(ctx->device().type == DeviceType::GPU)) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
-                }
-            } catch (const sycl::exception& e) {
-                if (e.code() == sycl::errc::runtime || e.code() == sycl::errc::feature_not_supported) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
-                } else {
-                    throw;
-                }
-            } catch (const std::exception& e) {
-                GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
-            }
-        } else {
-            ctx = std::make_shared<Queue>("cpu");
-        }
-        if (!ctx) {
-            GTEST_FAIL() << "Queue context is null after setup.";
+        test_utils::BatchLASTest<Config>::SetUp();
+        
+        if (!this->ctx) {
             return;
         }
         
         // Initialize test matrices
-        // Create a lower triangular matrix for A
         A_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
-        // Create a dense matrix for B
         B_data_original = UnifiedVector<ScalarType>(rows * cols * batch_size);
         B_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
         
@@ -64,26 +54,28 @@ protected:
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
                     if (i == j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(1.0); // Diagonal elements
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(1.0);
                     } else if (i > j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.5); // Lower triangular elements
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.5);
                     } else {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.0); // Upper triangular elements (zeros)
+                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.0);
                     }
                 }
             }
         }
         
         // Initialize matrix B with some test values
-        std::mt19937 rng(42); // Fixed seed for reproducibility
-        std::uniform_real_distribution<typename base_type<ScalarType>::type> dist(static_cast<typename base_type<ScalarType>::type>(1.0), static_cast<typename base_type<ScalarType>::type>(10.0));
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<typename base_type<ScalarType>::type> dist(
+            static_cast<typename base_type<ScalarType>::type>(1.0), 
+            static_cast<typename base_type<ScalarType>::type>(10.0));
         
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
                     ScalarType val = dist(rng);
                     B_data_original[b * rows * cols + i * cols + j] = val;
-                    B_data[b * rows * cols + i * cols + j] = val; // Create a copy to be modified
+                    B_data[b * rows * cols + i * cols + j] = val;
                 }
             }
         }
@@ -133,7 +125,6 @@ protected:
         return allMatch;
     }
     
-    // Helper method to perform TRSM test
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         // Create matrices using convenience factory methods
         auto A_matrix = Matrix<ScalarType, MatrixFormat::Dense>::Triangular(rows, uplo, static_cast<ScalarType>(1.0), static_cast<ScalarType>(0.5), test_batch_size);
@@ -204,28 +195,11 @@ protected:
                 B_data_original[b * rows * cols + i] = B_original.data()[b * rows * cols + i];
             }
             
-            // Verify each batch
             EXPECT_TRUE(verifyTrsmResult(b, trans)) << "TRSM solution verification failed for batch " << b;
         }
     }
-    
-    void TearDown() override {
-        // Clean-up
-    }
-    
-    std::shared_ptr<Queue> ctx;
-    const int rows = 8;
-    const int cols = 8;
-    const int ld = 8;
-    const int batch_size = 3;
-    const ScalarType alpha = static_cast<ScalarType>(1.0); // Scale factor for B
-
-    UnifiedVector<ScalarType> A_data;        // Triangular matrix
-    UnifiedVector<ScalarType> B_data;        // Right-hand side matrix, will be overwritten with solution X
-    UnifiedVector<ScalarType> B_data_original; // Original B values before solving
 };
 
-// Type definitions for testing
 TYPED_TEST_SUITE(TrsmOperationsTest, TrsmTestTypes);
 
 // Test TRSM operation with a lower triangular matrix (no transpose)
