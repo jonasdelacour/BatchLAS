@@ -83,8 +83,8 @@ static Event stedc_merge_flat(
     }
 
     // Workspace for the recursive children is unused here; reuse the whole ws for this merge.
-    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
-    auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
+    auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("stedc_flat:build_v");
@@ -126,7 +126,7 @@ static Event stedc_merge_flat(
                       permutation);
     }
 
-    auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
 
     T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
@@ -243,7 +243,7 @@ static Event stedc_merge_flat(
         permute(ctx, v, permutation);
     }
 
-    auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), static_cast<int64_t>(n), static_cast<int64_t>(n), static_cast<int64_t>(n), static_cast<int64_t>(n * n), batch_size);
 
     {
