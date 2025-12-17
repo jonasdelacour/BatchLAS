@@ -22,7 +22,7 @@ struct SyevConfig {
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
 template <typename Config>
-class SyevTest : public ::testing::Test {
+class SyevTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;

@@ -14,7 +14,7 @@ struct OrgqrConfig {
 using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
 
 template <typename Config>
-class OrgqrTest : public ::testing::Test {
+class OrgqrTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;

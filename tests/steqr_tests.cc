@@ -15,7 +15,7 @@ struct SteqrConfig {
 using SteqrTestTypes = typename test_utils::backend_types<SteqrConfig>::type;
 
 template <typename Config>
-class SteqrTest : public ::testing::Test {
+class SteqrTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;

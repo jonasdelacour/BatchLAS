@@ -7,6 +7,16 @@
 #include <cmath>
 #include <type_traits>
 
+#include <gtest/gtest.h>
+#include <blas/linalg.hh>
+#include <blas/matrix.hh>
+#include <sycl/sycl.hpp>
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <type_traits>
+#include "test_utils.hh"
+
 using namespace batchlas;
 
 template <typename T, Backend B>
@@ -15,38 +25,26 @@ struct TestConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
-
 using GemmTestTypes = typename test_utils::backend_types<TestConfig>::type;
 
 template <typename Config>
-class GemmTest : public ::testing::Test {
+class GemmTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
 
+    const int rows = 10;
+    const int cols = 10;
+    const int ld = 10;
+    const int batch_size = 3;
+    UnifiedVector<ScalarType> A_data;
+    UnifiedVector<ScalarType> B_data;
+    UnifiedVector<ScalarType> C_data;
+
     void SetUp() override {
-        // Create a SYCL queue based on BackendType
-        if constexpr (BackendType != Backend::NETLIB) {
-            try {
-                ctx = std::make_shared<Queue>("gpu");
-                if (!(ctx->device().type == DeviceType::GPU)) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL did not select a GPU device. Skipping.";
-                }
-            } catch (const sycl::exception& e) {
-                if (e.code() == sycl::errc::runtime || e.code() == sycl::errc::feature_not_supported) {
-                    GTEST_SKIP() << "CUDA backend selected, but SYCL GPU queue creation failed: " << e.what() << ". Skipping.";
-                } else {
-                    throw;
-                }
-            } catch (const std::exception& e) {
-                GTEST_SKIP() << "CUDA backend selected, but Queue construction failed: " << e.what() << ". Skipping.";
-            }
-        } else {
-            ctx = std::make_shared<Queue>("cpu");
-        }
-        if (!ctx) {
-            GTEST_FAIL() << "Queue context is null after setup.";
+        test_utils::BatchLASTest<Config>::SetUp();
+        
+        if (!this->ctx) {
             return;
         }
 
@@ -70,20 +68,7 @@ protected:
                 }
             }
         }
-        
     }
-    
-    void TearDown() override {
-    }
-    
-    std::shared_ptr<Queue> ctx;
-    const int rows = 10;
-    const int cols = 10;
-    const int ld = 10;
-    const int batch_size = 5;
-    UnifiedVector<ScalarType> A_data;
-    UnifiedVector<ScalarType> B_data;
-    UnifiedVector<ScalarType> C_data;
 
     void printMatrix(UnifiedVector<ScalarType>& matrix_data, int rows, int cols, int ld){
         for (int i = 0; i < cols; ++i) {
