@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <string>
 #include <algorithm>
+#include <iostream>
 
 namespace test_utils {
 
@@ -16,13 +17,35 @@ template <class Tuple> struct tuple_to_types;
 template <class... Ts>
 struct tuple_to_types<std::tuple<Ts...>> { using type = ::testing::Types<Ts...>; };
 
-// Runtime filtering support
+// Backend name lookup for error messages
+inline const char* backend_to_string(batchlas::Backend backend) {
+    switch (backend) {
+        case batchlas::Backend::CUDA: return "CUDA";
+        case batchlas::Backend::ROCM: return "ROCM";
+        case batchlas::Backend::MKL: return "MKL";
+        case batchlas::Backend::NETLIB: return "NETLIB";
+        default: return "UNKNOWN";
+    }
+}
+
+// Runtime filtering support with error handling
 inline bool should_run_backend(batchlas::Backend backend) {
     const char* env = std::getenv("BATCHLAS_TEST_BACKEND");
     if (!env) return true;  // No filter, run all
     
     std::string backend_filter(env);
     std::transform(backend_filter.begin(), backend_filter.end(), backend_filter.begin(), ::toupper);
+    
+    // Check if filter matches a known backend
+    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" || 
+                       backend_filter == "MKL" || backend_filter == "NETLIB");
+    
+    if (!recognized) {
+        std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
+                  << " is not recognized. Valid values are: CUDA, ROCM, MKL, NETLIB. "
+                  << "Skipping all tests." << std::endl;
+        return false;
+    }
     
     // Match backend to filter
     if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
@@ -33,6 +56,40 @@ inline bool should_run_backend(batchlas::Backend backend) {
     return false;  // Filter doesn't match, skip
 }
 
+// Portable type name checking using template specialization instead of typeid().name()
+template <typename T> struct is_float_type : std::false_type {};
+template <> struct is_float_type<float> : std::true_type {};
+template <> struct is_float_type<std::complex<float>> : std::true_type {};
+
+template <typename T> struct is_double_type : std::false_type {};
+template <> struct is_double_type<double> : std::true_type {};
+template <> struct is_double_type<std::complex<double>> : std::true_type {};
+
+template <typename T> struct is_complex_type : std::false_type {};
+template <> struct is_complex_type<std::complex<float>> : std::true_type {};
+template <> struct is_complex_type<std::complex<double>> : std::true_type {};
+
+// Runtime filtering for float types - portable version using template specialization
+template <typename T>
+inline bool should_run_float_type() {
+    const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
+    if (!env) return true;  // No filter, run all
+    
+    std::string type_filter(env);
+    std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
+    
+    if (type_filter == "float") {
+        return is_float_type<T>::value;
+    } else if (type_filter == "double") {
+        return is_double_type<T>::value;
+    } else if (type_filter == "complex") {
+        return is_complex_type<T>::value;
+    }
+    
+    return false;  // Filter doesn't match, skip
+}
+
+// Deprecated: non-template version kept for backward compatibility
 inline bool should_run_float_type(const std::string& type_name) {
     const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
     if (!env) return true;  // No filter, run all
@@ -40,15 +97,20 @@ inline bool should_run_float_type(const std::string& type_name) {
     std::string type_filter(env);
     std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
     
-    // typeid().name() returns mangled names like: f, d, St7complexIfE, St7complexIdE
-    // f = float, d = double, St7complexIfE = complex<float>, St7complexIdE = complex<double>
+    // typeid().name() returns mangled names (compiler-specific):
+    // GCC/Clang: f, d, St7complexIfE, St7complexIdE
+    // MSVC: float, double, complex<float>, complex<double> (different format)
+    // This fallback supports GCC/Clang but may not work on all compilers
     
     if (type_filter == "float") {
-        return type_name == "f" || type_name == "St7complexIfE";
+        return type_name == "f" || type_name == "St7complexIfE" ||
+               type_name.find("complex<float>") != std::string::npos;
     } else if (type_filter == "double") {
-        return type_name == "d" || type_name == "St7complexIdE";
+        return type_name == "d" || type_name == "St7complexIdE" ||
+               type_name.find("complex<double>") != std::string::npos;
     } else if (type_filter == "complex") {
-        return type_name == "St7complexIfE" || type_name == "St7complexIdE";
+        return type_name == "St7complexIfE" || type_name == "St7complexIdE" ||
+               type_name.find("complex") != std::string::npos;
     }
     
     return false;  // Filter doesn't match, skip
@@ -150,8 +212,8 @@ protected:
             GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
         }
         
-        std::string type_name = typeid(ScalarType).name();
-        if (!should_run_float_type(type_name)) {
+        // Use portable template-based type filtering instead of typeid().name()
+        if (!should_run_float_type<ScalarType>()) {
             GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
         }
         

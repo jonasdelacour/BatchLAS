@@ -54,28 +54,29 @@ BATCHLAS_TEST_BACKEND=CUDA BATCHLAS_TEST_FLOAT_TYPE=float ./test_executable
 
 ### 3. Updated Test Files
 
-The following test files have been updated to use the unified framework:
+The following test files have been fully migrated to use the unified framework:
 
 **BLAS Operations:**
-- `tests/gemm_tests.cc` - General matrix multiply
-- `tests/gemv_tests.cc` - General matrix-vector multiply
+- `tests/gemm_tests.cc` - General matrix multiply (batch_size: 3)
+- `tests/gemv_tests.cc` - General matrix-vector multiply (batch_size: 5)
 - `tests/trmm_tests.cc` - Triangular matrix multiply
-- `tests/trsm_tests.cc` - Triangular solve with multiple RHS
+- `tests/trsm_tests.cc` - Triangular solve with multiple RHS (batch_size: 3)
 
 **Eigenvalue Operations:**
 - `tests/stedc_tests.cc` - Divide and conquer eigenvalue solver
-- `tests/steqr_tests.cc` - QR eigenvalue solver (may be slow)
+- `tests/steqr_tests.cc` - QR eigenvalue solver (can be slow depending on matrix sizes)
 - `tests/syev_tests.cc` - Eigenvalue decomposition
 
 **Orthogonal Operations:**
 - `tests/orgqr_tests.cc` - Generate orthogonal matrix from QR
 - `tests/ormqr_tests.cc` - Multiply by orthogonal matrix from QR
 
-Each test file now:
+Each test file:
 1. Includes `test_utils.hh` at the top
 2. Defines its config struct (e.g., `TrmmConfig`)
 3. Inherits test fixture from `test_utils::BatchLASTest<Config>`
-4. Removes redundant setup/teardown code
+4. Has no redundant setup/teardown code or ctx member
+5. Inherits runtime filtering from base class automatically
 
 ### 4. Backend Support
 
@@ -122,10 +123,12 @@ ctest --output-on-failure
 
 Based on actual test runs:
 
-| Configuration | trmm_tests | gemv_tests | stedc_tests | trsm_tests |
-|--------------|-----------|-----------|------------|-----------|
-| CUDA only | ~1.5s | ~0.4s | ~7.6s | ~1.2s |
-| All backends | ~58s | ~1.8s | ~34s | ~5.4s |
+| Configuration | trmm_tests | gemv_tests | stedc_tests | steqr_tests | trsm_tests |
+|--------------|-----------|-----------|------------|------------|----------|
+| CUDA only | ~1.5s | ~0.4s | ~7.6s | ~varies* | ~1.2s |
+| All backends | ~58s | ~1.8s | ~34s | ~varies* | ~5.4s |
+
+*Note: steqr_tests may be slow depending on matrix sizes and backend implementation. Consider using `BATCHLAS_TEST_BACKEND=CUDA` to skip netlib backend for faster iteration.
 
 **Recommendation**: Use `BATCHLAS_TEST_BACKEND=CUDA` for development to iterate ~40x faster!
 
@@ -133,16 +136,19 @@ Based on actual test runs:
 
 ### Type Name Matching
 
-The float type filter uses C++ `typeid().name()` which returns mangled names:
-- `f` → `float`
-- `d` → `double`  
-- `St7complexIfE` → `std::complex<float>`
-- `St7complexIdE` → `std::complex<double>`
+The float type filter uses portable C++ template specialization instead of compiler-specific `typeid().name()` mangling:
+- Template specialization is used to check types at compile-time
+- This approach is compiler-independent and works on GCC, Clang, MSVC, and other compilers
+- Internal fallback to `typeid().name()` patterns (GCC/Clang mangling) is provided for backward compatibility:
+  - `f` → `float`
+  - `d` → `double`  
+  - `St7complexIfE` → `std::complex<float>`
+  - `St7complexIdE` → `std::complex<double>`
 
-The filter matches these appropriately:
-- `float` filter → runs `f` and `St7complexIfE`
-- `double` filter → runs `d` and `St7complexIdE`
-- `complex` filter → runs both complex types
+The filter matches appropriately:
+- `float` filter → runs `float` and `std::complex<float>` tests
+- `double` filter → runs `double` and `std::complex<double>` tests
+- `complex` filter → runs both complex type tests
 
 ### Backend Enum Values
 
@@ -154,3 +160,11 @@ Backend enum values (from `blas/enums.hh`):
 - `MAGMA` = 4
 - `SYCL` = 5
 - `NETLIB` = 6
+
+## Known Issues Addressed
+
+This refactor resolves several important issues from the review:
+1. **Incomplete Refactoring**: All test files now fully inherit from `BatchLASTest` with no redundant `ctx` members or `SetUp()` methods
+2. **Compiler Portability**: Float type filtering now uses portable template specialization instead of compiler-specific `typeid().name()` mangling
+3. **Error Handling**: Backend filter validation now warns users about invalid filter values instead of silently skipping all tests
+4. **Test Coverage**: Consistent batch sizes and proper documentation of intentional changes
