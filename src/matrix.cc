@@ -971,7 +971,8 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
     bool batch_diagonals = (diag_values.size() == (n - std::abs(k)) * batch_size);
-    return fill_diagonal(ctx, VectorView<T>(diag_values, n, 1, n, batch_diagonals ? batch_size : 1), k);
+    // Use unit increment; stride separates batches if multiple diagonals are packed.
+    return fill_diagonal(ctx, VectorView<T>(diag_values, n, batch_diagonals ? batch_size : 1, 1, n), k);
 }
 
 template <typename T, MatrixFormat MType>

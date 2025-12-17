@@ -492,7 +492,7 @@ namespace batchlas {
                             const MatrixView<T, MatrixFormat::Dense>& V) {
         using float_type = typename base_type<T>::type;
         size_t nRitz = V.cols();
-        Vector<float_type> ritz_vals(nRitz, 1, nRitz, V.batch_size());
+        Vector<float_type> ritz_vals(nRitz, V.batch_size());
         size_t workspace_size = ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
         UnifiedVector<std::byte> workspace(workspace_size);
         ctx.wait();

@@ -253,7 +253,7 @@ namespace batchlas {
             assert("Invalid slice dimensions in KernelMatrixView row extraction");
         }
         T* row_data = data_ + row + c_start * ld_;
-        return VectorView<T>(row_data, static_cast<int>(c_len), ld_, stride_, batch_size_);
+        return VectorView<T>(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
     }
 
     template <typename T, MatrixFormat MType>
@@ -264,7 +264,7 @@ namespace batchlas {
             assert("Invalid slice dimensions in KernelMatrixView column extraction");
         }
         T* col_data = data_ + r_start + col * ld_;
-        return VectorView<T>(col_data, static_cast<int>(r_len), 1, stride_, batch_size_);
+        return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
     }
 
     // Static asserts for dense and CSR instantiations
@@ -705,7 +705,7 @@ namespace batchlas {
                 throw std::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + row;
-            return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), ld_, stride_, batch_size_);
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
         }
 
         template <MatrixFormat M = MType, 
@@ -716,7 +716,7 @@ namespace batchlas {
                 throw std::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
             auto offset = col * ld_ + r_start;
-            return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), 1, stride_, batch_size_);
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_);
         }
 
         template <MatrixFormat M = MType, 
@@ -1006,23 +1006,29 @@ namespace batchlas {
         using reference = T&;
         using const_reference = const T&;
 
+            static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
+                if (size <= 0 || batch_size <= 0) return 0;
+                const int64_t max_index = int64_t(batch_size - 1) * int64_t(stride) + int64_t(size - 1) * int64_t(inc);
+                return static_cast<std::size_t>(max_index + 1);
+            }
+
         Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
-        Vector(int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * size)),
-              size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
-        Vector(int size, T value, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(std::max(std::max(stride * batch_size, size * batch_size), inc * size), value),
-              size_(size), inc_(inc), stride_(stride > 0 ? stride : size), batch_size_(batch_size) {}
+        Vector(int size, int batch_size = 1, int stride = 0, int inc = 1)
+            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+        Vector(int size, T value, int batch_size = 1, int stride = 0, int inc = 1)
+            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size), value),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
 
         // Convenience vectors
         static Vector<T> zeros(int size, int batch_size = 1, int stride = 0, int inc = 1) {
-            return Vector<T>(size, T(0), inc, stride, batch_size);
+            return Vector<T>(size, T(0), batch_size, stride, inc);
         }
         static Vector<T> ones(int size, int batch_size = 1, int stride = 0, int inc = 1) {
-            return Vector<T>(size, T(1), inc, stride, batch_size);
+            return Vector<T>(size, T(1), batch_size, stride, inc);
         }
         static Vector<T> random(int size, int batch_size = 1, int stride = 0, int inc = 1) {
-            Vector<T> vec(size, inc, stride, batch_size);
+            Vector<T> vec(size, batch_size, stride, inc);
             std::mt19937 rng(42); // Mersenne Twister engine with fixed seed
             std::uniform_real_distribution<float_t<T>> dist(0.0f, 1.0f);
             for (int b = 0; b < batch_size; ++b) {
@@ -1033,7 +1039,7 @@ namespace batchlas {
             return vec;
         }
         static Vector<T> standard_basis(int size, int index, int batch_size = 1, int stride = 0) {
-            Vector<T> vec(size, T(0), batch_size, stride);
+            Vector<T> vec(size, T(0), batch_size, stride, 1);
             for (int b = 0; b < batch_size; ++b) {
                 vec(index, b) = T(1);
             }
@@ -1058,7 +1064,8 @@ namespace batchlas {
 
         // Get a view of a single batch
         VectorView<T> batch_item(int batch_index) const {
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, stride_*batch_size_), size_, 1, inc_, stride_);
+            const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
         }
 
         void print(std::ostream& os = std::cout, int max_elements = 10) const {
@@ -1089,13 +1096,25 @@ namespace batchlas {
         using reference = T&;
         using const_reference = const T&;
 
+        static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
+            if (size <= 0 || batch_size <= 0) return 0;
+            const int64_t max_index = int64_t(batch_size - 1) * int64_t(stride) + int64_t(size - 1) * int64_t(inc);
+            return static_cast<std::size_t>(max_index + 1);
+        }
+
         VectorView() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
-        VectorView(Span<T> data, int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(data), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
-        VectorView(UnifiedVector<T>& data, int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(data.to_span()), size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
-        VectorView(T* data, int size, int inc = 1, int stride = 0, int batch_size = 1)
-            : data_(data, (stride > 0 ? stride * batch_size : size * inc * batch_size)),
+        VectorView(Span<T> data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data.data(), required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {
+                assert(data.size() >= data_.size());
+            }
+        VectorView(UnifiedVector<T>& data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data.data(), required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {
+                assert(data.size() >= data_.size());
+            }
+        VectorView(T* data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data, required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
 
         // Construct from Vector
@@ -1142,7 +1161,9 @@ namespace batchlas {
 
         // Subview (single batch)
         VectorView<T> batch_item(int batch_index) const {
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, size_), size_, inc_, stride_, 1);
+            // For a single batch, we need (size-1)*inc + 1 elements starting at batch_index * stride
+            const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
         }
 
         VectorView<T> operator()(Slice slice) const {
@@ -1161,7 +1182,8 @@ namespace batchlas {
             if (n <= 0) {
                 assert("Invalid slice dimensions for VectorView encountered in operator()(Slice)" && false);
             }
-            return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, stride_ * batch_size_), n, inc_, stride_, batch_size_);
+            const auto required = required_span_length(static_cast<int>(n), inc_, stride_, batch_size_);
+            return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, required), n, batch_size_, inc_, stride_);
         }
 
         //Computes z = a*x .* b*y + c*z

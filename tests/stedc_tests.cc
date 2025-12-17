@@ -72,7 +72,7 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
     syev<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
     this->ctx->wait();
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, 1, n, batch);
+    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
 
     auto tol = 1e-3f;
     if (!VectorView<float_type>::all_close(*(this->ctx), eigvals, ref_view, tol)) {
@@ -116,7 +116,7 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     syev<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
     this->ctx->wait();
 
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, 1, n, batch);
+    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
     auto diff_vect = Vector<float_type>::zeros(n, batch);
     
     VectorView<float_type>::add(*(this->ctx), float_type(1.0), float_type(-1.0), eigvals, ref_view, diff_vect).wait();

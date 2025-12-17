@@ -80,8 +80,8 @@ namespace batchlas {
                       MatrixView<T, fmt>(A.data_ptr(), m, i, m, A.stride(), batch_size) 
                     : MatrixView<T, fmt>(A.data_ptr(), i, m, m, A.stride(), batch_size);
                 //View of the next vector (either column or row of A depending on transA)
-                auto C = VectorView(Ymem.data(), i, 1, i, batch_size);
-                auto A_next = VectorView(A.data_ptr() + m * i, m, 1, A.stride(), batch_size);
+                auto C = VectorView(Ymem.data(), i, batch_size);
+                auto A_next = A(Slice(), i);  //VectorView(A.data_ptr() + m * i, m, batch_size, 1, A.stride());
                 //output vector
                 if (i > 0){ //If it's the first vector we just need to normalize it
                     for (int j = 0; j < 2; j++){

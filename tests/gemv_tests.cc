@@ -180,8 +180,8 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
     ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1); 
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1);
 
     ScalarType alpha = static_cast<ScalarType>(2.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
@@ -207,8 +207,8 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
                                                 this->rows * this->cols, this->batch_size); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1, this->cols, this->batch_size); 
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1, this->rows, this->batch_size); 
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, this->batch_size); 
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, this->batch_size); 
 
     ScalarType alpha = static_cast<ScalarType>(1.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
@@ -239,8 +239,8 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows,
                                                 this->rows * this->cols, this->batch_size); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1, this->rows, this->batch_size);
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1, this->cols, this->batch_size);
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, this->batch_size);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, this->batch_size);
 
     ScalarType alpha = static_cast<ScalarType>(2.5);
     ScalarType beta = static_cast<ScalarType>(0.0);
@@ -269,8 +269,8 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
                                                 this->rows * this->cols, this->batch_size); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1, this->cols, this->batch_size);
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1, this->rows, this->batch_size);
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, this->batch_size);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, this->batch_size);
 
     for (int b = 0; b < this->batch_size; ++b) {
         for (int i = 0; i < this->rows; ++i) {

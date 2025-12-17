@@ -208,8 +208,15 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 template <typename T>
 Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
     auto pool = BumpAllocator(workspace);
-    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), 1, eigs.size(), eigs.batch_size());
-    argsort(ctx, eigs, permutation, order, true);
+    // Ensure contiguous unit-inc views for argsort
+    VectorView<T> eigs_unit = eigs;
+    if (eigs.inc() != 1) {
+        auto tmp = Vector<T>(eigs.size(), eigs.batch_size(), eigs.size(), 1);
+        VectorView<T>::copy(ctx, tmp, eigs);
+        eigs_unit = VectorView<T>(tmp);
+    }
+    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
+    argsort(ctx, eigs_unit, permutation, order, true);
     permute(ctx, eigs, permutation);
     if (jobz == JobType::EigenVectors){
         auto temp_eigvects = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, eigvects.rows() * eigvects.cols() * eigvects.batch_size()).data(), eigvects.rows(), eigvects.cols(), eigvects.rows(), eigvects.rows() * eigvects.cols(), eigvects.batch_size());
@@ -220,7 +227,13 @@ Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixForm
 
 template <typename T>
 Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz, SortOrder order, Span<std::byte> workspace) {
-    return sort(ctx, VectorView<T>(W.data(), W.size(), 1, W.size(), V.batch_size()), V, jobz, order, workspace);
+    const auto batch_size = V.batch_size();
+    const auto n_total = W.size();
+    if (batch_size <= 0 || (n_total % batch_size) != 0) {
+        throw std::runtime_error("sort: invalid batch layout for eigenvalues span");
+    }
+    const auto n = n_total / batch_size;
+    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)), V, jobz, order, workspace);
 }
 
 template <typename T>

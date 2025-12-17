@@ -716,7 +716,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 //for (int k = tid; k < n; k += bdim) shared_mem[k] = Qview(k, i, bid) * Qview(k, i, bid);
 
                 //auto norm = std::sqrt(sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + n, sycl::plus<T>()));
-                auto norm = internal::nrm2<T>(cta, VectorView<T>(Qview.data() + i * Qview.ld(), n, 1, Qview.stride(), Qview.batch_size()));
+                auto norm = internal::nrm2<T>(cta, VectorView<T>(Qview.data() + i * Qview.ld(), n, Qview.batch_size(), 1, Qview.stride()));
 
                 for (int k = tid; k < n; k += bdim) Qview(k, i, bid) = Qview(k, i, bid) / norm;
             }
@@ -778,8 +778,8 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     }
     
     //Once permutations are done we can free the memory once again
-    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
-    auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size, 1, n);
+    auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size, 1, n);
     ctx -> submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
@@ -802,7 +802,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     permute(ctx, v, permutation);
     permuted_copy(ctx, eigvects, temp_Q, permutation);
 
-    auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size, 1, n);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
     //Deflation scheme
     T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
@@ -910,7 +910,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
 
-    auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, 1, n, batch_size);
+    auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size, 1, n);
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), n, n, n, n * n, batch_size);
     Qprime.fill_identity(ctx);
     //Problem: We ultimately need to compute Q1 ⨂ Q2 * Qprime, however since we are deflating the columns of Q1 ⨂ Q2 we need to be careful about how we form Qprime.
@@ -1079,9 +1079,9 @@ size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType job
     }
 
     size_t size = 0;
-    auto d = VectorView<T>(nullptr, params.recursion_threshold, 1, 0, batch_size);
-    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, 1, 0, batch_size);
-    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, 1, 0, batch_size);
+    auto d = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
+    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, batch_size, 1, 0);
+    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
     // How many recursions do we need?
     auto n_rec = (n + params.recursion_threshold - 1) / params.recursion_threshold;
     auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem
@@ -1110,9 +1110,9 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     }
 
     size_t size = 0;
-    auto d = VectorView<T>(nullptr, params.recursion_threshold, 1, 0, batch_size);
-    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, 1, 0, batch_size);
-    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, 1, 0, batch_size);
+    auto d = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
+    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, batch_size, 1, 0);
+    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
     // How many recursions do we need?
     auto n_rec = (n + params.recursion_threshold - 1) / params.recursion_threshold;
     auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem

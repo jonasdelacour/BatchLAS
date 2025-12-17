@@ -126,7 +126,7 @@ Event steqr_impl(Queue& ctx,
     auto scan_view = allocator.allocate<int32_t>(ctx, batch_size);
     //UnifiedVector<int32_t> scan_array(batch_size, int32_t(0)); //Max number of subproblems is n/2
     //Vector<std::array<int32_t, 2>> temp_deflation_indices(n / 2, batch_size, 1, batch_size);
-    auto temp_deflation_indices = VectorView<std::array<int32_t, 2>>(allocator.allocate<std::array<int32_t, 2>>(ctx, (n / 2) * batch_size), n / 2, batch_size, 1, batch_size);
+    auto temp_deflation_indices = VectorView<std::array<int32_t, 2>>(allocator.allocate<std::array<int32_t, 2>>(ctx, VectorView<std::array<int32_t, 2>>::required_span_length(n / 2, 1, n / 2, batch_size)), n / 2, batch_size, 1, n / 2);
     
     
     {
@@ -553,10 +553,10 @@ Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, co
     int64_t n = d_in.size();
     int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
-    auto d = params.transpose_working_vectors ? VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, batch_size, 1, batch_size) 
-                                                : VectorView<T>(pool.allocate<T>(ctx, batch_size * n).data(), n, 1, n, batch_size);
-    auto e = params.transpose_working_vectors ? VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, batch_size, 1, batch_size)
-                                                : VectorView<T>(pool.allocate<T>(ctx, batch_size * (n - 1)).data(), n - 1, 1, n - 1, batch_size);
+    const auto d_stride = d_in.stride() > 0 ? d_in.stride() : n * d_in.inc();
+    const auto e_stride = e_in.stride() > 0 ? e_in.stride() : (n - 1) * e_in.inc();
+    auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, d_in.inc(), d_stride, batch_size)).data(), n, batch_size, d_in.inc(), d_stride);
+    auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, e_in.inc(), e_stride, batch_size)).data(), n - 1, batch_size, e_in.inc(), e_stride);
     //Copy inputs to working buffers
     VectorView<T>::copy(ctx, d, d_in);
     VectorView<T>::copy(ctx, e, e_in);
@@ -601,11 +601,17 @@ template <typename T>
 size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                             const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
     // Calculate the required buffer size for the workspace
-    size_t size = BumpAllocator::allocation_size<T>(ctx, d.batch_size() * d.size()) // For d
-                + BumpAllocator::allocation_size<T>(ctx, d.batch_size() * (d.size() - 1)) // For e
-                + BumpAllocator::allocation_size<std::array<int32_t,3>>(ctx, d.batch_size() * (d.size() / 2 + 1)) // For deflation indices
-                + BumpAllocator::allocation_size<int32_t>(ctx, d.batch_size()) // For scan array
-                + BumpAllocator::allocation_size<std::array<int32_t,2>>(ctx, (d.size() / 2) * d.batch_size()); // For temp deflation indices
+    auto n = d.size();
+    auto batch_size = d.batch_size();
+                            const auto d_stride = d.stride() > 0 ? d.stride() : n * d.inc();
+                            const auto e_stride = e.stride() > 0 ? e.stride() : (n - 1) * e.inc();
+                            auto d_size = VectorView<T>::required_span_length(n, d.inc(), d_stride, batch_size);
+                            auto e_size = VectorView<T>::required_span_length(n - 1, e.inc(), e_stride, batch_size);
+    size_t size = BumpAllocator::allocation_size<T>(ctx, d_size) // For d
+                + BumpAllocator::allocation_size<T>(ctx, e_size) // For e
+                + BumpAllocator::allocation_size<std::array<int32_t,3>>(ctx, batch_size * (n / 2 + 1)) // For deflation indices
+                + BumpAllocator::allocation_size<int32_t>(ctx, batch_size) // For scan array
+                + BumpAllocator::allocation_size<std::array<int32_t,2>>(ctx, VectorView<std::array<int32_t,2>>::required_span_length(n / 2, 1, n / 2, batch_size)); // For temp deflation indices
     if (jobz == JobType::EigenVectors) {
         size += BumpAllocator::allocation_size<std::array<T,2>>(ctx, (d.size() / 2 + 1) * d.batch_size() * d.size() * params.max_sweeps);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * params.block_size * params.block_size * 4);
