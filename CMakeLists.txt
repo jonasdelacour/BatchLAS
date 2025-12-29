@@ -1,5 +1,36 @@
 cmake_minimum_required(VERSION 3.14)
+
+# ============================================================================
+# Compiler Detection (must happen BEFORE project())
+# ============================================================================
+# SYCL is mandatory for this project. If the user hasn't specified a compiler,
+# try to auto-detect icpx/clang++ from Intel oneAPI.
+
+if(NOT DEFINED CMAKE_CXX_COMPILER)
+    find_program(SYCL_LS sycl-ls)
+    if(SYCL_LS)
+        get_filename_component(SYCL_BIN_DIR ${SYCL_LS} DIRECTORY)
+        find_program(DPCPP_COMPILER NAMES ${SYCL_BIN_DIR}/icpx ${SYCL_BIN_DIR}/clang++)
+        
+        if(DPCPP_COMPILER)
+            message(STATUS "Auto-detected SYCL compiler: ${DPCPP_COMPILER}")
+            set(CMAKE_CXX_COMPILER "${DPCPP_COMPILER}" CACHE FILEPATH "C++ compiler" FORCE)
+        else()
+            message(WARNING "sycl-ls found but no SYCL compiler detected. Please set CXX environment variable or -DCMAKE_CXX_COMPILER.")
+        endif()
+    else()
+        message(WARNING "sycl-ls not found. SYCL support is mandatory. Please set CXX environment variable or -DCMAKE_CXX_COMPILER to icpx or a SYCL-capable compiler.")
+    endif()
+else()
+    message(STATUS "Using user-specified compiler: ${CMAKE_CXX_COMPILER}")
+endif()
+
 project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
+
+# Validate that we have a SYCL-capable compiler
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM|Clang")
+    message(WARNING "CMAKE_CXX_COMPILER does not appear to be a SYCL compiler (icpx/clang++). Build may fail.")
+endif()
 
 # Set default build type for developer iteration.
 # (Users building packages/benchmarks can still pass -DCMAKE_BUILD_TYPE=Release.)
@@ -85,23 +116,17 @@ else()
   message(STATUS "MKL backend disabled")
 endif()
 
-find_program(SYCL_LS sycl-ls)
+# Re-find sycl-ls for GPU detection (already used for compiler detection above)
+if(NOT SYCL_LS)
+    find_program(SYCL_LS sycl-ls)
+endif()
+
 if(SYCL_LS)
-  get_filename_component(SYCL_BIN_DIR ${SYCL_LS} DIRECTORY)
-  set(SYCL_DIR ${SYCL_BIN_DIR}/../)
-  find_program(DPCPP_COMPILER NAMES ${SYCL_BIN_DIR}/icpx ${SYCL_BIN_DIR}/clang++)
-
-  cmake_dependent_option(ENABLE_SYCL "Build SYCL GPU code" ON "DPCPP_COMPILER" OFF)
-
-  if(DPCPP_COMPILER)
-    message("Found dpc++ compiler: ${DPCPP_COMPILER}")
-    # Cache the compiler choice to stop CMake from thinking the value keeps changing
-    set(CMAKE_CXX_COMPILER "${DPCPP_COMPILER}" CACHE FILEPATH "DPC++ compiler" FORCE)
-    message(STATUS "C++ compiler locked to: ${CMAKE_CXX_COMPILER}")
-  else()
-    message("Could not find dpc++ compiler")
-  endif()
-
+    get_filename_component(SYCL_BIN_DIR ${SYCL_LS} DIRECTORY)
+    set(SYCL_DIR ${SYCL_BIN_DIR}/../)
+    message(STATUS "Using SYCL tools from: ${SYCL_DIR}")
+else()
+    message(WARNING "sycl-ls not found - GPU architecture auto-detection will be skipped")
 endif()
 
 # List of SYCL targets detected by the helper functions
@@ -305,7 +330,7 @@ add_link_options(-fsycl)
 detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
-detect_sycl_cpu_target()
+#detect_sycl_cpu_target()
 
 # Function to find NVIDIA libraries like cuBLAS
 function(find_nvidia_libs)
