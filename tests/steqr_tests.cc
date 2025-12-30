@@ -168,7 +168,7 @@ TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
     }
 
     SteqrParams<float_type> params = {};
-    params.max_sweeps = 100;  // Increase significantly - LAPACK uses 30*N=480
+    params.max_sweeps = 10;  // Per-eigenvalue iteration limit
     params.sort = true;  // Re-enable sorting to match test expectations
     params.transpose_working_vectors = false;
     params.sort_order = SortOrder::Ascending;
@@ -190,7 +190,7 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 16;
-    const int batch = 32;
+    const int batch = 1280;
 
     float_type a = 1.0f;
     float_type b = 0.5f;
@@ -208,7 +208,7 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
     }
 
     SteqrParams<float_type> params = {};
-    params.max_sweeps = 100;
+    params.max_sweeps = 10;
     params.sort = true;
     params.transpose_working_vectors = false;
     params.sort_order = SortOrder::Ascending;
@@ -233,7 +233,7 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 16;
-    const int batch = 64;
+    const int batch = 1280;
 
     Vector<float_type> diag = Vector<float_type>::random(n, batch);
     Vector<float_type> sub_diag = Vector<float_type>::random(n - 1, batch);
@@ -243,7 +243,7 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
 
     auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
     SteqrParams<float_type> params = {};
-    params.max_sweeps = 100;
+    params.max_sweeps = 10;  // Per-eigenvalue iteration limit
     params.sort = true;
     params.transpose_working_vectors = false;
     params.sort_order = SortOrder::Ascending;
