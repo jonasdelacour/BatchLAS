@@ -19,7 +19,7 @@ static void BM_STEQR(minibench::State& state) {
     const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  //Extra flops if eigvects are required.
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
-    bool transpose = transpose_layout != 0;
+    bool transpose = static_cast<bool>(transpose_layout);
 
     SteqrParams<T> params;
     params.max_sweeps = n_sweeps;

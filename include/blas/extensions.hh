@@ -375,7 +375,7 @@ namespace batchlas {
         size_t block_size = 32;
         //Maximum number of sweeps in each Francis QR iteration on average 2-3 iteartions are sufficient to converge to an eigenvalue. 
         size_t max_sweeps = 5; 
-        //Threshold for regarding off-diagonal elements as zero
+        //Threshold for regarding off-diagonal elements as zero  
         T zero_threshold = std::numeric_limits<T>::epsilon(); 
         //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
         bool back_transform = false; 
@@ -389,6 +389,14 @@ namespace batchlas {
     Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                 const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
                 const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
+
+    // CTA-optimized STEQR for small power-of-two N (runtime-dispatched, compile-time specialized kernels).
+    template <Backend B, typename T>
+    Event steqr_cta(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
+                    const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+                    JobType jobz = JobType::NoEigenVectors,
+                    SteqrParams<T> params = SteqrParams<T>(),
+                    const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
   
     // Forwarding overload for steqr taking owning Vectors
     template <Backend B, typename T>
@@ -407,9 +415,30 @@ namespace batchlas {
                         MatrixView<T, MatrixFormat::Dense>(eigvects));
     }
 
+    // Forwarding overload for steqr_cta taking owning Vectors
+    template <Backend B, typename T>
+    inline Event steqr_cta(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
+                           const Vector<T>& eigenvalues, const Span<std::byte>& ws,
+                           JobType jobz = JobType::NoEigenVectors,
+                           SteqrParams<T> params = SteqrParams<T>(),
+                           const Matrix<T, MatrixFormat::Dense>& eigvects = Matrix<T, MatrixFormat::Dense>()) {
+        return steqr_cta<B, T>(ctx,
+                               static_cast<VectorView<T>>(d),
+                               static_cast<VectorView<T>>(e),
+                               static_cast<VectorView<T>>(eigenvalues),
+                               ws,
+                               jobz,
+                               params,
+                               MatrixView<T, MatrixFormat::Dense>(eigvects));
+    }
+
     template <typename T>
     size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                             const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
+
+    template <typename T>
+    size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
+                                 const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
 
     // Forwarding overload for steqr_buffer_size taking owning Vectors
     template <typename T>
@@ -424,6 +453,21 @@ namespace batchlas {
                                     jobz,
                                     params);
     }
+
+    // Forwarding overload for steqr_cta_buffer_size taking owning Vectors
+    template <typename T>
+    inline size_t steqr_cta_buffer_size(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
+                                        const Vector<T>& eigenvalues,
+                                        JobType jobz = JobType::NoEigenVectors,
+                                        SteqrParams<T> params = SteqrParams<T>()) {
+        return steqr_cta_buffer_size<T>(ctx,
+                                        static_cast<VectorView<T>>(d),
+                                        static_cast<VectorView<T>>(e),
+                                        static_cast<VectorView<T>>(eigenvalues),
+                                        jobz,
+                                        params);
+    }
+
 
     template <typename T>
     struct StedcParams {

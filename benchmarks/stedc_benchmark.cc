@@ -15,8 +15,8 @@ static void BM_STEDC(minibench::State& state) {
     
     JobType jobz = JobType::EigenVectors;
 
-    auto diags = Vector<T>::ones(n, batch);
-    auto off_diags = Vector<T>::ones(n - 1, batch);
+    auto diags = Vector<T>::random(n, batch);
+    auto off_diags = Vector<T>::random(n - 1, batch);
 
     StedcParams<T> params;
     params.recursion_threshold = rec_threshold;
