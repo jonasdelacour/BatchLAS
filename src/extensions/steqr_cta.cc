@@ -222,8 +222,6 @@ namespace batchlas {
                     // Load D/E into registers (one element per lane).
                     T d_ = d_prob(lane);
                     T e_ = (lane < N - 1) ? e_prob(lane) : T(0);
-                    
-                    size_t jtot = 0;
 
                     // ---- Outer LAPACK-like split loop over blocks separated by E==0 ----
                     size_t l1 = 0;
@@ -264,48 +262,47 @@ namespace batchlas {
                                     l += 1;
                                     continue;
                                 }
-                                if (lane == 0) {
-                                }
 
-                                // Deflate within current active subproblem [l..lend].
-                                (void)deflate(partition, e_, d_, l, lend + 1, zero_threshold);
+                                // Inner loop: iterate up to max_sweeps times to converge eigenvalue at position l
+                                size_t jiter = 0;
+                                while (jiter < max_sweeps) {
+                                    // Deflate within current active subproblem [l..lend].
+                                    (void)deflate(partition, e_, d_, l, lend + 1, zero_threshold);
 
-                                // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
-                                const size_t cand = (lane >= l && lane < lend && e_ == T(0)) ? lane : lend;
-                                const size_t m = sycl::reduce_over_group(partition, cand, sycl::minimum<size_t>());
+                                    // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
+                                    const size_t cand = (lane >= l && lane < lend && e_ == T(0)) ? lane : lend;
+                                    const size_t m = sycl::reduce_over_group(partition, cand, sycl::minimum<size_t>());
 
-                                if (m == l) {
-                                    l += 1;
-                                    continue;
-                                }
-
-                                if (m == l + 1) {
-                                    // 2x2 block at (l,l+1).
-                                    const T a = sycl::select_from_group(partition, d_, l);
-                                    const T b = sycl::select_from_group(partition, e_, l);
-                                    const T c = sycl::select_from_group(partition, d_, l + 1);
-                                    T rt1, rt2, cs, sn;
-                                    laev2_device(a, b, c, rt1, rt2, cs, sn);
-
-                                    if (lane == l) {
-                                        d_ = rt1;
-                                        e_ = T(0);
-                                    }
-                                    if (lane == (l + 1)) {
-                                        d_ = rt2;
+                                    if (m == l) {
+                                        // Converged! Move to next eigenvalue.
+                                        l += 1;
+                                        break;
                                     }
 
-                                    apply_col_rotation<T, N>(partition, Q_local, base, l, l + 1, cs, sn);
+                                    if (m == l + 1) {
+                                        // 2x2 block at (l,l+1).
+                                        const T a = sycl::select_from_group(partition, d_, l);
+                                        const T b = sycl::select_from_group(partition, e_, l);
+                                        const T c = sycl::select_from_group(partition, d_, l + 1);
+                                        T rt1, rt2, cs, sn;
+                                        laev2_device(a, b, c, rt1, rt2, cs, sn);
 
-                                    l += 2;
-                                    continue;
-                                }
+                                        if (lane == l) {
+                                            d_ = rt1;
+                                            e_ = T(0);
+                                        }
+                                        if (lane == (l + 1)) {
+                                            d_ = rt2;
+                                        }
 
-                                if (jtot >= max_sweeps) {
-                                    break;
-                                }
-                                
-                                jtot++;
+                                        apply_col_rotation<T, N>(partition, Q_local, base, l, l + 1, cs, sn);
+
+                                        l += 2;
+                                        break;
+                                    }
+
+                                    // Perform one QL sweep iteration
+                                    jiter++;
                                 // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
                                 // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
                                 D_local[base_d + lane] = d_;
@@ -392,7 +389,8 @@ namespace batchlas {
                                 // Reload D/E registers from local memory for subsequent deflation scans.
                                 d_ = D_local[base_d + lane];
                                 e_ = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
-                            }
+                                }  // end inner jiter loop for QL
+                            }  // end while (l <= lend) for QL
                         } else {
                             // ---------------- QR iteration: converge from the bottom (l shrinks) ----------------
                             size_t l = lendsv;
@@ -405,48 +403,48 @@ namespace batchlas {
                                     continue;
                                 }
 
+                                // Inner loop: iterate up to max_sweeps times to converge eigenvalue at position l
+                                size_t jiter = 0;
+                                while (jiter < max_sweeps) {
+                                    (void)deflate(partition, e_, d_, lend, l + 1, zero_threshold);
 
-                                (void)deflate(partition, e_, d_, lend, l + 1, zero_threshold);
+                                    // Find m scanning downward: look for E(i)==0 and take the largest i+1.
+                                    const size_t cand_m2 = (lane >= lend && lane < l && e_ == T(0)) ? (lane + 1) : lend;
+                                    const size_t m = sycl::reduce_over_group(partition, cand_m2, sycl::maximum<size_t>());
 
-                                // Find m scanning downward: look for E(i)==0 and take the largest i+1.
-                                const size_t cand_m2 = (lane >= lend && lane < l && e_ == T(0)) ? (lane + 1) : lend;
-                                const size_t m = sycl::reduce_over_group(partition, cand_m2, sycl::maximum<size_t>());
-
-                                if (m == l) {
-                                    if (l == 0) break;
-                                    l -= 1;
-                                    continue;
-                                }
-
-                                if (m + 1 == l) {
-                                    // 2x2 block at (l-1,l).
-                                    const size_t l0 = l - 1;
-                                    const T a = sycl::select_from_group(partition, d_, l0);
-                                    const T b = sycl::select_from_group(partition, e_, l0);
-                                    const T c2 = sycl::select_from_group(partition, d_, l);
-                                    T rt1, rt2, cs, sn;
-                                    laev2_device(a, b, c2, rt1, rt2, cs, sn);
-
-                                    if (lane == l0) {
-                                        d_ = rt1;
-                                        e_ = T(0);
-                                    }
-                                    if (lane == l) {
-                                        d_ = rt2;
+                                    if (m == l) {
+                                        // Converged! Move to next eigenvalue.
+                                        if (l == 0) break;
+                                        l -= 1;
+                                        break;
                                     }
 
-                                    apply_col_rotation<T, N>(partition, Q_local, base, l0, l, cs, sn);
+                                    if (m + 1 == l) {
+                                        // 2x2 block at (l-1,l).
+                                        const size_t l0 = l - 1;
+                                        const T a = sycl::select_from_group(partition, d_, l0);
+                                        const T b = sycl::select_from_group(partition, e_, l0);
+                                        const T c2 = sycl::select_from_group(partition, d_, l);
+                                        T rt1, rt2, cs, sn;
+                                        laev2_device(a, b, c2, rt1, rt2, cs, sn);
 
-                                    if (l <= 1) break;
-                                    l -= 2;
-                                    continue;
-                                }
+                                        if (lane == l0) {
+                                            d_ = rt1;
+                                            e_ = T(0);
+                                        }
+                                        if (lane == l) {
+                                            d_ = rt2;
+                                        }
 
-                                if (jtot >= max_sweeps) {
-                                    break;
-                                }
-                                
-                                jtot++;
+                                        apply_col_rotation<T, N>(partition, Q_local, base, l0, l, cs, sn);
+
+                                        if (l <= 1) break;
+                                        l -= 2;
+                                        break;
+                                    }
+
+                                    // Perform one QR sweep iteration
+                                    jiter++;
 
                                 // ---- Implicit QR step on subblock [m..l] ----
                                 // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
@@ -526,9 +524,10 @@ namespace batchlas {
                                 // Reload D/E registers from local memory for subsequent deflation scans.
                                 d_ = D_local[base_d + lane];
                                 e_ = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
-                            }
-                        }
-                    }
+                                }  // end inner jiter loop for QR
+                            }  // end while (l >= lend) for QR
+                        }  // end if (do_ql) else
+                    }  // end outer block split loop
 
                     // Make sure all lanes are done updating Q_local before copying out.
                     sycl::group_barrier(partition);
