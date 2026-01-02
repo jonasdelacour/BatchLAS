@@ -975,6 +975,8 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_
     return fill_diagonal(ctx, VectorView<T>(diag_values, n, batch_diagonals ? batch_size : 1, 1, n), k);
 }
 
+template <typename T, MatrixFormat MType> struct FillDiagonalVectorKernel;
+
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k) const {
@@ -993,20 +995,24 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
     auto row_offset = (k < 0) ? -k : 0; // Adjust row offset based on k
     ctx->submit([=](sycl::handler& cgh) {
         auto view = this->kernel_view();
-        cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
-            size_t gid = item.get_global_id(0);
-            
-            // Bounds check
-            if (gid >= total_elements) return;
-            for (int flat = gid; flat < total_elements; flat += item.get_global_range(0)) {
-                size_t b = flat / (n - std::abs(k));
-                size_t i = flat % (n - std::abs(k));
-                view(i + row_offset, i + col_offset, b) = diag_values(i, batch_diagonals ? b : 0);
-            }
-        });
-    });    
+        auto diag = diag_values;
+        cgh.parallel_for<FillDiagonalVectorKernel<T, MType>>(
+            sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+                size_t gid = item.get_global_id(0);
+
+                // Bounds check
+                if (gid >= total_elements) return;
+                for (int flat = gid; flat < total_elements; flat += item.get_global_range(0)) {
+                    size_t b = flat / (n - std::abs(k));
+                    size_t i = flat % (n - std::abs(k));
+                    view(i + row_offset, i + col_offset, b) = diag(i, batch_diagonals ? b : 0);
+                }
+            });
+    });
     return ctx.get_event();
 }
+
+template <typename T, MatrixFormat MType> struct FillDiagonalVectorKernel {};
 
 template <typename T, MatrixFormat MType> struct FillDiagonalKernel {};
 template <typename T, MatrixFormat MType>

@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 @dataclass(frozen=True)
 class Case:
-    bench: str  # "stedc" | "steqr"
+    bench: str  # "stedc" | "steqr" | "steqr_cta"
     args: List[int]
 
 
@@ -187,6 +187,10 @@ def _run_one_benchmark(
     trace_events: Optional[List[Dict[str, Any]]] = None,
     kernel_trace_dir: Optional[Path] = None,
 ) -> List[Measurement]:
+    matching_cases = [c for c in cases if c.bench == bench]
+    if not matching_cases:
+        return []
+
     if not exe.exists():
         raise FileNotFoundError(
             f"Benchmark executable not found: {exe}. "
@@ -198,13 +202,12 @@ def _run_one_benchmark(
     expected_metric = {
         "stedc": "Time (µs) / Batch",
         "steqr": "T(µs)/Batch",
+        "steqr_cta": "T(µs)/Batch",
     }[bench]
 
     measurements: List[Measurement] = []
 
-    for case in cases:
-        if case.bench != bench:
-            continue
+    for case in matching_cases:
 
         with tempfile.TemporaryDirectory(prefix="batchlas-eval-") as td:
             csv_path = Path(td) / f"{bench}.csv"
@@ -388,7 +391,7 @@ def _compare(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="BatchLAS perf eval (CUDA FP32, STEDC/STEQR)")
+    p = argparse.ArgumentParser(description="BatchLAS perf eval (CUDA FP32, STEDC/STEQR/STEQR_CTA)")
     p.add_argument("--build-dir", default="", help="Build directory (default: repo_root/build)")
     p.add_argument(
         "--cases",
@@ -448,6 +451,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stedc_exe = _default_benchmark_path(build_dir, "stedc_benchmark")
     steqr_exe = _default_benchmark_path(build_dir, "steqr_benchmark")
+    steqr_cta_exe = _default_benchmark_path(build_dir, "steqr_cta_benchmark")
 
     measurements: List[Measurement] = []
     trace_events: Optional[List[Dict[str, Any]]] = [] if args.trace else None
@@ -468,6 +472,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     measurements += _run_one_benchmark(
         exe=steqr_exe,
         bench="steqr",
+        cases=cases,
+        backend=args.backend,
+        dtype=args.dtype,
+        warmup=args.warmup,
+        min_time_ms=args.min_time,
+        min_iters=args.min_iters,
+        max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
+    )
+    measurements += _run_one_benchmark(
+        exe=steqr_cta_exe,
+        bench="steqr_cta",
         cases=cases,
         backend=args.backend,
         dtype=args.dtype,

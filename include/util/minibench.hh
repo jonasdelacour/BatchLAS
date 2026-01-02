@@ -709,9 +709,28 @@ inline void SteqrBenchSizes(Benchmark* b) {
         }
     }
 }
+
 template <typename Benchmark>
 inline void SteqrBenchSizesNetlib(Benchmark* b) {
     for (int s : {8, 16, 32, 64}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+            b->Args({s, bs});
+        }
+    }
+}
+
+template <typename Benchmark>
+inline void SteqrCtaBenchSizes(Benchmark* b) {
+    for (int s : {8, 16, 32}) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+            b->Args({s, bs});
+        }
+    }
+}
+
+template <typename Benchmark>
+inline void SteqrCtaBenchSizesNetlib(Benchmark* b) {
+    for (int s : {8, 16, 32}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
             b->Args({s, bs});
         }

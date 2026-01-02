@@ -2,9 +2,17 @@
   "cases": [
     {"bench": "stedc", "args": [256, 256, 16, 0]},
     {"bench": "stedc", "args": [256, 256, 16, 1]},
-    {"bench": "steqr", "args": [64, 1024, 10, 0]},
-    {"bench": "steqr", "args": [64, 1024, 10, 1]},
-    {"bench": "steqr", "args": [16, 2048, 10, 0]},
-    {"bench": "steqr", "args": [16, 2048, 10, 1]}
+    {"bench": "steqr", "args": [8, 4096, 10, 0]},
+    {"bench": "steqr", "args": [8, 8192, 10, 1]},
+    {"bench": "steqr", "args": [16, 4096, 10, 0]},
+    {"bench": "steqr", "args": [16, 8192, 10, 1]},
+    {"bench": "steqr", "args": [32, 4096, 10, 0]},
+    {"bench": "steqr", "args": [32, 8192, 10, 1]},
+    {"bench": "steqr_cta", "args": [8, 4096]},
+    {"bench": "steqr_cta", "args": [8, 8192]},
+    {"bench": "steqr_cta", "args": [16, 4096]},
+    {"bench": "steqr_cta", "args": [16, 8192]},
+    {"bench": "steqr_cta", "args": [32, 4096]},
+    {"bench": "steqr_cta", "args": [32, 8192]}
   ]
 }
