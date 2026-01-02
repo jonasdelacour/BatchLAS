@@ -331,7 +331,7 @@ namespace batchlas {
         }
 
         template <typename T>
-        auto slaev2(const T& a, const T& b, const T& c) {
+        auto laev2(const T& a, const T& b, const T& c) {
             // LAPACK SLAEV2-style stable computation of eigenvalues and eigenvector
             // of a 2x2 symmetric matrix [[A, B], [B, C]]. Returns {rt1, rt2, cs1, sn1},
             // where rt1 >= rt2 are the eigenvalues and [cs1, sn1]^T is the normalized
@@ -423,7 +423,7 @@ namespace batchlas {
                 sn1        = tn;
             }
 
-            return std::array<T, 4>{rt1, rt2, cs1, sn1};
+            return std::make_tuple(rt1, rt2, cs1, sn1);
         }
 
     }
