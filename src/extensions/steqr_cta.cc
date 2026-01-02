@@ -13,119 +13,44 @@ using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 
+    template <size_t N>
+    inline bool steqr_cta_debug_enabled(size_t prob_id, size_t lane) {
+        // Keep device-side printf noise low: only print for the smallest debug case.
+        return (N == 8) && (prob_id == 0) && (lane == 0);
+    }
+
     template <typename T, size_t N>
     class SteqrCTAKernel;
-
-    template <typename T>
-    inline void lartg_device(T f, T g, T& c, T& s, T& r) {
-        // Stable Givens rotation similar to LAPACK xLARTG.
-        if (g == T(0)) {
-            c = T(1);
-            s = T(0);
-            r = f;
-            return;
-        }
-        if (f == T(0)) {
-            c = T(0);
-            s = T(1);
-            r = g;
-            return;
-        }
-        const T scale = sycl::fabs(f) + sycl::fabs(g);
-        const T fs = f / scale;
-        const T gs = g / scale;
-        r = scale * sycl::sqrt(fs * fs + gs * gs);
-        r = sycl::copysign(r, f);
-        c = f / r;
-        s = g / r;
-    }
-
-    template <typename T>
-    inline void laev2_device(T a, T b, T c, T& rt1, T& rt2, T& cs1, T& sn1) {
-        // Symmetric 2x2 eigendecomposition: [a b; b c].
-        if (b == T(0)) {
-            rt1 = a;
-            rt2 = c;
-            cs1 = T(1);
-            sn1 = T(0);
-            return;
-        }
-
-        const T sm = a + c;
-        const T df = a - c;
-        const T rt = sycl::hypot(df, T(2) * b);
-        const T rt_sign = sycl::copysign(rt, sm);
-        rt1 = (sm + rt_sign) / T(2);
-        rt2 = (sm - rt_sign) / T(2);
-
-        // Jacobi rotation that diagonalizes.
-        const T tau = (c - a) / (T(2) * b);
-        const T t = sycl::copysign(T(1), tau) / (sycl::fabs(tau) + sycl::sqrt(T(1) + tau * tau));
-        cs1 = T(1) / sycl::sqrt(T(1) + t * t);
-        sn1 = t * cs1;
-    }
 
     template <typename T, size_t N, typename Partition, typename LocalAcc>
     inline void apply_col_rotation(const Partition& partition,
                                    LocalAcc& Q_local,
-                                   size_t base,
-                                   size_t col0,
-                                   size_t col1,
+                                   int32_t base,
+                                   int32_t col0,
+                                   int32_t col1,
                                    T c,
                                    T s) {
         // Right-multiply Q by the Givens rotation acting on columns (col0,col1).
-        const size_t row = static_cast<size_t>(partition.get_local_linear_id());
-        const size_t i0 = base + row * N + col0;
-        const size_t i1 = base + row * N + col1;
+        const int32_t row = static_cast<int32_t>(partition.get_local_linear_id());
+        const int32_t i0 = base + row + col0 * N;
+        const int32_t i1 = base + row + col1 * N;
         const T q0 = Q_local[i0];
         const T q1 = Q_local[i1];
-        Q_local[i0] = c * q0 + s * q1;
-        Q_local[i1] = -s * q0 + c * q1;
-    }
-
-    template <typename T, size_t N, typename Partition, typename LocalAcc>
-    inline void bitonic_sort_with_cols(const Partition& partition,
-                                       T& d_lane,
-                                       LocalAcc& Q_local,
-                                       size_t base) {
-        // Bitonic sort of d across lanes (ascending). N is power-of-two.
-        // When swapping eigenvalues between lanes, also swap the corresponding columns in Q_local.
-        const size_t lane = static_cast<size_t>(partition.get_local_linear_id());
-
-        for (size_t k = 2; k <= N; k <<= 1) {
-            for (size_t j = (k >> 1); j > 0; j >>= 1) {
-                const size_t partner = lane ^ j;
-                const T other = sycl::permute_group_by_xor(partition, d_lane, j);
-                const bool up = ((lane & k) == 0);
-                const bool do_swap = up ? (d_lane > other) : (d_lane < other);
-
-                if (do_swap) {
-                    d_lane = other;
-                }
-
-                // Swap columns once per pair to avoid races.
-                if (do_swap && lane < partner) {
-                    for (size_t r = 0; r < N; ++r) {
-                        const size_t a = base + r * N + lane;
-                        const size_t b = base + r * N + partner;
-                        const T tmp = Q_local[a];
-                        Q_local[a] = Q_local[b];
-                        Q_local[b] = tmp;
-                    }
-                }
-            }
-        }
+        // Apply Q <- Q * G where G = [[c, s], [-s, c]].
+        Q_local[i0] = c * q0 - s * q1;
+        Q_local[i1] = s * q0 + c * q1;
     }
 
     template <typename T, typename Partition>
-    inline bool deflate(Partition partition,
+    inline void deflate(Partition partition,
                         T& e,
                         T& d,
-                        size_t start_ix,
-                        size_t end_ix,
+                        int32_t start_ix,
+                        int32_t end_ix,
                         T zero_threshold) {
-        const size_t lane = static_cast<size_t>(partition.get_local_linear_id());
-        const size_t partition_size = static_cast<size_t>(partition.get_local_range().size());
+        (void)zero_threshold;
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+        const int32_t partition_size = static_cast<int32_t>(partition.get_local_range().size());
         const bool lane_in_active_range = (lane + 1 < partition_size) && (lane >= start_ix) && (lane + 1 < end_ix);
 
         // We need d_{i+1} (neighbor lane's diagonal). A 1-lane shift is the most direct.
@@ -133,25 +58,215 @@ namespace batchlas {
         // lanes never use d_ip1 due to lane_in_active_range.
         const T d_ip1 = sycl::shift_group_left(partition, d, 1);
 
-        bool deflated_local = false;
         if (lane_in_active_range) {
             // Absolute cutoff (user-controlled) first.
-            if (sycl::fabs(e) <= zero_threshold) {
-                e = T(0);
-                deflated_local = true;
-            } else if (e != T(0)) {
+            if (e != T(0)) {
                 // LAPACK-style relative deflation test:
                 // |e|^2 <= eps2 * |d_i| * |d_{i+1}| + safmin
                 const T rhs = internal::eps2<T>() * sycl::fabs(d) * sycl::fabs(d_ip1) + internal::safmin<T>();
                 if (sycl::fabs(e) * sycl::fabs(e) <= rhs) {
                     e = T(0);
-                    deflated_local = true;
                 }
             }
         }
+    }
 
-        // Return whether any lane deflated in this partition.
-        return sycl::any_of_group(partition, deflated_local);
+    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    inline void stage_tridiag_to_local(const Partition& partition,
+                                       LocalAcc& D_local,
+                                       LocalAcc& E_local,
+                                       int32_t base_d,
+                                       int32_t base_e,
+                                       int32_t lane,
+                                       T diag,
+                                       T offdiag) {
+        D_local[base_d + lane] = diag;
+        if (lane < (N - 1)) {
+            E_local[base_e + lane] = offdiag;
+        }
+        sycl::group_barrier(partition);
+    }
+
+    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    inline std::pair<T, T> reload_tridiag_from_local(const Partition& partition,
+                                                     const LocalAcc& D_local,
+                                                     const LocalAcc& E_local,
+                                                     int32_t base_d,
+                                                     int32_t base_e,
+                                                     int32_t lane) {
+        sycl::group_barrier(partition);
+        const T diag = D_local[base_d + lane];
+        const T offdiag = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
+        return {diag, offdiag};
+    }
+
+    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    inline void solve_2x2_and_update(Partition partition,
+                                    T& diag,
+                                    T& offdiag,
+                                    int32_t l0,
+                                    bool ql,
+                                    LocalAcc& Q_local,
+                                    int32_t base) {
+        const T a = sycl::select_from_group(partition, diag, l0);
+        const T b = sycl::select_from_group(partition, offdiag, l0);
+        const T c2 = sycl::select_from_group(partition, diag, l0 + 1);
+        auto [rt1, rt2, cs, sn] = internal::laev2(a, b, c2);
+
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+        if (lane == l0) {
+            diag = rt1;
+            offdiag = T(0);
+        }
+        if (lane == (l0 + 1)) {
+            diag = rt2;
+        }
+
+        // Inline QR/QL eigenvector update:
+        // - QR: apply (cs, -sn) on columns (l0, l0+1)
+        // - QL: apply (cs,  sn) on columns (l0+1, l0)
+        const int32_t col0 = ql ? (l0 + 1) : l0;
+        const int32_t col1 = ql ? l0 : (l0 + 1);
+        const T s_eff = ql ? sn : -sn;
+        apply_col_rotation<T, N>(partition, Q_local, base, col0, col1, cs, s_eff);
+    }
+
+    template <typename T, size_t N, typename Partition, typename LocalAccD, typename LocalAccE, typename LocalAccQ>
+    inline void implicit_ql_step(const Partition& partition,
+                                 LocalAccD& D_local,
+                                 LocalAccE& E_local,
+                                 LocalAccQ& Q_local,
+                                 int32_t base_d,
+                                 int32_t base_e,
+                                 int32_t base_q,
+                                 int32_t l,
+                                 int32_t m) {
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // Leader-lane scalar state.
+        T g = T(0);
+        T c = T(1);
+        T s = T(1);
+        T p = T(0);
+
+        if (lane == 0) {
+            const T p0 = D_local[base_d + l];
+            const T e0 = E_local[base_e + l];
+            const T dlp1 = D_local[base_d + (l + 1)];
+
+            T gg = (dlp1 - p0) / (T(2) * e0);
+            const T rr = sycl::hypot(gg, T(1));
+            g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
+        }
+
+        for (int32_t i = m; i-- > l;) {
+            T c1 = T(0);
+            T s1 = T(0);
+
+            if (lane == 0) {
+                const T ei = E_local[base_e + i];
+                const T di = D_local[base_d + i];
+                const T dip1 = D_local[base_d + (i + 1)];
+
+                const T f = s * ei;
+                const T b = c * ei;
+
+                T r1;
+                std::tie(c1, s1, r1) = internal::lartg(g, f);
+
+                if (i != (m - 1) && (i + 1) < (N - 1)) {
+                    E_local[base_e + (i + 1)] = r1;
+                }
+
+                const T g2 = dip1 - p;
+                const T r2 = (di - g2) * s1 + T(2) * c1 * b;
+                p = s1 * r2;
+
+                D_local[base_d + (i + 1)] = g2 + p;
+                g = c1 * r2 - b;
+                c = c1;
+                s = s1;
+            }
+
+            const T c1b = sycl::select_from_group(partition, c1, 0);
+            const T s1b = sycl::select_from_group(partition, s1, 0);
+            // QL uses the reversed-column convention; this matches the previous inline code.
+            apply_col_rotation<T, N>(partition, Q_local, base_q, i + 1, i, c1b, -s1b);
+        }
+
+        if (lane == 0) {
+            D_local[base_d + l] = D_local[base_d + l] - p;
+            if (l < (N - 1)) {
+                E_local[base_e + l] = g;
+            }
+        }
+    }
+
+    template <typename T, size_t N, typename Partition, typename LocalAccD, typename LocalAccE, typename LocalAccQ>
+    inline void implicit_qr_step(const Partition& partition,
+                                 LocalAccD& D_local,
+                                 LocalAccE& E_local,
+                                 LocalAccQ& Q_local,
+                                 int32_t base_d,
+                                 int32_t base_e,
+                                 int32_t base_q,
+                                 int32_t m,
+                                 int32_t l) {
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // Leader-lane scalar state.
+        T g = T(0);
+        T c = T(1);
+        T s = T(1);
+        T p = T(0);
+
+        if (lane == 0) {
+            const T p0 = D_local[base_d + l];
+            const T e0 = E_local[base_e + (l - 1)];
+            const T dlm1 = D_local[base_d + (l - 1)];
+
+            T gg = (dlm1 - p0) / (T(2) * e0);
+            const T rr = sycl::hypot(gg, T(1));
+            g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
+        }
+
+        for (int32_t i = m; i < l; ++i) {
+            T c1 = T(0);
+            T s1 = T(0);
+
+            if (lane == 0) {
+                const T ei = E_local[base_e + i];
+                const T di = D_local[base_d + i];
+                const T dip1 = D_local[base_d + (i + 1)];
+
+                const T f = s * ei;
+                const T b = c * ei;
+
+                T r1;
+                std::tie(c1, s1, r1) = internal::lartg(g, f);
+                if (i != m) {
+                    E_local[base_e + (i - 1)] = r1;
+                }
+
+                const T g2 = di - p;
+                const T r2 = (dip1 - g2) * s1 + T(2) * c1 * b;
+                p = s1 * r2;
+
+                D_local[base_d + i] = g2 + p;
+                g = c1 * r2 - b;
+                c = c1;
+                s = s1;
+            }
+
+            const T c1b = sycl::select_from_group(partition, c1, 0);
+            const T s1b = sycl::select_from_group(partition, s1, 0);
+            apply_col_rotation<T, N>(partition, Q_local, base_q, i, i + 1, c1b, -s1b);
+        }
+
+        if (lane == 0) {
+            D_local[base_d + l] = D_local[base_d + l] - p;
+            E_local[base_e + (l - 1)] = g;
+        }
     }
 
     template <typename T, size_t N>
@@ -172,23 +287,23 @@ namespace batchlas {
             const auto dev = ctx->get_device();
             const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
 
-                        // Heuristic: prefer 16 for very small N when supported, otherwise 32 when supported.
-            size_t sg_size = sg_sizes.empty() ? size_t(1) : static_cast<size_t>(sg_sizes[0]);
+            // Heuristic: prefer 16 for very small N when supported, otherwise 32 when supported.
+            int32_t sg_size = sg_sizes.empty() ? int32_t(1) : static_cast<int32_t>(sg_sizes[0]);
             for (auto sgs : sg_sizes) {
-                if (static_cast<size_t>(sgs) == 32) sg_size = 32;
+                if (static_cast<int32_t>(sgs) == 32) sg_size = 32;
             }
             if constexpr (N <= 16) {
                 for (auto sgs : sg_sizes) {
-                    if (static_cast<size_t>(sgs) == 16) sg_size = 16;
+                    if (static_cast<int32_t>(sgs) == 16) sg_size = 16;
                 }
             }
 
             // Minimal, safe mapping: work-group size is LCM(N, sg_size), so we can form fixed-size partitions of size N.
-            const size_t wg_size = std::lcm<size_t>(static_cast<size_t>(N), sg_size);
-            const size_t probs_per_wg = wg_size / static_cast<size_t>(N);
+            const int32_t wg_size = std::lcm<int32_t>(static_cast<int32_t>(N), sg_size);
+            const int32_t probs_per_wg = wg_size / static_cast<int32_t>(N);
 
-            const size_t num_wg = (batch_size + probs_per_wg - 1) / probs_per_wg;
-            const size_t global_size = num_wg * wg_size;
+            const int32_t num_wg = (batch_size + probs_per_wg - 1) / probs_per_wg;
+            const int32_t global_size = num_wg * wg_size;
 
             auto Q_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * N * N), cgh);
             auto D_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * N), cgh);
@@ -202,76 +317,80 @@ namespace batchlas {
 
                     const auto sg = it.get_sub_group();
                     const auto partition = sycl::ext::oneapi::experimental::chunked_partition<N>(sg);
-                    const size_t part_id = static_cast<size_t>(partition.get_group_linear_id());
-                    const size_t lane = static_cast<size_t>(partition.get_local_linear_id());
-                    const size_t prob_id = wg_id * probs_per_wg + part_id;
-                    if (prob_id >= batch_size) return;
+                    // NOTE: chunked_partition<N>(sg) partitions *within a sub-group*.
+                    // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
+                    // repeats for each sub-group. Make part_id unique within the whole work-group.
+                    const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
+                    const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
+                    const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
+                    const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+                    const int32_t prob_id = static_cast<int32_t>(wg_id) * static_cast<int32_t>(probs_per_wg) + part_id;
+                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
                     auto d_prob = d.batch_item(prob_id);
                     auto e_prob = e.batch_item(prob_id);
                     auto Q_prob = Q_view.batch_item(prob_id);                    
 
-                    const size_t base = part_id * N * N;
-                    const size_t base_d = part_id * N;
-                    const size_t base_e = part_id * (N - 1);
+                    const int32_t base = part_id * N * N;
+                    const int32_t base_d = part_id * N;
+                    const int32_t base_e = part_id * (N - 1);
 
-                    // Initialize Q_local for this problem as identity.
-                    for (size_t i = lane; i < N * N; i += static_cast<size_t>(partition.get_local_range().size())) {
-                        Q_local[base + i] = (i / N == i % N) ? T(1) : T(0);
+                    // Initialize Q_local for this problem as identity (column-major storage).
+                    // Each lane handles its row: Q_local[base + row + col*N] = Q(row, col)
+                    for (int32_t i = 0; i < N; ++i) {
+                        Q_local[base + lane + i * N] = Q_prob(lane, i);
                     }
 
                     // Load D/E into registers (one element per lane).
-                    T d_ = d_prob(lane);
-                    T e_ = (lane < N - 1) ? e_prob(lane) : T(0);
+                    T diag = d_prob(lane);
+                    T offdiag = (lane < N - 1) ? e_prob(lane) : T(0);
 
-                    // ---- Outer LAPACK-like split loop over blocks separated by E==0 ----
-                    size_t l1 = 0;
-                    while (l1 < N) {
-                        // Mark the split explicitly as LAPACK does: E(l1-1)=0.
-                        if (l1 > 0 && lane == (l1 - 1) && lane < (N - 1)) {
-                            e_ = T(0);
+                    // ---- Outer split loop over blocks separated by E==0 ----
+                    for (int32_t next_block_begin = 0; next_block_begin < N;) {
+                        const int32_t block_begin = next_block_begin;
+
+                        // Mark the split explicitly as LAPACK does: E(block_begin-1)=0.
+                        if (block_begin > 0 && lane == (block_begin - 1) && lane < (N - 1)) {
+                            offdiag = T(0);
                         }
 
                         // Deflation pass over the remaining tail to create more zeros in E.
-                        (void)deflate(partition, e_, d_, l1, N, zero_threshold);
+                        deflate(partition, offdiag, diag, block_begin, N, zero_threshold);
 
-                        // Find end of current block: first index i>=l1 where E(i)==0; if none, block ends at N-1.
-                        const size_t cand_m = (lane >= l1 && lane < (N - 1) && e_ == T(0)) ? lane : (N - 1);
-                        const size_t lendsv = sycl::reduce_over_group(partition, cand_m, sycl::minimum<size_t>());
-                        const size_t lsv = l1;
+                        // Find end of current block: first i>=block_begin where E(i)==0; if none, block ends at N-1.
+                        const int32_t block_end_candidate =
+                            (lane >= block_begin && lane < (N - 1) && offdiag == T(0)) ? lane : (N - 1);
+                        const int32_t block_end = sycl::reduce_over_group(partition, block_end_candidate, sycl::minimum<int32_t>());
 
-                        // Next block starts after lendsv.
-                        l1 = lendsv + 1;
+                        // Next block starts after block_end.
+                        next_block_begin = block_end + 1;
 
-                        // Size-1 block.
-                        if (lendsv <= lsv) {
+                        // Size-0/1 block.
+                        if (block_end <= block_begin) {
                             continue;
                         }
 
-                        // Choose between QL and QR (LAPACK swaps ends when |D(lend)| < |D(l)|).
-                        const T dl = sycl::fabs(sycl::select_from_group(partition, d_, lsv));
-                        const T dlen = sycl::fabs(sycl::select_from_group(partition, d_, lendsv));
-                        const bool do_ql = !(dlen < dl);
-
-                        if (do_ql) {
+                        // Choose between QL and QR (matches steqr.cc):
+                        // - QR if |D(l)| <= |D(lend)|
+                        // - QL otherwise
+                        const T d_first = sycl::fabs(sycl::select_from_group(partition, diag, block_begin));
+                        const T d_last = sycl::fabs(sycl::select_from_group(partition, diag, block_end));
+                        const bool use_ql = (d_last < d_first);
+                        if (use_ql) {
                             // ---------------- QL iteration: converge from the top (l grows) ----------------
-                            size_t l = lsv;
-                            const size_t lend = lendsv;
-
-                            while (l <= lend) {
-                                if (l == lend) {
+                            for (int32_t l = block_begin; l <= block_end;) {
+                                if (l == block_end) {
                                     l += 1;
                                     continue;
                                 }
 
-                                // Inner loop: iterate up to max_sweeps times to converge eigenvalue at position l
-                                size_t jiter = 0;
-                                while (jiter < max_sweeps) {
+                                // Iterate up to max_sweeps times to converge eigenvalue at position l.
+                                for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                                     // Deflate within current active subproblem [l..lend].
-                                    (void)deflate(partition, e_, d_, l, lend + 1, zero_threshold);
+                                    deflate(partition, offdiag, diag, l, block_end + 1, zero_threshold);
 
                                     // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
-                                    const size_t cand = (lane >= l && lane < lend && e_ == T(0)) ? lane : lend;
-                                    const size_t m = sycl::reduce_over_group(partition, cand, sycl::minimum<size_t>());
+                                    const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
+                                    const int32_t m = sycl::reduce_over_group(partition, m_candidate, sycl::minimum<int32_t>());
 
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
@@ -281,251 +400,72 @@ namespace batchlas {
 
                                     if (m == l + 1) {
                                         // 2x2 block at (l,l+1).
-                                        const T a = sycl::select_from_group(partition, d_, l);
-                                        const T b = sycl::select_from_group(partition, e_, l);
-                                        const T c = sycl::select_from_group(partition, d_, l + 1);
-                                        T rt1, rt2, cs, sn;
-                                        laev2_device(a, b, c, rt1, rt2, cs, sn);
-
-                                        if (lane == l) {
-                                            d_ = rt1;
-                                            e_ = T(0);
-                                        }
-                                        if (lane == (l + 1)) {
-                                            d_ = rt2;
-                                        }
-
-                                        apply_col_rotation<T, N>(partition, Q_local, base, l, l + 1, cs, sn);
+                                        solve_2x2_and_update<T, N>(partition, diag, offdiag, l, /*ql=*/true, Q_local, base);
 
                                         l += 2;
                                         break;
                                     }
 
-                                    // Perform one QL sweep iteration
-                                    jiter++;
                                 // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
                                 // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
-                                D_local[base_d + lane] = d_;
-                                if (lane < (N - 1)) {
-                                    E_local[base_e + lane] = e_;
-                                }
-                                sycl::group_barrier(partition);
+                                    stage_tridiag_to_local<T, N>(partition, D_local, E_local, base_d, base_e, lane, diag, offdiag);
 
-                                // Leader-lane scalar state.
-                                T g = T(0);
-                                T c = T(1);
-                                T s = T(1);  // LAPACK initializes S=ONE before bulge chase
-                                T p = T(0);
-
-                                if (lane == 0) {
-                                    const T p0 = D_local[base_d + l];
-                                    const T e0 = E_local[base_e + l];
-                                    const T dlp1 = D_local[base_d + (l + 1)];
-
-                                    // Wilkinson-like shift initialization (STEQR style).
-                                    T gg = (dlp1 - p0) / (T(2) * e0);
-                                    const T rr = sycl::hypot(gg, T(1));
-                                    g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
-                                    
-                                    // p starts at zero in LAPACK bulge chase (NOT d[m])
-                                    // p = D_local[base_d + m];  // WRONG!
-                                }
-
-                                // Bulge chase upward: i = m-1 down to l.
-                                // The first step uses g and E[m-1] to form the first Givens rotation.
-                                // Subsequent steps use the previous rotation's sine/cosine.
-                                for (size_t i = m; i-- > l;) {
-                                    T c1 = T(0);
-                                    T s1 = T(0);
-
-                                    if (lane == 0) {
-                                        const T ei = E_local[base_e + i];
-                                        const T di = D_local[base_d + i];
-                                        const T dip1 = D_local[base_d + (i + 1)];
-
-                                        // LAPACK computes F = S*E(I) and B = C*E(I) for ALL iterations
-                                        // including the first one (where C=1, S=1 initially)
-                                        T f = s * ei;
-                                        T b = c * ei;
-
-
-                                        T r1;
-                                        lartg_device(g, f, c1, s1, r1);
-
-
-                                        // Propagate the updated off-diagonal one position up (matches STEQR's in-loop updates).
-                                        if (i != (m - 1) && (i + 1) < (N - 1)) {
-                                            E_local[base_e + (i + 1)] = r1;
-                                        }
-
-                                        const T g2 = dip1 - p;
-                                        const T r2 = (di - g2) * s1 + T(2) * c1 * b;
-                                        p = s1 * r2;
-
-
-                                        D_local[base_d + (i + 1)] = g2 + p;
-                                        g = c1 * r2 - b;
-                                        c = c1;
-                                        s = s1;
-                                        
-                                    }
-
-                                    // Broadcast the rotation so all lanes can update eigenvectors in parallel.
-                                    const T c1b = sycl::group_broadcast(partition, c1, 0);
-                                    const T s1b = sycl::group_broadcast(partition, s1, 0);
-                                    apply_col_rotation<T, N>(partition, Q_local, base, i, i + 1, c1b, s1b);
-                                }
-
-                                if (lane == 0) {
-                                    D_local[base_d + l] = D_local[base_d + l] - p;
-                                    if (l < (N - 1)) {
-                                        E_local[base_e + l] = g;
-                                    }
-
-                                }
-
-                                sycl::group_barrier(partition);
+                                    implicit_ql_step<T, N>(partition, D_local, E_local, Q_local, base_d, base_e, base, l, m);
 
                                 // Reload D/E registers from local memory for subsequent deflation scans.
-                                d_ = D_local[base_d + lane];
-                                e_ = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
-                                }  // end inner jiter loop for QL
-                            }  // end while (l <= lend) for QL
+                                    std::tie(diag, offdiag) = reload_tridiag_from_local<T, N>(partition, D_local, E_local, base_d, base_e, lane);
+                                }  // end sweep loop for QL
+                            }  // end QL l loop
                         } else {
                             // ---------------- QR iteration: converge from the bottom (l shrinks) ----------------
-                            size_t l = lendsv;
-                            const size_t lend = lsv;
-
-                            while (l >= lend) {
-                                if (l == lend) {
-                                    if (l == 0) break;
-                                    l -= 1;
-                                    continue;
+                            // Use signed indices for the descending loop to avoid unsigned underflow.
+                            for (int32_t l = static_cast<int32_t>(block_end);
+                                 l >= static_cast<int32_t>(block_begin);
+                                 /* manual step */) {
+                                if (l == static_cast<int32_t>(block_begin)) {
+                                    break;
                                 }
 
-                                // Inner loop: iterate up to max_sweeps times to converge eigenvalue at position l
-                                size_t jiter = 0;
-                                while (jiter < max_sweeps) {
-                                    (void)deflate(partition, e_, d_, lend, l + 1, zero_threshold);
+                                // Iterate up to max_sweeps times to converge eigenvalue at position l.
+                                for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
+                                    deflate(partition, offdiag, diag, block_begin, static_cast<int32_t>(l) + 1, zero_threshold);
 
                                     // Find m scanning downward: look for E(i)==0 and take the largest i+1.
-                                    const size_t cand_m2 = (lane >= lend && lane < l && e_ == T(0)) ? (lane + 1) : lend;
-                                    const size_t m = sycl::reduce_over_group(partition, cand_m2, sycl::maximum<size_t>());
+                                    const int32_t l_u = static_cast<int32_t>(l);
+                                    const int32_t m_candidate =
+                                        (lane >= block_begin && lane < l_u && offdiag == T(0)) ? (lane + 1) : block_begin;
+                                    const int32_t m = sycl::reduce_over_group(partition, m_candidate, sycl::maximum<int32_t>());
 
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
-                                        if (l == 0) break;
                                         l -= 1;
                                         break;
                                     }
 
                                     if (m + 1 == l) {
                                         // 2x2 block at (l-1,l).
-                                        const size_t l0 = l - 1;
-                                        const T a = sycl::select_from_group(partition, d_, l0);
-                                        const T b = sycl::select_from_group(partition, e_, l0);
-                                        const T c2 = sycl::select_from_group(partition, d_, l);
-                                        T rt1, rt2, cs, sn;
-                                        laev2_device(a, b, c2, rt1, rt2, cs, sn);
+                                        const size_t l0 = l_u - 1;
+                                        solve_2x2_and_update<T, N>(partition, diag, offdiag, l0, /*ql=*/false, Q_local, base);
 
-                                        if (lane == l0) {
-                                            d_ = rt1;
-                                            e_ = T(0);
+                                        if (l <= 1) {
+                                            l = static_cast<int32_t>(block_begin);
+                                        } else {
+                                            l -= 2;
                                         }
-                                        if (lane == l) {
-                                            d_ = rt2;
-                                        }
-
-                                        apply_col_rotation<T, N>(partition, Q_local, base, l0, l, cs, sn);
-
-                                        if (l <= 1) break;
-                                        l -= 2;
                                         break;
                                     }
 
-                                    // Perform one QR sweep iteration
-                                    jiter++;
 
                                 // ---- Implicit QR step on subblock [m..l] ----
                                 // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
-                                D_local[base_d + lane] = d_;
-                                if (lane < (N - 1)) {
-                                    E_local[base_e + lane] = e_;
-                                }
-                                sycl::group_barrier(partition);
+                                    stage_tridiag_to_local<T, N>(partition, D_local, E_local, base_d, base_e, lane, diag, offdiag);
 
-                                // Leader-lane scalar state.
-                                T g = T(0);
-                                T c = T(1);
-                                T s = T(1);  // LAPACK initializes S=ONE before bulge chase
-                                T p = T(0);
-
-                                if (lane == 0) {
-                                    const T p0 = D_local[base_d + l];
-                                    const T e0 = E_local[base_e + (l - 1)];
-                                    const T dlm1 = D_local[base_d + (l - 1)];
-
-                                    T gg = (dlm1 - p0) / (T(2) * e0);
-                                    const T rr = sycl::hypot(gg, T(1));
-                                    g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
-                                    
-                                    // p starts at zero in LAPACK bulge chase (NOT d[m])
-                                    // p = D_local[base_d + m];  // WRONG!
-                                }
-
-                                // Bulge chase downward: i = m .. l-1.
-                                // The first step uses g and E[m] to form the first Givens rotation.
-                                // Subsequent steps use the previous rotation's sine/cosine.
-                                for (size_t i = m; i < l; ++i) {
-                                    T c1 = T(0);
-                                    T s1 = T(0);
-
-                                    if (lane == 0) {
-                                        const T ei = E_local[base_e + i];
-                                        const T di = D_local[base_d + i];
-                                        const T dip1 = D_local[base_d + (i + 1)];
-
-                                        // LAPACK computes F = S*E(I) and B = C*E(I) for ALL iterations
-                                        // including the first one (where C=1, S=1 initially)
-                                        T f = s * ei;
-                                        T b = c * ei;
-
-                                        T r1;
-                                        lartg_device(g, f, c1, s1, r1);
-
-                                        // Propagate the updated off-diagonal one position down (matches the QR in-loop updates).
-                                        if (i != m) {
-                                            E_local[base_e + (i - 1)] = r1;
-                                        }
-
-                                        const T g2 = di - p;
-                                        const T r2 = (dip1 - g2) * s1 + T(2) * c1 * b;
-                                        p = s1 * r2;
-
-                                        D_local[base_d + i] = g2 + p;
-                                        g = c1 * r2 - b;
-                                        c = c1;
-                                        s = s1;
-                                    }
-
-                                    // Broadcast the rotation so all lanes can update eigenvectors in parallel.
-                                    const T c1b = sycl::group_broadcast(partition, c1, 0);
-                                    const T s1b = sycl::group_broadcast(partition, s1, 0);
-                                    apply_col_rotation<T, N>(partition, Q_local, base, i, i + 1, c1b, s1b);
-                                }
-
-                                if (lane == 0) {
-                                    D_local[base_d + l] = D_local[base_d + l] - p;
-                                    E_local[base_e + (l - 1)] = g;
-                                }
-
-                                sycl::group_barrier(partition);
+                                    implicit_qr_step<T, N>(partition, D_local, E_local, Q_local, base_d, base_e, base, m, l_u);
 
                                 // Reload D/E registers from local memory for subsequent deflation scans.
-                                d_ = D_local[base_d + lane];
-                                e_ = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
-                                }  // end inner jiter loop for QR
-                            }  // end while (l >= lend) for QR
+                                    std::tie(diag, offdiag) = reload_tridiag_from_local<T, N>(partition, D_local, E_local, base_d, base_e, lane);
+                                }  // end sweep loop for QR
+                            }  // end QR l loop
                         }  // end if (do_ql) else
                     }  // end outer block split loop
 
@@ -533,18 +473,20 @@ namespace batchlas {
                     sycl::group_barrier(partition);
 
                     // Store back D/E (one element per lane).
-                    d_prob(lane) = d_;
+                    d_prob(lane) = diag;
                     if (lane < (N - 1)) {
-                        e_prob(lane) = e_;
+                        e_prob(lane) = offdiag;
                     }
 
-                    // Store back Q (strided copy over N*N elements).
-                    for (size_t idx = lane; idx < N * N; idx += static_cast<size_t>(partition.get_local_range().size())) {
-                        const size_t r = idx / N;
-                        const size_t c = idx - r * N;
-                        Q_prob(r, c) = Q_local[base + idx];
-                    }
+                    // Barrier to ensure D/E writes complete before Q writes
+                    sycl::group_barrier(partition);
 
+                    // Store back Q (each lane copies its row).
+                    // Q_local is stored in column-major order: Q_local[base + row + col*N] = Q(row, col)
+                    // Each lane (representing a row) copies all columns of that row.
+                    for (int32_t c = 0; c < N; ++c) {
+                        Q_prob(lane, c) = Q_local[base + lane + c * N];
+                    }
                 });
         });
 
