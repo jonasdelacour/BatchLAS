@@ -18,6 +18,7 @@ set(BENCHMARK_TARGETS
     vector_benchmark
     stehr_benchmark
     stedc_benchmark
+    steqr_cta_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})
