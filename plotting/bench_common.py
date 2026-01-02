@@ -5,6 +5,7 @@ import subprocess
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 
@@ -57,7 +58,12 @@ def plot_metric(
     xlabel: str = "X",
     ylabel: Optional[str] = None,
     title: Optional[str] = None,
+    logx: bool = False,
+    logx_base: float = 10,
     logy: bool = False,
+    set_xticks: bool = True,
+    show_errorbars: bool = False,
+    errorbar_capsize: float = 2.0,
     ax: Optional[plt.Axes] = None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     if df.empty:
@@ -76,28 +82,51 @@ def plot_metric(
     x_ticks: list = []
     for idx, (group_value, g) in enumerate(df.groupby(group_by)):
         g_sorted = g.sort_values(x_field)
-        yerr = g_sorted[metric_std] if metric_std and metric_std in g_sorted else None
-        ax.plot(
-            g_sorted[x_field],
-            g_sorted[metric],
+        x = g_sorted[x_field].to_numpy()
+        y = g_sorted[metric].to_numpy()
+        yerr = g_sorted[metric_std].to_numpy() if metric_std and metric_std in g_sorted else None
+
+        (line,) = ax.plot(
+            x,
+            y,
             marker=_MARKERS[idx % len(_MARKERS)],
-            markersize=_MARKERS_SCALES[idx % len(_MARKERS_SCALES)]*rc["lines.markersize"],
+            markersize=_MARKERS_SCALES[idx % len(_MARKERS_SCALES)] * rc["lines.markersize"],
             linestyle=":",
             label=label_fmt.format(group=group_value, size=group_value),
         )
         if yerr is not None:
+            lower = y - yerr
+            upper = y + yerr
+            if logy:
+                # Avoid <=0 values which break log-scale fills.
+                tiny = np.finfo(float).tiny
+                lower = np.maximum(lower, tiny)
+                upper = np.maximum(upper, tiny)
+
             ax.fill_between(
-                g_sorted[x_field],
-                g_sorted[metric] - yerr,
-                g_sorted[metric] + yerr,
-                alpha=0.15,
-                joinstyle='bevel',
+                x,
+                lower,
+                upper,
+                alpha=0.12,
+                color=line.get_color(),
+                linewidth=0.0,
             )
-        x_ticks.extend(g_sorted[x_field].tolist())
+            if show_errorbars:
+                ax.errorbar(
+                    x,
+                    y,
+                    yerr=yerr,
+                    fmt="none",
+                    ecolor=line.get_color(),
+                    elinewidth=1.0,
+                    alpha=0.35,
+                    capsize=errorbar_capsize,
+                )
+        x_ticks.extend(x.tolist())
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel or metric)
-    if x_ticks:
+    if set_xticks and x_ticks:
         # Use unique, sorted x positions to align ticks with data points.
         xs_sorted = sorted(set(x_ticks))
         ax.set_xticks(xs_sorted)
@@ -105,6 +134,12 @@ def plot_metric(
         ax.set_yscale("log")
     if title:
         ax.set_title(title)
+    if logx:
+        # Matplotlib changed the keyword from basex -> base.
+        try:
+            ax.set_xscale("log", base=logx_base)
+        except TypeError:
+            ax.set_xscale("log", basex=logx_base)
     ax.legend()
     ax.grid(True)
     return fig, ax
