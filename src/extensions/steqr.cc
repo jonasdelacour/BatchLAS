@@ -197,7 +197,7 @@ Event steqr_impl(Queue& ctx,
             if (n == 1) continue; //Nothing to do for 1x1 blocks
             if (n == 2) { //Analytically compute eigenvalues for 2x2 blocks
                 if (store_givens) {
-                    auto [rt1, rt2, c, s] = internal::slaev2(d_(0), e_(0), d_(1));
+                    auto [rt1, rt2, c, s] = internal::laev2(d_(0), e_(0), d_(1));
                     d_(0) = rt1;
                     d_(1) = rt2;
                     e_(0) = T(0);
@@ -317,9 +317,10 @@ Event steqr_impl(Queue& ctx,
                     int ix1 = col_index(j);
                     int ix2 = col_index(j + 1);
 
-                    T temp = c * Q_(k, ix1) - s * Q_(k, ix2);
-                    Q_(k, ix2) = s * Q_(k, ix1) + c * Q_(k, ix2);
-                    Q_(k, ix1) = temp;
+                    const T x = Q_(k, ix1);
+                    const T y = Q_(k, ix2);
+                    Q_(k, ix1) = c * x - s * y;
+                    Q_(k, ix2) = s * x + c * y;
                 }
             }
             }
