@@ -3,55 +3,100 @@
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
 #include <util/kernel-heuristics.hh>
+#include <util/group-invoke.hh>
 #include <util/mempool.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include <internal/sort.hh>
+#include <array>
 #include <numeric>
-using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 
-    template <size_t N>
-    inline bool steqr_cta_debug_enabled(size_t prob_id, size_t lane) {
-        // Keep device-side printf noise low: only print for the smallest debug case.
-        return (N == 8) && (prob_id == 0) && (lane == 0);
+    template <typename T>
+    inline T wilkinson_shift(const T& a, const T& b, const T& c) {
+        // a,b,c represent the 2x2 block:
+        //   [ a  b ]
+        //   [ b  c ]
+        // Return the eigenvalue closest to c.
+        const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
+        return sycl::fabs(lambda1 - c) < sycl::fabs(lambda2 - c) ? lambda1 : lambda2;
     }
 
-    template <typename T, size_t N>
+    template <typename T, size_t P, bool ComputeVecs>
     class SteqrCTAKernel;
 
-    template <typename T, size_t N, typename Partition, typename LocalAcc>
-    inline void apply_col_rotation(const Partition& partition,
-                                   LocalAcc& Q_local,
-                                   int32_t base,
-                                   int32_t col0,
-                                   int32_t col1,
-                                   T c,
-                                   T s) {
-        // Right-multiply Q by the Givens rotation acting on columns (col0,col1).
-        const int32_t row = static_cast<int32_t>(partition.get_local_linear_id());
-        const int32_t i0 = base + row + col0 * N;
-        const int32_t i1 = base + row + col1 * N;
-        const T q0 = Q_local[i0];
-        const T q1 = Q_local[i1];
-        // Apply Q <- Q * G where G = [[c, s], [-s, c]].
-        Q_local[i0] = c * q0 - s * q1;
-        Q_local[i1] = s * q0 + c * q1;
-    }
+    // Compile-time selectable shared-memory cache for Q.
+    // Storage is column-major in local memory: Q_local[base_q + row + col*P] = Q(row, col)
+    template <typename T, size_t P, bool ComputeVecs, typename LocalAcc>
+    struct QSharedCache;
+
+    template <typename T, size_t P, typename LocalAcc>
+    struct QSharedCache<T, P, true, LocalAcc> {
+        LocalAcc Q_local;
+        int32_t base_q;
+        int32_t lane;
+        int32_t n;
+
+        QSharedCache(LocalAcc q, int32_t bq, int32_t ln, int32_t n_)
+            : Q_local(q), base_q(bq), lane(ln), n(n_) {}
+
+        template <typename QProb>
+        inline void load(const QProb& Q_prob) {
+            if (lane >= n) return;
+            const int32_t pN = static_cast<int32_t>(P);
+            for (int32_t c = 0; c < n; ++c) {
+                Q_local[base_q + lane + c * pN] = Q_prob(lane, c);
+            }
+        }
+
+        template <typename QProb>
+        inline void store(QProb& Q_prob) const {
+            if (lane >= n) return;
+            const int32_t pN = static_cast<int32_t>(P);
+            for (int32_t c = 0; c < n; ++c) {
+                Q_prob(lane, c) = Q_local[base_q + lane + c * pN];
+            }
+        }
+
+        inline void apply(int32_t col0, int32_t col1, T c, T s) {
+            if (lane >= n) return;
+            const int32_t pN = static_cast<int32_t>(P);
+            const int32_t i0 = base_q + lane + col0 * pN;
+            const int32_t i1 = base_q + lane + col1 * pN;
+            const T q0 = Q_local[i0];
+            const T q1 = Q_local[i1];
+            Q_local[i0] = c * q0 - s * q1;
+            Q_local[i1] = s * q0 + c * q1;
+        }
+    };
+
+    template <typename T, size_t P, typename LocalAcc>
+    struct QSharedCache<T, P, false, LocalAcc> {
+        QSharedCache(LocalAcc, int32_t, int32_t, int32_t) {}
+
+        template <typename QProb>
+        inline void load(const QProb&) {}
+
+        template <typename QProb>
+        inline void store(QProb&) const {}
+
+        inline void apply(int32_t, int32_t, T, T) {}
+    };
 
     template <typename T, typename Partition>
     inline void deflate(Partition partition,
                         T& e,
                         T& d,
+                        int32_t n,
                         int32_t start_ix,
                         int32_t end_ix,
                         T zero_threshold) {
+        // `zero_threshold` is currently unused: deflation follows LAPACK's relative test.
         (void)zero_threshold;
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
-        const int32_t partition_size = static_cast<int32_t>(partition.get_local_range().size());
-        const bool lane_in_active_range = (lane + 1 < partition_size) && (lane >= start_ix) && (lane + 1 < end_ix);
+        const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);
 
         // We need d_{i+1} (neighbor lane's diagonal). A 1-lane shift is the most direct.
         // Note: for lanes without i+1 (last lane), the result is unspecified, but those
@@ -59,7 +104,6 @@ namespace batchlas {
         const T d_ip1 = sycl::shift_group_left(partition, d, 1);
 
         if (lane_in_active_range) {
-            // Absolute cutoff (user-controlled) first.
             if (e != T(0)) {
                 // LAPACK-style relative deflation test:
                 // |e|^2 <= eps2 * |d_i| * |d_{i+1}| + safmin
@@ -71,8 +115,9 @@ namespace batchlas {
         }
     }
 
-    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    template <typename T, size_t P, typename Partition, typename LocalAcc>
     inline void stage_tridiag_to_local(const Partition& partition,
+                                       int32_t n,
                                        LocalAcc& D_local,
                                        LocalAcc& E_local,
                                        int32_t base_d,
@@ -80,38 +125,48 @@ namespace batchlas {
                                        int32_t lane,
                                        T diag,
                                        T offdiag) {
-        D_local[base_d + lane] = diag;
-        if (lane < (N - 1)) {
+        // Ensure the whole local tile is initialized.
+        if (lane < n) {
+            D_local[base_d + lane] = diag;
+        } else {
+            D_local[base_d + lane] = T(0);
+        }
+        if (lane < (n - 1)) {
             E_local[base_e + lane] = offdiag;
+        } else if (lane < static_cast<int32_t>(P - 1)) {
+            E_local[base_e + lane] = T(0);
         }
         sycl::group_barrier(partition);
     }
 
-    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    template <typename T, size_t P, typename Partition, typename LocalAcc>
     inline std::pair<T, T> reload_tridiag_from_local(const Partition& partition,
+                                                     int32_t n,
                                                      const LocalAcc& D_local,
                                                      const LocalAcc& E_local,
                                                      int32_t base_d,
                                                      int32_t base_e,
                                                      int32_t lane) {
         sycl::group_barrier(partition);
-        const T diag = D_local[base_d + lane];
-        const T offdiag = (lane < (N - 1)) ? E_local[base_e + lane] : T(0);
+        const T diag = (lane < n) ? D_local[base_d + lane] : T(0);
+        const T offdiag = (lane < (n - 1)) ? E_local[base_e + lane] : T(0);
         return {diag, offdiag};
     }
 
-    template <typename T, size_t N, typename Partition, typename LocalAcc>
+    template <typename T, size_t P, typename Partition, typename QCache>
     inline void solve_2x2_and_update(Partition partition,
-                                    T& diag,
-                                    T& offdiag,
-                                    int32_t l0,
-                                    bool ql,
-                                    LocalAcc& Q_local,
-                                    int32_t base) {
+                                     T& diag,
+                                     T& offdiag,
+                                     int32_t l0,
+                                     bool ql,
+                                     QCache& qcache) {
         const T a = sycl::select_from_group(partition, diag, l0);
         const T b = sycl::select_from_group(partition, offdiag, l0);
         const T c2 = sycl::select_from_group(partition, diag, l0 + 1);
-        auto [rt1, rt2, cs, sn] = internal::laev2(a, b, c2);
+
+        const auto [rt1, rt2, cs, sn] = invoke_one_broadcast(partition, [&]() {
+            return internal::laev2(a, b, c2);
+        });
 
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         if (lane == l0) {
@@ -128,20 +183,25 @@ namespace batchlas {
         const int32_t col0 = ql ? (l0 + 1) : l0;
         const int32_t col1 = ql ? l0 : (l0 + 1);
         const T s_eff = ql ? sn : -sn;
-        apply_col_rotation<T, N>(partition, Q_local, base, col0, col1, cs, s_eff);
+        qcache.apply(col0, col1, cs, s_eff);
     }
 
-    template <typename T, size_t N, typename Partition, typename LocalAccD, typename LocalAccE, typename LocalAccQ>
+    template <typename T, size_t P, typename Partition, typename QCache>
     inline void implicit_ql_step(const Partition& partition,
-                                 LocalAccD& D_local,
-                                 LocalAccE& E_local,
-                                 LocalAccQ& Q_local,
-                                 int32_t base_d,
-                                 int32_t base_e,
-                                 int32_t base_q,
+                                 T& diag,
+                                 T& offdiag,
+                                 QCache& qcache,
+                                 int32_t n,
                                  int32_t l,
-                                 int32_t m) {
+                                 int32_t m,
+                                 SteqrShiftStrategy shift_strategy) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // Broadcast values needed for the shift (all lanes participate).
+        const T p0 = sycl::select_from_group(partition, diag, l);
+        const T e0 = sycl::select_from_group(partition, offdiag, l);
+        const T dlp1 = sycl::select_from_group(partition, diag, l + 1);
+        const T dm = sycl::select_from_group(partition, diag, m);
 
         // Leader-lane scalar state.
         T g = T(0);
@@ -149,70 +209,93 @@ namespace batchlas {
         T s = T(1);
         T p = T(0);
 
-        if (lane == 0) {
-            const T p0 = D_local[base_d + l];
-            const T e0 = E_local[base_e + l];
-            const T dlp1 = D_local[base_d + (l + 1)];
-
-            T gg = (dlp1 - p0) / (T(2) * e0);
-            const T rr = sycl::hypot(gg, T(1));
-            g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
-        }
+        invoke_one(partition, [&]() {
+            T mu = T(0);
+            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                // Want eigenvalue closest to D(l); wilkinson_shift picks closest to its third arg.
+                mu = wilkinson_shift(dlp1, e0, p0);
+            } else {
+                // LAPACK-style stable implicit shift.
+                const T gg = (dlp1 - p0) / (T(2) * e0);
+                const T rr = sycl::hypot(gg, T(1));
+                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+            }
+            g = dm - mu;
+        });
 
         for (int32_t i = m; i-- > l;) {
-            T c1 = T(0);
-            T s1 = T(0);
+            // Broadcast the tridiagonal entries needed for this step.
+            const T ei = sycl::select_from_group(partition, offdiag, i);
+            const T di = sycl::select_from_group(partition, diag, i);
+            const T dip1 = sycl::select_from_group(partition, diag, i + 1);
 
-            if (lane == 0) {
-                const T ei = E_local[base_e + i];
-                const T di = D_local[base_d + i];
-                const T dip1 = D_local[base_d + (i + 1)];
+            // Whether E(i+1) should be updated is a pure function of (i, m, n).
+            const bool do_e_upd = (i != (m - 1)) && ((i + 1) < (n - 1));
 
+            const auto [c1b, s1b, d_ip1_new_b, r1_out_b] = invoke_one_broadcast(partition, [&]() {
+                // {c1, s1, d_ip1_new, r1_out}
                 const T f = s * ei;
-                const T b = c * ei;
+                T rout = T(0);
 
-                T r1;
-                std::tie(c1, s1, r1) = internal::lartg(g, f);
+                const auto [c1, s1, r1] = internal::lartg(g, f);
 
-                if (i != (m - 1) && (i + 1) < (N - 1)) {
-                    E_local[base_e + (i + 1)] = r1;
+                // In the original local-memory version: E(i+1) = r1 for i != m-1, when i+1 < N-1.
+                if (do_e_upd) {
+                    rout = r1;
                 }
 
                 const T g2 = dip1 - p;
-                const T r2 = (di - g2) * s1 + T(2) * c1 * b;
+                const T r2 = (di - g2) * s1 + T(2) * c1 * (c * ei);
                 p = s1 * r2;
 
-                D_local[base_d + (i + 1)] = g2 + p;
-                g = c1 * r2 - b;
+                const T d_ip1_new = g2 + p;
+                g = c1 * r2 - (c * ei);
                 c = c1;
                 s = s1;
+
+                return std::array{c1, s1, d_ip1_new, rout};
+            });
+
+            // Apply D/E updates directly to registers.
+            if (lane == (i + 1)) {
+                diag = d_ip1_new_b;
+                if (do_e_upd) {
+                    offdiag = r1_out_b;  // this lane owns E(i+1)
+                }
             }
 
-            const T c1b = sycl::select_from_group(partition, c1, 0);
-            const T s1b = sycl::select_from_group(partition, s1, 0);
-            // QL uses the reversed-column convention; this matches the previous inline code.
-            apply_col_rotation<T, N>(partition, Q_local, base_q, i + 1, i, c1b, -s1b);
+            // QL uses reversed-column convention; keep the same sign as before: apply(i+1,i,c,-s).
+            qcache.apply(i + 1, i, c1b, -s1b);
         }
 
-        if (lane == 0) {
-            D_local[base_d + l] = D_local[base_d + l] - p;
-            if (l < (N - 1)) {
-                E_local[base_e + l] = g;
+        // Final updates: D(l) = D(l) - p, and E(l) = g.
+        const auto [d_l_new_b, e_l_new_b] = invoke_one_broadcast(partition, [&]() {
+            return std::array{p0 - p, g};
+        });
+        if (lane == l) {
+            diag = d_l_new_b;
+            if (l < (n - 1)) {
+                offdiag = e_l_new_b;
             }
         }
     }
 
-    template <typename T, size_t N, typename Partition, typename LocalAccD, typename LocalAccE, typename LocalAccQ>
+    template <typename T, size_t P, typename Partition, typename QCache>
     inline void implicit_qr_step(const Partition& partition,
-                                 LocalAccD& D_local,
-                                 LocalAccE& E_local,
-                                 LocalAccQ& Q_local,
-                                 int32_t base_d,
-                                 int32_t base_e,
-                                 int32_t base_q,
+                                 T& diag,
+                                 T& offdiag,
+                                 QCache& qcache,
+                                 int32_t n,
                                  int32_t m,
-                                 int32_t l) {
+                                 int32_t l,
+                                 SteqrShiftStrategy shift_strategy) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // Broadcast values needed for the shift (all lanes participate).
+        const T p0 = sycl::select_from_group(partition, diag, l);
+        const T e0 = sycl::select_from_group(partition, offdiag, l - 1);
+        const T dlm1 = sycl::select_from_group(partition, diag, l - 1);
+        const T dm = sycl::select_from_group(partition, diag, m);
 
         // Leader-lane scalar state.
         T g = T(0);
@@ -220,104 +303,131 @@ namespace batchlas {
         T s = T(1);
         T p = T(0);
 
-        if (lane == 0) {
-            const T p0 = D_local[base_d + l];
-            const T e0 = E_local[base_e + (l - 1)];
-            const T dlm1 = D_local[base_d + (l - 1)];
-
-            T gg = (dlm1 - p0) / (T(2) * e0);
-            const T rr = sycl::hypot(gg, T(1));
-            g = D_local[base_d + m] - p0 + e0 / (gg + sycl::copysign(rr, gg));
-        }
+        invoke_one(partition, [&]() {
+            T mu = T(0);
+            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                mu = wilkinson_shift(dlm1, e0, p0);
+            } else {
+                const T gg = (dlm1 - p0) / (T(2) * e0);
+                const T rr = sycl::hypot(gg, T(1));
+                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+            }
+            g = dm - mu;
+        });
 
         for (int32_t i = m; i < l; ++i) {
-            T c1 = T(0);
-            T s1 = T(0);
+            // Broadcast the tridiagonal entries needed for this step.
+            const T ei = sycl::select_from_group(partition, offdiag, i);
+            const T di = sycl::select_from_group(partition, diag, i);
+            const T dip1 = sycl::select_from_group(partition, diag, i + 1);
 
-            if (lane == 0) {
-                const T ei = E_local[base_e + i];
-                const T di = D_local[base_d + i];
-                const T dip1 = D_local[base_d + (i + 1)];
+            // Whether E(i-1) should be updated is a pure function of (i, m).
+            const bool do_e_upd = (i != m);
 
+            const auto [c1b, s1b, d_i_new_b, r1_out_b] = invoke_one_broadcast(partition, [&]() {
+                // {c1, s1, d_i_new, r1_out}
                 const T f = s * ei;
-                const T b = c * ei;
+                T rout = T(0);
 
-                T r1;
-                std::tie(c1, s1, r1) = internal::lartg(g, f);
-                if (i != m) {
-                    E_local[base_e + (i - 1)] = r1;
+                const auto [c1, s1, r1] = internal::lartg(g, f);
+
+                // In the original local-memory version: E(i-1) = r1 for i != m.
+                if (do_e_upd) {
+                    rout = r1;
                 }
 
                 const T g2 = di - p;
-                const T r2 = (dip1 - g2) * s1 + T(2) * c1 * b;
+                const T r2 = (dip1 - g2) * s1 + T(2) * c1 * (c * ei);
                 p = s1 * r2;
 
-                D_local[base_d + i] = g2 + p;
-                g = c1 * r2 - b;
+                const T d_i_new = g2 + p;
+                g = c1 * r2 - (c * ei);
                 c = c1;
                 s = s1;
+
+                return std::array{c1, s1, d_i_new, rout};
+            });
+
+            // Apply D/E updates directly to registers.
+            if (lane == i) {
+                diag = d_i_new_b;
+            }
+            if (do_e_upd && lane == (i - 1)) {
+                offdiag = r1_out_b;  // this lane owns E(i-1)
             }
 
-            const T c1b = sycl::select_from_group(partition, c1, 0);
-            const T s1b = sycl::select_from_group(partition, s1, 0);
-            apply_col_rotation<T, N>(partition, Q_local, base_q, i, i + 1, c1b, -s1b);
+            // Match previous sign convention: apply(i,i+1,c,-s).
+            qcache.apply(i, i + 1, c1b, -s1b);
         }
 
-        if (lane == 0) {
-            D_local[base_d + l] = D_local[base_d + l] - p;
-            E_local[base_e + (l - 1)] = g;
+        // Final updates: D(l) = D(l) - p, and E(l-1) = g.
+        const auto [d_l_new_b, e_lm1_new_b] = invoke_one_broadcast(partition, [&]() {
+            return std::array{p0 - p, g};
+        });
+        if (lane == l) {
+            diag = d_l_new_b;
+        }
+        if (lane == (l - 1)) {
+            offdiag = e_lm1_new_b;
         }
     }
 
-    template <typename T, size_t N>
+    template <typename T, size_t P, bool ComputeVecs>
     inline void steqr_cta_impl(Queue& ctx,
-                               VectorView<T>& d,
-                               VectorView<T>& e,
-                               MatrixView<T, MatrixFormat::Dense>& eigvects,
-                               size_t max_sweeps,
-                               T zero_threshold,
-                               BumpAllocator& pool) {
-        auto batch_size = d.batch_size();
-        if (d.size() > N || e.size() > N - 1) {
-            throw std::runtime_error("steqr_cta_impl: Vector sizes exceed template parameter N.");
+                              VectorView<T>& d,
+                              VectorView<T>& e,
+                              MatrixView<T, MatrixFormat::Dense>& eigvects,
+                              int32_t n,
+                              size_t max_sweeps,
+                              T zero_threshold,
+                              SteqrShiftStrategy cta_shift_strategy,
+                              size_t cta_wg_size_multiplier,
+                              BumpAllocator& pool) {
+        (void)pool;
+        const auto batch_size = d.batch_size();
+        if (n < 1 || n > static_cast<int32_t>(P) || d.size() != n || e.size() != (n - 1)) {
+            throw std::runtime_error("steqr_cta_impl: invalid n or vector sizes for CTA partition.");
         }
-        // Implementation of the CTA-based STEQR algorithm goes here.
-        ctx -> submit([&](sycl::handler& cgh) {
+
+        ctx->submit([&](sycl::handler& cgh) {
             auto Q_view = eigvects.kernel_view();
             const auto dev = ctx->get_device();
             const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
 
-            // Heuristic: prefer 16 for very small N when supported, otherwise 32 when supported.
-            int32_t sg_size = sg_sizes.empty() ? int32_t(1) : static_cast<int32_t>(sg_sizes[0]);
-            for (auto sgs : sg_sizes) {
-                if (static_cast<int32_t>(sgs) == 32) sg_size = 32;
-            }
-            if constexpr (N <= 16) {
-                for (auto sgs : sg_sizes) {
-                    if (static_cast<int32_t>(sgs) == 16) sg_size = 16;
-                }
+            // CTA path assumes warp-sized sub-groups on NVIDIA.
+            const int32_t sg_size = 32;
+
+            // Baseline work-group size is LCM(P, sg_size), so we can form fixed-size partitions of size P.
+            // Allow scaling it at runtime to tune the number of sub-groups per work-group.
+            const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
+            int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
+            int32_t wg_size = base_wg_size * wg_size_multiplier;
+
+            const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+            if (wg_size > max_wg_size) {
+                const int32_t max_mul = std::max<int32_t>(int32_t(1), max_wg_size / base_wg_size);
+                wg_size_multiplier = std::min(wg_size_multiplier, max_mul);
+                wg_size = base_wg_size * wg_size_multiplier;
             }
 
-            // Minimal, safe mapping: work-group size is LCM(N, sg_size), so we can form fixed-size partitions of size N.
-            const int32_t wg_size = std::lcm<int32_t>(static_cast<int32_t>(N), sg_size);
-            const int32_t probs_per_wg = wg_size / static_cast<int32_t>(N);
-
+            const int32_t probs_per_wg = wg_size / static_cast<int32_t>(P);
             const int32_t num_wg = (batch_size + probs_per_wg - 1) / probs_per_wg;
             const int32_t global_size = num_wg * wg_size;
 
-            auto Q_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * N * N), cgh);
-            auto D_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * N), cgh);
-            auto E_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * (N - 1)), cgh);
+            auto Q_local = sycl::local_accessor<T, 1>(
+                sycl::range<1>(ComputeVecs ? (probs_per_wg * P * P) : 1), cgh);
+            auto D_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+            auto E_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * (P - 1)), cgh);
 
-            cgh.parallel_for<SteqrCTAKernel<T, N>>(
+            cgh.parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto wg = it.get_group();
-                    const size_t wg_id = static_cast<size_t>(wg.get_group_linear_id());
+                    const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
                     const auto sg = it.get_sub_group();
-                    const auto partition = sycl::ext::oneapi::experimental::chunked_partition<N>(sg);
-                    // NOTE: chunked_partition<N>(sg) partitions *within a sub-group*.
+                    const auto partition = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                    // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
                     // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
                     // repeats for each sub-group. Make part_id unique within the whole work-group.
                     const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
@@ -328,37 +438,38 @@ namespace batchlas {
                     if (prob_id >= static_cast<int32_t>(batch_size)) return;
                     auto d_prob = d.batch_item(prob_id);
                     auto e_prob = e.batch_item(prob_id);
-                    auto Q_prob = Q_view.batch_item(prob_id);                    
+                    const int32_t base_d = part_id * static_cast<int32_t>(P);
+                    const int32_t base_e = part_id * static_cast<int32_t>(P - 1);
 
-                    const int32_t base = part_id * N * N;
-                    const int32_t base_d = part_id * N;
-                    const int32_t base_e = part_id * (N - 1);
+                    // Compile-time selectable eigenvector accumulation (shared-memory Q).
+                    const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
+                    using QLocalAccT = decltype(Q_local);
+                    QSharedCache<T, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
-                    // Initialize Q_local for this problem as identity (column-major storage).
-                    // Each lane handles its row: Q_local[base + row + col*N] = Q(row, col)
-                    for (int32_t i = 0; i < N; ++i) {
-                        Q_local[base + lane + i * N] = Q_prob(lane, i);
+                    if constexpr (ComputeVecs) {
+                        auto Q_prob = Q_view.batch_item(prob_id);
+                        qcache.load(Q_prob);
                     }
 
                     // Load D/E into registers (one element per lane).
-                    T diag = d_prob(lane);
-                    T offdiag = (lane < N - 1) ? e_prob(lane) : T(0);
+                    T diag = (lane < n) ? d_prob(lane) : T(0);
+                    T offdiag = (lane < (n - 1)) ? e_prob(lane) : T(0);
 
                     // ---- Outer split loop over blocks separated by E==0 ----
-                    for (int32_t next_block_begin = 0; next_block_begin < N;) {
+                    for (int32_t next_block_begin = 0; next_block_begin < n;) {
                         const int32_t block_begin = next_block_begin;
 
                         // Mark the split explicitly as LAPACK does: E(block_begin-1)=0.
-                        if (block_begin > 0 && lane == (block_begin - 1) && lane < (N - 1)) {
+                        if (block_begin > 0 && lane == (block_begin - 1) && lane < (n - 1)) {
                             offdiag = T(0);
                         }
 
                         // Deflation pass over the remaining tail to create more zeros in E.
-                        deflate(partition, offdiag, diag, block_begin, N, zero_threshold);
+                        deflate(partition, offdiag, diag, n, block_begin, n, zero_threshold);
 
-                        // Find end of current block: first i>=block_begin where E(i)==0; if none, block ends at N-1.
+                        // Find end of current block: first i>=block_begin where E(i)==0; if none, block ends at n-1.
                         const int32_t block_end_candidate =
-                            (lane >= block_begin && lane < (N - 1) && offdiag == T(0)) ? lane : (N - 1);
+                            (lane >= block_begin && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1);
                         const int32_t block_end = sycl::reduce_over_group(partition, block_end_candidate, sycl::minimum<int32_t>());
 
                         // Next block starts after block_end.
@@ -367,6 +478,44 @@ namespace batchlas {
                         // Size-0/1 block.
                         if (block_end <= block_begin) {
                             continue;
+                        }
+
+                        // Numerical scaling (LAPACK-style): bring the active block norm into
+                        // a safe range to avoid overflow/underflow on tough inputs.
+                        // We scale the tridiagonal entries by `scale` during iteration and
+                        // rescale back by `inv_scale` once the block converges.
+                        //
+                        // NOTE: reduce_over_group() for floating point on chunked partitions
+                        // is not available on some backends (e.g. CUDA). We compute the max
+                        // norm via shared local memory and a leader-lane loop instead.
+                        stage_tridiag_to_local<T, P>(partition, n, D_local, E_local, base_d, base_e, lane, diag, offdiag);
+
+                        const T scale = invoke_one_broadcast(partition, [&]() {
+                            T anorm = sycl::fabs(D_local[base_d + block_end]);
+                            for (int32_t idx = block_begin; idx < block_end; ++idx) {
+                                anorm = sycl::fmax(anorm, sycl::fabs(D_local[base_d + idx]));
+                                anorm = sycl::fmax(anorm, sycl::fabs(E_local[base_e + idx]));
+                            }
+
+                            if (anorm > internal::ssfmax<T>()) {
+                                // Scale down to avoid overflow.
+                                return internal::ssfmax<T>() / anorm;
+                            }
+                            if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                                // Scale up to avoid underflow.
+                                return internal::ssfmin<T>() / anorm;
+                            }
+                            return T(1);
+                        });
+                        const T inv_scale = T(1) / scale;
+
+                        if (scale != T(1)) {
+                            if (lane >= block_begin && lane <= block_end) {
+                                diag *= scale;
+                            }
+                            if (lane >= block_begin && lane < block_end) {
+                                offdiag *= scale;
+                            }
                         }
 
                         // Choose between QL and QR (matches steqr.cc):
@@ -386,7 +535,7 @@ namespace batchlas {
                                 // Iterate up to max_sweeps times to converge eigenvalue at position l.
                                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                                     // Deflate within current active subproblem [l..lend].
-                                    deflate(partition, offdiag, diag, l, block_end + 1, zero_threshold);
+                                    deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
 
                                     // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
                                     const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
@@ -400,20 +549,14 @@ namespace batchlas {
 
                                     if (m == l + 1) {
                                         // 2x2 block at (l,l+1).
-                                        solve_2x2_and_update<T, N>(partition, diag, offdiag, l, /*ql=*/true, Q_local, base);
+                                        solve_2x2_and_update<T, P>(partition, diag, offdiag, l, /*ql=*/true, qcache);
 
                                         l += 2;
                                         break;
                                     }
 
                                 // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
-                                // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
-                                    stage_tridiag_to_local<T, N>(partition, D_local, E_local, base_d, base_e, lane, diag, offdiag);
-
-                                    implicit_ql_step<T, N>(partition, D_local, E_local, Q_local, base_d, base_e, base, l, m);
-
-                                // Reload D/E registers from local memory for subsequent deflation scans.
-                                    std::tie(diag, offdiag) = reload_tridiag_from_local<T, N>(partition, D_local, E_local, base_d, base_e, lane);
+                                    implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
                                 }  // end sweep loop for QL
                             }  // end QL l loop
                         } else {
@@ -428,7 +571,7 @@ namespace batchlas {
 
                                 // Iterate up to max_sweeps times to converge eigenvalue at position l.
                                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
-                                    deflate(partition, offdiag, diag, block_begin, static_cast<int32_t>(l) + 1, zero_threshold);
+                                    deflate(partition, offdiag, diag, n, block_begin, static_cast<int32_t>(l) + 1, zero_threshold);
 
                                     // Find m scanning downward: look for E(i)==0 and take the largest i+1.
                                     const int32_t l_u = static_cast<int32_t>(l);
@@ -445,7 +588,7 @@ namespace batchlas {
                                     if (m + 1 == l) {
                                         // 2x2 block at (l-1,l).
                                         const size_t l0 = l_u - 1;
-                                        solve_2x2_and_update<T, N>(partition, diag, offdiag, l0, /*ql=*/false, Q_local, base);
+                                        solve_2x2_and_update<T, P>(partition, diag, offdiag, l0, /*ql=*/false, qcache);
 
                                         if (l <= 1) {
                                             l = static_cast<int32_t>(block_begin);
@@ -457,35 +600,33 @@ namespace batchlas {
 
 
                                 // ---- Implicit QR step on subblock [m..l] ----
-                                // Stage the current D/E into local memory so the bulge chase can be done scalarly by a leader lane.
-                                    stage_tridiag_to_local<T, N>(partition, D_local, E_local, base_d, base_e, lane, diag, offdiag);
-
-                                    implicit_qr_step<T, N>(partition, D_local, E_local, Q_local, base_d, base_e, base, m, l_u);
-
-                                // Reload D/E registers from local memory for subsequent deflation scans.
-                                    std::tie(diag, offdiag) = reload_tridiag_from_local<T, N>(partition, D_local, E_local, base_d, base_e, lane);
+                                    implicit_qr_step<T, P>(partition, diag, offdiag, qcache, n, m, l_u, cta_shift_strategy);
                                 }  // end sweep loop for QR
                             }  // end QR l loop
                         }  // end if (do_ql) else
+
+                        // Rescale converged block back to the original magnitude.
+                        if (scale != T(1)) {
+                            if (lane >= block_begin && lane <= block_end) {
+                                diag *= inv_scale;
+                            }
+                            if (lane >= block_begin && lane < block_end) {
+                                offdiag *= inv_scale;
+                            }
+                        }
                     }  // end outer block split loop
 
-                    // Make sure all lanes are done updating Q_local before copying out.
-                    sycl::group_barrier(partition);
-
                     // Store back D/E (one element per lane).
-                    d_prob(lane) = diag;
-                    if (lane < (N - 1)) {
+                    if (lane < n) {
+                        d_prob(lane) = diag;
+                    }
+                    if (lane < (n - 1)) {
                         e_prob(lane) = offdiag;
                     }
 
-                    // Barrier to ensure D/E writes complete before Q writes
-                    sycl::group_barrier(partition);
-
-                    // Store back Q (each lane copies its row).
-                    // Q_local is stored in column-major order: Q_local[base + row + col*N] = Q(row, col)
-                    // Each lane (representing a row) copies all columns of that row.
-                    for (int32_t c = 0; c < N; ++c) {
-                        Q_prob(lane, c) = Q_local[base + lane + c * N];
+                    if constexpr (ComputeVecs) {
+                        auto Q_prob = Q_view.batch_item(prob_id);
+                        qcache.store(Q_prob);
                     }
                 });
         });
@@ -500,7 +641,7 @@ namespace batchlas {
         if (eigvects.rows() != eigvects.cols()) {
             throw std::invalid_argument("Matrix must be square for eigenvalue computation.");
         }
-        if (!params.back_transform) {
+        if (jobz == JobType::EigenVectors && !params.back_transform) {
             eigvects.fill_identity(ctx);
         }
 
@@ -520,19 +661,52 @@ namespace batchlas {
         VectorView<T>::copy(ctx, d, d_in);
         VectorView<T>::copy(ctx, e, e_in);
 
-        // Dispatch to a compile-time-specialized kernel.
-        switch (n) {
-            case 8:
-                steqr_cta_impl<T, 8>(ctx, d, e, const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects), params.max_sweeps, params.zero_threshold, pool);
-                break;
-            case 16:
-                steqr_cta_impl<T, 16>(ctx, d, e, const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects), params.max_sweeps, params.zero_threshold, pool);
-                break;
-            case 32:
-                steqr_cta_impl<T, 32>(ctx, d, e, const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects), params.max_sweeps, params.zero_threshold, pool);
-                break;
-            default:
-                throw std::invalid_argument("steqr_cta currently supports n in {8,16,32}.");
+        auto& eigvects_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects);
+
+        // CTA backend: choose an optimal compile-time partition size P in {4,8,16,32}.
+        // Requires warp-sized sub-groups (32) on NVIDIA.
+        if (n < 1 || n > 32) {
+            throw std::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
+        }
+
+        {
+            const auto dev = ctx->get_device();
+            const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
+            bool has32 = false;
+            for (auto sgs : sg_sizes) {
+                if (static_cast<int32_t>(sgs) == 32) {
+                    has32 = true;
+                    break;
+                }
+            }
+            if (!has32) {
+                throw std::runtime_error("steqr_cta: device does not support subgroup size 32 required for CTA kernels.");
+            }
+        }
+
+        const int32_t n_i32 = static_cast<int32_t>(n);
+
+        auto launch = [&](auto P_tag) {
+            constexpr int32_t P = decltype(P_tag)::value;
+            if (jobz == JobType::EigenVectors) {
+                steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
+                                           params.max_sweeps, params.zero_threshold,
+                                           params.cta_shift_strategy, params.cta_wg_size_multiplier, pool);
+            } else {
+                steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
+                                            params.max_sweeps, params.zero_threshold,
+                                            params.cta_shift_strategy, params.cta_wg_size_multiplier, pool);
+            }
+        };
+
+        if (n_i32 <= 4) {
+            launch(std::integral_constant<int32_t, 4>{});
+        } else if (n_i32 <= 8) {
+            launch(std::integral_constant<int32_t, 8>{});
+        } else if (n_i32 <= 16) {
+            launch(std::integral_constant<int32_t, 16>{});
+        } else {
+            launch(std::integral_constant<int32_t, 32>{});
         }
 
         // Copy back eigenvalues.
