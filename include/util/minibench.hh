@@ -723,7 +723,11 @@ template <typename Benchmark>
 inline void SteqrCtaBenchSizes(Benchmark* b) {
     for (int s : {8, 16, 32}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
-            b->Args({s, bs});
+            for (int wg_mult : {1, 2, 4, 8}) {
+                for (int shift_kind : {0, 1}) {
+                    b->Args({s, bs, /*n_sweeps=*/0, wg_mult, shift_kind});
+                }
+            }
         }
     }
 }
@@ -732,7 +736,11 @@ template <typename Benchmark>
 inline void SteqrCtaBenchSizesNetlib(Benchmark* b) {
     for (int s : {8, 16, 32}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
-            b->Args({s, bs});
+            for (int wg_mult : {1, 2, 4, 8}) {
+                for (int shift_kind : {0, 1}) {
+                    b->Args({s, bs, /*n_sweeps=*/0, wg_mult, shift_kind});
+                }
+            }
         }
     }
 }
