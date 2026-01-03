@@ -368,6 +368,13 @@ namespace batchlas {
         return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
     }
 
+    enum class SteqrShiftStrategy {
+        // LAPACK-style implicit shift (stable formulation used by dsteqr-style iterations).
+        Lapack = 0,
+        // Wilkinson shift computed from the relevant 2x2 block.
+        Wilkinson = 1,
+    };
+
     template <typename T>
     struct SteqrParams {
         //Givens rotations are applied in blocks of this size, increasing this number will lead to excess FLOPs but memory reuse and hence arithmetic intensity improves.
@@ -383,6 +390,17 @@ namespace batchlas {
         bool sort = true;
         bool transpose_working_vectors = true;
         SortOrder sort_order = SortOrder::Ascending;
+
+        // CTA STEQR only: multiplies the baseline work-group size.
+        // Baseline is LCM(N, sub_group_size). The effective work-group size becomes:
+        //   wg_size = LCM(N, sub_group_size) * cta_wg_size_multiplier
+        // This lets you tune the number of sub-groups per work-group at runtime.
+        size_t cta_wg_size_multiplier = 1;
+
+        // CTA STEQR only: select the shift strategy used in the implicit QR/QL steps.
+        // - Lapack: stable LAPACK-style implicit shift formulation.
+        // - Wilkinson: explicit Wilkinson shift via the eigenvalues of the 2x2 block.
+        SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;
     };
 
     template <Backend B, typename T>
