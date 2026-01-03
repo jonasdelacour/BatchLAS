@@ -19,7 +19,7 @@ namespace batchlas {
         struct is_complex<std::complex<double>> : std::true_type {};
 
         template <typename T>
-        base_float_t<T> abs(const T& value) {
+        inline constexpr base_float_t<T> abs(const T& value) {
             if constexpr (is_complex<T>::value) {
                 return std::hypot(value.real(), value.imag());
             } else {
@@ -28,12 +28,12 @@ namespace batchlas {
         }
 
         template <typename T>
-        bool is_numerically_zero(const T& value) {
+        inline constexpr bool is_numerically_zero(const T& value) {
             return abs(value) < std::numeric_limits<base_float_t<T>>::epsilon();
         }
 
         template <typename T>
-        base_float_t<T> norm_squared(const T& value) {
+        inline constexpr base_float_t<T> norm_squared(const T& value) {
             if constexpr (is_complex<T>::value) {
                 return std::real(std::conj(value) * value); // For complex numbers, return the squared norm
             } else {
@@ -42,7 +42,7 @@ namespace batchlas {
         }
 
         template <typename K>
-        K ceil_div(K num, K denom) {
+        inline constexpr K ceil_div(K num, K denom) {
             return (num + denom - 1) / denom;
         }
 
@@ -74,7 +74,7 @@ namespace batchlas {
         
 
         template <typename T>
-        auto nrm2(const sycl::group<1>& cta, const VectorView<T>& v)
+        inline constexpr auto nrm2(const sycl::group<1>& cta, const VectorView<T>& v)
         {
             using R = base_float_t<T>;
 
@@ -171,7 +171,7 @@ namespace batchlas {
         }
 
         template <typename T>
-        constexpr T ipow(T base, int e) {
+        inline constexpr T ipow(T base, int e) {
             T result = T(1);
             if (e < 0) {
                 base = T(1) / base;
@@ -186,7 +186,7 @@ namespace batchlas {
         }
         
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T safmin(){
+        inline constexpr T safmin(){
             constexpr auto eps = std::numeric_limits<T>::epsilon();
             constexpr auto s1 = std::numeric_limits<T>::min();
             constexpr auto s2 = T(1) / std::numeric_limits<T>::max();
@@ -194,57 +194,57 @@ namespace batchlas {
         }
 
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T safmax(){
+        inline constexpr T safmax(){
             return T(1) / safmin<T>();
         }
 
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T ssfmin(){
+        inline constexpr T ssfmin(){
             return std::sqrt(safmin<T>()) / (std::numeric_limits<T>::epsilon() * std::numeric_limits<T>::epsilon());
         }
 
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T ssfmax(){
+        inline constexpr T ssfmax(){
             return std::sqrt(safmax<T>()) / T(3.0);
         }
 
         //Matches LAPACK's DLAMCH/SLAMCH 'E' option
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T rounding_eps(){
+        inline constexpr T rounding_eps(){
             return std::numeric_limits<T>::epsilon() / T(2);
         }
 
         //Matches LAPACK's "eps2" used in DLAED2/DSTEQR
         template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
-        constexpr T eps2(){
+        inline constexpr T eps2(){
             return rounding_eps<T>() * rounding_eps<T>();
         }
 
         template <typename T>
-        constexpr T sbig() {
+        inline constexpr T sbig() {
             constexpr T e = std::ceil( (std::numeric_limits<T>::max_exponent + std::numeric_limits<T>::digits - 1) * T(0.5) );
             return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e)); 
         }
 
         template <typename T>
-        constexpr T smlnum() {
+        inline constexpr T smlnum() {
             return safmin<T>() / std::numeric_limits<T>::epsilon();
         }
 
         template <typename T>
-        constexpr T ssml(){
+        inline constexpr T ssml(){
             constexpr T e = std::floor( (std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits) * T(0.5) );
             return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e));
         }
 
         template <typename T>
-        constexpr T tbig() {
+        inline constexpr T tbig() {
             constexpr T e = std::floor( (std::numeric_limits<T>::max_exponent - std::numeric_limits<T>::digits + 1) * T(0.5) );
             return ipow(std::numeric_limits<T>::radix, static_cast<int>(e));
         }
 
         template <typename T>
-        auto lartg(const T& f, const T& g)
+        inline constexpr auto lartg(const T& f, const T& g)
         {
             using R = base_float_t<T>;
 
@@ -282,11 +282,11 @@ namespace batchlas {
                 r = r * u;
             }
 
-            return std::make_tuple(c, s, r);
+            return std::array{c, s, r};
         }
 
         template <typename T>
-        auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
+        inline constexpr auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
             // LAPACK SLAE2/DLAE2-style stable computation of eigenvalues of a 2x2
             // symmetric matrix [[A, B], [B, C]]. If (b != c), we symmetrize.
             const auto one  = T(1);
@@ -327,11 +327,11 @@ namespace batchlas {
                 rt2 = -half * rt;
             }
 
-            return std::make_pair(rt1, rt2);
+            return std::array{rt1, rt2};
         }
 
         template <typename T>
-        auto laev2(const T& a, const T& b, const T& c) {
+        inline constexpr auto laev2(const T& a, const T& b, const T& c) {
             // LAPACK SLAEV2-style stable computation of eigenvalues and eigenvector
             // of a 2x2 symmetric matrix [[A, B], [B, C]]. Returns {rt1, rt2, cs1, sn1},
             // where rt1 >= rt2 are the eigenvalues and [cs1, sn1]^T is the normalized
@@ -423,7 +423,7 @@ namespace batchlas {
                 sn1        = tn;
             }
 
-            return std::make_tuple(rt1, rt2, cs1, sn1);
+            return std::array{rt1, rt2, cs1, sn1};
         }
 
     }
