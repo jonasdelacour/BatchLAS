@@ -31,6 +31,6 @@ static void BM_GEMM(minibench::State& state) {
 
 // Register size/batch combinations at static‑init time using macro
 
-BATCHLAS_REGISTER_BENCHMARK(BM_GEMM, CubeBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM, CubeBatchSizes);
 
 MINI_BENCHMARK_MAIN();

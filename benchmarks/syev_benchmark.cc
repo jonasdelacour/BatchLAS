@@ -18,7 +18,7 @@ static void BM_SYEV(minibench::State& state) {
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel([=]() {
-        syev<B>(*q, A, W.to_span(),
+        syev<B, T>(*q, A, W.to_span(),
                 JobType::EigenVectors, Uplo::Lower, workspace.to_span());
     });
     state.SetBatchEndWait(q);
@@ -28,6 +28,6 @@ static void BM_SYEV(minibench::State& state) {
 }
 
 
-BATCHLAS_REGISTER_BENCHMARK(BM_SYEV, SteqrBenchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SteqrBenchSizes);
 
 MINI_BENCHMARK_MAIN();

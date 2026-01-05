@@ -23,6 +23,6 @@ static void BM_TRSM(minibench::State& state) {
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-BATCHLAS_REGISTER_BENCHMARK(BM_TRSM, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_TRSM, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

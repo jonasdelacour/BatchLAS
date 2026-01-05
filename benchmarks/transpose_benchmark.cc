@@ -22,7 +22,7 @@ static void BM_TRANSPOSE(minibench::State& state) {
         batchlas::transpose(*q, A, B_mat);
     });
     state.SetBatchEndWait(q);
-    state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * 4), minibench::Rate);
+    state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * sizeof(T)), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

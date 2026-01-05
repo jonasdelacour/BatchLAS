@@ -32,6 +32,6 @@ static void BM_GEMV(minibench::State& state) {
 
 
 
-BATCHLAS_REGISTER_BENCHMARK(BM_GEMV, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMV, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();
