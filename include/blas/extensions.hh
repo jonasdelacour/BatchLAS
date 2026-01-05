@@ -458,6 +458,82 @@ namespace batchlas {
     size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                                  const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
 
+
+    // === CTA small-matrix extensions (n <= 32) ===
+
+    enum class OrmqCtaFactorization {
+        QR,
+        QL,
+    };
+
+    /**
+     * @brief CTA-optimized symmetric tridiagonal reduction for very small matrices.
+     *
+     * This overwrites A with the tridiagonal and reflector storage (SYTD2-style), and
+     * returns the diagonal/off-diagonal in (d,e) plus reflector scalars in tau.
+     *
+     * Notes:
+     * - Intended for n <= 32.
+     * - `ws` is currently unused but kept for API compatibility.
+     */
+    template <Backend B, typename T>
+    Event sytrd_cta(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    const VectorView<T>& d_out,
+                    const VectorView<T>& e_out,
+                    const VectorView<T>& tau_out,
+                    Uplo uplo,
+                    const Span<std::byte>& ws,
+                    size_t cta_wg_size_multiplier = 1);
+
+    /**
+     * @brief CTA-optimized symmetric eigen-solver (SYEV-like) for very small matrices.
+     *
+     * Pipeline:
+     *  1) sytrd_cta: reduce symmetric A -> tridiagonal (d,e) and Householder reflectors (A,tau)
+     *  2) steqr_cta: solve tridiagonal eigenproblem (eigenvalues and optionally eigenvectors)
+     *  3) ormqx_cta: back-transform eigenvectors with the Householder reflectors
+     *
+     * Notes:
+     * - Intended for n <= 32.
+    * - Supports both real symmetric and complex Hermitian inputs.
+     * - Overwrites A with eigenvectors when jobz == EigenVectors.
+     * - Eigenvalues are returned in ascending order when SteqrParams::sort is enabled (default).
+     */
+    template <Backend B, typename T>
+    Event syev_cta(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& a_in,
+                   Span<typename base_type<T>::type> eigenvalues,
+                   JobType jobz,
+                   Uplo uplo,
+                   const Span<std::byte>& ws,
+                   SteqrParams<T> steqr_params = SteqrParams<T>(),
+                   size_t cta_wg_size_multiplier = 1);
+
+    template <Backend B, typename T>
+    size_t syev_cta_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& a,
+                                JobType jobz,
+                                SteqrParams<T> steqr_params = SteqrParams<T>());
+
+    /**
+     * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
+     *
+     * This applies the implicit orthogonal/unitary matrix Q represented by Householder
+     * reflectors (A, TAU) from GEQRF (Upper) or GEQLF (Lower) to C.
+     */
+    template <Backend B, typename T>
+    Event ormqx_cta(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& a_in,
+                   const VectorView<T>& tau_in,
+                   const MatrixView<T, MatrixFormat::Dense>& c_in,
+                   Uplo factorization,
+                   Side side,
+                   Transpose trans,
+                   int32_t k,
+                   const Span<std::byte>& ws,
+                   size_t cta_wg_size_multiplier = 1);
+
     // Forwarding overload for steqr_buffer_size taking owning Vectors
     template <typename T>
     inline size_t steqr_buffer_size(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
