@@ -533,9 +533,16 @@ inline bool match_filter(const Benchmark& b,
     if (!types.empty()) {
         bool ok = false;
         for (const auto& t : types) {
-            if (t == "float" && b.name.find("float") != std::string::npos)
+            // Important: a simple substring check like "float" matches both
+            // "float" and "std::complex<float>". Keep real and complex types
+            // disambiguated so --type=float does not run complex<float>.
+            if (t == "float" &&
+                b.name.find("<float") != std::string::npos &&
+                b.name.find("complex<float>") == std::string::npos)
                 ok = true;
-            else if (t == "double" && b.name.find("double") != std::string::npos)
+            else if (t == "double" &&
+                     b.name.find("<double") != std::string::npos &&
+                     b.name.find("complex<double>") == std::string::npos)
                 ok = true;
             else if ((t == "cfloat" || t == "complex<float>") &&
                      b.name.find("complex<float>") != std::string::npos)
