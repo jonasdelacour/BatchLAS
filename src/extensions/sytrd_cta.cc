@@ -75,16 +75,28 @@ namespace batchlas {
 
     // NOTE: DPC++'s CUDA path for non-uniform group collectives currently has
     // limitations for floating-point reductions on chunked partitions.
-    // This fallback implements a reduction using `select_from_group`, which is
-    // supported and correct for the small fixed sizes used here (P <= 32).
+    // This reduction uses XOR shuffles (butterfly), which is O(log P) and keeps
+    // the result replicated in all lanes.
     template <typename T, typename Group>
     inline T group_reduce_sum_select_from_group(const Group& g, T v) {
         const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-        T sum = T(0);
-        for (uint32_t j = 0; j < lanes; ++j) {
-            sum += sycl::select_from_group(g, v, j);
+        (void)lanes;
+
+        if constexpr (internal::is_complex<T>::value) {
+            using Real = typename base_type<T>::type;
+            Real re = v.real();
+            Real im = v.imag();
+            for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
+                re += sycl::permute_group_by_xor(g, re, offset);
+                im += sycl::permute_group_by_xor(g, im, offset);
+            }
+            return T(re, im);
+        } else {
+            for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
+                v += sycl::permute_group_by_xor(g, v, offset);
+            }
+            return v;
         }
-        return sum;
     }
 
     template <typename T>
