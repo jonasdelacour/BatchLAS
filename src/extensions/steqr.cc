@@ -217,17 +217,17 @@ Event steqr_impl(Queue& ctx,
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             for (size_t k = 0; k < max_sweeps; ++k) {
                 auto anorm = std::abs(d_(n - 1));
-                for (size_t idx = 0; idx < n - 1; ++idx) 
+                for (size_t idx = 0; idx < n - 1; ++idx)
                     anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
 
                 if (anorm > internal::ssfmax<T>()) {
-                    auto alpha = anorm / internal::ssfmax<T>();
+                    auto alpha = internal::ssfmax<T>() / anorm;
                     // Scale down to avoid overflow
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
                 } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
                     // Scale up to avoid underflow
-                    auto alpha = anorm / internal::ssfmin<T>();
+                    auto alpha = internal::ssfmin<T>() / anorm;
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
                 }
@@ -273,12 +273,12 @@ Event steqr_impl(Queue& ctx,
                 }
 
                 if (anorm > internal::ssfmax<T>()) {
-                    auto alpha = internal::ssfmax<T>() / anorm;
+                    auto alpha = anorm / internal::ssfmax<T>();
                     // Scale back up
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
                 } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                    auto alpha = internal::ssfmin<T>() / anorm;
+                    auto alpha = anorm / internal::ssfmin<T>();
                     // Scale back down
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
