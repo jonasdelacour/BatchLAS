@@ -62,7 +62,10 @@ void Queue::enqueue(Event& event) {
 }
 
 Event Queue::get_event() const {
-    EventImpl event = impl_->submit([](sycl::handler& h){h.single_task([](){});});
+    // Return an event that is ordered after all previously enqueued work.
+    // Submitting an unnamed `single_task` can fail under AOT/kernel-bundle
+    // builds ("No kernel named ... was found"), especially on CUDA backends.
+    EventImpl event = impl_->ext_oneapi_submit_barrier();
     return event;
 }
 
