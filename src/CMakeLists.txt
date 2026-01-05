@@ -1,5 +1,8 @@
 # Define the main library target
-add_library(batchlas SHARED
+# NOTE: SYCL device images are most reliable when linked into the final
+# executable (static libs). Respect BUILD_SHARED_LIBS so users can opt into
+# shared builds, but keep the default static.
+add_library(batchlas
     linalg-impl.hh
     matrix.cc
     #util/sycl-util-impl.cc

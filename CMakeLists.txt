@@ -796,9 +796,11 @@ add_subdirectory(src)
 if(BATCHLAS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-    if(BATCHLAS_BUILD_BENCHMARKS)
-        add_subdirectory(benchmarks)
-    endif()
+endif()
+
+# Benchmarks
+if(BATCHLAS_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif()
 
 # Python bindings

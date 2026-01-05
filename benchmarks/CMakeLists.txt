@@ -8,6 +8,7 @@ set(BENCHMARK_TARGETS
     ormqr_benchmark
     orgqr_benchmark
     syev_benchmark
+    syev_cta_benchmark
     syevx_benchmark
     lanczos_benchmark
     ortho_benchmark
@@ -19,6 +20,8 @@ set(BENCHMARK_TARGETS
     stehr_benchmark
     stedc_benchmark
     steqr_cta_benchmark
+    sytrd_cta_benchmark
+    ormqr_cta_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})

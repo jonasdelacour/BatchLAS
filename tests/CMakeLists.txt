@@ -11,8 +11,8 @@ if(NOT GTest_FOUND)
         GIT_TAG release-1.12.1
     )
     
-    # Configure GoogleTest to build shared libraries
-    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    # Do not force BUILD_SHARED_LIBS globally: it also affects BatchLAS and can
+    # break SYCL kernel availability (device images end up in a shared lib).
     FetchContent_MakeAvailable(googletest)
 endif()
 
@@ -35,6 +35,7 @@ set(TEST_TARGETS
     norm_tests
     cond_tests
     ormqr_tests
+    ormqr_cta_tests
     orgqr_tests
     transpose_tests
     syev_tests
@@ -42,6 +43,8 @@ set(TEST_TARGETS
     trmm_tests
     stedc_tests
     ritz_values_tests
+    sytrd_cta_tests
+    syev_cta_tests
 )
 
 # Create test executables
