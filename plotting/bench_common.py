@@ -142,4 +142,5 @@ def plot_metric(
             ax.set_xscale("log", basex=logx_base)
     ax.legend()
     ax.grid(True)
+    ax.set_ylim(bottom=0)
     return fig, ax
