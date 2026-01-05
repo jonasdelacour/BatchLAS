@@ -171,13 +171,14 @@ inline void ormqx_cta_impl(Queue& ctx,
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
-        // Clamp by local memory usage: we allocate per-problem local tiles of size
-        //   A_local: P*P, C_local: P*P, V_local: P
+        // Clamp by local memory usage. Per problem we allocate:
+        // - LEFT specialization: V_local: P
+        // - non-LEFT: C_local: P*P, V_local: P
         // and probs_per_wg = wg_size / P.
         {
             const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
-            const std::size_t elems_per_prob = static_cast<std::size_t>(2) * static_cast<std::size_t>(P) * static_cast<std::size_t>(P)
-                                             + static_cast<std::size_t>(P);
+            const std::size_t elems_per_prob = Left ? static_cast<std::size_t>(P)
+                                                     : (static_cast<std::size_t>(P) * static_cast<std::size_t>(P) + static_cast<std::size_t>(P));
             const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
             const int32_t max_probs = (bytes_per_prob == 0)
                                           ? int32_t(1)
@@ -190,15 +191,13 @@ inline void ormqx_cta_impl(Queue& ctx,
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
-        // Local storage per problem:
-        // - Full P x P tile for C (column-major)
-        // - One length-P vector v
-        auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
-        auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+        if constexpr (Left) {
+            // LEFT specialization: lane->column and keep that column in registers.
+            auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-        cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
-            sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) {
+            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
+                sycl::nd_range<1>(global_size, wg_size),
+                [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
                 const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
 
@@ -215,26 +214,20 @@ inline void ormqx_cta_impl(Queue& ctx,
                 auto A_prob = A_view.batch_item(prob_id);
                 auto TAU_prob = TAU_view.batch_item(prob_id);
                 auto C_prob = C_view.batch_item(prob_id);
-
-                const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                 const int32_t base_v = part_id * static_cast<int32_t>(P);
 
-                const int32_t P_i = static_cast<int32_t>(P);
+                const bool active_col = (lane < n);
+                const int32_t j = lane;
 
-                // Load C into local memory (column-major).
-                if (lane < n) {
-                    for (int32_t col = 0; col < n; ++col) {
-                        C_local[base_c + lane + col * P_i] = C_prob(lane, col);
-                    }
-                    for (int32_t col = n; col < P_i; ++col) {
-                        C_local[base_c + lane + col * P_i] = T(0);
-                    }
-                } else {
-                    for (int32_t col = 0; col < P_i; ++col) {
-                        C_local[base_c + lane + col * P_i] = T(0);
+                // Register column buffer for column j.
+                T C_col[P];
+                for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                    if (active_col && r < n) {
+                        C_col[r] = C_prob(r, j);
+                    } else {
+                        C_col[r] = T(0);
                     }
                 }
-                sycl::group_barrier(part);
 
                 // Determine reflector application order.
                 //
@@ -259,6 +252,7 @@ inline void ormqx_cta_impl(Queue& ctx,
 
                 for (int32_t ii = i0; ii != i1; ii += step) {
                     const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
+                    const T tau_eff = TransposeOrConj ? detail::conj_val(tau_i) : tau_i;
 
                     // Build v and compute (offset,len) for this reflector.
                     int32_t offset = 0;
@@ -295,31 +289,145 @@ inline void ormqx_cta_impl(Queue& ctx,
 
                     sycl::group_barrier(part);
 
-                    apply_reflector_small<T>(
-                        part,
-                        &C_local[base_c],
-                        P_i,
-                        n,
-                        lane,
-                        &V_local[base_v],
-                        offset,
-                        len,
-                        tau_i,
-                        Left,
-                        TransposeOrConj
-                    );
+                    if (active_col && tau_eff != T(0) && len > 0) {
+                        T dot = T(0);
+                        for (int32_t r = 0; r < len; ++r) {
+                            const T v_r = V_local[base_v + r];
+                            dot += detail::conj_val(v_r) * C_col[offset + r];
+                        }
+                        const T gamma = tau_eff * dot;
+                        for (int32_t r = 0; r < len; ++r) {
+                            const T v_r = V_local[base_v + r];
+                            C_col[offset + r] -= v_r * gamma;
+                        }
+                    }
 
+                    // Ensure all lanes have finished consuming v before overwrite.
                     sycl::group_barrier(part);
                 }
 
-                // Write back C.
-                if (lane < n) {
-                    for (int32_t col = 0; col < n; ++col) {
-                        C_prob(lane, col) = C_local[base_c + lane + col * P_i];
+                if (active_col) {
+                    for (int32_t r = 0; r < n; ++r) {
+                        C_prob(r, j) = C_col[r];
                     }
                 }
-            }
-        );
+            });
+        } else {
+            // Local storage per problem:
+            // - Full P x P tile for C (column-major)
+            // - One length-P vector v
+            auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
+            auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+
+            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
+                sycl::nd_range<1>(global_size, wg_size),
+                [=](sycl::nd_item<1> it) {
+                    const auto sg = it.get_sub_group();
+                    const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+
+                    const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
+                    const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
+                    const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
+
+                    const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+
+                    const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
+                    const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
+
+                    auto A_prob = A_view.batch_item(prob_id);
+                    auto TAU_prob = TAU_view.batch_item(prob_id);
+                    auto C_prob = C_view.batch_item(prob_id);
+
+                    const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
+                    const int32_t base_v = part_id * static_cast<int32_t>(P);
+
+                    const int32_t P_i = static_cast<int32_t>(P);
+
+                    // Load C into local memory (column-major).
+                    if (lane < n) {
+                        for (int32_t col = 0; col < n; ++col) {
+                            C_local[base_c + lane + col * P_i] = C_prob(lane, col);
+                        }
+                        for (int32_t col = n; col < P_i; ++col) {
+                            C_local[base_c + lane + col * P_i] = T(0);
+                        }
+                    } else {
+                        for (int32_t col = 0; col < P_i; ++col) {
+                            C_local[base_c + lane + col * P_i] = T(0);
+                        }
+                    }
+                    sycl::group_barrier(part);
+
+                    const bool descending = (Left ^ QL) ? (!TransposeOrConj) : TransposeOrConj;
+
+                    const int32_t i0 = descending ? (k - 1) : 0;
+                    const int32_t i1 = descending ? -1 : k;
+                    const int32_t step = descending ? -1 : 1;
+
+                    for (int32_t ii = i0; ii != i1; ii += step) {
+                        const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
+
+                        // Build v and compute (offset,len) for this reflector.
+                        int32_t offset = 0;
+                        int32_t len = 0;
+
+                        if constexpr (!QL) {
+                            // QR: reflector ii stored in column ii, v has leading zeros of length ii.
+                            offset = ii;
+                            len = n - ii;
+
+                            if (lane < len) {
+                                const int32_t row = offset + lane;
+                                const int32_t col = ii;
+                                V_local[base_v + lane] = (lane == 0) ? T(1) : A_prob(row, col);
+                            } else {
+                                V_local[base_v + lane] = T(0);
+                            }
+                        } else {
+                            // QL: reflector ii is H(ii+1), stored in last k columns.
+                            // From LAPACK DGEQLF/ZGEQLF: v(pivot) = 1, v(pivot+1:m)=0, and v(0:pivot-1)
+                            // stored in A(0:pivot-1, n-k+ii).
+                            const int32_t col = (n - k) + ii;
+                            const int32_t pivot = (n - k) + ii; // since m=n in our current restriction
+                            offset = 0;
+                            len = pivot + 1;
+
+                            if (lane < len) {
+                                const int32_t row = lane;
+                                V_local[base_v + lane] = (row == pivot) ? T(1) : A_prob(row, col);
+                            } else {
+                                V_local[base_v + lane] = T(0);
+                            }
+                        }
+
+                        sycl::group_barrier(part);
+
+                        apply_reflector_small<T>(
+                            part,
+                            &C_local[base_c],
+                            P_i,
+                            n,
+                            lane,
+                            &V_local[base_v],
+                            offset,
+                            len,
+                            tau_i,
+                            Left,
+                            TransposeOrConj
+                        );
+
+                        sycl::group_barrier(part);
+                    }
+
+                    // Write back C.
+                    if (lane < n) {
+                        for (int32_t col = 0; col < n; ++col) {
+                            C_prob(lane, col) = C_local[base_c + lane + col * P_i];
+                        }
+                    }
+                });
+        }
     });
 }
 
