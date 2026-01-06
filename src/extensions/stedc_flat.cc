@@ -451,8 +451,13 @@ Event stedc_flat(Queue& ctx,
         auto eblk = e(Slice(b.offset, b.offset + b.size - 1));
         auto evalblk = eigenvalues(Slice(b.offset, b.offset + b.size));
         auto Eblk = eigvects(make_slice(b.offset, b.size), make_slice(b.offset, b.size));
-        steqr<B, T>(ctx, dblk, eblk, evalblk, ws_remaining, jobz, 
+        if (b.size <= 32){
+            steqr_cta<B, T>(ctx, dblk, eblk, evalblk, ws_remaining, jobz, 
                     SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, false}, Eblk);
+        } else {
+            steqr<B, T>(ctx, dblk, eblk, evalblk, ws_remaining, jobz, 
+                    SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, false}, Eblk);
+        }
     }
 
     // Iterative merges with doubling block size

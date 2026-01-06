@@ -739,7 +739,11 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto n = d.size();
     auto batch_size = d.batch_size();
     if (n <= params.recursion_threshold){
-        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+        if (n <= 32) {
+            return steqr_cta<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+        } else {
+            return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+        }
     }
 
     //Split the matrix into two halves
@@ -1087,16 +1091,7 @@ size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType job
     auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem
     
     // Compute the workspace size based on the job type
-    switch (jobz) {
-        case JobType::NoEigenVectors:
-            size = steqr_buffer_size<T>(ctx, d, e, eigenvalues);
-            break;
-        case JobType::EigenVectors:
-            size = steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
-            break;
-        default:
-            throw std::runtime_error("Invalid job type");
-    }
+    size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
     size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
 
     return (size * n_rec) + 2 * BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
@@ -1118,16 +1113,7 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem
     
     // Compute the workspace size based on the job type
-    switch (jobz) {
-        case JobType::NoEigenVectors:
-            size = steqr_buffer_size<T>(ctx, d, e, eigenvalues);
-            break;
-        case JobType::EigenVectors:
-            size = steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
-            break;
-        default:
-            throw std::runtime_error("Invalid job type");
-    }
+    size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
     size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
 
     return (size * n_rec) + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
