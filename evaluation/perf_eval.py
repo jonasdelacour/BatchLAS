@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 @dataclass(frozen=True)
 class Case:
-    bench: str  # "stedc" | "steqr" | "steqr_cta"
+    bench: str  # "stedc" | "steqr" | "steqr_cta" | "sytrd_cta" | "ormx_cta" | "syev_cta"
     args: List[int]
 
 
@@ -96,14 +96,15 @@ def _guess_backend_and_type_from_name(name: str) -> Tuple[str, str]:
             break
 
     dtype = "unknown"
-    if "<float" in name or "float," in name:
-        dtype = "float"
-    elif "<double" in name or "double," in name:
-        dtype = "double"
-    elif "complex<float>" in name:
+    # Important: check complex first; "complex<float>" contains the substring "<float".
+    if "complex<float>" in name:
         dtype = "complex<float>"
     elif "complex<double>" in name:
         dtype = "complex<double>"
+    elif "<float" in name or "float," in name:
+        dtype = "float"
+    elif "<double" in name or "double," in name:
+        dtype = "double"
 
     return backend, dtype
 
@@ -199,11 +200,19 @@ def _run_one_benchmark(
     if not os.access(exe, os.X_OK):
         raise PermissionError(f"Benchmark executable is not runnable: {exe}")
 
-    expected_metric = {
+    expected_metric_by_bench = {
         "stedc": "Time (µs) / Batch",
         "steqr": "T(µs)/Batch",
         "steqr_cta": "T(µs)/Batch",
-    }[bench]
+        "sytrd_cta": "T(µs)/Batch",
+        # Note: this runs the ormqx_cta kernel via the ormqr_cta_benchmark executable.
+        "ormx_cta": "T(µs)/Batch",
+        "syev_cta": "Time (µs) / Batch",
+    }
+    try:
+        expected_metric = expected_metric_by_bench[bench]
+    except KeyError as e:
+        raise RuntimeError(f"Unknown bench '{bench}'. Supported: {sorted(expected_metric_by_bench.keys())}") from e
 
     measurements: List[Measurement] = []
 
@@ -391,7 +400,9 @@ def _compare(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="BatchLAS perf eval (CUDA FP32, STEDC/STEQR/STEQR_CTA)")
+    p = argparse.ArgumentParser(
+        description="BatchLAS perf eval (minibench; default CUDA FP32; STEDC/STEQR/CTA variants)"
+    )
     p.add_argument("--build-dir", default="", help="Build directory (default: repo_root/build)")
     p.add_argument(
         "--cases",
@@ -452,6 +463,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     stedc_exe = _default_benchmark_path(build_dir, "stedc_benchmark")
     steqr_exe = _default_benchmark_path(build_dir, "steqr_benchmark")
     steqr_cta_exe = _default_benchmark_path(build_dir, "steqr_cta_benchmark")
+    sytrd_cta_exe = _default_benchmark_path(build_dir, "sytrd_cta_benchmark")
+    # Historical naming: the executable is ormqr_cta_benchmark, but the kernel under test is ormqx_cta.
+    ormx_cta_exe = _default_benchmark_path(build_dir, "ormqr_cta_benchmark")
+    syev_cta_exe = _default_benchmark_path(build_dir, "syev_cta_benchmark")
 
     measurements: List[Measurement] = []
     trace_events: Optional[List[Dict[str, Any]]] = [] if args.trace else None
@@ -485,6 +500,48 @@ def main(argv: Optional[List[str]] = None) -> int:
     measurements += _run_one_benchmark(
         exe=steqr_cta_exe,
         bench="steqr_cta",
+        cases=cases,
+        backend=args.backend,
+        dtype=args.dtype,
+        warmup=args.warmup,
+        min_time_ms=args.min_time,
+        min_iters=args.min_iters,
+        max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
+    )
+
+    measurements += _run_one_benchmark(
+        exe=sytrd_cta_exe,
+        bench="sytrd_cta",
+        cases=cases,
+        backend=args.backend,
+        dtype=args.dtype,
+        warmup=args.warmup,
+        min_time_ms=args.min_time,
+        min_iters=args.min_iters,
+        max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
+    )
+
+    measurements += _run_one_benchmark(
+        exe=ormx_cta_exe,
+        bench="ormx_cta",
+        cases=cases,
+        backend=args.backend,
+        dtype=args.dtype,
+        warmup=args.warmup,
+        min_time_ms=args.min_time,
+        min_iters=args.min_iters,
+        max_iters=args.max_iters,
+        trace_events=trace_events,
+        kernel_trace_dir=kernel_trace_dir,
+    )
+
+    measurements += _run_one_benchmark(
+        exe=syev_cta_exe,
+        bench="syev_cta",
         cases=cases,
         backend=args.backend,
         dtype=args.dtype,

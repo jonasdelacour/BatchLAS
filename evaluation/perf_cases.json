@@ -13,6 +13,27 @@
     {"bench": "steqr_cta", "args": [16, 4096, 10, 1, 0]},
     {"bench": "steqr_cta", "args": [16, 8192, 10, 1, 0]},
     {"bench": "steqr_cta", "args": [32, 4096, 10, 1, 0]},
-    {"bench": "steqr_cta", "args": [32, 8192, 10, 1, 0]}
+    {"bench": "steqr_cta", "args": [32, 8192, 10, 1, 0]},
+
+    {"bench": "sytrd_cta", "args": [8, 4096, 4, 0]},
+    {"bench": "sytrd_cta", "args": [8, 8192, 4, 0]},
+    {"bench": "sytrd_cta", "args": [16, 4096, 4, 0]},
+    {"bench": "sytrd_cta", "args": [16, 8192, 4, 0]},
+    {"bench": "sytrd_cta", "args": [32, 4096, 4, 0]},
+    {"bench": "sytrd_cta", "args": [32, 8192, 4, 0]},
+
+    {"bench": "ormx_cta", "args": [8, 4096, 4, 0, 0]},
+    {"bench": "ormx_cta", "args": [8, 8192, 4, 0, 0]},
+    {"bench": "ormx_cta", "args": [16, 4096, 4, 0, 0]},
+    {"bench": "ormx_cta", "args": [16, 8192, 4, 0, 0]},
+    {"bench": "ormx_cta", "args": [32, 4096, 4, 0, 0]},
+    {"bench": "ormx_cta", "args": [32, 8192, 4, 0, 0]},
+
+    {"bench": "syev_cta", "args": [8, 4096, 1, 0, 4]},
+    {"bench": "syev_cta", "args": [8, 8192, 1, 0, 4]},
+    {"bench": "syev_cta", "args": [16, 4096, 1, 0, 4]},
+    {"bench": "syev_cta", "args": [16, 8192, 1, 0, 4]},
+    {"bench": "syev_cta", "args": [32, 4096, 1, 0, 4]},
+    {"bench": "syev_cta", "args": [32, 8192, 1, 0, 4]}
   ]
 }
