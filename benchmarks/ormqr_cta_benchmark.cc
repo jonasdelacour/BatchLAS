@@ -44,19 +44,21 @@ static void BM_ORMQR_CTA(minibench::State& state) {
     // Build reflectors via QR once (outside timed region) using the same backend.
     // This avoids an unconditional dependency on the NETLIB/CPU backend.
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2025);
-    UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau.to_span());
+    // NOTE: minibench executes the SetKernel callback after this function returns.
+    // So we must capture *owning* storage (not just a VectorView) into the callback.
+    UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
+    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau_storage.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf<B>(*q, A.view(), tau.to_span(), ws_geqrf.to_span()).wait();
-    q->wait();
 
-    VectorView<T> tau_view(tau.to_span(), n, batch);
+    geqrf<B>(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
+    q->wait();
 
     auto C = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1337);
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
-    state.SetKernel([=]() {
-        ormqx_cta<B>(*q, A.view(), tau_view, C.view(), Uplo::Upper, side, trans, /*k=*/n, ws_dummy.to_span(), wg_mult);
+    state.SetKernel([q, A, C, tau_storage = std::move(tau_storage), ws_dummy, n, batch, wg_mult, side, trans]() mutable {
+        VectorView<T> tau_view_local(tau_storage.to_span(), n, batch);
+        ormqx_cta<B>(*q, A.view(), tau_view_local, C.view(), Uplo::Upper, side, trans, /*k=*/n, ws_dummy.to_span(), wg_mult);
     });
     state.SetBatchEndWait(q);
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
@@ -67,6 +69,6 @@ static void BM_ORMQR_CTA(minibench::State& state) {
 }
 
 // Register size/batch combinations at static-init time
-BATCHLAS_BENCH_CUDA(BM_ORMQR_CTA, OrmqrCtaBenchSizes);
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_ORMQR_CTA, OrmqrCtaBenchSizes);
 
 MINI_BENCHMARK_MAIN();
