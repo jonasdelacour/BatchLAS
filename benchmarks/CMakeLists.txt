@@ -6,6 +6,7 @@ set(BENCHMARK_TARGETS
     spmm_benchmark
     trsm_benchmark
     ormqr_benchmark
+    ormqr_blocked_benchmark
     orgqr_benchmark
     syev_benchmark
     syev_cta_benchmark

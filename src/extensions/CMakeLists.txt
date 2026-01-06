@@ -7,6 +7,7 @@ set(EXTENSIONS_SOURCES
     lanczos.cc
     trmm.cc
     ormqr_cta.cc
+    ormqr_blocked.cc
     steqr.cc
     steqr_cta.cc
     sytrd_cta.cc

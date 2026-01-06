@@ -36,7 +36,7 @@ def _default_plot_path() -> str:
 
 
 def _default_batches() -> list[int]:
-    return [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    return [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 
 
 def _as_csv_arg(values: Iterable[int]) -> str:
