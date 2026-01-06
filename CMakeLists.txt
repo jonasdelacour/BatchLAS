@@ -43,9 +43,13 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # Define compile flags for different build types
-set(CMAKE_CXX_FLAGS_DEBUG "-O0")
+# NOTE: Avoid full `-g` here because, with the SYCL CUDA backend, it can
+# propagate into device compilation and (depending on CUDA/tool versions)
+# may cause compute-sanitizer to bail out. `-gline-tables-only` keeps
+# useful backtraces/symbolization without emitting full debug info.
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -gline-tables-only -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -gline-tables-only -fno-omit-frame-pointer -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
 # Include CMakeDependentOption module
@@ -331,6 +335,34 @@ detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
 #detect_sycl_cpu_target()
+
+# ---------------------------------------------------------------------------
+# Device line info (CUDA/NVIDIA)
+# ---------------------------------------------------------------------------
+# For profiling/debugging on NVIDIA, it is often useful to embed line-number
+# information in the generated device code (similar to nvcc's `-lineinfo`).
+# With clang-based SYCL/CUDA toolchains this is typically passed to ptxas.
+# Scope it only to the CUDA device backend and only for Debug/RelWithDebInfo.
+if(BATCHLAS_ENABLE_CUDA)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        message(STATUS "Enabling line info for CUDA device code")
+        # NOTE: DPC++/Clang emits device IR per TU, but the CUDA device binary is
+        # typically produced during the *link* step. Passing backend options on
+        # every compile step causes noisy "argument unused" warnings.
+        #
+        # Keep this as a *link* option so it reaches the nvptx backend/ptxas when
+        # the device image is actually produced.
+        # ptxas can emit warnings like:
+        #   "ptxas warning :  .debug_abbrev section not found"
+        # when only line tables are present. Silence ptxas warnings (-w) while
+        # keeping line-number info for tools like compute-sanitizer.
+        add_link_options(-Xsycl-target-backend=nvptx64-nvidia-cuda "--generate-line-info")
+        # Silence ptxas warnings (equivalent to nvcc's -Xptxas -w). Use the
+        # dedicated clang/DPC++ forwarding flag so clang doesn't try to parse
+        # nvcc-style long options.
+        add_link_options(-Xcuda-ptxas -w)
+    endif()
+endif()
 
 # Function to find NVIDIA libraries like cuBLAS
 function(find_nvidia_libs)
