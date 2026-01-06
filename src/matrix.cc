@@ -1225,7 +1225,11 @@ MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
     : rows_(matrix.rows_), cols_(matrix.cols_), batch_size_(matrix.batch_size_),
-      data_(matrix.data()), data_ptrs_(matrix.data_ptrs_, matrix.batch_size_) {
+    data_(matrix.data()),
+    // NOTE: Matrix stores an optional UnifiedVector<T*> of per-batch base pointers.
+    // Be careful: passing (Span, offset) would create a subspan and can silently
+    // produce a zero-length view; we want a view over the whole pointer array.
+    data_ptrs_(matrix.data_ptrs_.data(), matrix.data_ptrs_.size()) {
       
     // Format-specific initializations
     if constexpr (MType == MatrixFormat::Dense) {
@@ -1614,6 +1618,9 @@ void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx) const {
     auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, data_ptrs_);
     if (!data_ptrs.data()) {
         throw std::runtime_error("data_ptrs is null");
+    }
+    if (data_ptrs.size() < static_cast<std::size_t>(batch_size_)) {
+        throw std::runtime_error("data_ptrs is smaller than batch_size");
     }
     if (!start_ptr) {
         throw std::runtime_error("start_ptr is null");
