@@ -69,38 +69,87 @@ void UnifiedVector<T>::resize(size_t new_size) {
 }
 
 template <typename T>
-Event Span<T>::set_read_mostly(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY));
+Event Span<T>::set_read_mostly(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::unset_read_mostly(const Queue &ctx){
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY));
+Event Span<T>::unset_read_mostly(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::set_preferred_location(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION));
+Event Span<T>::set_preferred_location(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::clear_preferred_location(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION));
+Event Span<T>::clear_preferred_location(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::set_access_device(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE));
+Event Span<T>::set_access_device(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::clear_access_device(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE));
+Event Span<T>::clear_access_device(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
-Event Span<T>::prefetch(const Queue &ctx) {
-    return static_cast<EventImpl>(ctx -> prefetch(data_, this->size_bytes()));
+Event Span<T>::prefetch(const Queue &ctx) const {
+    if (!data_ || this->size_bytes() == 0) return Event{};
+    try {
+        return static_cast<EventImpl>(ctx -> prefetch(data_, this->size_bytes()));
+    } catch (const sycl::exception&) {
+        return Event{};
+    } catch (...) {
+        return Event{};
+    }
 }
 
 template <typename T>
@@ -252,6 +301,8 @@ template struct Span<uint32_t>;
 template struct Span<uint64_t>;
 template struct Span<float>;
 template struct Span<double>;
+template struct Span<std::complex<float>>;
+template struct Span<std::complex<double>>;
 template struct Span<std::byte>;
 template struct Span<bool>;
 template struct Span<std::array<double,2>>;

@@ -4,6 +4,9 @@
 #include <string>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdint>
+#include <optional>
+#include <utility>
 
 
 enum class Policy
@@ -121,6 +124,11 @@ struct Event {
     void wait() const;
     EventImpl* operator->() const;
     EventImpl& operator*() const;
+
+    // Returns {command_start, command_end} timestamps in nanoseconds when
+    // profiling is enabled on the underlying SYCL queue.
+    // Returns std::nullopt if profiling timestamps are unavailable.
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> profiling_command_start_end_ns() const;
 };
 
 struct QueueImpl;

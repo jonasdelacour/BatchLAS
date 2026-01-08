@@ -4,6 +4,10 @@
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
 
+namespace {
+class QueueGetEventNoopKernel;
+}
+
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
 Event::Event(EventImpl&& impl) : impl_(std::make_unique<EventImpl>(std::move(impl))) {}
 Event& Event::operator=(Event&& other) {
@@ -21,6 +25,16 @@ Event::Event(Event&& other) = default;
 Event::~Event() = default;
 
 void Event::wait() const {impl_->wait();}
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>> Event::profiling_command_start_end_ns() const {
+    try {
+        const auto start = impl_->get_profiling_info<sycl::info::event_profiling::command_start>();
+        const auto end = impl_->get_profiling_info<sycl::info::event_profiling::command_end>();
+        return std::make_pair(static_cast<std::uint64_t>(start), static_cast<std::uint64_t>(end));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
@@ -65,8 +79,17 @@ Event Queue::get_event() const {
     // Return an event that is ordered after all previously enqueued work.
     // Submitting an unnamed `single_task` can fail under AOT/kernel-bundle
     // builds ("No kernel named ... was found"), especially on CUDA backends.
-    EventImpl event = impl_->ext_oneapi_submit_barrier();
-    return event;
+    try {
+        EventImpl event = impl_->ext_oneapi_submit_barrier();
+        return event;
+    } catch (const sycl::exception&) {
+        // Some backends (notably certain CUDA/UR stacks) don't support
+        // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
+        EventImpl event = impl_->submit([&](sycl::handler& h) {
+            h.single_task<QueueGetEventNoopKernel>([]() {});
+        });
+        return event;
+    }
 }
 
 std::vector<Device> Device::get_devices(DeviceType type){

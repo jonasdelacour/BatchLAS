@@ -3,8 +3,22 @@
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
+#include <cstdlib>
 
 #include "util/kernel-trace.hh"
+
+inline bool batchlas_queue_profiling_enabled() {
+    // Keep profiling opt-in to avoid overhead in non-benchmark runs.
+    // Kernel trace implies profiling; benchmarks can enable profiling without tracing.
+    auto env_truthy = [](const char* v) {
+        if (!v) return false;
+        return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
+                std::string(v) == "on" || std::string(v) == "ON");
+    };
+    return batchlas_kernel_trace::enabled() ||
+           env_truthy(std::getenv("BATCHLAS_QUEUE_PROFILING")) ||
+           env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
+}
 
 struct QueueImpl : public sycl::queue{
     using sycl::queue::queue;
@@ -20,7 +34,7 @@ struct QueueImpl : public sycl::queue{
     QueueImpl(Device dev, bool in_order)
         : sycl::queue(device_arrays.at((int)dev.type).at(dev.idx),
                       [&] {
-                          const bool prof = batchlas_kernel_trace::enabled();
+                          const bool prof = batchlas_queue_profiling_enabled();
                           if (in_order && prof)
                               return sycl::property_list{sycl::property::queue::in_order{},
                                                         sycl::property::queue::enable_profiling{}};
@@ -37,7 +51,7 @@ struct QueueImpl : public sycl::queue{
         : sycl::queue(ctx,
                       dev,
                       [&] {
-                          const bool prof = batchlas_kernel_trace::enabled();
+                          const bool prof = batchlas_queue_profiling_enabled();
                           if (in_order && prof)
                               return sycl::property_list{sycl::property::queue::in_order{},
                                                         sycl::property::queue::enable_profiling{}};
@@ -52,7 +66,7 @@ struct QueueImpl : public sycl::queue{
 
     QueueImpl()
         : sycl::queue(device_arrays.at((int)DeviceType::CPU).at(0),
-                      batchlas_kernel_trace::enabled()
+                      batchlas_queue_profiling_enabled()
                           ? sycl::property_list{sycl::property::queue::enable_profiling{}}
                           : sycl::property_list{}),
           device_(Device{0, DeviceType::CPU}),
