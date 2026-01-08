@@ -21,21 +21,36 @@ static void BM_STEDC(minibench::State& state) {
     StedcParams<T> params;
     params.recursion_threshold = rec_threshold;
 
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<std::byte> ws(stedc_workspace_size<B, T>(*q, n, batch, jobz, params));
 
-    // Register kernel-only runner so warmup uses the same USM allocations.
-    state.SetKernel([=]() {
+    auto kernel = [q, flat](auto& diags,
+                            auto& off_diags,
+                            auto& eigvals,
+                            auto& ws,
+                            JobType jobz,
+                            StedcParams<T> params,
+                            auto& eigvects) {
+        auto d = static_cast<VectorView<T>>(diags);
+        auto e = static_cast<VectorView<T>>(off_diags);
+        auto w = static_cast<VectorView<T>>(eigvals);
+        auto Z = eigvects.view();
         if (flat) {
-            stedc_flat<B>(*q, diags, off_diags, eigvals, ws.to_span(), jobz, params, eigvects);
-        } else {
-            stedc<B>(*q, diags, off_diags, eigvals, ws.to_span(), jobz, params, eigvects);    
+            return stedc_flat<B, T>(*q, d, e, w, ws.to_span(), jobz, params, Z);
         }
-    });
-    // Single wait after each batch of internal iterations to mirror prior behavior.
-    state.SetBatchEndWait(q);
+        return stedc<B, T>(*q, d, e, w, ws.to_span(), jobz, params, Z);
+    };
+    state.SetKernel(q,
+                    bench::pristine(diags),
+                    bench::pristine(off_diags),
+                    std::move(eigvals),
+                    std::move(ws),
+                    jobz,
+                    params,
+                    bench::pristine(eigvects),
+                    kernel);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

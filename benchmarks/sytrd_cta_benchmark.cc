@@ -37,25 +37,20 @@ static void BM_SYTRD_CTA(minibench::State& state) {
     // We use ~4/3 n^3 as a rough proxy.
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
+    auto q = std::make_shared<Queue>("gpu");
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
     auto d = Vector<T>::zeros(n, batch);
     auto e = Vector<T>::zeros(n - 1, batch);
     auto tau = Vector<T>::zeros(n - 1, batch);
-
-    auto q = std::make_shared<Queue>("gpu");
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
-    state.SetKernel([=]() {
-        sytrd_cta<B>(*q,
-                     A.view(),
-                     VectorView<T>(d),
-                     VectorView<T>(e),
-                     VectorView<T>(tau),
-                     uplo,
-                     ws_dummy.to_span(),
-                     wg_mult);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(
+        q,
+        bench::pristine(A), //sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        d,e,tau,uplo,ws_dummy,wg_mult,
+        [](Queue& q, auto&&... xs) {
+            sytrd_cta<B>(q, std::forward<decltype(xs)>(xs)...);
+        });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else

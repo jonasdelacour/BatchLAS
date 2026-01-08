@@ -19,11 +19,18 @@ static void BM_TRMM(minibench::State& state) {
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto A = Matrix<T>::RandomTriangular(n, Uplo::Lower, Diag::NonUnit, batch);
 
-    state.SetKernel([=]() {
-        trmm<B>(*q, A, Bm, C, T(1), Side::Left, Uplo::Lower,
-                Transpose::NoTrans, Diag::NonUnit);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    std::move(Bm),
+                    bench::pristine(C),
+                    T(1),
+                    Side::Left,
+                    Uplo::Lower,
+                    Transpose::NoTrans,
+                    Diag::NonUnit,
+                    [](Queue& q, auto&&... xs) {
+                        trmm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

@@ -27,23 +27,25 @@ static void BM_STEQR(minibench::State& state) {
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;
 
-
     Vector<T> diags = Vector<T>::random(n, batch, transpose ? 1 : n, transpose ? batch : 1);
     Vector<T> off_diags = Vector<T>::random(n - 1, batch, transpose ? 1 : n - 1, transpose ? batch : 1);
-
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    UnifiedVector<std::byte> ws(steqr_buffer_size<T>(*q, diags, off_diags, eigvals,
-                                                    jobz, params));
+    const size_t ws_size = steqr_buffer_size<T>(*q, diags, off_diags, eigvals, jobz, params);
+    UnifiedVector<std::byte> ws(ws_size);
 
-    // Register kernel-only runner so warmup uses the same USM allocations.
-    state.SetKernel([=]() {
-        steqr<B>(*q, diags, off_diags, eigvals,
-                 ws.to_span(), jobz, params, eigvects);
-    });
-    // Single wait after each batch of internal iterations to mirror prior behavior.
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    bench::pristine(diags),
+                    bench::pristine(off_diags),
+                    std::move(eigvals),
+                    std::move(ws),
+                    jobz,
+                    params,
+                    bench::pristine(eigvects),
+                    [](Queue& q, auto&&... xs) {
+                        steqr<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

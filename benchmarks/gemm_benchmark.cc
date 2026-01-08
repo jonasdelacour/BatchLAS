@@ -18,11 +18,17 @@ static void BM_GEMM(minibench::State& state) {
     auto C = Matrix<T>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
 
-    state.SetKernel([=]() {
-        gemm<B>(*q, A, Bm, C, T(1), T(1),
-                Transpose::NoTrans, Transpose::NoTrans);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    std::move(Bm),
+                    bench::pristine(C),
+                    T(1),
+                    T(1),
+                    Transpose::NoTrans,
+                    Transpose::NoTrans,
+                    [](Queue& q, auto&&... xs) {
+                        gemm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

@@ -96,18 +96,32 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     const double nn = double(n);
     const double gflops_nominal = double(batch) * (1e-9 * (4.0 * m * nn * nn - 2.0 * nn * nn * nn + 3.0 * nn * nn));
 
-    state.SetKernel([q, A, C, tau_storage = std::move(tau_storage), ws, side, trans, block_size]() mutable {
-        ormqr_blocked<B, T>(*q,
-                            A.view(),
-                            C.view(),
-                            side,
-                            trans,
-                            tau_storage.to_span(),
-                            ws.to_span(),
-                            block_size);
-    });
+    auto kernel = [q](auto& A,
+                      auto& C,
+                      auto& tau_storage,
+                      auto& ws,
+                      Side side,
+                      Transpose trans,
+                      int block_size) {
+        return ormqr_blocked<B, T>(*q,
+                                  A.view(),
+                                  C.view(),
+                                  side,
+                                  trans,
+                                  tau_storage.to_span(),
+                                  ws.to_span(),
+                                  block_size);
+    };
 
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    bench::pristine(std::move(C)),
+                    std::move(tau_storage),
+                    std::move(ws),
+                    side,
+                    trans,
+                    block_size,
+                    kernel);
     state.SetMetric("GFLOPS", gflops_nominal, minibench::Rate);
     state.SetMetric("Time (\u00b5s) / Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }

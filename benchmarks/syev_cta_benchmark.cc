@@ -58,8 +58,8 @@ static void BM_SYEV_CTA(minibench::State& state) {
     const JobType jobz = parse_jobz(jobz_i);
     const Uplo uplo = parse_uplo(uplo_i);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     SteqrParams<T> params;
@@ -68,10 +68,17 @@ static void BM_SYEV_CTA(minibench::State& state) {
     const size_t ws_size = syev_cta_buffer_size<B, T>(*q, A.view(), jobz, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.SetKernel([=]() {
-        syev_cta<B, T>(*q, A.view(), W.to_span(), jobz, uplo, workspace.to_span(), params, wg_mult);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    bench::pristine(A),
+                    std::move(W),
+                    jobz,
+                    uplo,
+                    std::move(workspace),
+                    params,
+                    wg_mult,
+                    [](Queue& q, auto&&... xs) {
+                        syev_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
@@ -91,17 +98,22 @@ static void BM_SYEV_NETLIB_REF(minibench::State& state) {
     const JobType jobz = parse_jobz(jobz_i);
     const Uplo uplo = parse_uplo(uplo_i);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     auto q = std::make_shared<Queue>("cpu");
+    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     const size_t ws_size = syev_buffer_size<B>(*q, A.view(), W.to_span(), jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);
 
-    state.SetKernel([=]() {
-        syev<B>(*q, A.view(), W.to_span(), jobz, uplo, workspace.to_span());
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    bench::pristine(A),
+                    std::move(W),
+                    jobz,
+                    uplo,
+                    std::move(workspace),
+                    [](Queue& q, auto&&... xs) {
+                        syev<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);

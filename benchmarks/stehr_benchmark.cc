@@ -26,12 +26,34 @@ static void BM_STEHR(minibench::State& state) {
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, T>(*q, n, batch, jobz));
 
-    // Register kernel-only runner so warmup uses the same USM allocations.
-    state.SetKernel([=]() {
-        tridiagonal_solver<B>(*q, diags.data(), off_diags.data(), eigvals.data(), ws.to_span(), jobz, eigvects, n, batch);
-    });
-    // Single wait after each batch of internal iterations to mirror prior behavior.
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    bench::pristine(std::move(diags)),
+                    bench::pristine(std::move(off_diags)),
+                    std::move(eigvals),
+                    std::move(ws),
+                    jobz,
+                    bench::pristine(std::move(eigvects)),
+                    n,
+                    batch,
+                    [](Queue& q,
+                       auto&& diags,
+                       auto&& off_diags,
+                       auto&& eigvals,
+                       auto&& ws,
+                       JobType jobz,
+                       auto&& eigvects,
+                       size_t n,
+                       size_t batch) {
+                        tridiagonal_solver<B>(q,
+                                              diags.data(),
+                                              off_diags.data(),
+                                              eigvals.data(),
+                                              ws,
+                                              jobz,
+                                              eigvects,
+                                              n,
+                                              batch);
+                    });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

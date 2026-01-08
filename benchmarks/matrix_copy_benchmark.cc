@@ -20,10 +20,12 @@ static void BM_MATRIX_COPY(minibench::State& state) {
     Matrix<T> src(rows, cols, batch, ld, stride);
     Matrix<T> dst(rows, cols, batch, ld, stride);
 
-    state.SetKernel([=]() {
-        auto evt = MatrixView<T>::copy(*q, dst, src);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(dst),
+                    std::move(src),
+                    [](Queue& q, auto&& dst, auto&& src) {
+                        (void)MatrixView<T>::copy(q, dst, src);
+                    });
 
     const double bytes_moved = static_cast<double>(rows) * cols * batch * sizeof(T) * 2.0;
     state.SetMetric("GB/s", bytes_moved * 1e-9, minibench::Rate);

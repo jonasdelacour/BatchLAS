@@ -12,14 +12,18 @@ static void BM_Ortho(minibench::State& state) {
     const size_t batch = state.range(2);
     const OrthoAlgorithm algo = static_cast<OrthoAlgorithm>(state.range(3));
 
-    auto A = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto A = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, batch);
     UnifiedVector<std::byte> workspace(ortho_buffer_size<B>(*q, A.view(), Transpose::NoTrans, algo));
 
-    state.SetKernel([=]() {
-        ortho<B>(*q, A, Transpose::NoTrans, workspace.to_span(), algo);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    bench::pristine(A),
+                    Transpose::NoTrans,
+                    std::move(workspace),
+                    algo,
+                        [](Queue& q, auto&&... xs) {
+                            ortho<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        });
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

@@ -14,11 +14,17 @@ static void BM_TRSM(minibench::State& state) {
     auto Bm = Matrix<T>::Random(n, n, false, batch);
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    state.SetKernel([=]() {
-        trsm<B>(*q, A, Bm, Side::Left, Uplo::Lower,
-                Transpose::NoTrans, Diag::NonUnit, T(1));
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    bench::pristine(Bm),
+                    Side::Left,
+                    Uplo::Lower,
+                    Transpose::NoTrans,
+                    Diag::NonUnit,
+                    T(1),
+                    [](Queue& q, auto&&... xs) {
+                        trsm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                    });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

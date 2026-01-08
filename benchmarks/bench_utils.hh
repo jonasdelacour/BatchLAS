@@ -1,6 +1,11 @@
 #pragma once
-#include <util/minibench.hh>
+
 #include <batchlas/backend_config.h>
+
+// This header is intentionally benchmark-local and should stay lightweight.
+// The structured-benchmark implementation lives in `include/util/*`.
+#include <util/minibench_structured.hh>
+
 #include <complex>
 
 #if BATCHLAS_HAS_CUDA_BACKEND

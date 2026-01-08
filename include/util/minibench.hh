@@ -22,6 +22,7 @@
 #include <sstream>
 #include <iomanip>
 #include <blas/enums.hh>
+#include <type_traits>
 
 namespace minibench {
 
@@ -131,6 +132,15 @@ struct State {
     // and register the kernel, then execute warmups and measurements by calling
     // only this kernel repeatedly (avoiding re-doing setup each time).
     std::function<void()> kernel_once_;
+    // Optional: called once after setup and before warmup/measurement.
+    // Use this to prefetch USM, set mem_advise hints, etc.
+    std::function<void()> prepare_once_;
+    // Optional: called before each kernel run (warmup + measurement), but outside timing.
+    // Use this to restore mutated inputs from a pristine device-resident copy.
+    std::function<void()> before_each_run_;
+    // Optional: provide a per-run timing function (in milliseconds) that measures
+    // only the kernel/algorithm, typically via events + profiling, and waits for completion.
+    std::function<double()> timed_kernel_ms_;
     std::function<void()> batch_end_fn_;
 
     struct iterator {
@@ -189,9 +199,35 @@ struct State {
     // Structured mode: register the kernel body and optional end-of-batch hook
     // (e.g., to insert a single queue.wait() after a batch of internal iters).
     void SetKernel(std::function<void()> kernel_once) { kernel_once_ = (kernel_once); }
+
+    // Sugar overload for structured benchmarks.
+    // Usage:
+    //   state.SetKernel(q, managed_arg1, managed_arg2, ..., kernel_fn);
+    // The LAST argument must be the kernel callable; all preceding arguments
+    // are *consumed* (moved-from) and forwarded to `bench::Kernel(q, ...)`.
+    // Note: the definition lives in util/minibench_structured.hh, so include
+    // that header (or a benchmark helper that includes it) at callsites that
+    // use this overload.
+    template <typename Q, typename... Args>
+    void SetKernel(std::shared_ptr<Q> q, Args&&... args);
+
+    // Convenience: allow a single configurator object (callable as `cfg(State&)`)
+    // to set up kernel + prepare/reset/timing hooks in one call.
+    template <typename Configurator,
+              typename = std::enable_if_t<std::is_invocable_v<Configurator, State&>>>
+    void SetKernel(Configurator&& cfg) {
+        std::forward<Configurator>(cfg)(*this);
+    }
+    void SetPrepare(std::function<void()> prepare_once) { prepare_once_ = std::move(prepare_once); }
+    void SetBeforeEachRun(std::function<void()> before_each_run) { before_each_run_ = std::move(before_each_run); }
+    void SetTimedKernelMs(std::function<double()> timed_kernel_ms) { timed_kernel_ms_ = std::move(timed_kernel_ms); }
     void SetBatchEnd(std::function<void()> fn) { batch_end_fn_ = (fn); }
     bool HasKernel() const { return static_cast<bool>(kernel_once_); }
     void RunKernelOnce() { if (kernel_once_) kernel_once_(); }
+    void RunPrepareOnce() { if (prepare_once_) prepare_once_(); }
+    void RunBeforeEachRun() { if (before_each_run_) before_each_run_(); }
+    bool HasTimedKernel() const { return static_cast<bool>(timed_kernel_ms_); }
+    double RunTimedKernelMsOnce() { return timed_kernel_ms_ ? timed_kernel_ms_() : 0.0; }
     void RunBatchEnd() { if (batch_end_fn_) batch_end_fn_(); }
 
     // Convenience: set batch end to a simple wait() on a shared queue-like
@@ -281,42 +317,76 @@ inline Result run_benchmark(const Benchmark& b,
         // Structured mode: warm up and measure by calling the registered kernel
         // repeatedly without re-running setup, which is critical for USM.
 
+        // Optional one-time preparation step (not timed).
+        state.RunPrepareOnce();
+
         // Warmup calls (not timed). Ensure completion after each warmup batch
         // and once more before starting timed measurement to avoid contamination
         // from any outstanding async work (e.g., USM migrations).
         for (size_t i = 0; i < cfg.warmup_runs; ++i) {
             for (size_t j = 0; j < cfg.warmup_internal_iterations; ++j) {
-                state.RunKernelOnce();
+                state.RunBeforeEachRun();
+                if (state.HasTimedKernel()) {
+                    (void)state.RunTimedKernelMsOnce();
+                } else {
+                    state.RunKernelOnce();
+                }
             }
             state.RunBatchEnd();
         }
 
         // Determine optimal internal iterations for measurement by sampling
         size_t measurement_internal_iters = 1;
-        state.ResetTiming();
-        state.ResumeTiming();
-        state.RunKernelOnce();
-        state.RunBatchEnd();
-        double sample_time = state.StopTiming();
-
-        while (sample_time < 1.0 && measurement_internal_iters < 10000) {
-            measurement_internal_iters *= 10;
+        double sample_time = 0.0;
+        if (state.HasTimedKernel()) {
+            state.RunBeforeEachRun();
+            sample_time = state.RunTimedKernelMsOnce();
+            while (sample_time < 1.0 && measurement_internal_iters < 10000) {
+                measurement_internal_iters *= 10;
+                sample_time = 0.0;
+                for (size_t i = 0; i < measurement_internal_iters; ++i) {
+                    state.RunBeforeEachRun();
+                    sample_time += state.RunTimedKernelMsOnce();
+                }
+            }
+        } else {
             state.ResetTiming();
             state.ResumeTiming();
-            for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
+            state.RunKernelOnce();
             state.RunBatchEnd();
             sample_time = state.StopTiming();
+
+            while (sample_time < 1.0 && measurement_internal_iters < 10000) {
+                measurement_internal_iters *= 10;
+                state.ResetTiming();
+                state.ResumeTiming();
+                for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
+                state.RunBatchEnd();
+                sample_time = state.StopTiming();
+            }
         }
 
         // Measurements
         while (res.iterations < cfg.max_iters &&
                (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
-            state.ResetTiming();
-            state.ResumeTiming();
-            for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
-            state.RunBatchEnd();
-            double t = state.StopTiming();
-            double time_per_iter = t / measurement_internal_iters;
+            double time_per_iter = 0.0;
+            if (state.HasTimedKernel()) {
+                double batch_ms = 0.0;
+                for (size_t i = 0; i < measurement_internal_iters; ++i) {
+                    state.RunBeforeEachRun();
+                    batch_ms += state.RunTimedKernelMsOnce();
+                }
+                time_per_iter = batch_ms / measurement_internal_iters;
+                // Keep the previous behavior for end-of-batch hooks (e.g., queue.wait()).
+                state.RunBatchEnd();
+            } else {
+                state.ResetTiming();
+                state.ResumeTiming();
+                for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
+                state.RunBatchEnd();
+                double t = state.StopTiming();
+                time_per_iter = t / measurement_internal_iters;
+            }
             times.push_back(time_per_iter);
             total_ms += time_per_iter;
             ++res.iterations;

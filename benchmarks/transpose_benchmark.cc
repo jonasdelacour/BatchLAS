@@ -18,10 +18,12 @@ static void BM_TRANSPOSE(minibench::State& state) {
     auto A = Matrix<T>::Random(m, n, false, batch);
     auto B_mat = Matrix<T>::Zeros(n, m, batch);
 
-    state.SetKernel([=]() {
-        batchlas::transpose(*q, A, B_mat);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    std::move(B_mat),
+                    [](Queue& q, auto&& A, auto&& B_mat) {
+                        batchlas::transpose<T, MatrixFormat::Dense>(q, A, B_mat);
+                    });
     state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * sizeof(T)), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

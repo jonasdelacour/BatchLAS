@@ -15,6 +15,7 @@ static void BM_SPMM(minibench::State& state) {
 
     auto A_dense = Matrix<T>::Random(m, k, false, batch);
     auto A = A_dense.template convert_to<MatrixFormat::CSR>();
+    const auto nnz = A.nnz();
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
 
@@ -23,13 +24,21 @@ static void BM_SPMM(minibench::State& state) {
                                          T(1), T(0), Transpose::NoTrans,
                                          Transpose::NoTrans);
     UnifiedVector<std::byte> workspace(ws_size);
-    state.SetKernel([=]() {
-        spmm<B>(*q, A, Bm, C, T(1), T(0),
-                Transpose::NoTrans, Transpose::NoTrans, workspace.to_span());
-    });
-    state.SetBatchEndWait(q);
+
+    state.SetKernel(q,
+                    std::move(A),
+                    std::move(Bm),
+                    std::move(C),
+                    T(1),
+                    T(0),
+                    Transpose::NoTrans,
+                    Transpose::NoTrans,
+                    std::move(workspace),
+                    [](Queue& q, auto&&... xs) {
+                        spmm<B, T, MatrixFormat::CSR>(q, std::forward<decltype(xs)>(xs)...);
+                    });
     state.SetMetric("GFLOPS", static_cast<double>(batch) *
-                        (1e-9 * 2.0 * A.nnz() * n), minibench::Rate);
+                        (1e-9 * 2.0 * nnz * n), minibench::Rate);
     state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

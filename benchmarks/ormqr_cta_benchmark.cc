@@ -56,11 +56,42 @@ static void BM_ORMQR_CTA(minibench::State& state) {
     auto C = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1337);
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
-    state.SetKernel([q, A, C, tau_storage = std::move(tau_storage), ws_dummy, n, batch, wg_mult, side, trans]() mutable {
-        VectorView<T> tau_view_local(tau_storage.to_span(), n, batch);
-        ormqx_cta<B>(*q, A.view(), tau_view_local, C.view(), Uplo::Upper, side, trans, /*k=*/n, ws_dummy.to_span(), wg_mult);
-    });
-    state.SetBatchEndWait(q);
+    state.SetKernel(q,
+                    std::move(A),
+                    bench::pristine(std::move(C)),
+                    std::move(tau_storage),
+                    std::move(ws_dummy),
+                    Uplo::Upper,
+                    side,
+                    trans,
+                    n,
+                    batch,
+                    wg_mult,
+                    [](Queue& q,
+                       auto&& A,
+                       auto&& C,
+                       auto&& tau_storage,
+                       auto&& ws_dummy,
+                       auto factorization,
+                       auto side,
+                       auto trans,
+                       auto n,
+                       auto batch,
+                       auto wg_mult) {
+                        VectorView<T> tau_view_local(tau_storage,
+                                                     static_cast<int>(n),
+                                                     static_cast<int>(batch));
+                        ormqx_cta<B>(q,
+                                    A,
+                                    tau_view_local,
+                                    C,
+                                    factorization,
+                                    side,
+                                    trans,
+                                    /*k=*/static_cast<int32_t>(n),
+                                    ws_dummy,
+                                    wg_mult);
+                    });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else

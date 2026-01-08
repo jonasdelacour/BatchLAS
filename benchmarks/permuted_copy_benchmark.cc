@@ -34,11 +34,20 @@ static void BM_PERMUTED_COPY(minibench::State& state) {
             permutation(c, b) = indices[c];
         }
     }
-    
-    state.SetKernel([=]() {
-        permuted_copy(*q, src, dst, permutation, PermutedCopyParams{{n_blocks*block_size, block_size}});
-    });
-    state.SetBatchEndWait(q);
+
+    const PermutedCopyParams params{{n_blocks * block_size, block_size}};
+    state.SetKernel(q,
+                    std::move(src),
+                    std::move(dst),
+                    std::move(permutation),
+                    params,
+                    [](Queue& q,
+                       auto&& src,
+                       auto&& dst,
+                       auto&& permutation,
+                       const PermutedCopyParams& params) {
+                        permuted_copy(q, src, dst, permutation, params);
+                    });
 
     const double bytes_moved = static_cast<double>(rows) * cols * batch * sizeof(T) * 2.0;
     state.SetMetric("GB/s", bytes_moved * 1e-9, minibench::Rate);

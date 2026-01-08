@@ -29,24 +29,24 @@ static void BM_STEQR_CTA(minibench::State& state) {
     params.block_rotations = false;
     params.transpose_working_vectors = false;
 
-    Vector<T> diags = Vector<T>::random(n, batch);
-    Vector<T> off_diags = Vector<T>::random(n - 1, batch);
-
+    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto diags = Vector<T>::random(n, batch);
+    auto off_diags = Vector<T>::random(n - 1, batch);
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    UnifiedVector<std::byte> ws(steqr_cta_buffer_size<T>(*q, diags, off_diags, eigvals,
-                                                    jobz, params));
+    UnifiedVector<std::byte> ws(steqr_cta_buffer_size<T>(*q, diags, off_diags, eigvals, jobz, params));
 
-    // Register kernel-only runner so warmup uses the same USM allocations.
-    state.SetKernel([=]() {
-        steqr_cta<B>(*q, diags, off_diags, eigvals,
-                 ws.to_span(), jobz, params, eigvects);
-    });
-    // Single wait after each batch of internal iterations to mirror prior behavior.
-    state.SetBatchEndWait(q);
-    state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(µs)/Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetKernel(q,
+                    bench::pristine(diags),
+                    bench::pristine(off_diags),
+                    std::move(eigvals),
+                    std::move(ws),
+                    jobz,
+                    params,
+                    bench::pristine(eigvects),
+                        [](Queue& q, auto&&... xs) {
+                            steqr_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        });
 }
 
 
