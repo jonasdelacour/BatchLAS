@@ -2,6 +2,7 @@
 #include <cassert>
 #include <iterator>
 #include <array>
+#include <type_traits>
 #include <util/sycl-device-queue.hh>
 
 template <typename T>
@@ -25,13 +26,13 @@ struct Span
     inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
     inline constexpr Span(T& value) : data_(&value), size_(1) {}
 
-    Event set_read_mostly(const Queue &ctx = Queue());
-    Event unset_read_mostly(const Queue &ctx = Queue());
-    Event set_preferred_location(const Queue &ctx = Queue());
-    Event clear_preferred_location(const Queue &ctx = Queue());
-    Event set_access_device(const Queue &ctx = Queue());
-    Event clear_access_device(const Queue &ctx = Queue());
-    Event prefetch(const Queue &ctx = Queue());
+    Event set_read_mostly(const Queue &ctx = Queue()) const;
+    Event unset_read_mostly(const Queue &ctx = Queue()) const;
+    Event set_preferred_location(const Queue &ctx = Queue()) const;
+    Event clear_preferred_location(const Queue &ctx = Queue()) const;
+    Event set_access_device(const Queue &ctx = Queue()) const;
+    Event clear_access_device(const Queue &ctx = Queue()) const;
+    Event prefetch(const Queue &ctx = Queue()) const;
     
     template <typename U>
     inline constexpr Span<U> as_span() const {
