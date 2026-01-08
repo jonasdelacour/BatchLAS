@@ -432,6 +432,22 @@ namespace batchlas {
         int rows_, cols_, batch_size_;
 
         // Data access - provides non-owning view of the data
+        // USM preparation helpers (non-owning, safe to call on const objects)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.to_span().set_access_device(ctx);
+                (void)col_indices_.to_span().set_access_device(ctx);
+            }
+            return data_.to_span().set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.to_span().prefetch(ctx);
+                (void)col_indices_.to_span().prefetch(ctx);
+            }
+            return data_.to_span().prefetch(ctx);
+        }
         Span<T> data() const { return data_.to_span(); }
         
         // Fill the matrix with a specific value
@@ -610,6 +626,22 @@ namespace batchlas {
 
         // Data access
         Span<T> data() const { return data_; }
+        // USM preparation helpers (non-owning, safe to call on const views)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.set_access_device(ctx);
+                (void)col_indices_.set_access_device(ctx);
+            }
+            return data_.set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.prefetch(ctx);
+                (void)col_indices_.prefetch(ctx);
+            }
+            return data_.prefetch(ctx);
+        }
         T* data_ptr() const { return data_.data(); }
         
 
@@ -688,7 +720,11 @@ namespace batchlas {
                 throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
-            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
+            // Do not propagate the parent pointer-array into a slice: those pointers refer to the
+            // *unsliced* base addresses. Backends that use pointer-array batched kernels (e.g. cuBLAS)
+            // would then read/write the wrong addresses. Leaving it null lets backends regenerate the
+            // correct pointer array for this view if needed.
+            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, nullptr);
         }
 
         template <MatrixFormat M = MType, 
@@ -1047,6 +1083,14 @@ namespace batchlas {
         }
 
         Span<T> data() const { return data_.to_span(); }
+        // USM preparation helpers (safe to call on const vectors)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            return data_.to_span().set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            return data_.to_span().prefetch(ctx);
+        }
         T* data_ptr() const { return data_.data(); }
         int size() const { return size_; }
         int inc() const { return inc_; }
@@ -1129,6 +1173,14 @@ namespace batchlas {
 
         // Data access
         Span<T> data() const { return data_; }
+        // USM preparation helpers (non-owning, safe to call on const views)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            return data_.set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            return data_.prefetch(ctx);
+        }
         T* data_ptr() const { return data_.data(); }
         int size() const { return size_; }
         int inc() const { return inc_; }
