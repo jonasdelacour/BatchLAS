@@ -44,6 +44,7 @@ set(TEST_TARGETS
     stedc_tests
     ritz_values_tests
     sytrd_cta_tests
+    sytrd_blocked_tests
     syev_cta_tests
 )
 

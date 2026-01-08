@@ -22,6 +22,7 @@ set(BENCHMARK_TARGETS
     stedc_benchmark
     steqr_cta_benchmark
     sytrd_cta_benchmark
+    sytrd_blocked_benchmark
     ormqr_cta_benchmark
 )
 
