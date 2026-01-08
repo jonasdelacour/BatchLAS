@@ -487,6 +487,36 @@ namespace batchlas {
                     size_t cta_wg_size_multiplier = 1);
 
     /**
+     * @brief Blocked symmetric/Hermitian tridiagonal reduction for medium/large matrices.
+     *
+     * This overwrites A with the tridiagonal and reflector storage (SYTD2-style), and
+     * returns the diagonal/off-diagonal in (d,e) plus reflector scalars in tau.
+     *
+     * Notes:
+     * - Intended for n > 32.
+     * - Requires an in-order queue.
+     * - Uses a blocked panel (LATRD-style) + BLAS-3 trailing update.
+     */
+    template <Backend B, typename T>
+    Event sytrd_blocked(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& a_in,
+                        const VectorView<T>& d_out,
+                        const VectorView<T>& e_out,
+                        const VectorView<T>& tau_out,
+                        Uplo uplo,
+                        const Span<std::byte>& ws,
+                        int32_t block_size);
+
+    template <Backend B, typename T>
+    size_t sytrd_blocked_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& a,
+                                     const VectorView<T>& d,
+                                     const VectorView<T>& e,
+                                     const VectorView<T>& tau,
+                                     Uplo uplo,
+                                     int32_t block_size);
+
+    /**
      * @brief CTA-optimized symmetric eigen-solver (SYEV-like) for very small matrices.
      *
      * Pipeline:
