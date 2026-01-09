@@ -399,7 +399,7 @@ namespace batchlas {
                 throw std::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
-            return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, nullptr);
+            return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
         }
         template <MatrixFormat M = MType, typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView<T, MType> operator()(Slice rows) const { return (*this)(rows, {}); }
@@ -724,7 +724,7 @@ namespace batchlas {
             // *unsliced* base addresses. Backends that use pointer-array batched kernels (e.g. cuBLAS)
             // would then read/write the wrong addresses. Leaving it null lets backends regenerate the
             // correct pointer array for this view if needed.
-            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, nullptr);
+            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
         }
 
         template <MatrixFormat M = MType, 
