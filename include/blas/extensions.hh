@@ -517,6 +517,47 @@ namespace batchlas {
                     size_t cta_wg_size_multiplier = 1);
 
     /**
+     * @brief LATRD-like panel factorization used by blocked SYTRD (Lower only).
+     *
+     * Computes Householder vectors (stored in A) and W (workspace) for a block
+     * of columns starting at j0. This is the panel factorization stage of the
+     * blocked reduction and is useful to benchmark/optimize independently.
+     *
+     * Notes:
+     * - Currently implements only `Uplo::Lower` semantics.
+     * - Overwrites A in the same SYTD2-style reflector layout used by sytrd.
+     * - Writes only the first `ib` columns of W (W is treated as n x nb).
+     */
+    template <Backend B, typename T>
+    Event latrd_lower_panel(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& a_in,
+                            const VectorView<T>& e_out,
+                            const VectorView<T>& tau_out,
+                            const MatrixView<T, MatrixFormat::Dense>& w_in,
+                            int32_t j0,
+                            int32_t ib);
+
+    /**
+     * @brief LATRD-like panel factorization (Lower only), view-based overload.
+     *
+     * Pass pre-sliced views instead of (j0, ib). Typical usage in blocked SYTRD:
+     *  - a_panel = A({j0, SliceEnd()}, {j0, SliceEnd()})
+     *  - e_panel = E(Slice(j0, j0 + ib))
+     *  - tau_panel = TAU(Slice(j0, j0 + ib))
+     *  - w_panel = Wmat({j0, SliceEnd()}, {0, ib})
+     *
+     * Notes:
+     * - a_panel must be square.
+     * - e_panel/tau_panel size must match w_panel.cols().
+     */
+    template <Backend B, typename T>
+    Event latrd_lower_panel(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& a_panel_in,
+                            const VectorView<T>& e_panel_out,
+                            const VectorView<T>& tau_panel_out,
+                            const MatrixView<T, MatrixFormat::Dense>& w_panel_in);
+
+    /**
      * @brief Blocked symmetric/Hermitian tridiagonal reduction for medium/large matrices.
      *
      * This overwrites A with the tridiagonal and reflector storage (SYTD2-style), and

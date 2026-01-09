@@ -79,259 +79,11 @@ inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g
     return sycl::reduce_over_group(g, x, sycl::plus<R>());
 }
 
-template <typename T, int WG>
-class LatrdLowerPanelKernel;
-
 template <typename T>
 class UpdateVWLowerSmallKernel;
 
 template <typename T>
 class SytrdLowerLocalSmallKernel;
-
-// LATRD-like panel factorization for SYTRD (Lower).
-// Computes Householder vectors (stored in A) and W (workspace) for a block of columns.
-//
-// A layout (SYTD2-style, lower): for reflector i
-// - v has implicit 1 at A(i+1,i), and A(i+2:n-1,i) stores the tail.
-// - tau(i) stores scalar.
-// - e(i) stores beta (what will become the subdiagonal element).
-//
-// W is stored as a dense n x nb matrix for each batch item.
-// Only rows >= i+1 are written for column (i-j0).
-
-template <typename T, int WG>
-Event latrd_lower_panel_batched_wg(Queue& q,
-                                const MatrixView<T, MatrixFormat::Dense>& a,
-                                const VectorView<T>& e,
-                                const VectorView<T>& tau,
-                                T* w_data,
-                                int ld_w,
-                                int stride_w,
-                                int n,
-                                int j0,
-                                int ib) {
-    const int lda = a.ld();
-    const int stride_a = a.stride();
-    T* a_ptr = a.data_ptr();
-    T* e_ptr = e.data_ptr();
-    T* tau_ptr = tau.data_ptr();
-    const int stride_e = e.stride();
-    const int stride_tau = tau.stride();
-    const int batch = a.batch_size();
-
-    constexpr int wg = WG;
-
-    (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<LatrdLowerPanelKernel<T, WG>>(
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
-
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-
-                T* A = a_ptr + b * stride_a;
-                T* W = w_data + b * stride_w;
-                T* Eb = e_ptr + b * stride_e;
-                T* Taub = tau_ptr + b * stride_tau;
-
-                auto Aat = [&](int r, int c) -> T& { return A[r + c * lda]; };
-                auto Wat = [&](int r, int c) -> T& { return W[r + c * ld_w]; };
-
-                auto Ah = [&](int r, int c) -> T {
-                    // Treat A as Hermitian/symmetric using the lower triangle.
-                    if (r >= c) return Aat(r, c);
-                    return conj_if_needed(Aat(c, r));
-                };
-
-                for (int i = j0; i < j0 + ib; ++i) {
-                    if (i >= n - 1) break;
-
-                    // Update diagonal element A(i,i) using previously computed V/W (j0..i-1).
-                    if (lid == 0) {
-                        T aii = Aat(i, i);
-                        for (int p = j0; p < i; ++p) {
-                            const int pc = p - j0;
-                            const T vip = (i == p + 1) ? T(1) : Aat(i, p);
-                            const T wip = Wat(i, pc);
-                            aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
-                        }
-                        Aat(i, i) = aii;
-                    }
-
-                    // Update column i entries from row i+1 .. n-1.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T val = Aat(r, i);
-                        for (int p = j0; p < i; ++p) {
-                            const int pc = p - j0;
-                            const T wip = Wat(i, pc);
-                            const T vip = (i == p + 1) ? T(1) : Aat(i, p);
-
-                            // V(r,p)
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Aat(r, p);
-                            }
-
-                            const T wrp = Wat(r, pc);
-                            val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
-                        }
-                        Aat(r, i) = val;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    // Generate Householder reflector to annihilate A(i+2:n-1,i).
-                    using Real = typename base_type<T>::type;
-
-                    const int x0 = i + 2;
-                    Real sumsq = Real(0);
-                    for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += abs2_if_complex(Aat(r, i));
-                    }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
-
-                    const T alpha = (i + 1 < n) ? Aat(i + 1, i) : T(0);
-
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lid == 0) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (internal::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        Eb[i] = beta;
-                        Taub[i] = tau_i;
-
-                        // Set v(0)=1 at A(i+1,i).
-                        Aat(i + 1, i) = T(1);
-                    }
-
-                    // Broadcast tau/scale.
-                    tau_i = sycl::group_broadcast(g, tau_i);
-                    scale = sycl::group_broadcast(g, scale);
-
-                    if (tau_i != T(0)) {
-                        for (int r = x0 + lid; r < n; r += wg) {
-                            Aat(r, i) *= scale;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    // Compute W(:, i-j0) for rows i+1..n-1.
-                    // w = tau * A(i+1:n-1, i+1:n-1) * v
-                    const int col = i - j0;
-
-                    // Compute raw w (before scaling by tau) for the *updated* trailing matrix:
-                    //   A := A - V*W^H - W*V^H  (within the current panel, columns j0..i-1)
-                    // without explicitly forming A.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T acc = T(0);
-                        for (int c = i + 1; c < n; ++c) {
-                            const T vc = (c == i + 1) ? T(1) : Aat(c, i);
-                            acc += Ah(r, c) * vc;
-                        }
-                        Wat(r, col) = acc;
-                    }
-
-                    // Apply intra-panel corrections from previously computed reflectors.
-                    for (int p = j0; p < i; ++p) {
-                        const int pc = p - j0;
-
-                        // gamma = W(:,pc)^H * v, delta = V(:,p)^H * v
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
-                        for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = (c == i + 1) ? T(1) : Aat(c, i);
-
-                            gamma_partial += conj_if_needed(Wat(c, pc)) * vc;
-
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Aat(c, p) : T(0));
-                            delta_partial += conj_if_needed(vcp) * vc;
-                        }
-                        const T gamma = reduce_sum_group(g, gamma_partial);
-                        const T delta = reduce_sum_group(g, delta_partial);
-
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Aat(r, p) : T(0));
-                            const T wrp = Wat(r, pc);
-                            Wat(r, col) -= vrp * gamma + wrp * delta;
-                        }
-                    }
-
-                    // Scale by tau.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wat(r, col) *= tau_i;
-                    }
-
-                    // dot = v^H * w
-                    T dot_partial = T(0);
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = (r == i + 1) ? T(1) : Aat(r, i);
-                        dot_partial += conj_if_needed(vr) * Wat(r, col);
-                    }
-                    const T dot = reduce_sum_group(g, dot_partial);
-
-                    // w += (-0.5 * tau * dot) * v
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = (r == i + 1) ? T(1) : Aat(r, i);
-                        Wat(r, col) += alpha2 * vr;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-            });
-    });
-
-    return q.get_event();
-}
-
-template <typename T>
-Event latrd_lower_panel_batched(Queue& q,
-                                const MatrixView<T, MatrixFormat::Dense>& a,
-                                const VectorView<T>& e,
-                                const VectorView<T>& tau,
-                                T* w_data,
-                                int ld_w,
-                                int stride_w,
-                                int n,
-                                int j0,
-                                int ib) {
-    // For very small n, a smaller work-group reduces wasted lanes and barrier overhead.
-    if (n <= 64) {
-        return latrd_lower_panel_batched_wg<T, 64>(q, a, e, tau, w_data, ld_w, stride_w, n, j0, ib);
-    }
-    if (n <= 128) {
-        return latrd_lower_panel_batched_wg<T, 128>(q, a, e, tau, w_data, ld_w, stride_w, n, j0, ib);
-    }
-    return latrd_lower_panel_batched_wg<T, 256>(q, a, e, tau, w_data, ld_w, stride_w, n, j0, ib);
-}
 
 template <typename T>
 Event update_vw_lower_small(Queue& q,
@@ -679,6 +431,10 @@ Event sytrd_blocked(Queue& ctx,
     // Optional: local-memory unblocked kernel.
     // Auto-enabled for float where it improves the n=33..64 crossover; other types require
     // an explicit env override because it can regress performance.
+    //
+    // NOTE: The DPC++ CUDA plugin has been observed to abort in
+    // detail::adjustNDRangePerKernel for this kernel shape. Prefer stability
+    // and fall back to the regular blocked path on CUDA.
     if (n <= 64) {
         auto env_truthy = [](const char* v) -> bool {
             if (!v) return false;
@@ -706,8 +462,9 @@ Event sytrd_blocked(Queue& ctx,
             }
         }
 
-        const bool auto_local = std::is_same_v<T, float>;
-        if ((auto_local && props_ok) || (force_local && props_ok)) {
+        constexpr bool allow_local_small = (B != Backend::CUDA);
+        const bool auto_local = allow_local_small && std::is_same_v<T, float>;
+        if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.local_small");
                 (void)sytrd_lower_local_small<T>(ctx, a_in, e_out, tau_out, n);
@@ -737,9 +494,11 @@ Event sytrd_blocked(Queue& ctx,
 
         {
             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.latrd_lower_panel");
-            (void)latrd_lower_panel_batched<T>(ctx, A, E, TAU,
-                                               Wmat.data_ptr(), Wmat.ld(), Wmat.stride(),
-                                               n, j0, ib);
+            auto A_panel = A({j0, SliceEnd()}, {j0, SliceEnd()});
+            auto E_panel = E(Slice(j0, j0 + ib));
+            auto TAU_panel = TAU(Slice(j0, j0 + ib));
+            auto W_panel = Wmat({j0, SliceEnd()}, {0, ib});
+            (void)latrd_lower_panel<B, T>(ctx, A_panel, E_panel, TAU_panel, W_panel);
         }
 
         const int j2 = j0 + ib;
