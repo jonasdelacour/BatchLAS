@@ -543,16 +543,22 @@ Event rot(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& gi
 template <Backend B, typename T>
 Event steqr(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects) {
-    // Ensure the matrix is square
-    if (eigvects.rows() != eigvects.cols()) {
-        throw std::invalid_argument("Matrix must be square for eigenvalue computation.");
-    }
-    if (!params.back_transform) {
-        eigvects.fill_identity(ctx);
+    const int64_t n = d_in.size();
+    const int64_t batch_size = d_in.batch_size();
+
+    if (jobz == JobType::EigenVectors) {
+        // Ensure the eigenvector matrix is square and matches the problem size.
+        if (eigvects.rows() != eigvects.cols()) {
+            throw std::invalid_argument("Matrix must be square for eigenvector computation.");
+        }
+        if (eigvects.rows() != n || eigvects.batch_size() != batch_size) {
+            throw std::invalid_argument("Eigenvector matrix has incompatible dimensions.");
+        }
+        if (!params.back_transform) {
+            eigvects.fill_identity(ctx);
+        }
     }
 
-    int64_t n = d_in.size();
-    int64_t batch_size = d_in.batch_size();   
     auto pool = BumpAllocator(ws);
     const auto increment = params.transpose_working_vectors ? batch_size : 1;
     const auto d_stride = params.transpose_working_vectors ? 1 : n;

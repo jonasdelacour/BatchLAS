@@ -421,8 +421,23 @@ namespace batchlas {
     inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
                        const Vector<T>& eigenvalues, const Span<std::byte>& ws,
                        JobType jobz = JobType::NoEigenVectors,
-                       SteqrParams<T> params = SteqrParams<T>(),
-                       const Matrix<T, MatrixFormat::Dense>& eigvects = Matrix<T, MatrixFormat::Dense>()) {
+                       SteqrParams<T> params = SteqrParams<T>()) {
+        return steqr<B, T>(ctx,
+                        static_cast<VectorView<T>>(d),
+                        static_cast<VectorView<T>>(e),
+                        static_cast<VectorView<T>>(eigenvalues),
+                        ws,
+                        jobz,
+                        params,
+                        MatrixView<T, MatrixFormat::Dense>());
+    }
+
+    template <Backend B, typename T>
+    inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
+                       const Vector<T>& eigenvalues, const Span<std::byte>& ws,
+                       JobType jobz,
+                       SteqrParams<T> params,
+                       const Matrix<T, MatrixFormat::Dense>& eigvects) {
         return steqr<B, T>(ctx,
                         static_cast<VectorView<T>>(d),
                         static_cast<VectorView<T>>(e),
@@ -438,8 +453,23 @@ namespace batchlas {
     inline Event steqr_cta(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
                            const Vector<T>& eigenvalues, const Span<std::byte>& ws,
                            JobType jobz = JobType::NoEigenVectors,
-                           SteqrParams<T> params = SteqrParams<T>(),
-                           const Matrix<T, MatrixFormat::Dense>& eigvects = Matrix<T, MatrixFormat::Dense>()) {
+                           SteqrParams<T> params = SteqrParams<T>()) {
+        return steqr_cta<B, T>(ctx,
+                               static_cast<VectorView<T>>(d),
+                               static_cast<VectorView<T>>(e),
+                               static_cast<VectorView<T>>(eigenvalues),
+                               ws,
+                               jobz,
+                               params,
+                               MatrixView<T, MatrixFormat::Dense>());
+    }
+
+    template <Backend B, typename T>
+    inline Event steqr_cta(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
+                           const Vector<T>& eigenvalues, const Span<std::byte>& ws,
+                           JobType jobz,
+                           SteqrParams<T> params,
+                           const Matrix<T, MatrixFormat::Dense>& eigvects) {
         return steqr_cta<B, T>(ctx,
                                static_cast<VectorView<T>>(d),
                                static_cast<VectorView<T>>(e),
