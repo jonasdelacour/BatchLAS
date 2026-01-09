@@ -11,7 +11,10 @@ set(EXTENSIONS_SOURCES
     steqr.cc
     steqr_cta.cc
     sytrd_cta.cc
+    latrd_lower_panel.cc
     sytrd_blocked.cc
+    sytrd_sy2sb.cc
+    sytrd_sb2st.cc
     stedc.cc
     stedc_flat.cc
     ritz_values.cc

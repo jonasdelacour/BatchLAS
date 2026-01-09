@@ -23,6 +23,9 @@ set(BENCHMARK_TARGETS
     steqr_cta_benchmark
     sytrd_cta_benchmark
     sytrd_blocked_benchmark
+    sytrd_sy2sb_benchmark
+    sytrd_sb2st_benchmark
+    latrd_lower_panel_benchmark
     ormqr_cta_benchmark
 )
 
