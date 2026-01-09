@@ -588,6 +588,109 @@ namespace batchlas {
                                      int32_t block_size);
 
     /**
+     * @brief First stage of two-stage reduction: symmetric/Hermitian dense -> band (SY2SB).
+     *
+     * This is analogous to LAPACK xSYTRD_SY2SB: it overwrites `A` with Householder
+     * reflector storage and writes the band matrix into `AB` (LAPACK band storage).
+     *
+     * Band storage (AB):
+     *  - `AB` has shape (kd+1) x n.
+     *  - For `Uplo::Lower`: AB(1+i-j,j) = A(i,j) for j<=i<=min(n,j+kd).
+     *  - For `Uplo::Upper`: AB(kd+1+i-j,j) = A(i,j) for max(1,j-kd)<=i<=j.
+     *
+     * Reflectors:
+     *  - `tau_out` has size (n-kd).
+     *
+     * Notes:
+     *  - Requires an in-order queue.
+     *  - Currently only `Uplo::Lower` is implemented.
+     */
+    template <Backend B, typename T>
+    Event sytrd_sy2sb(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& a_in,
+                      const MatrixView<T, MatrixFormat::Dense>& ab_out,
+                      const VectorView<T>& tau_out,
+                      Uplo uplo,
+                      int32_t kd,
+                      const Span<std::byte>& ws);
+
+    template <Backend B, typename T>
+    size_t sytrd_sy2sb_buffer_size(Queue& ctx,
+                                   const MatrixView<T, MatrixFormat::Dense>& a_in,
+                                   const MatrixView<T, MatrixFormat::Dense>& ab_out,
+                                   const VectorView<T>& tau_out,
+                                   Uplo uplo,
+                                   int32_t kd);
+
+    /**
+     * @brief Second stage of two-stage reduction: symmetric/Hermitian band -> tridiagonal (SB2ST/HB2ST).
+     *
+     * This is analogous to LAPACK xSB2ST/xHB2ST (bulge chasing) in the VECT='N' sense:
+     * it reduces the band matrix to tridiagonal without forming eigenvectors.
+     *
+     * Band storage (AB):
+     *  - `AB` has shape (kd+1) x n.
+     *  - For `Uplo::Lower`: AB(1+i-j,j) = A(i,j) for j<=i<=min(n,j+kd).
+     *  - For `Uplo::Upper`: AB(kd+1+i-j,j) = A(i,j) for max(1,j-kd)<=i<=j.
+     *
+     * Outputs:
+    *  - `d_out` has size n (diagonal of the tridiagonal), always real-valued.
+    *  - `e_out` has size (n-1) (off-diagonal of the tridiagonal), always real-valued.
+    *  - `tau_out` has size (n-1). For the current VECT='N' style implementation this output
+    *    is not used by downstream routines and is set to 0.
+     *
+    * Notes:
+    *  - Requires an in-order queue.
+    *  - Currently only `Uplo::Lower` is implemented.
+     */
+    template <Backend B, typename T>
+    Event sytrd_sb2st(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                      const VectorView<typename base_type<T>::type>& d_out,
+                      const VectorView<typename base_type<T>::type>& e_out,
+                      const VectorView<T>& tau_out,
+                      Uplo uplo,
+                      int32_t kd,
+                      const Span<std::byte>& ws,
+                      int32_t block_size);
+
+    template <Backend B, typename T>
+    size_t sytrd_sb2st_buffer_size(Queue& ctx,
+                                   const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                   const VectorView<typename base_type<T>::type>& d_out,
+                                   const VectorView<typename base_type<T>::type>& e_out,
+                                   const VectorView<T>& tau_out,
+                                   Uplo uplo,
+                                   int32_t kd,
+                                   int32_t block_size);
+
+    // Naming aliases for Hermitian band -> tridiagonal (HB2ST) to match LAPACK terminology.
+    template <Backend B, typename T>
+    inline Event hetrd_hb2st(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                             const VectorView<typename base_type<T>::type>& d_out,
+                             const VectorView<typename base_type<T>::type>& e_out,
+                             const VectorView<T>& tau_out,
+                             Uplo uplo,
+                             int32_t kd,
+                             const Span<std::byte>& ws,
+                             int32_t block_size) {
+        return sytrd_sb2st<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, block_size);
+    }
+
+    template <Backend B, typename T>
+    inline size_t hetrd_hb2st_buffer_size(Queue& ctx,
+                                          const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                          const VectorView<typename base_type<T>::type>& d_out,
+                                          const VectorView<typename base_type<T>::type>& e_out,
+                                          const VectorView<T>& tau_out,
+                                          Uplo uplo,
+                                          int32_t kd,
+                                          int32_t block_size) {
+        return sytrd_sb2st_buffer_size<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, block_size);
+    }
+
+    /**
      * @brief CTA-optimized symmetric eigen-solver (SYEV-like) for very small matrices.
      *
      * Pipeline:
