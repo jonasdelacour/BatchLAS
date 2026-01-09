@@ -55,23 +55,13 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
                                                            nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-    for (auto _ : state) {
-        (void)_;
-        state.PauseTiming();
-        MatrixView<T, MatrixFormat::Dense>::copy(*q, A.view(), A0.view());
-        q->wait();
-        state.ResumeTiming();
-
-        sytrd_blocked<B, T>(*q,
-                            A.view(),
-                            VectorView<T>(d),
-                            VectorView<T>(e),
-                            VectorView<T>(tau),
-                            uplo,
-                            ws.to_span(),
-                            nb);
-        q->wait();
-    }
+    state.SetKernel(
+        q,
+        bench::pristine(A0), //sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        d,e,tau,uplo,ws,nb,
+        [](Queue& q, auto&&... xs) {
+            sytrd_blocked<B, T>(q, std::forward<decltype(xs)>(xs)...);
+        });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
