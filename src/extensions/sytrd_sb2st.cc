@@ -197,24 +197,10 @@ struct btrd_givens_ops<T, false> {
     using Real = typename base_type<T>::type;
 
     static inline void lartg(const T& f_in, const T& g_in, Real& c, T& s, T& r) {
-        const Real f = static_cast<Real>(f_in);
-        const Real g = static_cast<Real>(g_in);
-        if (g == Real(0)) {
-            c = Real(1);
-            s = T(0);
-            r = T(f);
-            return;
-        }
-        if (f == Real(0)) {
-            c = Real(0);
-            s = T(1);
-            r = T(g);
-            return;
-        }
-        const Real rr = sycl::hypot(f, g);
-        c = f / rr;
-        s = T(g / rr);
-        r = T(rr);
+        auto [ct, st, rt] = internal::lartg(f_in, g_in);
+        c = ct;
+        s = T(st);
+        r = T(rt);
     }
 
     static inline void rot(int nrot, T* x, int incx, T* y, int incy, Real c, const T& s_in) {
@@ -301,27 +287,10 @@ struct btrd_givens_ops<T, true> {
     using Real = typename base_type<T>::type;
 
     static inline void lartg(const T& f, const T& g, Real& c, T& s, T& r) {
-        const Real g_abs = abs_complex(g);
-        if (g_abs == Real(0)) {
-            c = Real(1);
-            s = T(0);
-            r = f;
-            return;
-        }
-        const Real f_abs = abs_complex(f);
-        if (f_abs == Real(0)) {
-            c = Real(0);
-            // Match CLARTG/CLARGV convention: choose s so that r is real.
-            s = conj_if_needed(g) / T(g_abs);
-            r = T(g_abs, Real(0));
-            return;
-        }
-
-        const Real norm = sycl::hypot(f_abs, g_abs);
-        const T alpha = (f_abs == Real(0)) ? T(1) : (f / T(f_abs));
-        c = f_abs / norm;
-        s = alpha * conj_if_needed(g) / T(norm);
-        r = alpha * T(norm);
+        auto [ct, st, rt] = internal::lartg(f, g);
+        c = ct;
+        s = st;
+        r = rt;
     }
 
     static inline void rot(int nrot, T* x, int incx, T* y, int incy, Real c, const T& s) {

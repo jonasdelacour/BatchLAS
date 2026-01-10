@@ -1,6 +1,9 @@
 #include <sycl/sycl.hpp>
-#include <complex>
+
 #include <blas/enums.hh>
+
+#include <complex>
+
 #include "queue.hh"
 
 
@@ -21,9 +24,9 @@ namespace batchlas {
         template <typename T>
         inline constexpr base_float_t<T> abs(const T& value) {
             if constexpr (is_complex<T>::value) {
-                return std::hypot(value.real(), value.imag());
+                return sycl::hypot(value.real(), value.imag());
             } else {
-                return std::fabs(value);
+                return sycl::fabs(value);
             }
         }
 
@@ -244,45 +247,61 @@ namespace batchlas {
         }
 
         template <typename T>
-        inline constexpr auto lartg(const T& f, const T& g)
+        struct lartg_result {
+            base_float_t<T> c;
+            T s;
+            T r;
+        };
+
+        template <typename T>
+        inline constexpr lartg_result<T> lartg(const T& f, const T& g)
         {
             using R = base_float_t<T>;
 
-            R c = R(0);
-            R s = R(0);
-            R r = R(0);
-            R rtmin = std::sqrt(safmin<R>());
-            R rtmax = std::sqrt(safmax<R>() / R(2));
+            const R f_abs = internal::abs(f);
+            const R g_abs = internal::abs(g);
 
-            R f1 = std::abs(static_cast<R>(f));
-            R g1 = std::abs(static_cast<R>(g));
-
-            if (g == T(0)) {
-                c = R(1);
-                s = R(0);
-                r = static_cast<R>(f);
-            } else if (f == T(0)) {
-                c = R(0);
-                s = std::copysign(R(1), g);
-                r = g1;
-            } else if (f1 > rtmin && f1 < rtmax &&
-                        g1 > rtmin && g1 < rtmax) {
-                auto d = std::sqrt(f * f + g * g);
-                c = f1 / d;
-                r = std::copysign(d, f);
-                s = g / r;
-            } else {
-                auto u = std::min( safmax<R>(), std::max( safmin<R>(), std::max(f1, g1) ) );
-                R fs = f / u;
-                R gs = g / u;
-                auto d = std::sqrt(fs * fs + gs * gs);
-                c = std::abs(fs) / d;
-                r = std::copysign(d, f);
-                s = gs / r;
-                r = r * u;
+            // G=0 => C=1, S=0, R=F.
+            if (g_abs == R(0)) {
+                return {R(1), T(0), f};
             }
 
-            return std::array{c, s, r};
+            // F=0 => C=0. Choose S so that R is real for complex case.
+            if (f_abs == R(0)) {
+                if constexpr (is_complex<T>::value) {
+                    const T conjg = T(g.real(), -g.imag());
+                    const T s = conjg / T(g_abs);
+                    const T r = T(g_abs, R(0));
+                    return {R(0), s, r};
+                } else {
+                    const R s = sycl::copysign(R(1), static_cast<R>(g));
+                    const R r = g_abs;
+                    return {R(0), T(s), T(r)};
+                }
+            }
+
+            // General case (CLARTG/SLARTG): incorporate scaling to avoid overflow/underflow.
+            const R u = sycl::fmin(safmax<R>(), sycl::fmax(safmin<R>(), sycl::fmax(f_abs, g_abs)));
+            const R fs = f_abs / u;
+            const R gs = g_abs / u;
+            const R norm = u * sycl::sqrt(fs * fs + gs * gs);
+
+            if constexpr (is_complex<T>::value) {
+                const T alpha = f / T(f_abs); // sgn(F)
+                const R c = f_abs / norm;
+                const T conjg = T(g.real(), -g.imag());
+                const T s = alpha * conjg / T(norm);
+                const T r = alpha * T(norm);
+                return {c, s, r};
+            } else {
+                const R f_r = static_cast<R>(f);
+                const R g_r = static_cast<R>(g);
+                const R alpha = f_r / f_abs; // sign(F)
+                const R c = f_abs / norm;
+                const R r = alpha * norm;
+                const R s = alpha * g_r / norm;
+                return {c, T(s), T(r)};
+            }
         }
 
         template <typename T>
