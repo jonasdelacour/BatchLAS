@@ -87,29 +87,25 @@ Event kd0_extract(Queue& q,
                   const VectorView<typename base_type<T>::type>& e,
                   const VectorView<T>& tau) {
     const int n = ab.cols();
-    const int ldab = ab.ld();
-    const int stride_ab = ab.stride();
-    const int stride_d = d.stride();
-    const int stride_e = e.stride();
-    const int stride_tau = tau.stride();
     const int batch = ab.batch_size();
-    const T* ab_ptr = ab.data_ptr();
     using Real = typename base_type<T>::type;
-    Real* d_ptr = d.data_ptr();
-    Real* e_ptr = e.data_ptr();
-    T* tau_ptr = tau.data_ptr();
+
+    auto ABv = ab.kernel_view();
+    auto dv = d;
+    auto ev = e;
+    auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
         h.parallel_for<Kd0ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
-            const T* AB = ab_ptr + b * stride_ab;
-            Real* Db = d_ptr + b * stride_d;
-            Real* Eb = e_ptr + b * stride_e;
-            T* Taub = tau_ptr + b * stride_tau;
+            auto AB = ABv.batch_item(b);
+            auto Db = dv.batch_item(b);
+            auto Eb = ev.batch_item(b);
+            auto Taub = tauv.batch_item(b);
 
             for (int i = 0; i < n; ++i) {
-                Db[i] = real_part(AB[0 + i * ldab]);
+                Db[i] = real_part(AB(0, i));
                 if (i < n - 1) {
                     Eb[i] = Real(0);
                     Taub[i] = T(0);
@@ -133,35 +129,31 @@ Event kd1_extract_lower(Queue& q,
                         const VectorView<typename base_type<T>::type>& e,
                         const VectorView<T>& tau) {
     const int n = ab.cols();
-    const int ldab = ab.ld();
-    const int stride_ab = ab.stride();
-    const int stride_d = d.stride();
-    const int stride_e = e.stride();
-    const int stride_tau = tau.stride();
     const int batch = ab.batch_size();
-    const T* ab_ptr = ab.data_ptr();
     using Real = typename base_type<T>::type;
-    Real* d_ptr = d.data_ptr();
-    Real* e_ptr = e.data_ptr();
-    T* tau_ptr = tau.data_ptr();
+
+    auto ABv = ab.kernel_view();
+    auto dv = d;
+    auto ev = e;
+    auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
         h.parallel_for<Kd1ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
-            const T* AB = ab_ptr + b * stride_ab;
-            Real* Db = d_ptr + b * stride_d;
-            Real* Eb = e_ptr + b * stride_e;
-            T* Taub = tau_ptr + b * stride_tau;
+            auto AB = ABv.batch_item(b);
+            auto Db = dv.batch_item(b);
+            auto Eb = ev.batch_item(b);
+            auto Taub = tauv.batch_item(b);
 
             for (int i = 0; i < n; ++i) {
-                Db[i] = real_part(AB[0 + i * ldab]);
+                Db[i] = real_part(AB(0, i));
             }
 
             // Make off-diagonal real via chained phase, as in LAPACK KD=1 special-case.
             T phase = T(1);
             for (int i = 0; i < n - 1; ++i) {
-                const T t = AB[1 + i * ldab];
+                const T t = AB(1, i);
                 const Real a = internal::abs(t);
                 Eb[i] = a;
                 Taub[i] = T(0);
@@ -264,16 +256,15 @@ struct btrd_givens_ops<T, false> {
     static inline void prepare_work_for_right(int /*nrot*/, T* /*s*/, int /*stride*/) {}
     static inline void ensure_band_diag_real(T* /*AB*/, int /*ldab*/, int /*n*/) {}
 
-    static inline void finalize_tridiag(const T* AB,
-                                        int ldab,
+    static inline void finalize_tridiag(const KernelMatrixView<T, MatrixFormat::Dense>& AB,
                                         int n,
-                                        Real* D,
-                                        Real* E,
-                                        T* TAU) {
+                                        VectorView<Real> D,
+                                        VectorView<Real> E,
+                                        VectorView<T> TAU) {
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(AB[0 + j * ldab]);
+            D[j] = static_cast<Real>(AB(0, j));
             if (j < n - 1) {
-                E[j] = static_cast<Real>(AB[1 + j * ldab]);
+                E[j] = static_cast<Real>(AB(1, j));
                 TAU[j] = T(0);
             }
         }
@@ -378,35 +369,34 @@ struct btrd_givens_ops<T, true> {
         }
     }
 
-    static inline void finalize_tridiag(T* AB,
-                                        int ldab,
+    static inline void finalize_tridiag(KernelMatrixView<T, MatrixFormat::Dense> AB,
                                         int n,
-                                        Real* D,
-                                        Real* E,
-                                        T* TAU) {
+                                        VectorView<Real> D,
+                                        VectorView<Real> E,
+                                        VectorView<T> TAU) {
         // Make diagonal real.
         for (int j = 0; j < n; ++j) {
-            AB[0 + j * ldab] = real_as_T(AB[0 + j * ldab]);
+            AB(0, j) = real_as_T(AB(0, j));
         }
 
         // Make subdiagonal real (phase chaining) and extract D/E.
         for (int j = 0; j < n - 1; ++j) {
-            const T t = AB[1 + j * ldab];
+            const T t = AB(1, j);
             const Real a = abs_complex(t);
             E[j] = a;
             T phase = T(1);
             if (a != Real(0)) {
                 phase = t / T(a);
             }
-            AB[1 + j * ldab] = T(a, Real(0));
+            AB(1, j) = T(a, Real(0));
             if (j < n - 2) {
-                AB[1 + (j + 1) * ldab] *= phase;
+                AB(1, j + 1) *= phase;
             }
             TAU[j] = T(0);
         }
 
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(real_part(AB[0 + j * ldab]));
+            D[j] = static_cast<Real>(real_part(AB(0, j)));
         }
     }
 };
@@ -416,24 +406,17 @@ class BtrdLowerKernel;
 
 template <typename T>
 Event btrd_lower_inplace(Queue& q,
-                         T* ab_ptr,
-                         int ldab,
-                         int stride_ab,
+                         KernelMatrixView<T, MatrixFormat::Dense> ab,
                          int n,
                          int kd,
-                         typename base_type<T>::type* c_ptr,
-                         int stride_c,
-                         T* work_ptr,
-                         int stride_work,
-                         typename base_type<T>::type* d_ptr,
-                         int stride_d,
-                         typename base_type<T>::type* e_ptr,
-                         int stride_e,
-                         T* tau_ptr,
-                         int stride_tau,
-                         int batch) {
+                         VectorView<typename base_type<T>::type> c,
+                         VectorView<T> work,
+                         VectorView<typename base_type<T>::type> d,
+                         VectorView<typename base_type<T>::type> e,
+                         VectorView<T> tau) {
     (void)q->submit([&](sycl::handler& h) {
         constexpr int kWorkGroupSize = 128;
+        const int batch = ab.batch_size();
         const size_t groups = static_cast<size_t>(batch);
         const size_t global = groups * static_cast<size_t>(kWorkGroupSize);
         sycl::local_accessor<int, 1> shared_ints(4, h); // {nr, j1, j2, k}
@@ -448,12 +431,20 @@ Event btrd_lower_inplace(Queue& q,
             const int lid = static_cast<int>(it.get_local_id(0));
             const int lsize = static_cast<int>(it.get_local_range(0));
 
-            T* AB = ab_ptr + b * stride_ab;
-            Real* C = c_ptr + b * stride_c;
-            T* WORK = work_ptr + b * stride_work;
-            Real* D = d_ptr + b * stride_d;
-            Real* E = e_ptr + b * stride_e;
-            T* TAU = tau_ptr + b * stride_tau;
+            auto ABv = ab.batch_item(b);
+            auto Cv = c.batch_item(b);
+            auto WORKv = work.batch_item(b);
+            auto Dv = d.batch_item(b);
+            auto Ev = e.batch_item(b);
+            auto TAUv = tau.batch_item(b);
+
+            const int ldab = ABv.ld();
+            T* AB = ABv.data();
+            auto& C = Cv;
+            auto& WORK = WORKv;
+            auto& D = Dv;
+            auto& E = Ev;
+            auto& TAU = TAUv;
 
             for (int i = lid; i < n + kd + 2; i += lsize) {
                 C[i] = Real(0);
@@ -484,7 +475,7 @@ Event btrd_lower_inplace(Queue& q,
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (internal::is_complex<T>::value) {
                 for (int j = lid; j < n; j += lsize) {
-                    AB[(0) + j * ldab] = real_as_T(AB[(0) + j * ldab]);
+                    ABv(0, j) = real_as_T(ABv(0, j));
                 }
                 sycl::group_barrier(it.get_group());
             }
@@ -694,7 +685,7 @@ Event btrd_lower_inplace(Queue& q,
             }
 
             if (lid == 0) {
-                Ops::finalize_tridiag(AB, ldab, n, D, E, TAU);
+                Ops::finalize_tridiag(ABv, n, D, E, TAU);
             }
         });
     });
@@ -785,19 +776,18 @@ Event sytrd_sb2st(Queue& ctx,
     T* ab_ptr = ab_work.data();
 
     {
-        const int stride_in = ab_in.stride();
         const int stride_out = ldab * n;
-        const int ldab_in = ab_in.ld();
-        const T* src = ab_in.data_ptr();
+        auto ABsrc = ab_in.kernel_view();
+        KernelMatrixView<T, MatrixFormat::Dense> ABdst(ab_ptr, ldab, n, ldab, stride_out, batch);
         (void)ctx->submit([&](sycl::handler& h) {
             h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
-                const T* AB = src + b * stride_in;
-                T* W = ab_ptr + b * stride_out;
+                auto AB = ABsrc.batch_item(b);
+                auto W = ABdst.batch_item(b);
                 for (int j = 0; j < n; ++j) {
                     for (int r = 0; r < ldab; ++r) {
-                        W[r + j * ldab] = AB[r + j * ldab_in];
+                        W(r, j) = AB(r, j);
                     }
                 }
             });
@@ -809,24 +799,11 @@ Event sytrd_sb2st(Queue& ctx,
     auto c_buf = pool.allocate<Real>(ctx, rot_elems);
     auto work_buf = pool.allocate<T>(ctx, rot_elems);
 
-    (void)btrd_lower_inplace<T>(
-        ctx,
-        ab_ptr,
-        ldab,
-        ldab * n,
-        n,
-        kd_i,
-        c_buf.data(),
-        (n + kd_i + 2),
-        work_buf.data(),
-        (n + kd_i + 2),
-        d_out.data_ptr(),
-        d_out.stride(),
-        e_out.data_ptr(),
-        e_out.stride(),
-        tau_out.data_ptr(),
-        tau_out.stride(),
-        batch);
+    KernelMatrixView<T, MatrixFormat::Dense> ABwork(ab_ptr, ldab, n, ldab, ldab * n, batch);
+    VectorView<Real> Cv(c_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
+    VectorView<T> WORKv(work_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
+
+    (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
 
     return ctx.get_event();
 }
