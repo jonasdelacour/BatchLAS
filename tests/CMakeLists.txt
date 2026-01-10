@@ -36,6 +36,7 @@ set(TEST_TARGETS
     cond_tests
     ormqr_tests
     ormqr_cta_tests
+    ormqr_blocked_tests
     orgqr_tests
     transpose_tests
     syev_tests
@@ -48,6 +49,7 @@ set(TEST_TARGETS
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
     syev_cta_tests
+    syev_blocked_tests
 )
 
 # Create test executables

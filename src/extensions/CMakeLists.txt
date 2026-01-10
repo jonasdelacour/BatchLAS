@@ -2,6 +2,7 @@ set(EXTENSIONS_SOURCES
     ortho.cc
     syevx.cc
     syev_cta.cc
+    syev_blocked.cc
     inv.cc
     tridiag_solver.cc
     lanczos.cc
@@ -15,6 +16,7 @@ set(EXTENSIONS_SOURCES
     sytrd_blocked.cc
     sytrd_sy2sb.cc
     sytrd_sb2st.cc
+    sytrd_sb2st_cta.cc
     stedc.cc
     stedc_flat.cc
     ritz_values.cc
