@@ -12,6 +12,9 @@
 namespace batchlas {
     // Forward declarations for interface compatibility
 
+    template <typename T>
+    struct StedcParams;
+
     /**
      * @brief Parameters for the Syevx algorithm (eigenvalues calculation)
      * 
@@ -719,6 +722,38 @@ namespace batchlas {
                                 const MatrixView<T, MatrixFormat::Dense>& a,
                                 JobType jobz,
                                 SteqrParams<T> steqr_params = SteqrParams<T>());
+
+    /**
+     * @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large matrices.
+     *
+     * Pipeline:
+     *  1) sytrd_blocked: reduce dense A -> tridiagonal (d,e) and Householder reflectors (A,tau)
+     *  2) stedc: solve tridiagonal eigenproblem (eigenvalues and optionally eigenvectors)
+     *  3) ormqr_blocked: back-transform eigenvectors with the Householder reflectors
+     *
+     * Notes:
+     * - Overwrites A with eigenvectors when jobz == EigenVectors.
+     * - Currently supports only Uplo::Lower (matches current sytrd_blocked support).
+     */
+    template <Backend B, typename T>
+    Event syev_blocked(Queue& ctx,
+                       const MatrixView<T, MatrixFormat::Dense>& a_in,
+                       Span<typename base_type<T>::type> eigenvalues,
+                       JobType jobz,
+                       Uplo uplo,
+                       const Span<std::byte>& ws,
+                       int32_t sytrd_block_size = 32,
+                       int32_t ormqr_block_size = 32,
+                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+
+    template <Backend B, typename T>
+    size_t syev_blocked_buffer_size(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& a,
+                                    JobType jobz,
+                                    Uplo uplo,
+                                    int32_t sytrd_block_size = 32,
+                                    int32_t ormqr_block_size = 32,
+                                    StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
