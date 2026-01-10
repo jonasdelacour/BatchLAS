@@ -280,26 +280,57 @@ namespace batchlas {
                 }
             }
 
-            // General case (CLARTG/SLARTG): incorporate scaling to avoid overflow/underflow.
-            const R u = sycl::fmin(safmax<R>(), sycl::fmax(safmin<R>(), sycl::fmax(f_abs, g_abs)));
-            const R fs = f_abs / u;
-            const R gs = g_abs / u;
-            const R norm = u * sycl::sqrt(fs * fs + gs * gs);
-
             if constexpr (is_complex<T>::value) {
-                const T alpha = f / T(f_abs); // sgn(F)
-                const R c = f_abs / norm;
-                const T conjg = T(g.real(), -g.imag());
-                const T s = alpha * conjg / T(norm);
-                const T r = alpha * T(norm);
-                return {c, s, r};
+                // CLARTG/ZLARTG-style: incorporate scaling to avoid overflow/underflow.
+                // For complex<float>, do the scalar math in double to reduce accumulated
+                // rounding noise in downstream bulge-chasing.
+                using W = std::conditional_t<std::is_same_v<R, float>, double, R>;
+
+                const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
+                const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
+
+                const W u = sycl::fmin(safmax<W>(), sycl::fmax(safmin<W>(), sycl::fmax(f_abs_w, g_abs_w)));
+                const W fs = f_abs_w / u;
+                const W gs = g_abs_w / u;
+                const W norm = u * sycl::sqrt(fs * fs + gs * gs);
+
+                const std::complex<W> f_w{static_cast<W>(f.real()), static_cast<W>(f.imag())};
+                const std::complex<W> g_w{static_cast<W>(g.real()), static_cast<W>(g.imag())};
+                const std::complex<W> alpha = f_w / f_abs_w; // sgn(F)
+                const W c_w = f_abs_w / norm;
+                const std::complex<W> conjg_w{g_w.real(), -g_w.imag()};
+                const std::complex<W> s_w = alpha * conjg_w / norm;
+                const std::complex<W> r_w = alpha * norm;
+
+                const T s{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())};
+                const T r{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())};
+                return {static_cast<R>(c_w), s, r};
             } else {
+                // SLARTG/DLARTG-style fast path improves accuracy for floats by avoiding
+                // extra scaling ops when values are safely in range.
+                const R rtmin = sycl::sqrt(safmin<R>());
+                const R rtmax = sycl::sqrt(safmax<R>() / R(2));
+
                 const R f_r = static_cast<R>(f);
                 const R g_r = static_cast<R>(g);
-                const R alpha = f_r / f_abs; // sign(F)
-                const R c = f_abs / norm;
-                const R r = alpha * norm;
-                const R s = alpha * g_r / norm;
+
+                if (f_abs > rtmin && f_abs < rtmax && g_abs > rtmin && g_abs < rtmax) {
+                    const R d = sycl::sqrt(f_r * f_r + g_r * g_r);
+                    const R c = f_abs / d;
+                    const R r = sycl::copysign(d, f_r);
+                    const R s = g_r / r;
+                    return {c, T(s), T(r)};
+                }
+
+                // General case with scaling.
+                const R u = sycl::fmin(safmax<R>(), sycl::fmax(safmin<R>(), sycl::fmax(f_abs, g_abs)));
+                const R fs = f_r / u;
+                const R gs = g_r / u;
+                const R d = sycl::sqrt(fs * fs + gs * gs);
+                const R c = internal::abs(fs) / d;
+                const R r_unscaled = sycl::copysign(d, f_r);
+                const R s = gs / r_unscaled;
+                const R r = r_unscaled * u;
                 return {c, T(s), T(r)};
             }
         }
