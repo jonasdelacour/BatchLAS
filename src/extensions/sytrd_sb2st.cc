@@ -261,10 +261,12 @@ struct btrd_givens_ops<T, false> {
                                         VectorView<Real> D,
                                         VectorView<Real> E,
                                         VectorView<T> TAU) {
+        auto diag = AB(int32_t(0), Slice{});
+        auto sub = AB(int32_t(1), Slice{});
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(AB(0, j));
+            D[j] = static_cast<Real>(diag[j]);
             if (j < n - 1) {
-                E[j] = static_cast<Real>(AB(1, j));
+                E[j] = static_cast<Real>(sub[j]);
                 TAU[j] = T(0);
             }
         }
@@ -374,29 +376,32 @@ struct btrd_givens_ops<T, true> {
                                         VectorView<Real> D,
                                         VectorView<Real> E,
                                         VectorView<T> TAU) {
+        auto diag = AB(int32_t(0), Slice{});
+        auto sub = AB(int32_t(1), Slice{});
+
         // Make diagonal real.
         for (int j = 0; j < n; ++j) {
-            AB(0, j) = real_as_T(AB(0, j));
+            diag[j] = real_as_T(diag[j]);
         }
 
         // Make subdiagonal real (phase chaining) and extract D/E.
         for (int j = 0; j < n - 1; ++j) {
-            const T t = AB(1, j);
+            const T t = sub[j];
             const Real a = abs_complex(t);
             E[j] = a;
             T phase = T(1);
             if (a != Real(0)) {
                 phase = t / T(a);
             }
-            AB(1, j) = T(a, Real(0));
+            sub[j] = T(a, Real(0));
             if (j < n - 2) {
-                AB(1, j + 1) *= phase;
+                sub[j + 1] *= phase;
             }
             TAU[j] = T(0);
         }
 
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(real_part(AB(0, j)));
+            D[j] = static_cast<Real>(real_part(diag[j]));
         }
     }
 };
@@ -474,8 +479,9 @@ Event btrd_lower_inplace(Queue& q,
 
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (internal::is_complex<T>::value) {
+                auto diag = ABv(int32_t(0), Slice{});
                 for (int j = lid; j < n; j += lsize) {
-                    ABv(0, j) = real_as_T(ABv(0, j));
+                    diag[j] = real_as_T(diag[j]);
                 }
                 sycl::group_barrier(it.get_group());
             }
@@ -501,7 +507,7 @@ Event btrd_lower_inplace(Queue& q,
                         // Parallel LARGV over rotations.
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
-                            const T f = AB[idx(kd, j - kd1)];
+                            const T f = ABv(kd, j - kd1);
                             const T g = WORK[j];
                             Real ct = Real(0);
                             T st = T(0);
@@ -509,7 +515,7 @@ Event btrd_lower_inplace(Queue& q,
                             Ops::lartg(f, g, ct, st, rt);
                             C[j] = ct;
                             WORK[j] = st;
-                            AB[idx(kd, j - kd1)] = rt;
+                            ABv(kd, j - kd1) = rt;
                         }
                         sycl::group_barrier(it.get_group());
 
@@ -550,15 +556,15 @@ Event btrd_lower_inplace(Queue& q,
                     if (lid == 0) {
                         if (k > 1) {
                             if (k <= n - i - 1) {
-                                const T f = AB[idx(k - 1, i)];
-                                const T g = AB[idx(k, i)];
+                                const T f = ABv(k - 1, i);
+                                const T g = ABv(k, i);
                                 Real ct = Real(0);
                                 T st = T(0);
                                 T rt = T(0);
                                 Ops::lartg(f, g, ct, st, rt);
                                 C[i + k] = ct;
                                 WORK[i + k] = st;
-                                AB[idx(k - 1, i)] = rt;
+                                ABv(k - 1, i) = rt;
 
                                 if (k > 2) {
                                     const Real ct = C[i + k];
@@ -676,8 +682,8 @@ Event btrd_lower_inplace(Queue& q,
                     if (nr > 0) {
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
-                            WORK[j + kd] = WORK[j] * AB[idx(kd, j)];
-                            AB[idx(kd, j)] = T(C[j]) * AB[idx(kd, j)];
+                            WORK[j + kd] = WORK[j] * ABv(kd, j);
+                            ABv(kd, j) = T(C[j]) * ABv(kd, j);
                         }
                         sycl::group_barrier(it.get_group());
                     }
