@@ -82,74 +82,75 @@ sycl::event larft_forward_columnwise_batched(Queue& q,
         }
     };
 
-    // One work-group per (batch, j) computing the whole column j of T.
-    // Parallelize the dot-products over r=j+1..m-1.
+    // LARFT has a strict column dependency: column j uses T(0:j-1,0:j-1).
+    // Therefore we must compute columns sequentially per batch item.
+    // We use one work-group per batch item and parallelize only the dot-products.
     const size_t wg = 256;
-    const size_t groups = static_cast<size_t>(batch) * static_cast<size_t>(ib);
 
     return q->submit([&](sycl::handler& h) {
         h.parallel_for<LarftKernel<T>>(
-            sycl::nd_range<1>(sycl::range<1>(groups * wg), sycl::range<1>(wg)),
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
-                const size_t gid = it.get_group_linear_id();
-                const int b = static_cast<int>(gid / static_cast<size_t>(ib));
-                const int j = static_cast<int>(gid - static_cast<size_t>(b) * static_cast<size_t>(ib));
-                if (b >= batch || j >= ib) return;
+                const int b = static_cast<int>(it.get_group_linear_id());
+                if (b >= batch) return;
 
                 T* t_b = t_data + b * stride_t;
                 const T* v_b = v_data + b * stride_v;
                 const T* tau_b = tau_data + b * tau_stride + tau_offset;
 
-                const T tauj = tau_b[j];
-
-                // Clear column j.
-                // This loop is small; let one lane do it.
-                if (it.get_local_linear_id() == 0) {
-                    for (int i = 0; i < ib; ++i) {
-                        t_b[i + j * ld_t] = T(0);
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                if (tauj == T(0)) {
-                    if (it.get_local_linear_id() == 0) {
-                        t_b[j + j * ld_t] = T(0);
-                    }
-                    return;
-                }
-
                 const sycl::group<1> g = it.get_group();
+                const int lid = static_cast<int>(it.get_local_linear_id());
 
-                // Compute t(0:j-1,j) = -tauj * V(j:m-1,0:j-1)^H * v_j(j:m-1)
-                // (v_j has implicit 1 at position j; V is already packed with diag=1).
-                for (int col = 0; col < j; ++col) {
-                    T partial = T(0);
-                    // r starts at j+1; r==j handled by leader with conj(V(j,col))*1.
-                    for (int r = j + 1 + static_cast<int>(it.get_local_linear_id()); r < m; r += static_cast<int>(wg)) {
-                        const T v_rc = v_b[r + col * ld_v];
-                        const T v_rj = v_b[r + j * ld_v];
-                        partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
+                // Clear T (small: ib x ib).
+                if (lid == 0) {
+                    for (int j = 0; j < ib; ++j) {
+                        for (int i = 0; i < ib; ++i) {
+                            t_b[i + j * ld_t] = T(0);
+                        }
+                    }
+                }
+                it.barrier(sycl::access::fence_space::global_space);
+
+                for (int j = 0; j < ib; ++j) {
+                    const T tauj = tau_b[j];
+                    if (tauj == T(0)) {
+                        if (lid == 0) {
+                            t_b[j + j * ld_t] = T(0);
+                        }
+                        it.barrier(sycl::access::fence_space::global_space);
+                        continue;
                     }
 
-                    const T sum_r = reduce_sum(g, partial);
-                    if (it.get_local_linear_id() == 0) {
-                        T sum = conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
-                        t_b[col + j * ld_t] = -tauj * sum;
+                    // Compute t(0:j-1,j) = -tauj * V(j:m-1,0:j-1)^H * v_j(j:m-1)
+                    // (v_j has implicit 1 at position j; V is packed with diag=1).
+                    for (int col = 0; col < j; ++col) {
+                        T partial = T(0);
+                        for (int r = j + 1 + lid; r < m; r += static_cast<int>(wg)) {
+                            const T v_rc = v_b[r + col * ld_v];
+                            const T v_rj = v_b[r + j * ld_v];
+                            partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
+                        }
+                        const T sum_r = reduce_sum(g, partial);
+                        if (lid == 0) {
+                            const T sum = conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
+                            t_b[col + j * ld_t] = -tauj * sum;
+                        }
+                        it.barrier(sycl::access::fence_space::global_space);
+                    }
+
+                    // t(0:j-1,j) = T(0:j-1,0:j-1) * t(0:j-1,j)
+                    // Upper-triangular mat-vec; small, do it serially.
+                    if (lid == 0) {
+                        for (int row = 0; row < j; ++row) {
+                            T acc = T(0);
+                            for (int col = row; col < j; ++col) {
+                                acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
+                            }
+                            t_b[row + j * ld_t] = acc;
+                        }
+                        t_b[j + j * ld_t] = tauj;
                     }
                     it.barrier(sycl::access::fence_space::global_space);
-                }
-
-                // t(0:j-1,j) = T(0:j-1,0:j-1) * t(0:j-1,j)
-                // Upper-triangular mat-vec; small, so do it serially.
-                if (it.get_local_linear_id() == 0) {
-                    for (int row = 0; row < j; ++row) {
-                        T acc = T(0);
-                        for (int col = row; col < j; ++col) {
-                            acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
-                        }
-                        t_b[row + j * ld_t] = acc;
-                    }
-                    t_b[j + j * ld_t] = tauj;
                 }
             });
     });
@@ -336,8 +337,11 @@ Event ormqr_blocked(Queue& ctx,
 
     };
 
-    // Block order: forward for NoTrans, backward for Trans/ConjTrans.
-    if (!transpose_apply) {
+    // Block order:
+    // Match backend `ormqr` reference behavior for reflectors produced by our `geqrf`.
+    // The required traversal depends on which side we apply from.
+    const bool forward = (side == Side::Left) ? transpose_apply : !transpose_apply;
+    if (forward) {
         for (int i0 = 0; i0 < k; i0 += nb) {
             apply_block(i0);
         }
