@@ -270,11 +270,10 @@ struct btrd_givens_ops<T, false> {
                                         Real* D,
                                         Real* E,
                                         T* TAU) {
-        auto idx = [&](int r1, int c1) -> int { return (r1 - 1) + (c1 - 1) * ldab; };
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(AB[idx(1, j + 1)]);
+            D[j] = static_cast<Real>(AB[0 + j * ldab]);
             if (j < n - 1) {
-                E[j] = static_cast<Real>(AB[idx(2, j + 1)]);
+                E[j] = static_cast<Real>(AB[1 + j * ldab]);
                 TAU[j] = T(0);
             }
         }
@@ -385,31 +384,29 @@ struct btrd_givens_ops<T, true> {
                                         Real* D,
                                         Real* E,
                                         T* TAU) {
-        auto idx = [&](int r1, int c1) -> int { return (r1 - 1) + (c1 - 1) * ldab; };
-
         // Make diagonal real.
         for (int j = 0; j < n; ++j) {
-            AB[idx(1, j + 1)] = real_as_T(AB[idx(1, j + 1)]);
+            AB[0 + j * ldab] = real_as_T(AB[0 + j * ldab]);
         }
 
         // Make subdiagonal real (phase chaining) and extract D/E.
         for (int j = 0; j < n - 1; ++j) {
-            const T t = AB[idx(2, j + 1)];
+            const T t = AB[1 + j * ldab];
             const Real a = abs_complex(t);
             E[j] = a;
             T phase = T(1);
             if (a != Real(0)) {
                 phase = t / T(a);
             }
-            AB[idx(2, j + 1)] = T(a, Real(0));
+            AB[1 + j * ldab] = T(a, Real(0));
             if (j < n - 2) {
-                AB[idx(2, j + 2)] *= phase;
+                AB[1 + (j + 1) * ldab] *= phase;
             }
             TAU[j] = T(0);
         }
 
         for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(real_part(AB[idx(1, j + 1)]));
+            D[j] = static_cast<Real>(real_part(AB[0 + j * ldab]));
         }
     }
 };
@@ -470,13 +467,11 @@ Event btrd_lower_inplace(Queue& q,
             const int inca = kd1 * ldab;
             const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
-            auto idx = [&](int r1, int c1) -> int {
-                return (r1 - 1) + (c1 - 1) * ldab;
-            };
+            auto idx = [&](int r, int c) -> int { return r + c * ldab; };
 
             int nr = 0;
-            int j1 = kdn + 2;
-            int j2 = 1;
+            int j1 = kdn + 1;
+            int j2 = 0;
 
             if (lid == 0) {
                 shared_ints[0] = nr;
@@ -494,8 +489,8 @@ Event btrd_lower_inplace(Queue& q,
                 sycl::group_barrier(it.get_group());
             }
 
-            for (int i = 1; i <= n - 2; ++i) {
-                for (int k = kdn + 1; k >= 2; --k) {
+            for (int i = 0; i < n - 2; ++i) {
+                for (int k = kdn; k >= 1; --k) {
                     if (lid == 0) {
                         j1 += kdn;
                         j2 += kdn;
@@ -515,7 +510,7 @@ Event btrd_lower_inplace(Queue& q,
                         // Parallel LARGV over rotations.
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
-                            const T f = AB[idx(kd1, j - kd1)];
+                            const T f = AB[idx(kd, j - kd1)];
                             const T g = WORK[j];
                             Real ct = Real(0);
                             T st = T(0);
@@ -523,19 +518,19 @@ Event btrd_lower_inplace(Queue& q,
                             Ops::lartg(f, g, ct, st, rt);
                             C[j] = ct;
                             WORK[j] = st;
-                            AB[idx(kd1, j - kd1)] = rt;
+                            AB[idx(kd, j - kd1)] = rt;
                         }
                         sycl::group_barrier(it.get_group());
 
                         if (nr > 2 * kd - 1) {
                             // Keep the l-loop sequential, but parallelize across rotations within each l.
-                            for (int l = 1; l <= kd - 1; ++l) {
+                            for (int l = 0; l < kd - 1; ++l) {
                                 for (int t = lid; t < nr; t += lsize) {
                                     const int j = j1 + t * kd1;
                                     Ops::rot(1,
-                                             &AB[idx(kd1 - l, j - kd1 + l)],
+                                             &AB[idx(kd - 1 - l, j - kd1 + l + 1)],
                                              1,
-                                             &AB[idx(kd1 - l + 1, j - kd1 + l)],
+                                             &AB[idx(kd - l, j - kd1 + l + 1)],
                                              1,
                                              C[j],
                                              WORK[j]);
@@ -548,9 +543,9 @@ Event btrd_lower_inplace(Queue& q,
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
                                         Ops::rot(kdm1,
-                                                 &AB[idx(kd, jinc - kd)],
+                                                 &AB[idx(kd - 1, jinc - kd)],
                                                  incx,
-                                                 &AB[idx(kd1, jinc - kd)],
+                                                 &AB[idx(kd, jinc - kd)],
                                                  incx,
                                                  C[jinc],
                                                  WORK[jinc]);
@@ -562,22 +557,22 @@ Event btrd_lower_inplace(Queue& q,
                     }
 
                     if (lid == 0) {
-                        if (k > 2) {
-                            if (k <= n - i + 1) {
+                        if (k > 1) {
+                            if (k <= n - i - 1) {
                                 const T f = AB[idx(k - 1, i)];
                                 const T g = AB[idx(k, i)];
                                 Real ct = Real(0);
                                 T st = T(0);
                                 T rt = T(0);
                                 Ops::lartg(f, g, ct, st, rt);
-                                C[i + k - 1] = ct;
-                                WORK[i + k - 1] = st;
+                                C[i + k] = ct;
+                                WORK[i + k] = st;
                                 AB[idx(k - 1, i)] = rt;
 
-                                if (k - 3 > 0) {
-                                    const Real ct = C[i + k - 1];
-                                    const T st = WORK[i + k - 1];
-                                    Ops::rot(k - 3,
+                                if (k > 2) {
+                                    const Real ct = C[i + k];
+                                    const T st = WORK[i + k];
+                                    Ops::rot(k - 2,
                                              &AB[idx(k - 2, i + 1)],
                                              ldab - 1,
                                              &AB[idx(k - 1, i + 1)],
@@ -604,9 +599,9 @@ Event btrd_lower_inplace(Queue& q,
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
                             Ops::lar2v(1,
+                                       &AB[idx(0, j - 1)],
+                                       &AB[idx(0, j)],
                                        &AB[idx(1, j - 1)],
-                                       &AB[idx(1, j)],
-                                       &AB[idx(2, j - 1)],
                                        inca,
                                        &C[j],
                                        &WORK[j],
@@ -624,8 +619,8 @@ Event btrd_lower_inplace(Queue& q,
                         }
 
                         if (nr > 2 * kd - 1) {
-                            for (int l = 1; l <= kd - 1; ++l) {
-                                const int nrt = (j2 + l > n) ? (nr - 1) : nr;
+                            for (int l = 0; l < kd - 1; ++l) {
+                                const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
                                     for (int t = lid; t < nrt; t += lsize) {
                                         const int j = j1 + t * kd1;
@@ -647,22 +642,22 @@ Event btrd_lower_inplace(Queue& q,
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
                                             Ops::rot(kdm1,
-                                                     &AB[idx(3, j1inc - 1)],
+                                                     &AB[idx(2, j1inc - 1)],
                                                      1,
-                                                     &AB[idx(2, j1inc)],
+                                                     &AB[idx(1, j1inc)],
                                                      1,
                                                      C[j1inc],
                                                      WORK[j1inc]);
                                         }
                                     }
                                 }
-                                const int lend = (n - j2 < kdm1) ? (n - j2) : kdm1;
+                                const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
                                     Ops::rot(lend,
-                                             &AB[idx(3, last - 1)],
+                                             &AB[idx(2, last - 1)],
                                              1,
-                                             &AB[idx(2, last)],
+                                             &AB[idx(1, last)],
                                              1,
                                              C[last],
                                              WORK[last]);
@@ -673,7 +668,7 @@ Event btrd_lower_inplace(Queue& q,
                     }
 
                     if (lid == 0) {
-                        if (j2 + kdn > n) {
+                        if (j2 + kdn >= n) {
                             nr -= 1;
                             j2 = j2 - kdn - 1;
                         }
@@ -690,8 +685,8 @@ Event btrd_lower_inplace(Queue& q,
                     if (nr > 0) {
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
-                            WORK[j + kd] = WORK[j] * AB[idx(kd1, j)];
-                            AB[idx(kd1, j)] = T(C[j]) * AB[idx(kd1, j)];
+                            WORK[j + kd] = WORK[j] * AB[idx(kd, j)];
+                            AB[idx(kd, j)] = T(C[j]) * AB[idx(kd, j)];
                         }
                         sycl::group_barrier(it.get_group());
                     }
