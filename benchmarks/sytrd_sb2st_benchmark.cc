@@ -41,14 +41,12 @@ inline void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>&
 
 template <typename Benchmark>
 inline void SytrdSb2stBenchSizes(Benchmark* b) {
-    for (int n : {128, 256, 512, 1024, 2048}) {
+    for (int n : {128, 256, 512}) {
         for (int bs : {1, 8, 32, 64}) {
-            for (int kd : {8, 16, 32, 64}) {
+            for (int kd : {4, 8, 16}) {
                 if (kd >= n) continue;
-                for (int ib : {16, 32, 64}) {
-                    // uplo: 0=Lower, 1=Upper (sb2st currently implements Lower only)
-                    b->Args({n, bs, kd, ib, 0});
-                }
+                // uplo: 0=Lower, 1=Upper (sb2st currently implements Lower only)
+                b->Args({n, bs, kd, 0});
             }
         }
     }
@@ -62,9 +60,11 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int kd = static_cast<int>(state.range(2));
-    const int ib = static_cast<int>(state.range(3));
-    const int uplo_i = static_cast<int>(state.range(4));
+    const int uplo_i = static_cast<int>(state.range(3));
     const Uplo uplo = (uplo_i == 0) ? Uplo::Lower : Uplo::Upper;
+
+    // NOTE: `sytrd_sb2st` currently ignores `block_size`.
+    constexpr int ib = 32;
 
     // Build a Hermitian/symmetric band input once.
     auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/2027);

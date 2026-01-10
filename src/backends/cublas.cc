@@ -5,11 +5,30 @@
 #include <util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
+#include <internal/ormqr_blocked.hh>
+
+#include <cstdlib>
+#include <string>
 #include <blas/functions.hh>
 #include <complex>
 
 // This file contains cuBLAS primitives implementation using MatrixView
 namespace batchlas {
+
+    namespace {
+        inline bool _use_blocked_ormqr() {
+            if (const char* p = std::getenv("BATCHLAS_ORMQR_IMPL")) {
+                if (std::string(p) == "blocked") return true;
+            }
+            if (const char* p = std::getenv("BATCHLAS_ORMQR_BLOCKED")) {
+                if (std::string(p) == "1" || std::string(p) == "true" || std::string(p) == "TRUE" ||
+                    std::string(p) == "on" || std::string(p) == "ON") {
+                    return true;
+                }
+            }
+            return false;
+        }
+    } // namespace
 
     template <Backend Back, typename T>
     Event gemm(Queue& ctx,
@@ -23,6 +42,14 @@ namespace batchlas {
                    ComputePrecision precision) {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
+
+        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "GEMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", B=" + std::to_string(B.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
         if (A.batch_size() <= 1) {
@@ -173,6 +200,15 @@ namespace batchlas {
                 Transpose trans,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        if (_use_blocked_ormqr()) {
+            Queue* q_ptr = &ctx;
+            Queue in_order_q;
+            if (!ctx.in_order()) {
+                in_order_q = Queue(ctx, true);
+                q_ptr = &in_order_q;
+            }
+            return ormqr_blocked<B, T>(*q_ptr, A, C, side, trans, tau, workspace);
+        }
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto m = C.rows();
@@ -225,6 +261,9 @@ namespace batchlas {
                              Side side,
                              Transpose trans,
                              Span<T> tau) {
+        if (_use_blocked_ormqr()) {
+            return ormqr_blocked_buffer_size<B, T>(ctx, A, C, side, trans, tau);
+        }
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto m = C.rows();
