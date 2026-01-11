@@ -97,6 +97,15 @@ Event latrd_lower_panel_batched_wg(Queue& q,
         const int batch = A_view.batch_size();
         const int ib = W_view.cols();
 
+        // Cache the current reflector vector v and the current W column in local memory
+        // to reduce repeated global loads/stores.
+        auto v_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+
+        // Cache vip/wip (values at row i for previous reflector columns p<i).
+        auto vip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
+        auto wip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
+
         h.parallel_for<LatrdLowerPanelKernel<T, WG>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -118,13 +127,20 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
 
+                    // Cache vip/wip for p<i (shared across all r updates below).
+                    if (lid < i) {
+                        const int p = lid;
+                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
+                        wip_local[p] = Wb(i, p);
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
+
                     // Update diagonal element A(i,i) using previously computed V/W (j0..i-1).
                     if (lid == 0) {
                         T aii = Ab(i, i);
                         for (int p = 0; p < i; ++p) {
-                            const int pc = p;
-                            const T vip = (i == p + 1) ? T(1) : Ab(i, p);
-                            const T wip = Wb(i, pc);
+                            const T vip = vip_local[p];
+                            const T wip = wip_local[p];
                             aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
                         }
                         Ab(i, i) = aii;
@@ -134,9 +150,8 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         T val = Ab(r, i);
                         for (int p = 0; p < i; ++p) {
-                            const int pc = p;
-                            const T wip = Wb(i, pc);
-                            const T vip = (i == p + 1) ? T(1) : Ab(i, p);
+                            const T wip = wip_local[p];
+                            const T vip = vip_local[p];
 
                             // V(r,p)
                             T vrp = T(0);
@@ -146,11 +161,13 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                                 vrp = Ab(r, p);
                             }
 
-                            const T wrp = Wb(r, pc);
+                            const T wrp = Wb(r, p);
                             val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
                         }
                         Ab(r, i) = val;
                     }
+                    // Ensure updated Ab(r,i) values are visible before other lanes read them
+                    // (later phases use a different lane-to-row mapping).
                     it.barrier(sycl::access::fence_space::global_space);
 
                     // Generate Householder reflector to annihilate A(i+2:n-1,i).
@@ -163,7 +180,11 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     }
                     sumsq = reduce_sum_group_real<T>(g, sumsq);
 
-                    const T alpha = (i + 1 < n) ? Ab(i + 1, i) : T(0);
+                    T alpha = T(0);
+                    if (lid == 0 && i + 1 < n) {
+                        alpha = Ab(i + 1, i);
+                    }
+                    alpha = sycl::group_broadcast(g, alpha);
 
                     T tau_i = T(0);
                     T beta = alpha;
@@ -212,7 +233,16 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                             Ab(r, i) *= scale;
                         }
                     }
+
+                    // Ensure scaling stores are visible before other lanes read Ab(r,i)
+                    // (v_local fill uses a different lane-to-row mapping).
                     it.barrier(sycl::access::fence_space::global_space);
+
+                    // Build v in local memory for the upcoming A*v, dot-products, and updates.
+                    for (int r = i + 1 + lid; r < n; r += wg) {
+                        v_local[r] = (r == i + 1) ? T(1) : Ab(r, i);
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // Compute W(:, i-j0) for rows i+1..n-1.
                     // w = tau * A(i+1:n-1, i+1:n-1) * v
@@ -224,10 +254,10 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         T acc = T(0);
                         for (int c = i + 1; c < n; ++c) {
-                            const T vc = (c == i + 1) ? T(1) : Ab(c, i);
+                            const T vc = v_local[c];
                             acc += Ah(r, c) * vc;
                         }
-                        Wb(r, col) = acc;
+                        wcol_local[r] = acc;
                     }
 
                     // Apply intra-panel corrections from previously computed reflectors.
@@ -238,7 +268,7 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         T gamma_partial = T(0);
                         T delta_partial = T(0);
                         for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = (c == i + 1) ? T(1) : Ab(c, i);
+                            const T vc = v_local[c];
 
                             gamma_partial += conj_if_needed(Wb(c, pc)) * vc;
 
@@ -251,29 +281,36 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         for (int r = i + 1 + lid; r < n; r += wg) {
                             const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
                             const T wrp = Wb(r, pc);
-                            Wb(r, col) -= vrp * gamma + wrp * delta;
+                            wcol_local[r] -= vrp * gamma + wrp * delta;
                         }
                     }
 
                     // Scale by tau.
                     for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wb(r, col) *= tau_i;
+                        wcol_local[r] *= tau_i;
                     }
 
                     // dot = v^H * w
                     T dot_partial = T(0);
                     for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = (r == i + 1) ? T(1) : Ab(r, i);
-                        dot_partial += conj_if_needed(vr) * Wb(r, col);
+                        const T vr = v_local[r];
+                        dot_partial += conj_if_needed(vr) * wcol_local[r];
                     }
                     const T dot = reduce_sum_group(g, dot_partial);
 
                     // w += (-0.5 * tau * dot) * v
                     const T alpha2 = T(-0.5) * tau_i * dot;
                     for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = (r == i + 1) ? T(1) : Ab(r, i);
-                        Wb(r, col) += alpha2 * vr;
+                        const T vr = v_local[r];
+                        wcol_local[r] += alpha2 * vr;
                     }
+
+                    // Commit the computed W column to global memory once.
+                    for (int r = i + 1 + lid; r < n; r += wg) {
+                        Wb(r, col) = wcol_local[r];
+                    }
+                    // Ensure all global writes to A/W from this iteration are visible before the next iteration
+                    // reads Wb(i,p) / Ab(i,p) computed by other lanes.
                     it.barrier(sycl::access::fence_space::global_space);
                 }
             });

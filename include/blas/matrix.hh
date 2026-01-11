@@ -69,7 +69,7 @@ namespace batchlas {
 
         // Element access (Dense only)
         template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
-        inline T& operator()(int i, int j, int b = 0) const { 
+        inline constexpr T& operator()(int i, int j, int b = 0) const { 
             assert(i < rows_); assert(i >= 0);
             assert(j < cols_); assert(j >= 0);
             assert(b < batch_size_); assert(b >= 0);
@@ -78,7 +78,7 @@ namespace batchlas {
 
         // CSR coefficient lookup (returns zero if absent)
         template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::CSR, int>::type = 0>
-        inline T get(int i, int j, int b = 0) const {
+        inline constexpr T get(int i, int j, int b = 0) const {
             const int ro_base = b * offset_stride_;
             const int val_base = b * matrix_stride_;
             int rs = row_offsets_[ro_base + i];
@@ -90,7 +90,7 @@ namespace batchlas {
         }
 
         // Batch item extraction - works for both formats
-        inline KernelMatrixView batch_item(int b) const {
+        inline constexpr KernelMatrixView batch_item(int b) const {
             KernelMatrixView out = *this;
             if (b < 0 || b >= batch_size_) { out.rows_ = out.cols_ = 0; return out; }
             if constexpr (MType == MatrixFormat::Dense) {
