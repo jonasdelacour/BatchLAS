@@ -10,6 +10,7 @@ set(BENCHMARK_TARGETS
     orgqr_benchmark
     syev_benchmark
     syev_cta_benchmark
+    syev_blocked_benchmark
     syevx_benchmark
     lanczos_benchmark
     ortho_benchmark
