@@ -2,6 +2,7 @@
 #include <blas/functions.hh>
 #include <blas/matrix.hh>
 #include <blas/linalg.hh>
+#include <internal/ormqr_blocked.hh>
 #include <util/mempool.hh>
 #include <batchlas/backend_config.h>
 
@@ -258,15 +259,23 @@ Event syev_blocked(Queue& ctx,
                 Span<T> tau_q_span_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
 
                 if (p > 0) {
-                    auto ormqr_ws_bytes = ormqr_buffer_size<B, T>(ctx,
-                                                                  aq_view,
-                                                                  zc_sub,
-                                                                  Side::Left,
-                                                                  Transpose::NoTrans,
-                                                                  tau_q_span_flat);
+                    auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
+                                                                          aq_view,
+                                                                          zc_sub,
+                                                                          Side::Left,
+                                                                          Transpose::NoTrans,
+                                                                          tau_q_span_flat,
+                                                                          ormqr_block_size);
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
 
-                    ormqr<B, T>(ctx, aq_view, zc_sub, Side::Left, Transpose::NoTrans, tau_q_span_flat, ormqr_ws);
+                    ormqr_blocked<B, T>(ctx,
+                                        aq_view,
+                                        zc_sub,
+                                        Side::Left,
+                                        Transpose::NoTrans,
+                                        tau_q_span_flat,
+                                        ormqr_ws,
+                                        ormqr_block_size);
                 }
             }
 
@@ -357,15 +366,23 @@ Event syev_blocked(Queue& ctx,
                 auto z_sub = z_view({1, SliceEnd()}, Slice());
                 Span<T> tau_q_span_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
                 if (p > 0) {
-                    auto ormqr_ws_bytes = ormqr_buffer_size<B, T>(ctx,
-                                                                  aq_view,
-                                                                  z_sub,
-                                                                  Side::Left,
-                                                                  Transpose::NoTrans,
-                                                                  tau_q_span_flat);
+                    auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
+                                                                          aq_view,
+                                                                          z_sub,
+                                                                          Side::Left,
+                                                                          Transpose::NoTrans,
+                                                                          tau_q_span_flat,
+                                                                          ormqr_block_size);
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
 
-                    ormqr<B, T>(ctx, aq_view, z_sub, Side::Left, Transpose::NoTrans, tau_q_span_flat, ormqr_ws);
+                    ormqr_blocked<B, T>(ctx,
+                                        aq_view,
+                                        z_sub,
+                                        Side::Left,
+                                        Transpose::NoTrans,
+                                        tau_q_span_flat,
+                                        ormqr_ws,
+                                        ormqr_block_size);
                 }
             }
 
@@ -440,7 +457,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
         MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
         Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        bytes += ormqr_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy);
+        bytes += ormqr_blocked_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy, ormqr_block_size);
 
         return bytes;
     } else {
@@ -472,7 +489,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
         MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
         Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        bytes += ormqr_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy);
+        bytes += ormqr_blocked_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy, ormqr_block_size);
 
         return bytes;
     }
