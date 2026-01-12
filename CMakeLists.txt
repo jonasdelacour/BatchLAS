@@ -52,6 +52,21 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -gline-tables-only -fno-omit-frame-pointer -DNDEBUG")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
+# Opt-in: improve host backtraces for tools like compute-sanitizer.
+#
+# In practice, unwinding through the SYCL runtime can be fragile when the
+# runtime libraries lack frame pointers/unwind info or when user code is
+# heavily inlined. These flags trade performance for more reliable stacks.
+#
+# IMPORTANT: `-g` may propagate into device compilation; if that causes issues
+# with your CUDA/SYCL toolchain, keep this OFF and use the default flags.
+option(BATCHLAS_SANITIZER_FRIENDLY_DEBUG "Use more unwind-friendly debug flags for sanitizer runs (may slow down builds/runs)" OFF)
+if(BATCHLAS_SANITIZER_FRIENDLY_DEBUG)
+    message(STATUS "Enabling sanitizer-friendly debug flags (-g, no-inline, keep frame pointers)")
+    set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-inline")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-inline")
+endif()
+
 # Include CMakeDependentOption module
 include(CMakeDependentOption)
 
