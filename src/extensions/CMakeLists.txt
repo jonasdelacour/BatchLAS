@@ -17,6 +17,7 @@ set(EXTENSIONS_SOURCES
     sytrd_sy2sb.cc
     sytrd_sb2st.cc
     sytrd_sb2st_cta.cc
+    band_reduction.cc
     stedc.cc
     stedc_flat.cc
     ritz_values.cc

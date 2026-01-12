@@ -667,6 +667,134 @@ namespace batchlas {
                                    int32_t kd,
                                    int32_t block_size);
 
+    /**
+     * @brief Symmetric/Hermitian band -> tridiagonal reduction (BANDR1-style).
+     *
+     * This is the dedicated entrypoint for the new blocked band→tridiagonal reduction
+     * algorithm (BANDR1-like schedule).
+     *
+     * Notes:
+     *  - Requires an in-order queue.
+     *  - Currently only `Uplo::Lower` is implemented.
+     *  - Produces real-valued tridiagonal outputs (d,e). For complex inputs, `e_out` is the
+     *    magnitude of the (possibly phased) subdiagonal.
+     *  - `tau_out` is currently set to 0 (VECT='N' style).
+     */
+
+    struct SytrdBandReductionParams {
+        // Householder/block size parameter (nb in the Python reference).
+        int32_t block_size = 32;
+
+        // Number of diagonals to eliminate per sweep (d in the Python reference / literature).
+        // d == 0 means use the implementation default schedule.
+        int32_t d = 0;
+
+        // Maximum number of sweeps. max_sweeps < 0 means use the implementation default.
+        int32_t max_sweeps = -1;
+
+        // Debug/testing: maximum number of chase steps to execute in the
+        // `sytrd_band_reduction_single_step` entrypoint.
+        // max_steps <= 0 means run exactly one step.
+        int32_t max_steps = 1;
+
+        // Working band semibandwidth. kd_work <= 0 means use the implementation default.
+        int32_t kd_work = 0;
+    };
+
+    template <Backend B, typename T>
+    Event sytrd_band_reduction(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                               const VectorView<typename base_type<T>::type>& d_out,
+                               const VectorView<typename base_type<T>::type>& e_out,
+                               const VectorView<T>& tau_out,
+                               Uplo uplo,
+                               int32_t kd,
+                               const Span<std::byte>& ws,
+                               int32_t block_size);
+
+    // Overload exposing schedule parameters (Python-style flexibility).
+    template <Backend B, typename T>
+    Event sytrd_band_reduction(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                               const VectorView<typename base_type<T>::type>& d_out,
+                               const VectorView<typename base_type<T>::type>& e_out,
+                               const VectorView<T>& tau_out,
+                               Uplo uplo,
+                               int32_t kd,
+                               const Span<std::byte>& ws,
+                               SytrdBandReductionParams params);
+
+    template <Backend B, typename T>
+    Event sytrd_band_reduction_single_step(Queue& ctx,
+                                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                           const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                           Uplo uplo,
+                                           int32_t kd,
+                                           const Span<std::byte>& ws,
+                                           SytrdBandReductionParams params);
+
+    template <Backend B, typename T>
+    size_t sytrd_band_reduction_buffer_size(Queue& ctx,
+                                            const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                            const VectorView<typename base_type<T>::type>& d_out,
+                                            const VectorView<typename base_type<T>::type>& e_out,
+                                            const VectorView<T>& tau_out,
+                                            Uplo uplo,
+                                            int32_t kd,
+                                            int32_t block_size);
+
+    // Buffer size query matching the schedule-parameter overload.
+    template <Backend B, typename T>
+    size_t sytrd_band_reduction_buffer_size(Queue& ctx,
+                                            const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                            const VectorView<typename base_type<T>::type>& d_out,
+                                            const VectorView<typename base_type<T>::type>& e_out,
+                                            const VectorView<T>& tau_out,
+                                            Uplo uplo,
+                                            int32_t kd,
+                                            SytrdBandReductionParams params);
+
+    template <Backend B, typename T>
+    size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
+                                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                                        const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                        Uplo uplo,
+                                                        int32_t kd,
+                                                        SytrdBandReductionParams params);
+
+    /**
+     * @brief Debug/testing hook: execute exactly one BANDR1 “chase step”.
+     *
+     * This runs a single QR-panel + similarity update (Pre/Sym/Post/Right) on a
+     * working band matrix ABw.
+     *
+     * Inputs:
+     *  - ab_in: lower-band storage with rows == kd+1
+     * Outputs:
+     *  - abw_out: lower-band storage with rows == kd_work+1 (kd_work from params)
+     *
+     * Notes:
+     *  - Requires an in-order queue.
+     *  - Currently only `Uplo::Lower` is implemented.
+     *  - Intended for unit tests / debugging; not a stable public API.
+     */
+    template <Backend B, typename T>
+    Event sytrd_band_reduction_single_step(Queue& ctx,
+                                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                           const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                           Uplo uplo,
+                                           int32_t kd,
+                                           const Span<std::byte>& ws,
+                                           SytrdBandReductionParams params);
+
+    template <Backend B, typename T>
+    size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
+                                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                                        const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                        Uplo uplo,
+                                                        int32_t kd,
+                                                        SytrdBandReductionParams params);
+
     // Naming aliases for Hermitian band -> tridiagonal (HB2ST) to match LAPACK terminology.
     template <Backend B, typename T>
     inline Event hetrd_hb2st(Queue& ctx,
