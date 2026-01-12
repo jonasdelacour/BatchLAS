@@ -47,6 +47,9 @@ static void BM_STEQR_CTA(minibench::State& state) {
                         [](Queue& q, auto&&... xs) {
                             steqr_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
                         });
+
+    state.SetMetric("GFLOPS", total_flops / 1e9, minibench::Rate);
+    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

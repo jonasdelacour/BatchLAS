@@ -1,4 +1,5 @@
 set(BENCHMARK_TARGETS
+    bandr1_dump
     geqrf_benchmark
     gemm_benchmark
     trmm_benchmark
