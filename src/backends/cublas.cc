@@ -136,6 +136,7 @@ namespace batchlas {
         handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
+        auto k = std::min(m, n);
         auto batch_size = A.batch_size();
         auto pool = BumpAllocator(work_space);
         if (batch_size <= 1) {
@@ -159,7 +160,7 @@ namespace batchlas {
             auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
             ctx->parallel_for(sycl::range<1>(batch_size), [=](sycl::id<1> item) {
                 size_t i = item.get(0);
-                tau_ptrs[i] = tau_data + i * n;
+                tau_ptrs[i] = tau_data + i * k;
             });
             auto info = pool.allocate<int>(ctx, batch_size);
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
@@ -209,8 +210,18 @@ namespace batchlas {
             }
             return ormqr_blocked<B, T>(*q_ptr, A, C, side, trans, tau, workspace);
         }
+
+        // Ensure the non-blocked cuSOLVER path respects the ordering guarantees of the
+        // caller queue. In particular, the batched fallback must not run on a separate
+        // Queue/stream without synchronizing with prior kernels that produced A/C.
+        Queue* q_ptr = &ctx;
+        Queue in_order_q;
+        if (!ctx.in_order()) {
+            in_order_q = Queue(ctx, true);
+            q_ptr = &in_order_q;
+        }
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
+        handle.setStream(*q_ptr);
         auto m = C.rows();
         auto n = C.cols();
         auto k = std::min(A.rows(), A.cols());
@@ -243,15 +254,13 @@ namespace batchlas {
                 C.data_ptr(), C.ld(),
                 device_ws.data(), lwork, info.data());
         } else {
-            Queue sub_queue(ctx.device(), false);
-            size_t single_ws = ormqr_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
+            size_t single_ws = ormqr_buffer_size<B>(*q_ptr, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
             for (int i = 0; i < batch_size; ++i) {
-                auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
-                ormqr<B>(sub_queue, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
+                auto sub_ws = pool.allocate<std::byte>(*q_ptr, single_ws);
+                ormqr<B>(*q_ptr, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
             }
-            sub_queue.wait();
         }
-        return ctx.get_event();
+        return q_ptr->get_event();
     }
 
     template <Backend B, typename T>

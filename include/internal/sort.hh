@@ -253,10 +253,24 @@ Event sort(Queue& ctx, const VectorView<T>& data, const MatrixView<T, MatrixForm
 
 template <typename T>
 size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz) {
+    // Workspace used by `sort(...)` in this header:
+    // - permutation indices: int32_t[n * batch]
+    // - optional temp eigenvectors matrix: T[rows * cols * batch]
+    //
+    // Note: `W` is expected to be a flat span containing all eigenvalues across the batch
+    // (size == n * batch). Do not multiply by batch again.
+    const int64_t batch = V.batch_size();
+    const int64_t n_total = static_cast<int64_t>(W.size());
+    if (batch <= 0 || n_total < 0 || (n_total % batch) != 0) {
+        throw std::runtime_error("sort_buffer_size: invalid batch layout for eigenvalues span");
+    }
+
     size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, W.size() * V.batch_size()); // For eigenvalues
-    size += BumpAllocator::allocation_size<T>(ctx, jobz == JobType::EigenVectors ? V.rows() * V.batch_size() : 0); // For eigenvectors if needed
-    size += jobz == JobType::EigenVectors ? BumpAllocator::allocation_size<T>(ctx, V.rows() * V.cols() * V.batch_size()) : 0; // Temporary storage for eigenvectors
+    size += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(n_total));
+    if (jobz == JobType::EigenVectors) {
+        size += BumpAllocator::allocation_size<T>(ctx,
+                                                  static_cast<size_t>(V.rows()) * static_cast<size_t>(V.cols()) * static_cast<size_t>(batch));
+    }
     return size;
 }
 
