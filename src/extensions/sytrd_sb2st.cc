@@ -9,8 +9,13 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 
+#include "sytrd_sb2st_cta.hh"
+
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -18,6 +23,57 @@
 namespace batchlas {
 
 namespace {
+
+template <typename T>
+struct StridedView {
+    T* ptr = nullptr;
+    int inc = 1;
+    inline T& operator[](int i) const { return ptr[i * inc]; }
+};
+
+template <typename T>
+struct ConstStridedView {
+    const T* ptr = nullptr;
+    int inc = 1;
+    inline const T& operator[](int i) const { return ptr[i * inc]; }
+};
+
+template <typename T>
+inline StridedView<T> make_strided(T* ptr, int inc) {
+    return StridedView<T>{ptr, inc};
+}
+
+template <typename T>
+inline ConstStridedView<T> make_strided(const T* ptr, int inc) {
+    return ConstStridedView<T>{ptr, inc};
+}
+
+template <typename T>
+inline ConstStridedView<T> make_const_strided(T* ptr, int inc) {
+    return ConstStridedView<T>{ptr, inc};
+}
+
+template <typename Ops, typename T>
+inline void lartv_impl(int nrot, StridedView<T> x, StridedView<T> y, ConstStridedView<typename Ops::Real> c, ConstStridedView<T> s) {
+    for (int t = 0; t < nrot; ++t) {
+        Ops::rot_pair(x[t], y[t], c[t], s[t]);
+    }
+}
+
+template <typename Ops, typename T>
+inline void largv_impl(int nrot, StridedView<T> x, StridedView<T> w, StridedView<typename Ops::Real> c) {
+    for (int t = 0; t < nrot; ++t) {
+        const T f = x[t];
+        const T g = w[t];
+        typename Ops::Real ct = typename Ops::Real(0);
+        T st = T(0);
+        T rt = T(0);
+        Ops::lartg(f, g, ct, st, rt);
+        c[t] = ct;
+        w[t] = st;
+        x[t] = rt;
+    }
+}
 
 template <typename U>
 inline U conj_if_needed(const U& x) {
@@ -195,61 +251,58 @@ struct btrd_givens_ops<T, false> {
         r = T(rt);
     }
 
-    static inline void rot(int nrot, T* x, int incx, T* y, int incy, Real c, const T& s_in) {
+    static inline void rot_pair(T& x, T& y, Real c, const T& s_in) {
         const Real s = static_cast<Real>(s_in);
+        const Real xt = static_cast<Real>(x);
+        const Real yt = static_cast<Real>(y);
+        x = T(c * xt + s * yt);
+        y = T(c * yt - s * xt);
+    }
+
+    static inline void rot(int nrot, StridedView<T> x, StridedView<T> y, Real c, const T& s_in) {
         for (int t = 0; t < nrot; ++t) {
-            const Real xt = static_cast<Real>(x[t * incx]);
-            const Real yt = static_cast<Real>(y[t * incy]);
-            x[t * incx] = T(c * xt + s * yt);
-            y[t * incy] = T(c * yt - s * xt);
+            rot_pair(x[t], y[t], c, s_in);
         }
     }
 
     static inline void lartv(int nrot,
-                             T* x,
-                             int incx,
-                             T* y,
-                             int incy,
-                             const Real* c,
-                             const T* s,
-                             int incc) {
-        for (int t = 0; t < nrot; ++t) {
-            rot(1, &x[t * incx], 1, &y[t * incy], 1, c[t * incc], s[t * incc]);
-        }
+                             StridedView<T> x,
+                             StridedView<T> y,
+                             ConstStridedView<Real> c,
+                             ConstStridedView<T> s) {
+        lartv_impl<btrd_givens_ops<T, false>, T>(nrot, x, y, c, s);
     }
 
-    static inline void largv(int nrot, T* x, int incx, T* w, int incw, Real* c, int incc) {
-        for (int t = 0; t < nrot; ++t) {
-            const T f = x[t * incx];
-            const T g = w[t * incw];
-            Real ct = Real(0);
-            T st = T(0);
-            T rt = T(0);
-            lartg(f, g, ct, st, rt);
-            c[t * incc] = ct;
-            w[t * incw] = st;
-            x[t * incx] = rt;
-        }
+    static inline void largv(int nrot, StridedView<T> x, StridedView<T> w, StridedView<Real> c) {
+        largv_impl<btrd_givens_ops<T, false>, T>(nrot, x, w, c);
     }
 
-    static inline void lar2v(int nrot, T* x, T* y, T* z, int incx, const Real* c, const T* s, int incc) {
+    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si_in) {
+        const Real xi = static_cast<Real>(x);
+        const Real yi = static_cast<Real>(y);
+        const Real zi = static_cast<Real>(z);
+        const Real si = static_cast<Real>(si_in);
+
+        const Real t1 = si * zi;
+        const Real t2 = ci * zi;
+        const Real t3 = t2 - si * xi;
+        const Real t4 = t2 + si * yi;
+        const Real t5 = ci * xi + t1;
+        const Real t6 = ci * yi - t1;
+
+        x = T(ci * t5 + si * t4);
+        y = T(ci * t6 - si * t3);
+        z = T(ci * t4 - si * t5);
+    }
+
+    static inline void lar2v(int nrot,
+                             StridedView<T> x,
+                             StridedView<T> y,
+                             StridedView<T> z,
+                             ConstStridedView<Real> c,
+                             ConstStridedView<T> s) {
         for (int t = 0; t < nrot; ++t) {
-            const Real xi = static_cast<Real>(x[t * incx]);
-            const Real yi = static_cast<Real>(y[t * incx]);
-            const Real zi = static_cast<Real>(z[t * incx]);
-            const Real ci = c[t * incc];
-            const Real si = static_cast<Real>(s[t * incc]);
-
-            const Real t1 = si * zi;
-            const Real t2 = ci * zi;
-            const Real t3 = t2 - si * xi;
-            const Real t4 = t2 + si * yi;
-            const Real t5 = ci * xi + t1;
-            const Real t6 = ci * yi - t1;
-
-            x[t * incx] = T(ci * t5 + si * t4);
-            y[t * incx] = T(ci * t6 - si * t3);
-            z[t * incx] = T(ci * t4 - si * t5);
+            lar2v_pair(x[t], y[t], z[t], c[t], s[t]);
         }
     }
 
@@ -285,74 +338,70 @@ struct btrd_givens_ops<T, true> {
         r = rt;
     }
 
-    static inline void rot(int nrot, T* x, int incx, T* y, int incy, Real c, const T& s) {
+    static inline void rot_pair(T& x, T& y, Real c, const T& s) {
+        const T xt = x;
+        const T yt = y;
+        x = T(c) * xt + s * yt;
+        y = T(c) * yt - conj_if_needed(s) * xt;
+    }
+
+    static inline void rot(int nrot, StridedView<T> x, StridedView<T> y, Real c, const T& s) {
         for (int t = 0; t < nrot; ++t) {
-            const T xt = x[t * incx];
-            const T yt = y[t * incy];
-            x[t * incx] = T(c) * xt + s * yt;
-            y[t * incy] = T(c) * yt - conj_if_needed(s) * xt;
+            rot_pair(x[t], y[t], c, s);
         }
     }
 
     static inline void lartv(int nrot,
-                             T* x,
-                             int incx,
-                             T* y,
-                             int incy,
-                             const Real* c,
-                             const T* s,
-                             int incc) {
-        for (int t = 0; t < nrot; ++t) {
-            rot(1, &x[t * incx], 1, &y[t * incy], 1, c[t * incc], s[t * incc]);
-        }
+                             StridedView<T> x,
+                             StridedView<T> y,
+                             ConstStridedView<Real> c,
+                             ConstStridedView<T> s) {
+        lartv_impl<btrd_givens_ops<T, true>, T>(nrot, x, y, c, s);
     }
 
-    static inline void largv(int nrot, T* x, int incx, T* w, int incw, Real* c, int incc) {
-        for (int t = 0; t < nrot; ++t) {
-            const T f = x[t * incx];
-            const T g = w[t * incw];
-            Real ct = Real(0);
-            T st = T(0);
-            T rt = T(0);
-            lartg(f, g, ct, st, rt);
-            c[t * incc] = ct;
-            w[t * incw] = st;
-            x[t * incx] = rt;
-        }
+    static inline void largv(int nrot, StridedView<T> x, StridedView<T> w, StridedView<Real> c) {
+        largv_impl<btrd_givens_ops<T, true>, T>(nrot, x, w, c);
     }
 
-    static inline void lar2v(int nrot, T* x, T* y, T* z, int incx, const Real* c, const T* s, int incc) {
+    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si) {
         // Exact port of Netlib LAPACK CLAR2V logic.
+        const Real xi = static_cast<Real>(x.real());
+        const Real yi = static_cast<Real>(y.real());
+        const T zi = z;
+
+        const Real zir = static_cast<Real>(zi.real());
+        const Real zii = static_cast<Real>(zi.imag());
+
+        const Real sir = static_cast<Real>(si.real());
+        const Real sii = static_cast<Real>(si.imag());
+
+        const Real t1r = sir * zir - sii * zii;
+        const Real t1i = sir * zii + sii * zir;
+
+        const T t2 = T(ci * zir, ci * zii);
+        const T t3 = t2 - conj_if_needed(si) * T(xi, Real(0));
+        const T t4 = conj_if_needed(t2) + si * T(yi, Real(0));
+
+        const Real t5 = ci * xi + t1r;
+        const Real t6 = ci * yi - t1r;
+
+        const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
+        const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
+        const T znew = T(ci) * t3 + conj_if_needed(si) * T(t6, t1i);
+
+        x = T(xnew, Real(0));
+        y = T(ynew, Real(0));
+        z = znew;
+    }
+
+    static inline void lar2v(int nrot,
+                             StridedView<T> x,
+                             StridedView<T> y,
+                             StridedView<T> z,
+                             ConstStridedView<Real> c,
+                             ConstStridedView<T> s) {
         for (int t = 0; t < nrot; ++t) {
-            const Real xi = static_cast<Real>(x[t * incx].real());
-            const Real yi = static_cast<Real>(y[t * incx].real());
-            const T zi = z[t * incx];
-
-            const Real zir = static_cast<Real>(zi.real());
-            const Real zii = static_cast<Real>(zi.imag());
-
-            const Real ci = c[t * incc];
-            const T si = s[t * incc];
-            const Real sir = static_cast<Real>(si.real());
-            const Real sii = static_cast<Real>(si.imag());
-
-            const Real t1r = sir * zir - sii * zii;
-            const Real t1i = sir * zii + sii * zir;
-
-            const T t2 = T(ci * zir, ci * zii);
-            const T t3 = t2 - conj_if_needed(si) * T(xi, Real(0));
-            const T t4 = conj_if_needed(t2) + si * T(yi, Real(0));
-
-            const Real t5 = ci * xi + t1r;
-            const Real t6 = ci * yi - t1r;
-
-            const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
-            const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
-            const T znew = T(ci) * t3 + conj_if_needed(si) * T(t6, t1i);
-
-            x[t * incx] = T(xnew, Real(0));
-            y[t * incx] = T(ynew, Real(0));
-            z[t * incx] = znew;
+            lar2v_pair(x[t], y[t], z[t], c[t], s[t]);
         }
     }
 
@@ -524,13 +573,10 @@ Event btrd_lower_inplace(Queue& q,
                             for (int l = 0; l < kd - 1; ++l) {
                                 for (int t = lid; t < nr; t += lsize) {
                                     const int j = j1 + t * kd1;
-                                    Ops::rot(1,
-                                             &AB[idx(kd - 1 - l, j - kd1 + l + 1)],
-                                             1,
-                                             &AB[idx(kd - l, j - kd1 + l + 1)],
-                                             1,
-                                             C[j],
-                                             WORK[j]);
+                                    Ops::rot_pair(ABv(kd - 1 - l, j - kd1 + l + 1),
+                                                  ABv(kd - l, j - kd1 + l + 1),
+                                                  C[j],
+                                                  WORK[j]);
                                 }
                                 sycl::group_barrier(it.get_group());
                             }
@@ -540,10 +586,8 @@ Event btrd_lower_inplace(Queue& q,
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
                                         Ops::rot(kdm1,
-                                                 &AB[idx(kd - 1, jinc - kd)],
-                                                 incx,
-                                                 &AB[idx(kd, jinc - kd)],
-                                                 incx,
+                                                 make_strided(AB + idx(kd - 1, jinc - kd), incx),
+                                                 make_strided(AB + idx(kd, jinc - kd), incx),
                                                  C[jinc],
                                                  WORK[jinc]);
                                     }
@@ -570,10 +614,8 @@ Event btrd_lower_inplace(Queue& q,
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
                                     Ops::rot(k - 2,
-                                             &AB[idx(k - 2, i + 1)],
-                                             ldab - 1,
-                                             &AB[idx(k - 1, i + 1)],
-                                             ldab - 1,
+                                             make_strided(AB + idx(k - 2, i + 1), ldab - 1),
+                                             make_strided(AB + idx(k - 1, i + 1), ldab - 1),
                                              ct,
                                              st);
                                 }
@@ -596,13 +638,11 @@ Event btrd_lower_inplace(Queue& q,
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
                             Ops::lar2v(1,
-                                       &AB[idx(0, j - 1)],
-                                       &AB[idx(0, j)],
-                                       &AB[idx(1, j - 1)],
-                                       inca,
-                                       &C[j],
-                                       &WORK[j],
-                                       kd1);
+                                       make_strided(AB + idx(0, j - 1), inca),
+                                       make_strided(AB + idx(0, j), inca),
+                                       make_strided(AB + idx(1, j - 1), inca),
+                                       make_const_strided(C.data_ptr() + j, kd1),
+                                       make_const_strided(WORK.data_ptr() + j, kd1));
                         }
                         sycl::group_barrier(it.get_group());
 
@@ -621,13 +661,10 @@ Event btrd_lower_inplace(Queue& q,
                                 if (nrt > 0) {
                                     for (int t = lid; t < nrt; t += lsize) {
                                         const int j = j1 + t * kd1;
-                                        Ops::rot(1,
-                                                 &AB[idx(l + 2, j - 1)],
-                                                 1,
-                                                 &AB[idx(l + 1, j)],
-                                                 1,
-                                                 C[j],
-                                                 WORK[j]);
+                                        Ops::rot_pair(ABv(l + 2, j - 1),
+                                                      ABv(l + 1, j),
+                                                      C[j],
+                                                      WORK[j]);
                                     }
                                     sycl::group_barrier(it.get_group());
                                 }
@@ -639,10 +676,8 @@ Event btrd_lower_inplace(Queue& q,
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
                                             Ops::rot(kdm1,
-                                                     &AB[idx(2, j1inc - 1)],
-                                                     1,
-                                                     &AB[idx(1, j1inc)],
-                                                     1,
+                                                     make_strided(AB + idx(2, j1inc - 1), 1),
+                                                     make_strided(AB + idx(1, j1inc), 1),
                                                      C[j1inc],
                                                      WORK[j1inc]);
                                         }
@@ -652,10 +687,8 @@ Event btrd_lower_inplace(Queue& q,
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
                                     Ops::rot(lend,
-                                             &AB[idx(2, last - 1)],
-                                             1,
-                                             &AB[idx(1, last)],
-                                             1,
+                                             make_strided(AB + idx(2, last - 1), 1),
+                                             make_strided(AB + idx(1, last), 1),
                                              C[last],
                                              WORK[last]);
                                 }
@@ -809,7 +842,53 @@ Event sytrd_sb2st(Queue& ctx,
     VectorView<Real> Cv(c_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
     VectorView<T> WORKv(work_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
 
-    (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+    enum class Sb2stSubgroupMode {
+        Auto,
+        ForceOn,
+        ForceOff,
+    };
+
+    auto parse_mode = []() -> Sb2stSubgroupMode {
+        const char* p = std::getenv("BATCHLAS_SB2ST_SUBGROUP");
+        if (!p || !*p) return Sb2stSubgroupMode::Auto;
+        std::string v(p);
+        for (char& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (v == "1" || v == "true" || v == "on") return Sb2stSubgroupMode::ForceOn;
+        if (v == "0" || v == "false" || v == "off") return Sb2stSubgroupMode::ForceOff;
+        if (v == "auto") return Sb2stSubgroupMode::Auto;
+        // Unknown value: keep behavior unchanged.
+        return Sb2stSubgroupMode::Auto;
+    };
+
+    const Sb2stSubgroupMode mode = parse_mode();
+
+    bool device_has_sg32 = false;
+    {
+        const auto dev = ctx->get_device();
+        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
+        for (auto sgs : sg_sizes) {
+            if (static_cast<int32_t>(sgs) == 32) {
+                device_has_sg32 = true;
+                break;
+            }
+        }
+    }
+
+    bool can_use_subgroup = false;
+    if (mode != Sb2stSubgroupMode::ForceOff) {
+        can_use_subgroup = (kd_i <= 32) && device_has_sg32;
+    }
+
+    if (mode == Sb2stSubgroupMode::ForceOn && !can_use_subgroup) {
+        throw std::runtime_error(
+            "sytrd_sb2st: BATCHLAS_SB2ST_SUBGROUP=1 requires kd<=32 and a device supporting sub_group_size=32");
+    }
+
+    if (can_use_subgroup) {
+        (void)internal::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+    } else {
+        (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+    }
 
     return ctx.get_event();
 }
