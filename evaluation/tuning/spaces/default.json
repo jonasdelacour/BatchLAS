@@ -1,0 +1,77 @@
+{
+  "spaces": [
+    {
+      "bench": "stedc",
+      "exe": "stedc_benchmark",
+      "metric": "Time (µs) / Batch",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "recursion_threshold", "flat"],
+      "cases": [
+        {
+          "fixed": {"n": 256, "batch": 256},
+          "tune": {"recursion_threshold": [8, 16, 32, 64], "flat": [0, 1]}
+        }
+      ]
+    },
+    {
+      "bench": "steqr_cta",
+      "exe": "steqr_cta_benchmark",
+      "metric": "T(µs)/Batch",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "n_sweeps", "wg_multiplier", "shift_kind"],
+      "cases": [
+        {
+          "fixed": {"n": 16, "batch": 4096, "n_sweeps": 10},
+          "tune": {"wg_multiplier": [1, 2, 4], "shift_kind": [0, 1, 2]}
+        },
+        {
+          "fixed": {"n": 32, "batch": 4096, "n_sweeps": 10},
+          "tune": {"wg_multiplier": [1, 2, 4], "shift_kind": [0, 1, 2]}
+        }
+      ]
+    },
+    {
+      "bench": "sytrd_blocked",
+      "exe": "sytrd_blocked_benchmark",
+      "metric": "T(µs)/Batch",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "nb", "uplo"],
+      "cases": [
+        {
+          "fixed": {"n": 256, "batch": 32, "uplo": 0},
+          "tune": {"nb": [8, 16, 32, 64]}
+        }
+      ]
+    },
+    {
+      "bench": "ormqr_blocked",
+      "exe": "ormqr_blocked_benchmark",
+      "metric": "Time (µs) / Batch",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "side", "trans", "block_size"],
+      "cases": [
+        {
+          "fixed": {"n": 256, "batch": 32, "side": 0, "trans": 0},
+          "tune": {"block_size": [16, 32, 64, 128]}
+        },
+        {
+          "fixed": {"n": 256, "batch": 32, "side": 1, "trans": 0},
+          "tune": {"block_size": [16, 32, 64, 128]}
+        }
+      ]
+    },
+    {
+      "bench": "syev_blocked",
+      "exe": "syev_blocked_benchmark",
+      "metric": "Time (µs) / Batch",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "jobz", "sytrd_block_size", "ormqr_block_size"],
+      "cases": [
+        {
+          "fixed": {"n": 256, "batch": 32, "jobz": 1},
+          "tune": {"sytrd_block_size": [8, 16, 32, 64], "ormqr_block_size": [16, 32, 64]}
+        }
+      ]
+    }
+  ]
+}

@@ -64,9 +64,9 @@ template <typename T, Backend B>
 static void BM_ORMQR_BLOCKED(minibench::State& state) {
     const int n = state.range(0);
     const int batch = state.range(1);
-    const int block_size = std::max(1, state.range(2));
-    const Side side = parse_side(state.range(3));
-    const Transpose trans = parse_transpose(state.range(4));
+    const Side side = parse_side(state.range(2));
+    const Transpose trans = parse_transpose(state.range(3));
+    const int block_size = std::max(1, state.range(4));
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
 

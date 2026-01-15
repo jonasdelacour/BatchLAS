@@ -86,6 +86,10 @@ option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detecte
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
+
+# Opt-in: bottom-up tuning harness (runs benchmark grid-search and writes a JSON profile).
+# This is intentionally OFF-by-default and only meaningful when benchmarks are enabled.
+option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python and benchmarks)" OFF)
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_MKL_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
@@ -848,6 +852,41 @@ endif()
 # Benchmarks
 if(BATCHLAS_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
+
+    if(BATCHLAS_ENABLE_TUNING)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+        set(_BATCHLAS_TUNING_SPACE "${CMAKE_CURRENT_SOURCE_DIR}/evaluation/tuning/spaces/default.json")
+        set(_BATCHLAS_TUNING_OUT "${CMAKE_CURRENT_BINARY_DIR}/tuning/profile.json")
+
+        # Default backend/type can be overridden at configure time, e.g.:
+        #   cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON -DBATCHLAS_ENABLE_TUNING=ON \
+        #       -DBATCHLAS_TUNE_BACKEND=CUDA -DBATCHLAS_TUNE_TYPE=float
+        set(BATCHLAS_TUNE_BACKEND "CUDA" CACHE STRING "Backend to pass to tuning benchmarks (e.g., CUDA/ROCM/NETLIB/MKL)")
+        set(BATCHLAS_TUNE_TYPE "float" CACHE STRING "Type to pass to tuning benchmarks (e.g., float/double)")
+
+        add_custom_target(batchlas_tune
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/tuning"
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/evaluation/tuning/tune.py"
+                --build-dir "${CMAKE_CURRENT_BINARY_DIR}"
+                --space "${_BATCHLAS_TUNING_SPACE}"
+                --backend "${BATCHLAS_TUNE_BACKEND}"
+                --type "${BATCHLAS_TUNE_TYPE}"
+                --out "${_BATCHLAS_TUNING_OUT}"
+                --skip-missing
+                --skip-failed
+            DEPENDS
+                stedc_benchmark
+                steqr_cta_benchmark
+                sytrd_blocked_benchmark
+                ormqr_blocked_benchmark
+                syev_blocked_benchmark
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            COMMENT "Running BatchLAS tuning harness (writes ${_BATCHLAS_TUNING_OUT})"
+            VERBATIM
+        )
+    endif()
 endif()
 
 # Python bindings
