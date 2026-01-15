@@ -5,9 +5,27 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <complex>
+#include <utility>
 #include <lapack.h>
 #include <blas/linalg.hh>
+
+#include <blas/functions/ormqr.hh>
+#include <blas/functions/syev.hh>
+#include <blas/dispatch/op.hh>
+
 namespace batchlas{
+
+    namespace detail {
+    template <typename F>
+    Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
+        Event dep = ctx.get_event();
+        EventImpl ev = ctx->submit([&](sycl::handler& h) {
+            h.depends_on(static_cast<sycl::event>(*dep));
+            h.host_task([=] { f(); });
+        });
+        return Event(std::move(ev));
+    }
+    } // namespace detail
 
     template <Backend Back, typename T, MatrixFormat MFormat>
     Event spmm(Queue& ctx,
@@ -20,38 +38,41 @@ namespace batchlas{
                Transpose transB,
                Span<std::byte> workspace) {
         static_cast<void>(workspace); // no workspace needed for CPU implementation
+        auto A_view = A;
+        auto B_view = B;
+        auto C_view = C;
+        return detail::submit_host_task(ctx, "netlib.spmm", [=] {
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                int batch = A_view.batch_size();
+                for (int b = 0; b < batch; ++b) {
+                    auto A_b = A_view[b];
+                    auto B_b = B_view[b];
+                    auto C_b = C_view[b];
 
-        if constexpr (MFormat == MatrixFormat::CSR) {
-            int batch = A.batch_size();
-            for (int b = 0; b < batch; ++b) {
-                auto A_b = A[b];
-                auto B_b = B[b];
-                auto C_b = C[b];
+                    int m = A_b.rows();
+                    int k = A_b.cols();
+                    int n = B_b.cols();
 
-                int m = A_b.rows();
-                int k = A_b.cols();
-                int n = B_b.cols();
+                    // Only handle no transpose cases for now
+                    if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+                        throw std::runtime_error("NETLIB spmm only supports NoTrans for now");
+                    }
 
-                // Only handle no transpose cases for now
-                if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
-                    throw std::runtime_error("NETLIB spmm only supports NoTrans for now");
-                }
-
-                for (int row = 0; row < m; ++row) {
-                    for (int col = 0; col < n; ++col) {
-                        T sum = beta * C_b.at(row, col);
-                        for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
-                            int a_col = A_b.col_indices()[idx];
-                            sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                    for (int row = 0; row < m; ++row) {
+                        for (int col = 0; col < n; ++col) {
+                            T sum = beta * C_b.at(row, col);
+                            for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
+                                int a_col = A_b.col_indices()[idx];
+                                sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                            }
+                            C_b.at(row, col) = sum;
                         }
-                        C_b.at(row, col) = sum;
                     }
                 }
+            } else {
+                throw std::runtime_error("Unsupported sparse format for NETLIB spmm");
             }
-        } else {
-            throw std::runtime_error("Unsupported sparse format for NETLIB spmm");
-        }
-        return ctx.get_event();
+        });
     }
 
     template <Backend Back, typename T, MatrixFormat MFormat>
@@ -84,35 +105,39 @@ namespace batchlas{
                    Transpose transA,
                    Transpose transB,
                    ComputePrecision precision) {
-        auto [m, k] = get_effective_dims(descrA, transA);
-        auto [kB, n] = get_effective_dims(descrB, transB);
+        static_cast<void>(precision);
+        auto A_view = descrA;
+        auto B_view = descrB;
+        auto C_view = descrC;
+        return detail::submit_host_task(ctx, "netlib.gemm", [=] {
+            auto [m, k] = get_effective_dims(A_view, transA);
+            auto [kB, n] = get_effective_dims(B_view, transB);
+            static_cast<void>(kB);
 
-        if (descrA.batch_size() == 1) {
+            if (A_view.batch_size() == 1) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     Layout::ColMajor, transA, transB,
                     m, n, k,
                     alpha,
-                    descrA.data_ptr(), descrA.ld(),
-                    descrB.data_ptr(), descrB.ld(),
+                    A_view.data_ptr(), A_view.ld(),
+                    B_view.data_ptr(), B_view.ld(),
                     beta,
-                    descrC.data_ptr(), descrC.ld());    
-        } else {
-            for (int i = 0; i < descrA.batch_size(); ++i) {
-                gemm<Backend::NETLIB>(
-                    ctx,
-                    descrA[i],
-                    descrB[i],
-                    descrC[i],
-                    alpha,
-                    beta,
-                    transA,
-                    transB,
-                    precision);
-
+                    C_view.data_ptr(), C_view.ld());
+            } else {
+                for (int i = 0; i < A_view.batch_size(); ++i) {
+                    call_backend_nh<T, BackendLibrary::CBLAS>(
+                        cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
+                        Layout::ColMajor, transA, transB,
+                        m, n, k,
+                        alpha,
+                        A_view[i].data_ptr(), A_view[i].ld(),
+                        B_view[i].data_ptr(), B_view[i].ld(),
+                        beta,
+                        C_view[i].data_ptr(), C_view[i].ld());
+                }
             }
-        }
-        return ctx.get_event();
+        });
     }
 
     template <Backend B, typename T>
@@ -123,35 +148,47 @@ namespace batchlas{
                T alpha,
                T beta,
                Transpose transA) {
-        auto [m, n] = get_effective_dims(A, transA);
-
-        if (A.batch_size() > 1) {
-            for (int i = 0; i < A.batch_size(); ++i) {
-                gemv<B>(ctx,
-                       A[i],
-                       X.batch_item(i),
-                       Y.batch_item(i),
-                       alpha,
-                       beta,
-                       transA);
+        auto A_view = A;
+        auto X_view = X;
+        auto Y_view = Y;
+        return detail::submit_host_task(ctx, "netlib.gemv", [=] {
+            auto [m, n] = get_effective_dims(A_view, transA);
+            if (A_view.batch_size() > 1) {
+                for (int i = 0; i < A_view.batch_size(); ++i) {
+                    auto Xi = X_view.batch_item(i);
+                    auto Yi = Y_view.batch_item(i);
+                    call_backend_nh<T, BackendLibrary::CBLAS>(
+                        cblas_sgemv, cblas_dgemv, cblas_cgemv, cblas_zgemv,
+                        Layout::ColMajor,
+                        transA,
+                        m,
+                        n,
+                        alpha,
+                        A_view[i].data_ptr(),
+                        A_view[i].ld(),
+                        Xi.data_ptr(),
+                        Xi.inc(),
+                        beta,
+                        Yi.data_ptr(),
+                        Yi.inc());
+                }
+            } else {
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_sgemv, cblas_dgemv, cblas_cgemv, cblas_zgemv,
+                    Layout::ColMajor,
+                    transA,
+                    m,
+                    n,
+                    alpha,
+                    A_view.data_ptr(),
+                    A_view.ld(),
+                    X_view.data_ptr(),
+                    X_view.inc(),
+                    beta,
+                    Y_view.data_ptr(),
+                    Y_view.inc());
             }
-        } else {
-            call_backend_nh<T, BackendLibrary::CBLAS>(
-                cblas_sgemv, cblas_dgemv, cblas_cgemv, cblas_zgemv,
-                Layout::ColMajor,
-                transA,
-                m,
-                n,
-                alpha,
-                A.data_ptr(),
-                A.ld(),
-                X.data_ptr(),
-                X.inc(),
-                beta,
-                Y.data_ptr(),
-                Y.inc());
-        }
-        return ctx.get_event();
+        });
     }
 
     template <Backend B, typename T>
@@ -163,30 +200,30 @@ namespace batchlas{
         Transpose transA,
         Diag diag,
         T alpha) {
-        
-        auto [kB, n] = get_effective_dims(descrB, Transpose::NoTrans);
-        if (descrA.batch_size() == 1) {
+        auto A_view = descrA;
+        auto B_view = descrB;
+        return detail::submit_host_task(ctx, "netlib.trsm", [=] {
+            auto [kB, n] = get_effective_dims(B_view, Transpose::NoTrans);
+            if (A_view.batch_size() == 1) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
                     Layout::ColMajor, side, uplo, transA, diag,
                     kB, n,
                     alpha,
-                    descrA.data_ptr(), descrA.ld(),
-                    descrB.data_ptr(), descrB.ld());    
-        } else {
-            for (int i = 0; i < descrA.batch_size(); ++i) {
-                trsm<Backend::NETLIB>(
-                    ctx,
-                    descrA[i],
-                    descrB[i],
-                    side,
-                    uplo,
-                    transA,
-                    diag,
-                    alpha);
+                    A_view.data_ptr(), A_view.ld(),
+                    B_view.data_ptr(), B_view.ld());
+            } else {
+                for (int i = 0; i < A_view.batch_size(); ++i) {
+                    call_backend_nh<T, BackendLibrary::CBLAS>(
+                        cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
+                        Layout::ColMajor, side, uplo, transA, diag,
+                        kB, n,
+                        alpha,
+                        A_view[i].data_ptr(), A_view[i].ld(),
+                        B_view[i].data_ptr(), B_view[i].ld());
+                }
             }
-        }
-        return ctx.get_event();
+        });
     }
 
     template <Backend B, typename T>
@@ -194,49 +231,70 @@ namespace batchlas{
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace) {
-        if (descrA.batch_size() == 1) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
-                Layout::ColMajor, uplo,
-                descrA.rows(), descrA.data_ptr(), descrA.ld());
-        } else {
-            for (int i = 0; i < descrA.batch_size(); ++i) {
-                potrf<Backend::NETLIB>(
-                    ctx,
-                    descrA[i],
-                    uplo,
-                    workspace);
+        static_cast<void>(workspace);
+        auto A_view = descrA;
+        return detail::submit_host_task(ctx, "netlib.potrf", [=] {
+            if (A_view.batch_size() == 1) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
+                    Layout::ColMajor, uplo,
+                    A_view.rows(), A_view.data_ptr(), A_view.ld());
+            } else {
+                for (int i = 0; i < A_view.batch_size(); ++i) {
+                    call_backend_nh<T, BackendLibrary::LAPACKE>(
+                        LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
+                        Layout::ColMajor, uplo,
+                        A_view[i].rows(), A_view[i].data_ptr(), A_view[i].ld());
+                }
             }
-        }
-        return ctx.get_event();    
+        });
+    }
+
+    namespace backend {
+
+    template <Backend B, typename T>
+    Event syev_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& descrA,
+                      Span<typename base_type<T>::type> eigenvalues,
+                      JobType jobtype,
+                      Uplo uplo,
+                      Span<std::byte> /*workspace*/) {
+        auto A_view = descrA;
+        auto eig = eigenvalues;
+        return op_external("lapacke.syev", [&, A_view, eig, jobtype, uplo] {
+            return detail::submit_host_task(ctx, "lapacke.syev", [=] {
+                if (A_view.batch_size() == 1) {
+                    call_backend_nh<T, BackendLibrary::LAPACKE>(
+                        LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
+                        Layout::ColMajor, jobtype, uplo,
+                        A_view.rows(), A_view.data_ptr(), A_view.ld(),
+                        base_float_ptr_convert(eig.data()));
+                } else {
+                    for (int i = 0; i < A_view.batch_size(); ++i) {
+                        call_backend_nh<T, BackendLibrary::LAPACKE>(
+                            LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
+                            Layout::ColMajor, jobtype, uplo,
+                            A_view[i].rows(),
+                            A_view[i].data_ptr(),
+                            A_view[i].ld(),
+                            base_float_ptr_convert(eig.subspan(i * A_view.rows()).data()));
+                    }
+                }
+            });
+        });
     }
 
     template <Backend B, typename T>
-    Event syev(Queue& ctx,
-                   const MatrixView<T,MatrixFormat::Dense>& descrA,
-                   Span<typename base_type<T>::type> eigenvalues,
-                   JobType jobtype,
-                   Uplo uplo,
-                   Span<std::byte> workspace) {
-        if (descrA.batch_size() == 1) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
-                Layout::ColMajor, jobtype, uplo,
-                descrA.rows(), descrA.data_ptr(), descrA.ld(),
-                base_float_ptr_convert(eigenvalues.data()));
-        } else {
-            for (int i = 0; i < descrA.batch_size(); ++i) {
-                syev<Backend::NETLIB>(
-                    ctx,
-                    descrA[i],
-                    eigenvalues.subspan(i*descrA.rows()),
-                    jobtype,
-                    uplo,
-                    workspace);
-            }
-        }
-        return ctx.get_event();
+    size_t syev_vendor_buffer_size(Queue& /*ctx*/, 
+                                   const MatrixView<T, MatrixFormat::Dense>& /*descrA*/,
+                                   Span<typename base_type<T>::type> /*eigenvalues*/,
+                                   JobType /*jobtype*/,
+                                   Uplo /*uplo*/) {
+        // LAPACKE path uses no user-provided workspace.
+        return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
     }
+
+    } // namespace backend
 
     template <Backend Back, typename T>
     Event getrs(Queue& ctx,
@@ -246,22 +304,26 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        int n = A.rows();
-        int nrhs = B.cols();
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sgetrs, LAPACKE_dgetrs, LAPACKE_cgetrs, LAPACKE_zgetrs,
-                Layout::ColMajor,
-                transA,
-                n,
-                nrhs,
-                A[i].data_ptr(),
-                A.ld(),
-                pivots.as_span<int>().data() + i * n,
-                B[i].data_ptr(),
-                B.ld());
-        }
-        return ctx.get_event();
+        auto A_view = A;
+        auto B_view = B;
+        auto piv = pivots;
+        return detail::submit_host_task(ctx, "netlib.getrs", [=] {
+            int n = A_view.rows();
+            int nrhs = B_view.cols();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sgetrs, LAPACKE_dgetrs, LAPACKE_cgetrs, LAPACKE_zgetrs,
+                    Layout::ColMajor,
+                    transA,
+                    n,
+                    nrhs,
+                    A_view[i].data_ptr(),
+                    A_view.ld(),
+                    piv.as_span<int>().data() + i * n,
+                    B_view[i].data_ptr(),
+                    B_view.ld());
+            }
+        });
     }
 
     template <Backend Back, typename T>
@@ -282,18 +344,21 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        int n = A.rows();
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
-                Layout::ColMajor,
-                n,
-                n,
-                A[i].data_ptr(),
-                A.ld(),
-                pivots.as_span<int>().data() + i * n);
-        }
-        return ctx.get_event();
+        auto A_view = A;
+        auto piv = pivots;
+        return detail::submit_host_task(ctx, "netlib.getrf", [=] {
+            int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
+                    Layout::ColMajor,
+                    n,
+                    n,
+                    A_view[i].data_ptr(),
+                    A_view.ld(),
+                    piv.as_span<int>().data() + i * n);
+            }
+        });
     }
 
     template <Backend B, typename T>
@@ -311,17 +376,21 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        int n = A.rows();
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sgetri, LAPACKE_dgetri, LAPACKE_cgetri, LAPACKE_zgetri,
-                Layout::ColMajor,
-                n,
-                C[i].data_ptr(),
-                C.ld(),
-                pivots.as_span<int>().data() + i * n);
-        }
-        return ctx.get_event();
+        auto A_view = A;
+        auto C_view = C;
+        auto piv = pivots;
+        return detail::submit_host_task(ctx, "netlib.getri", [=] {
+            int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sgetri, LAPACKE_dgetri, LAPACKE_cgetri, LAPACKE_zgetri,
+                    Layout::ColMajor,
+                    n,
+                    C_view[i].data_ptr(),
+                    C_view.ld(),
+                    piv.as_span<int>().data() + i * n);
+            }
+        });
     }
 
     template <Backend B, typename T>
@@ -338,20 +407,22 @@ namespace batchlas{
                 Span<T> tau,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        int m = A.rows();
-        int n = A.cols();
-
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sgeqrf, LAPACKE_dgeqrf, LAPACKE_cgeqrf, LAPACKE_zgeqrf,
-                Layout::ColMajor,
-                m,
-                n,
-                A[i].data_ptr(),
-                A.ld(),
-                tau.data() + i * std::min(m, n));
-        }
-        return ctx.get_event();
+        auto A_view = A;
+        auto tau_view = tau;
+        return detail::submit_host_task(ctx, "netlib.geqrf", [=] {
+            int m = A_view.rows();
+            int n = A_view.cols();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sgeqrf, LAPACKE_dgeqrf, LAPACKE_cgeqrf, LAPACKE_zgeqrf,
+                    Layout::ColMajor,
+                    m,
+                    n,
+                    A_view[i].data_ptr(),
+                    A_view.ld(),
+                    tau_view.data() + i * std::min(m, n));
+            }
+        });
     }
 
     template <Backend B, typename T>
@@ -370,21 +441,24 @@ namespace batchlas{
                 Span<T> tau,
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
-        int m = A.rows();
-        int n = A.cols();
-        int k = std::min(m, n);
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sorgqr, LAPACKE_dorgqr, LAPACKE_cungqr, LAPACKE_zungqr,
-                Layout::ColMajor,
-                m,
-                n,
-                k,
-                A[i].data_ptr(),
-                A.ld(),
-                tau.data() + i * k);
-        }
-        return ctx.get_event();
+        auto A_view = A;
+        auto tau_view = tau;
+        return detail::submit_host_task(ctx, "netlib.orgqr", [=] {
+            int m = A_view.rows();
+            int n = A_view.cols();
+            int k = std::min(m, n);
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sorgqr, LAPACKE_dorgqr, LAPACKE_cungqr, LAPACKE_zungqr,
+                    Layout::ColMajor,
+                    m,
+                    n,
+                    k,
+                    A_view[i].data_ptr(),
+                    A_view.ld(),
+                    tau_view.data() + i * k);
+            }
+        });
     }
 
     template <Backend B, typename T>
@@ -397,51 +471,63 @@ namespace batchlas{
         return 0;
     }
 
+    namespace backend {
+
     template <Backend B, typename T>
-    Event ormqr(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                Side side,
-                Transpose trans,
-                Span<T> tau,
-                Span<std::byte> workspace) {
-        static_cast<void>(workspace);
-        int m = C.rows();
-        int n = C.cols();
-        int k = std::min(A.rows(), A.cols());
-        for (int i = 0; i < A.batch_size(); ++i) {
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
-                LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
-                Layout::ColMajor,
-                side,
-                trans,
-                m,
-                n,
-                k,
-                A[i].data_ptr(),
-                A.ld(),
-                tau.data() + i * k,
-                C[i].data_ptr(),
-                C.ld());
-        }
-        return ctx.get_event();
+    Event ormqr_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& C,
+                      Side side,
+                      Transpose trans,
+                      Span<T> tau,
+                      Span<std::byte> workspace) {
+        auto A_view = A;
+        auto C_view = C;
+        auto tau_view = tau;
+        return op_external("lapacke.ormqr_vendor", [&, A_view, C_view, tau_view, side, trans] {
+            return detail::submit_host_task(ctx, "lapacke.ormqr_vendor", [=] {
+                static_cast<void>(workspace);
+                int m = C_view.rows();
+                int n = C_view.cols();
+                int k = std::min(A_view.rows(), A_view.cols());
+                for (int i = 0; i < A_view.batch_size(); ++i) {
+                    call_backend_nh<T, BackendLibrary::LAPACKE>(
+                        LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
+                        Layout::ColMajor,
+                        side,
+                        trans,
+                        m,
+                        n,
+                        k,
+                        A_view[i].data_ptr(),
+                        A_view.ld(),
+                        tau_view.data() + i * k,
+                        C_view[i].data_ptr(),
+                        C_view.ld());
+                }
+            });
+        });
     }
 
     template <Backend B, typename T>
-    size_t ormqr_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
-                             Side side,
-                             Transpose trans,
-                             Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(C);
-        static_cast<void>(side);
-        static_cast<void>(trans);
-        static_cast<void>(tau);
-        return 0;
+    size_t ormqr_vendor_buffer_size(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& C,
+                                    Side side,
+                                    Transpose trans,
+                                    Span<T> tau) {
+        return op_external("lapacke.ormqr_vendor_buffer_size", [&] {
+            static_cast<void>(ctx);
+            static_cast<void>(A);
+            static_cast<void>(C);
+            static_cast<void>(side);
+            static_cast<void>(trans);
+            static_cast<void>(tau);
+            return static_cast<size_t>(0);
+        });
     }
+
+    } // namespace backend
 
     template <Backend B, typename T>
     size_t potrf_buffer_size(Queue& ctx,
@@ -450,15 +536,6 @@ namespace batchlas{
         static_cast<void>(ctx);
         static_cast<void>(descrA);
         static_cast<void>(uplo);
-        return 0;
-    }
-
-    template <Backend B, typename T>
-    size_t syev_buffer_size(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& descrA,
-                   Span<typename base_type<T>::type> eigenvalues,
-                   JobType jobtype,
-                   Uplo uplo) {
         return 0;
     }
 
@@ -586,6 +663,23 @@ namespace batchlas{
         Side, Transpose, \
         Span<fp>);
 
+    #define ORMQR_VENDOR_INSTANTIATE(fp) \
+    template Event backend::ormqr_vendor<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>, \
+        Span<std::byte>);
+
+    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t backend::ormqr_vendor_buffer_size<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Side, Transpose, \
+        Span<fp>);
+
     #define POTRF_INSTANTIATE(fp) \
     template Event potrf<Backend::NETLIB, fp>( \
         Queue&, \
@@ -613,6 +707,21 @@ namespace batchlas{
         Span<typename base_type<fp>::type>, \
         JobType, Uplo);
 
+    #define SYEV_VENDOR_INSTANTIATE(fp) \
+    template Event backend::syev_vendor<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<fp>::type>, \
+        JobType, Uplo, \
+        Span<std::byte>);
+
+    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t backend::syev_vendor_buffer_size<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<fp>::type>, \
+        JobType, Uplo);
+
     #define BLAS_LEVEL3_INSTANTIATE(fp) \
         SPMM_INSTANTIATE(fp, MatrixFormat::CSR) \
         SPMM_BUFFER_SIZE_INSTANTIATE(fp, MatrixFormat::CSR) \
@@ -629,12 +738,16 @@ namespace batchlas{
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_INSTANTIATE(fp) \
         ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
+        ORMQR_VENDOR_INSTANTIATE(fp) \
+        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORGQR_INSTANTIATE(fp) \
         ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp)
+        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
+        SYEV_VENDOR_INSTANTIATE(fp) \
+        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)
 
     // Instantiate for the floating-point types of interest.
     BLAS_LEVEL3_INSTANTIATE(float)
@@ -657,11 +770,15 @@ namespace batchlas{
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_INSTANTIATE
     #undef ORMQR_BUFFER_SIZE_INSTANTIATE
+    #undef ORMQR_VENDOR_INSTANTIATE
+    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE
     #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_INSTANTIATE
     #undef SYEV_BUFFER_SIZE_INSTANTIATE
+    #undef SYEV_VENDOR_INSTANTIATE
+    #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
 }
