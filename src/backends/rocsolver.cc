@@ -7,6 +7,10 @@
 #include <algorithm>
 #include <blas/linalg.hh>
 
+#include <blas/functions/syev.hh>
+#include <blas/functions/ormqr.hh>
+#include <blas/dispatch/op.hh>
+
 namespace batchlas {
 
     template <Backend B, typename T>
@@ -80,56 +84,69 @@ namespace batchlas {
         return 0;
     }
 
+    namespace backend {
+
     template <Backend B, typename T>
-    Event ormqr(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                Side side,
-                Transpose trans,
-                Span<T> tau,
-                Span<std::byte> workspace) {
-        static_cast<void>(workspace);
-        static LinalgHandle<B> handle;
-        handle.setStream(ctx);
-        auto m = C.rows();
-        auto n = C.cols();
-        auto k = std::min(A.rows(), A.cols());
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
-                                                         rocsolver_cunmqr, rocsolver_zunmqr,
-                                                         handle,
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(side),
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(trans),
-                                                         m, n, k,
-                                                         A.data_ptr(), A.ld(),
-                                                         tau.data(),
-                                                         C.data_ptr(), C.ld());
-        } else {
-            Queue sub_queue(ctx.device(), false);
-            for (int i = 0; i < A.batch_size(); ++i) {
-                ormqr<B>(sub_queue, A.batch_item(i), C.batch_item(i), side, trans,
-                          tau.subspan(i * k, k), {});
+    Event ormqr_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& C,
+                      Side side,
+                      Transpose trans,
+                      Span<T> tau,
+                      Span<std::byte> workspace) {
+        return op_external("rocsolver.ormqr_vendor", [&] {
+            static_cast<void>(workspace);
+            static LinalgHandle<B> handle;
+            handle.setStream(ctx);
+            auto m = C.rows();
+            auto n = C.cols();
+            auto k = std::min(A.rows(), A.cols());
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
+                                                             rocsolver_cunmqr, rocsolver_zunmqr,
+                                                             handle,
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(side),
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(trans),
+                                                             m, n, k,
+                                                             A.data_ptr(), A.ld(),
+                                                             tau.data(),
+                                                             C.data_ptr(), C.ld());
+            } else {
+                Queue sub_queue(ctx.device(), false);
+                for (int i = 0; i < A.batch_size(); ++i) {
+                    ormqr_vendor<B, T>(sub_queue,
+                                       A.batch_item(i),
+                                       C.batch_item(i),
+                                       side,
+                                       trans,
+                                       tau.subspan(i * k, k),
+                                       {});
+                }
+                sub_queue.wait();
             }
-            sub_queue.wait();
-        }
-        return ctx.get_event();
+            return ctx.get_event();
+        });
     }
 
     template <Backend B, typename T>
-    size_t ormqr_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
-                             Side side,
-                             Transpose trans,
-                             Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(C);
-        static_cast<void>(side);
-        static_cast<void>(trans);
-        static_cast<void>(tau);
-        return 0;
+    size_t ormqr_vendor_buffer_size(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& C,
+                                    Side side,
+                                    Transpose trans,
+                                    Span<T> tau) {
+        return op_external("rocsolver.ormqr_vendor_buffer_size", [&] {
+            static_cast<void>(ctx);
+            static_cast<void>(A);
+            static_cast<void>(C);
+            static_cast<void>(side);
+            static_cast<void>(trans);
+            static_cast<void>(tau);
+            return static_cast<size_t>(0);
+        });
     }
+
+    } // namespace backend
 
     template <Backend B, typename T>
     Event orgqr(Queue& ctx,
@@ -286,41 +303,49 @@ namespace batchlas {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
+    namespace backend {
+
     template <Backend B, typename T>
-    Event syev(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> eigenvalues,
-                   JobType jobtype,
-                   Uplo uplo,
-                   Span<std::byte> workspace) {
-        static LinalgHandle<B> handle;
-        handle.setStream(ctx);
-        BumpAllocator pool(workspace);
-        auto info = pool.allocate<int>(ctx, A.batch_size());
-        auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
-                handle, jobtype, uplo,
-                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
-                info.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
-                rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
-                handle, jobtype, uplo,
-                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
-        }
-        return ctx.get_event();
+    Event syev_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      Span<typename base_type<T>::type> eigenvalues,
+                      JobType jobtype,
+                      Uplo uplo,
+                      Span<std::byte> workspace) {
+        return op_external("rocsolver.syev_vendor", [&] {
+            static LinalgHandle<B> handle;
+            handle.setStream(ctx);
+            BumpAllocator pool(workspace);
+            auto info = pool.allocate<int>(ctx, A.batch_size());
+            auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
+                    handle, jobtype, uplo,
+                    A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
+                    info.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
+                    rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
+                    handle, jobtype, uplo,
+                    A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
+            }
+            return ctx.get_event();
+        });
     }
 
     template <Backend B, typename T>
-    size_t syev_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        Span<typename base_type<T>::type> eigenvalues,
-                        JobType jobtype,
-                        Uplo uplo) {
-                            return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
-                                   BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+    size_t syev_vendor_buffer_size(Queue& ctx,
+                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                   Span<typename base_type<T>::type> /*eigenvalues*/,
+                                   JobType /*jobtype*/,
+                                   Uplo /*uplo*/) {
+        return op_external("rocsolver.syev_vendor_buffer_size", [&] {
+            return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
+                   BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+        });
     }
+
+    } // namespace backend
 
     #define POTRF_INSTANTIATE(fp) \
     template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>);
@@ -330,6 +355,10 @@ namespace batchlas {
     template Event syev<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
     #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t syev_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
+    #define SYEV_VENDOR_INSTANTIATE(fp) \
+    template Event backend::syev_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
+    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t backend::syev_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
     #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
@@ -338,6 +367,10 @@ namespace batchlas {
     template Event ormqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
     #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t ormqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>);
+    #define ORMQR_VENDOR_INSTANTIATE(fp) \
+    template Event backend::ormqr_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
+    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t backend::ormqr_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>);
     #define ORGQR_INSTANTIATE(fp) \
     template Event orgqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
     #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
@@ -360,6 +393,8 @@ namespace batchlas {
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_INSTANTIATE(fp) \
         SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
+        SYEV_VENDOR_INSTANTIATE(fp) \
+        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GEQRF_INSTANTIATE(fp) \
         GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRF_INSTANTIATE(fp) \
@@ -370,6 +405,8 @@ namespace batchlas {
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_INSTANTIATE(fp) \
         ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
+        ORMQR_VENDOR_INSTANTIATE(fp) \
+        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORGQR_INSTANTIATE(fp) \
         ORGQR_BUFFER_SIZE_INSTANTIATE(fp)
 
@@ -382,10 +419,14 @@ namespace batchlas {
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_INSTANTIATE
     #undef SYEV_BUFFER_SIZE_INSTANTIATE
+    #undef SYEV_VENDOR_INSTANTIATE
+    #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_INSTANTIATE
     #undef ORMQR_BUFFER_SIZE_INSTANTIATE
+    #undef ORMQR_VENDOR_INSTANTIATE
+    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE
     #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef GETRF_INSTANTIATE

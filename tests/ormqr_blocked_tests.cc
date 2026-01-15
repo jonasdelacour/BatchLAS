@@ -69,10 +69,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     const int n = 64;
     const int batch = 1;
 
-    // Make sure the reference path doesn't accidentally route to the blocked impl.
-    ::setenv("BATCHLAS_ORMQR_BLOCKED", "0", 1);
-    ::setenv("BATCHLAS_ORMQR_IMPL", "", 1);
-
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -86,8 +82,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(ormqr_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        ormqr<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(backend::ormqr_vendor_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
+        backend::ormqr_vendor<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -134,9 +130,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     const int n = 64;
     const int batch = 1;
 
-    ::setenv("BATCHLAS_ORMQR_BLOCKED", "0", 1);
-    ::setenv("BATCHLAS_ORMQR_IMPL", "", 1);
-
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -150,8 +143,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(ormqr_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span()));
-        ormqr<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(backend::ormqr_vendor_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span()));
+        backend::ormqr_vendor<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -184,9 +177,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     const int n = 64;
     const int batch = 1;
 
-    ::setenv("BATCHLAS_ORMQR_BLOCKED", "0", 1);
-    ::setenv("BATCHLAS_ORMQR_IMPL", "", 1);
-
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -200,8 +190,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(ormqr_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span()));
-        ormqr<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(backend::ormqr_vendor_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span()));
+        backend::ormqr_vendor<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -234,9 +224,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     const int n = 64;
     const int batch = 1;
 
-    ::setenv("BATCHLAS_ORMQR_BLOCKED", "0", 1);
-    ::setenv("BATCHLAS_ORMQR_IMPL", "", 1);
-
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -251,8 +238,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
 
     {
         UnifiedVector<std::byte> ws_ref(
-            ormqr_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span()));
-        ormqr<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
+            backend::ormqr_vendor_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span()));
+        backend::ormqr_vendor<B>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -285,9 +272,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     const int n = 64;
     const int batch = 8;
 
-    ::setenv("BATCHLAS_ORMQR_BLOCKED", "0", 1);
-    ::setenv("BATCHLAS_ORMQR_IMPL", "", 1);
-
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -301,8 +285,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(ormqr_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        ormqr<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(backend::ormqr_vendor_buffer_size<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
+        backend::ormqr_vendor<B>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 

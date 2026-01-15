@@ -13,8 +13,19 @@
 // This file contains cuSPARSE primitives implementation using MatrixView
 namespace batchlas {
 
+    namespace backend {
+        template <Backend B, typename T, MatrixFormat MFormat>
+        size_t spmm_vendor_buffer_size(Queue& ctx,
+                                       const MatrixView<T, MFormat>& A,
+                                       const MatrixView<T, MatrixFormat::Dense>& B_mat,
+                                       const MatrixView<T, MatrixFormat::Dense>& C,
+                                       T alpha,
+                                       T beta,
+                                       Transpose transA,
+                                       Transpose transB);
+
     template <Backend B, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
+    Event spmm_vendor(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B_mat,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -28,7 +39,7 @@ namespace batchlas {
         handle.setStream(ctx);
 
         BumpAllocator pool(workspace);
-        auto buffer_size = spmm_buffer_size<B>(ctx, A, B_mat, C, alpha, beta, transA, transB);
+        auto buffer_size = spmm_vendor_buffer_size<B>(ctx, A, B_mat, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
 
         cusparseSpMM(
@@ -48,7 +59,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
+    size_t spmm_vendor_buffer_size(Queue& ctx,
                           const MatrixView<T, MFormat>& A,
                           const MatrixView<T, MatrixFormat::Dense>& B_mat,
                           const MatrixView<T, MatrixFormat::Dense>& C,
@@ -75,6 +86,33 @@ namespace batchlas {
             &size
         );
         return BumpAllocator::allocation_size<std::byte>(ctx, size);
+    }
+
+    } // namespace backend
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event spmm(Queue& ctx,
+               const MatrixView<T, MFormat>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B_mat,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               T beta,
+               Transpose transA,
+               Transpose transB,
+               Span<std::byte> workspace) {
+        return backend::spmm_vendor<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB, workspace);
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t spmm_buffer_size(Queue& ctx,
+                            const MatrixView<T, MFormat>& A,
+                            const MatrixView<T, MatrixFormat::Dense>& B_mat,
+                            const MatrixView<T, MatrixFormat::Dense>& C,
+                            T alpha,
+                            T beta,
+                            Transpose transA,
+                            Transpose transB) {
+        return backend::spmm_vendor_buffer_size<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB);
     }
 
     #define SPMM_INSTANTIATE(fp, F) \

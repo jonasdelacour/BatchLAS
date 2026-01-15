@@ -7,6 +7,9 @@
 #include <complex>
 #include <sycl/sycl.hpp>
 
+#include <blas/functions/syev.hh>
+#include <blas/functions/ormqr.hh>
+
 namespace batchlas {
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -349,45 +352,6 @@ inline size_t orgqr_buffer_size(Queue& ctx,
 }
 
 template <Backend B, typename T>
-Event ormqr(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            Side side,
-            Transpose trans,
-            Span<T> tau,
-            Span<std::byte> workspace);
-
-template <Backend B, typename T>
-inline Event ormqr(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        const Matrix<T, MatrixFormat::Dense>& Cmat,
-                        Side side,
-                        Transpose trans,
-                        Span<T> tau,
-                        Span<std::byte> workspace) {
-        return ormqr<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), side, trans, tau, workspace);
-}
-
-template <Backend B, typename T>
-size_t ormqr_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
-                         Side side,
-                         Transpose trans,
-                         Span<T> tau);
-
-template <Backend B, typename T>
-inline size_t ormqr_buffer_size(Queue& ctx,
-                                                 const Matrix<T, MatrixFormat::Dense>& A,
-                                                 const Matrix<T, MatrixFormat::Dense>& Cmat,
-                                                 Side side,
-                                                 Transpose trans,
-                                                 Span<T> tau) {
-        return ormqr_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), side, trans, tau);
-}
-
-
-template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
                     Uplo uplo);
@@ -409,39 +373,6 @@ inline Event potrf(Queue& ctx,
                 Uplo uplo,
                 Span<std::byte> workspace) {
         return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace);
-}
-
-        template <Backend B, typename T>
-Event syev(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& descrA, //A is overwritten with eigenvectors
-        Span<typename base_type<T>::type> eigenvalues,
-        JobType jobtype,
-        Uplo uplo,
-        Span<std::byte> workspace);
-
-template <Backend B, typename T>
-size_t syev_buffer_size(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
-        Span<typename base_type<T>::type> eigenvalues,
-        JobType jobtype,
-        Uplo uplo);
-
-template <Backend B, typename T>
-inline Event syev(Queue& ctx,
-                const Matrix<T, MatrixFormat::Dense>& descrA,
-                Span<typename base_type<T>::type> eigenvalues,
-                JobType jobtype,
-                Uplo uplo,
-                Span<std::byte> workspace) {
-        return syev<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), eigenvalues, jobtype, uplo, workspace);
-}
-template <Backend B, typename T>
-inline size_t syev_buffer_size(Queue& ctx,
-                const Matrix<T, MatrixFormat::Dense>& A,
-                Span<typename base_type<T>::type> eigenvalues,
-                JobType jobtype,
-                Uplo uplo) {
-        return syev_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), eigenvalues, jobtype, uplo);
 }
 
 
