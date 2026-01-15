@@ -15,25 +15,25 @@ static int called_dn = 0;
 template <typename T, batchlas::Backend B>
 static void typed_bench(minibench::State&) {}
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::CUDA>(minibench::State&) { ++called_fc; }
 BATCHLAS_BENCH_CUDA(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::ROCM>(minibench::State&) { ++called_fc; }
 BATCHLAS_BENCH_ROCM(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::MKL>(minibench::State&) { ++called_fc; }
 BATCHLAS_BENCH_MKL(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
 template <>
 void typed_bench<double, batchlas::Backend::NETLIB>(minibench::State&) { ++called_dn; }
 MINI_BENCHMARK_REGISTER_SIZES((typed_bench<double, batchlas::Backend::NETLIB>), [](auto* b){ b->Args({1}); });

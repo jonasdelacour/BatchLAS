@@ -3,7 +3,7 @@
 #include <blas/matrix.hh>
 #include "../linalg-impl.hh"
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
     #include <cublas_v2.h>
@@ -23,7 +23,7 @@ struct BackendMatrixHandle {
     BackendMatrixHandle& operator=(BackendMatrixHandle&&) = default;
 
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) {
-        #ifdef BATCHLAS_HAS_CUDA_BACKEND
+        #if BATCHLAS_HAS_CUDA_BACKEND
             if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
                 if (matrix.batch_size() > 1) {
@@ -37,7 +37,7 @@ struct BackendMatrixHandle {
                 }
             }
         #endif
-        #ifdef BATCHLAS_HAS_ROCM_BACKEND
+        #if BATCHLAS_HAS_ROCM_BACKEND
             if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 rocsparse_create_dnmat_descr(&rocsparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(),
                                              std::is_same_v<T, float> ? rocsparse_datatype_f32_r :
@@ -65,7 +65,7 @@ struct BackendMatrixHandle {
 
     BackendMatrixHandle(const Matrix<T, MType>& matrix) : BackendMatrixHandle(matrix.view()) {}
 
-    #ifdef BATCHLAS_HAS_CUDA_BACKEND
+    #if BATCHLAS_HAS_CUDA_BACKEND
         cusparseDnMatDescr_t cusparse_descr_ = nullptr;
         cusparseSpMatDescr_t cusparse_descr_sp_ = nullptr;
 
@@ -73,7 +73,7 @@ struct BackendMatrixHandle {
         constexpr inline operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
     #endif
 
-    #ifdef BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCM_BACKEND
         rocsparse_dnmat_descr rocsparse_descr_ = nullptr;
         rocsparse_spmat_descr rocsparse_descr_sp_ = nullptr;
 

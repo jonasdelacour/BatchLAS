@@ -5,8 +5,9 @@
 #include <util/mempool.hh>
 #include <execution>
 #include <type_traits>
+#include <memory>
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
     #include <cublas_v2.h>
@@ -16,12 +17,12 @@
 
 #if BATCHLAS_HAS_HOST_BACKEND
     #include <lapacke.h>
-    #ifndef BATCHLAS_HAS_MKL_BACKEND
+    #if !BATCHLAS_HAS_MKL_BACKEND
         #include <cblas.h>
-    #endif // BATCHLAS_HAS_MKL_BACKEND
+    #endif // !BATCHLAS_HAS_MKL_BACKEND
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
     #define  __HIP_PLATFORM_AMD__
     #include <hip/hip_runtime.h>
     #include <rocblas/rocblas.h>
@@ -33,7 +34,7 @@
     #include <magma_v2.h>
 #endif
 
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
     #include <oneapi/mkl/blas.hpp>
     #include <oneapi/mkl/lapack.hpp>
     #include <oneapi/mkl/types.hpp>
@@ -80,19 +81,19 @@ namespace batchlas{
     // Individual enum conversions for CUDA backend
     template<BackendLibrary B>
     constexpr auto enum_convert(Side side) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasSideMode_t>(
                 side == Side::Left ? CUBLAS_SIDE_LEFT : CUBLAS_SIDE_RIGHT
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
             return static_cast<rocblas_side>(side == Side::Left ? rocblas_side_left : rocblas_side_right);
         } else
 #endif
-#ifdef BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND
         if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
@@ -103,7 +104,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return side == Side::Left ? oneapi::mkl::side::left : oneapi::mkl::side::right;
         } else
@@ -115,14 +116,14 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(JobType job) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUSOLVER) {
             return static_cast<cusolverEigMode_t>(
                 job == JobType::EigenVectors ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCSOLVER) {
             return job == JobType::EigenVectors ? rocblas_evect_original : rocblas_evect_none;
         } else
@@ -134,7 +135,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return job == JobType::EigenVectors ? oneapi::mkl::job::vec : oneapi::mkl::job::novec;
         } else
@@ -146,14 +147,14 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Diag diag) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS) {
             return static_cast<cublasDiagType_t>(
                 diag == Diag::NonUnit ? CUBLAS_DIAG_NON_UNIT : CUBLAS_DIAG_UNIT
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS) {
             return diag == Diag::NonUnit ? rocblas_diagonal_non_unit : rocblas_diagonal_unit;
         } else
@@ -169,7 +170,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return diag == Diag::NonUnit ? oneapi::mkl::diag::nonunit : oneapi::mkl::diag::unit;
         } else
@@ -181,14 +182,14 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Layout layout) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUSPARSE) {
             return static_cast<cusparseOrder_t>(
                 layout == Layout::RowMajor ? CUSPARSE_ORDER_ROW : CUSPARSE_ORDER_COL
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCSPARSE) {
             return static_cast<rocsparse_order>(layout == Layout::RowMajor ? rocsparse_order_row : rocsparse_order_column);
         } else
@@ -204,7 +205,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return layout == Layout::RowMajor ? oneapi::mkl::layout::row_major : oneapi::mkl::layout::col_major;
         } else
@@ -216,7 +217,7 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Uplo uplo) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasFillMode_t>(
                 uplo == Uplo::Upper ? CUBLAS_FILL_MODE_UPPER : CUBLAS_FILL_MODE_LOWER
@@ -227,7 +228,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
             return uplo == Uplo::Upper ? rocblas_fill_upper : rocblas_fill_lower;
         } else if constexpr (B == BackendLibrary::ROCSPARSE) {
@@ -245,7 +246,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return uplo == Uplo::Upper ? oneapi::mkl::uplo::upper : oneapi::mkl::uplo::lower;
         } else
@@ -257,7 +258,7 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Transpose trans) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             switch (trans) {
                 case Transpose::NoTrans: return static_cast<cublasOperation_t>(CUBLAS_OP_N);
@@ -272,7 +273,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
             //return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
             switch (trans) {
@@ -300,7 +301,7 @@ namespace batchlas{
             );
         } else
 #endif
-#ifdef BATCHLAS_HAS_MKL_BACKEND
+#if BATCHLAS_HAS_MKL_BACKEND
         if constexpr (B == BackendLibrary::MKL) {
             return trans == Transpose::NoTrans ? oneapi::mkl::transpose::nontrans : oneapi::mkl::transpose::trans;
         } else
@@ -312,7 +313,7 @@ namespace batchlas{
 
     template<BackendLibrary B, typename T>
     constexpr auto enum_convert(ComputePrecision precision) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
             using BaseType = typename base_type<T>::type;
             
@@ -344,7 +345,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
             (void)precision;
             if constexpr (std::is_same_v<T, float>) {
@@ -365,7 +366,7 @@ namespace batchlas{
 
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(T** ptr) {
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -376,7 +377,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr;
@@ -411,7 +412,7 @@ namespace batchlas{
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(T* ptr) {
         static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -422,7 +423,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr;
@@ -465,7 +466,7 @@ namespace batchlas{
     template<BackendLibrary B, typename T>
     constexpr auto ptr_convert(const T* ptr) {
         static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr; // No conversion needed
@@ -476,7 +477,7 @@ namespace batchlas{
             }
         } else
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
             if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                 return ptr;
@@ -493,17 +494,18 @@ namespace batchlas{
     }
 
     template<BackendLibrary B, typename T>
-    constexpr auto float_convert(T& val) {
-        static_assert(is_complex_or_floating_point<T>::value, "Type must be floating point or complex");
+    constexpr auto float_convert(const T& val) {
+        using BareT = std::remove_const_t<T>;
+        static_assert(is_complex_or_floating_point<BareT>::value, "Type must be floating point or complex");
         if constexpr (B == BackendLibrary::CBLAS) {
-            if constexpr (std::is_same_v<T, float>) {
+            if constexpr (std::is_same_v<BareT, float>) {
                 return static_cast<float>(val);
-            } else if constexpr (std::is_same_v<T, double>) {
+            } else if constexpr (std::is_same_v<BareT, double>) {
                 return static_cast<double>(val);
-            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-                return static_cast<void*>(&val);
-            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
-                return static_cast<void*>(&val);
+            } else if constexpr (std::is_same_v<BareT, std::complex<float>>) {
+                return static_cast<const void*>(std::addressof(val));
+            } else if constexpr (std::is_same_v<BareT, std::complex<double>>) {
+                return static_cast<const void*>(std::addressof(val));
             }
         } else {
             return val; // No conversion needed
@@ -548,15 +550,16 @@ namespace batchlas{
     namespace detail {
         template <BackendLibrary B, typename T>
         constexpr auto convert_arg(T&& arg) {
-            if constexpr (is_linalg_enum<std::remove_const_t<std::remove_reference_t<T>>>::value) {
+            using Arg = std::remove_cv_t<std::remove_reference_t<T>>;
+            if constexpr (is_linalg_enum<Arg>::value) {
                 return enum_convert<B>(std::forward<T>(arg));
-            } else if constexpr (std::is_integral_v<std::remove_reference_t<T>>) {
+            } else if constexpr (std::is_integral_v<Arg>) {
                 return std::forward<T>(arg);
-            } else if constexpr (std::is_integral_v<std::remove_pointer_t<std::remove_reference_t<T>>>) {
+            } else if constexpr (std::is_integral_v<std::remove_pointer_t<Arg>>) {
                 return std::forward<T>(arg);
-            } else if constexpr (std::is_pointer_v<std::remove_reference_t<T>> && is_complex_or_floating_point<std::remove_pointer_t<std::remove_pointer_t<std::remove_reference_t<T>>>>::value) {
+            } else if constexpr (std::is_pointer_v<Arg> && is_complex_or_floating_point<std::remove_pointer_t<std::remove_pointer_t<Arg>>>::value) {
                 return ptr_convert<B>(std::forward<T>(arg));
-            } else if constexpr (is_complex_or_floating_point<std::remove_reference_t<T>>::value) {
+            } else if constexpr (is_complex_or_floating_point<Arg>::value) {
                 return float_convert<B>(std::forward<T>(arg));
             } else {
                 return std::forward<T>(arg);
@@ -584,7 +587,7 @@ namespace batchlas{
         return std::make_tuple(detail::convert_arg<B>(std::forward<Args>(args))...);
     }
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
     inline auto check_status(cublasStatus_t status) {
         if (status != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("CUBLAS error: " + std::to_string(status));
@@ -607,7 +610,7 @@ namespace batchlas{
     }
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
     inline auto check_status(rocblas_status status) {
         if (status != rocblas_status_success) {
             throw std::runtime_error("rocBLAS error: " + std::to_string(status));
@@ -623,7 +626,7 @@ namespace batchlas{
     }
 #endif
     
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
@@ -638,7 +641,7 @@ namespace batchlas{
     }
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
@@ -680,7 +683,7 @@ namespace batchlas{
         
 
 
-    #ifdef BATCHLAS_HAS_CUDA_BACKEND
+    #if BATCHLAS_HAS_CUDA_BACKEND
         template <>
         struct BackendScalar<float, BackendLibrary::CUBLAS> {
             static constexpr cudaDataType_t type = CUDA_R_32F;
@@ -743,7 +746,7 @@ namespace batchlas{
         };
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         template <>
         struct BackendScalar<float, BackendLibrary::ROCBLAS> {
             static constexpr rocblas_datatype type = rocblas_datatype_f32_r;
@@ -805,14 +808,14 @@ namespace batchlas{
         };
 #endif
 
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_ROCM_BACKEND
         template <typename T>
         struct BlasComputeType<T, ComputePrecision::Default, Backend::ROCM> {
             static constexpr rocblas_datatype type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? rocblas_datatype_f32_r : rocblas_datatype_f64_r;
         };
 #endif
 
-#ifdef BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
 
         template <typename T>
         struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
@@ -891,7 +894,7 @@ namespace batchlas{
             }
         };
 #endif
-#ifdef BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCM_BACKEND
         template <>
         struct LinalgHandle<Backend::ROCM> {
             rocblas_handle blas_handle_{};
