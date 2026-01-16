@@ -21,7 +21,6 @@ set(TEST_TARGETS
     util_span_tests
     util_vector_tests
     util_device_queue_tests
-    minibench_cli_tests
     mempool_tests
     gemm_tests
     syevx_tests
@@ -35,7 +34,6 @@ set(TEST_TARGETS
     norm_tests
     cond_tests
     ormqr_tests
-    ormqr_cta_tests
     ormqr_blocked_tests
     orgqr_tests
     transpose_tests
@@ -44,13 +42,27 @@ set(TEST_TARGETS
     trmm_tests
     stedc_tests
     ritz_values_tests
-    sytrd_cta_tests
-    sytrd_blocked_tests
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
-    syev_cta_tests
-    syev_blocked_tests
 )
+
+# Tests that require CPU target (use ctx_cpu or NETLIB backend)
+set(CPU_DEPENDENT_TESTS
+    minibench_cli_tests
+    ormqr_cta_tests
+    syev_blocked_tests
+    syev_cta_tests
+    sytrd_cta_tests
+    sytrd_blocked_tests
+)
+
+# Add CPU-dependent tests only if CPU target is available
+if(BATCHLAS_HAS_CPU_TARGET)
+    list(APPEND TEST_TARGETS ${CPU_DEPENDENT_TESTS})
+    message(STATUS "Including CPU-dependent tests: ${CPU_DEPENDENT_TESTS}")
+else()
+    message(STATUS "Skipping CPU-dependent tests (no CPU target available): ${CPU_DEPENDENT_TESTS}")
+endif()
 
 # Create test executables
 foreach(test ${TEST_TARGETS})
