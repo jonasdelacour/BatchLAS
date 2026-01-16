@@ -11,6 +11,9 @@
 #cmakedefine01 BATCHLAS_HAS_ROCM_BACKEND
 #cmakedefine01 BATCHLAS_HAS_MKL_BACKEND
 
+// Whether CPU SYCL kernel targets are compiled
+#cmakedefine01 BATCHLAS_HAS_CPU_TARGET
+
 // Helper macros for conditional compilation
 #if BATCHLAS_HAS_CUDA_BACKEND
   #define BATCHLAS_IF_CUDA(x) x

@@ -120,11 +120,11 @@ inline bool should_run_float_type(const std::string& type_name) {
 template <template <typename, batchlas::Backend> class Config>
 struct backend_types {
     using tuple_type = decltype(std::tuple_cat(
-#if BATCHLAS_HAS_HOST_BACKEND
-        std::tuple<Config<float, batchlas::Backend::NETLIB>,
-                   Config<double, batchlas::Backend::NETLIB>,
-                   Config<std::complex<float>, batchlas::Backend::NETLIB>,
-                   Config<std::complex<double>, batchlas::Backend::NETLIB>>{},
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+    std::tuple<Config<float, batchlas::Backend::NETLIB>,
+           Config<double, batchlas::Backend::NETLIB>,
+           Config<std::complex<float>, batchlas::Backend::NETLIB>,
+           Config<std::complex<double>, batchlas::Backend::NETLIB>>{},
 #endif
 #if BATCHLAS_HAS_CUDA_BACKEND
         std::tuple<Config<float, batchlas::Backend::CUDA>,
@@ -234,6 +234,9 @@ protected:
                 GTEST_SKIP() << "Queue construction failed: " << e.what();
             }
         } else {
+#if !BATCHLAS_HAS_CPU_TARGET
+            GTEST_SKIP() << "NETLIB backend requires CPU SYCL target support (no CPU target in fsycl-targets)";
+#endif
             ctx = std::make_shared<Queue>("cpu");
         }
     }
