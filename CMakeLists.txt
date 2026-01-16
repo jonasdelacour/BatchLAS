@@ -86,6 +86,7 @@ option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detecte
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
+option(BATCHLAS_ENABLE_CPU_TESTS "Enable tests/benchmarks requiring CPU SYCL kernel compilation" ON)
 
 # Opt-in: bottom-up tuning harness (runs benchmark grid-search and writes a JSON profile).
 # This is intentionally OFF-by-default and only meaningful when benchmarks are enabled.
@@ -154,6 +155,7 @@ endif()
 
 # List of SYCL targets detected by the helper functions
 set(BATCHLAS_SYCL_TARGETS "")
+set(BATCHLAS_HAS_CPU_TARGET OFF)
 
 
 
@@ -315,6 +317,7 @@ endfunction()
 function(detect_sycl_cpu_target)
     if(NOT SYCL_LS)
         message(STATUS "sycl-ls not found, skipping CPU target detection")
+        set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
         return()
     endif()
 
@@ -327,21 +330,21 @@ function(detect_sycl_cpu_target)
 
     if(NOT SYCL_LS_CPU_RESULT EQUAL 0)
         message(WARNING "Failed to execute sycl-ls: ${SYCL_LS_CPU_ERROR}")
+        set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
         return()
     endif()
 
     # Check for native_cpu backend (LLVM's built-in CPU support)
     if(SYCL_LS_CPU_OUTPUT MATCHES "\\[native_cpu:cpu\\]")
-        message(STATUS "Detected SYCL native_cpu device, adding native_cpu target")
-        list(APPEND BATCHLAS_SYCL_TARGETS native_cpu)
-        set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+        message(STATUS "Detected SYCL native_cpu device")
+        set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
     # Check for OpenCL-based CPU backend (Intel's implementation)
     elseif(SYCL_LS_CPU_OUTPUT MATCHES "\\[opencl:cpu\\]" OR SYCL_LS_CPU_OUTPUT MATCHES "\\[host:cpu\\]")
-        message(STATUS "Detected SYCL OpenCL CPU device, adding spir64_x86_64 target")
-        list(APPEND BATCHLAS_SYCL_TARGETS spir64_x86_64)
-        set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+        message(STATUS "Detected SYCL OpenCL CPU device")
+        set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
     else()
         message(STATUS "No SYCL CPU device detected")
+        set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -353,7 +356,7 @@ add_link_options(-fsycl)
 detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
-#detect_sycl_cpu_target()
+detect_sycl_cpu_target()
 
 # ---------------------------------------------------------------------------
 # Device line info (CUDA/NVIDIA)
@@ -798,6 +801,32 @@ if(BATCHLAS_SYCL_TARGETS)
     add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
     add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
     message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
+endif()
+
+# Check if CPU kernels will actually be compiled based on SYCL targets
+# CPU targets include: native_cpu, spir64_x86_64, spir64, or anything with "cpu" in the name
+set(HAS_CPU_SYCL_TARGET OFF)
+foreach(_target ${BATCHLAS_SYCL_TARGETS})
+    if(_target MATCHES "cpu" OR _target MATCHES "spir64" OR _target MATCHES "native_cpu")
+        set(HAS_CPU_SYCL_TARGET ON)
+        break()
+    endif()
+endforeach()
+
+# Override BATCHLAS_HAS_CPU_TARGET based on actual compilation targets
+# If no CPU-like target in fsycl-targets, CPU kernels won't be compiled
+if(NOT HAS_CPU_SYCL_TARGET)
+    if(BATCHLAS_HAS_CPU_TARGET)
+        message(STATUS "CPU device detected by sycl-ls, but no CPU target in fsycl-targets")
+        message(STATUS "CPU kernels will not be compiled - disabling CPU-dependent tests/benchmarks")
+    endif()
+    set(BATCHLAS_HAS_CPU_TARGET OFF)
+endif()
+
+# Allow manual override
+if(NOT BATCHLAS_ENABLE_CPU_TESTS)
+    message(STATUS "CPU-dependent tests and benchmarks manually disabled")
+    set(BATCHLAS_HAS_CPU_TARGET OFF)
 endif()
 
 # This ensures proper integration with Intel's SYCL implementation

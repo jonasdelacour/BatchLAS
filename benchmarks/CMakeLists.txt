@@ -8,6 +8,7 @@ set(BENCHMARK_TARGETS
     trsm_benchmark
     ormqr_benchmark
     ormqr_blocked_benchmark
+    ormqr_cta_benchmark
     orgqr_benchmark
     syev_benchmark
     syev_cta_benchmark
@@ -16,19 +17,18 @@ set(BENCHMARK_TARGETS
     lanczos_benchmark
     ortho_benchmark
     steqr_benchmark
+    steqr_cta_benchmark
     transpose_benchmark
     permuted_copy_benchmark
     matrix_copy_benchmark
     vector_benchmark
     stehr_benchmark
     stedc_benchmark
-    steqr_cta_benchmark
+    latrd_lower_panel_benchmark
     sytrd_cta_benchmark
     sytrd_blocked_benchmark
     sytrd_sy2sb_benchmark
     sytrd_sb2st_benchmark
-    latrd_lower_panel_benchmark
-    ormqr_cta_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})

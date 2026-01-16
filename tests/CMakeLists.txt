@@ -21,7 +21,6 @@ set(TEST_TARGETS
     util_span_tests
     util_vector_tests
     util_device_queue_tests
-    minibench_cli_tests
     mempool_tests
     gemm_tests
     syevx_tests
@@ -44,13 +43,26 @@ set(TEST_TARGETS
     trmm_tests
     stedc_tests
     ritz_values_tests
-    sytrd_cta_tests
-    sytrd_blocked_tests
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
+    sytrd_cta_tests
+    sytrd_blocked_tests
     syev_cta_tests
     syev_blocked_tests
 )
+
+# Tests that require CPU SYCL kernel compilation (not just NETLIB)
+set(CPU_SYCL_DEPENDENT_TESTS
+    minibench_cli_tests
+)
+
+# Add CPU SYCL-dependent tests only if CPU kernels will be compiled
+if(BATCHLAS_HAS_CPU_TARGET)
+    list(APPEND TEST_TARGETS ${CPU_SYCL_DEPENDENT_TESTS})
+    message(STATUS "Including CPU SYCL-dependent tests: ${CPU_SYCL_DEPENDENT_TESTS}")
+else()
+    message(STATUS "Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): ${CPU_SYCL_DEPENDENT_TESTS}")
+endif()
 
 # Create test executables
 foreach(test ${TEST_TARGETS})
