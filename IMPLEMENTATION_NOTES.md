@@ -23,47 +23,24 @@ The build system now intelligently detects whether CPU kernels will actually be 
    - New option: `BATCHLAS_ENABLE_CPU_TESTS` (default: ON)
    - Can be set to OFF to force-disable CPU-dependent tests regardless of detection
 
-## CPU-Dependent Tests
-- minibench_cli_tests
-- ormqr_cta_tests
-- syev_blocked_tests
-- syev_cta_tests
-- sytrd_cta_tests
-- sytrd_blocked_tests
+## CPU SYCL Kernel-Dependent Tests
+Only tests that actually require CPU SYCL kernel compilation are excluded:
+- minibench_cli_tests (tests NETLIB backend with CPU SYCL kernels)
 
-## CPU-Dependent Benchmarks
-- geqrf_benchmark
-- gemm_benchmark
-- trmm_benchmark
-- gemv_benchmark
-- spmm_benchmark
-- trsm_benchmark
-- ormqr_benchmark
-- ormqr_blocked_benchmark
-- ormqr_cta_benchmark
-- orgqr_benchmark
-- syev_benchmark
-- syev_cta_benchmark
-- syev_blocked_benchmark
-- syevx_benchmark
-- lanczos_benchmark
-- ortho_benchmark
-- steqr_benchmark
-- steqr_cta_benchmark
-- transpose_benchmark
-- permuted_copy_benchmark
-- matrix_copy_benchmark
-- vector_benchmark
-- stehr_benchmark
-- stedc_benchmark
+## Note on Queue("cpu") Usage
+Many tests create `Queue("cpu")` to run NETLIB (host BLAS/LAPACK) for reference comparisons. These tests do NOT require CPU SYCL kernel compilation because:
+- The actual test kernels run on GPU (which is compiled)
+- NETLIB executes on the host CPU directly (not through SYCL kernels)  
+- `Queue("cpu")` can be created as long as a CPU device exists in the SYCL runtime
+
+Tests like `ormqr_cta_tests`, `syev_cta_tests`, `sytrd_cta_tests`, etc. are included even without CPU targets in fsycl-targets.
 
 ## Example Output
 ```
 -- Using SYCL targets: nvidia_gpu_sm_89
 -- CPU device detected by sycl-ls, but no CPU target in fsycl-targets
 -- CPU kernels will not be compiled - disabling CPU-dependent tests/benchmarks
--- Skipping CPU-dependent tests (no CPU target available)
--- Skipping CPU-dependent benchmarks (no CPU target available)
+-- Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): minibench_cli_tests
 ```
 
 ## Benefits

@@ -34,6 +34,7 @@ set(TEST_TARGETS
     norm_tests
     cond_tests
     ormqr_tests
+    ormqr_cta_tests
     ormqr_blocked_tests
     orgqr_tests
     transpose_tests
@@ -44,24 +45,23 @@ set(TEST_TARGETS
     ritz_values_tests
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
-)
-
-# Tests that require CPU target (use ctx_cpu or NETLIB backend)
-set(CPU_DEPENDENT_TESTS
-    minibench_cli_tests
-    ormqr_cta_tests
-    syev_blocked_tests
-    syev_cta_tests
     sytrd_cta_tests
     sytrd_blocked_tests
+    syev_cta_tests
+    syev_blocked_tests
 )
 
-# Add CPU-dependent tests only if CPU target is available
+# Tests that require CPU SYCL kernel compilation (not just NETLIB)
+set(CPU_SYCL_DEPENDENT_TESTS
+    minibench_cli_tests
+)
+
+# Add CPU SYCL-dependent tests only if CPU kernels will be compiled
 if(BATCHLAS_HAS_CPU_TARGET)
-    list(APPEND TEST_TARGETS ${CPU_DEPENDENT_TESTS})
-    message(STATUS "Including CPU-dependent tests: ${CPU_DEPENDENT_TESTS}")
+    list(APPEND TEST_TARGETS ${CPU_SYCL_DEPENDENT_TESTS})
+    message(STATUS "Including CPU SYCL-dependent tests: ${CPU_SYCL_DEPENDENT_TESTS}")
 else()
-    message(STATUS "Skipping CPU-dependent tests (no CPU target available): ${CPU_DEPENDENT_TESTS}")
+    message(STATUS "Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): ${CPU_SYCL_DEPENDENT_TESTS}")
 endif()
 
 # Create test executables

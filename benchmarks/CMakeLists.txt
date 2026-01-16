@@ -1,14 +1,5 @@
 set(BENCHMARK_TARGETS
     bandr1_dump
-    latrd_lower_panel_benchmark
-    sytrd_cta_benchmark
-    sytrd_blocked_benchmark
-    sytrd_sy2sb_benchmark
-    sytrd_sb2st_benchmark
-)
-
-# Benchmarks that require CPU target (use ctx_cpu or NETLIB backend)
-set(CPU_DEPENDENT_BENCHMARKS
     geqrf_benchmark
     gemm_benchmark
     trmm_benchmark
@@ -33,15 +24,12 @@ set(CPU_DEPENDENT_BENCHMARKS
     vector_benchmark
     stehr_benchmark
     stedc_benchmark
+    latrd_lower_panel_benchmark
+    sytrd_cta_benchmark
+    sytrd_blocked_benchmark
+    sytrd_sy2sb_benchmark
+    sytrd_sb2st_benchmark
 )
-
-# Add CPU-dependent benchmarks only if CPU target is available
-if(BATCHLAS_HAS_CPU_TARGET)
-    list(APPEND BENCHMARK_TARGETS ${CPU_DEPENDENT_BENCHMARKS})
-    message(STATUS "Including CPU-dependent benchmarks")
-else()
-    message(STATUS "Skipping CPU-dependent benchmarks (no CPU target available)")
-endif()
 
 foreach(test ${BENCHMARK_TARGETS})
     add_executable(${test} ${test}.cc)
