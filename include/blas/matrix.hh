@@ -999,7 +999,7 @@ namespace batchlas {
         }
 
     private:
-        void init_data_ptr_array(Queue& ctx) const;
+        void init_data_ptr_array(Queue& ctx, Span<T*> target = {}) const;
 
         // Data storage - non-owning spans
         Span<T> data_;

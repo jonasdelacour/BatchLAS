@@ -1614,13 +1614,14 @@ Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
 
 
 template <typename T, MatrixFormat MType>
-void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx) const {
-    auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, data_ptrs_);
+void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) const {
+    if (target.data() == nullptr) target = data_ptrs_;
+    auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, target);
     if (!data_ptrs.data()) {
-        throw std::runtime_error("data_ptrs is null");
+        throw std::runtime_error("data_ptrs target is null");
     }
     if (data_ptrs.size() < static_cast<std::size_t>(batch_size_)) {
-        throw std::runtime_error("data_ptrs is smaller than batch_size");
+        throw std::runtime_error("data_ptrs target is smaller than batch_size");
     }
     if (!start_ptr) {
         throw std::runtime_error("start_ptr is null");
