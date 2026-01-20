@@ -117,12 +117,123 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         trsm_validate_params(A, B, side, uplo, transA, diag);
 
-        if (batch_size == 1) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm, 
-                handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptr(), A.ld(), B.data_ptr(), B.ld()); 
+        const auto side_cublas = enum_convert<BackendLibrary::CUBLAS>(side);
+        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
+        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
+        const auto diag_cublas = enum_convert<BackendLibrary::CUBLAS>(diag);
+
+        if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+            // Fallback: Implement TRSM directly for complex types.
+            // cuBLAS TRSM has exhibited incorrect behavior (unchanged output / NaNs) with our
+            // SYCL CUDA interop + USM complex buffers. This kernel is sequential per RHS/row,
+            // but parallel across (batch, rhs) or (batch, row).
+            const T* A_ptr = A.data_ptr();
+            T* B_ptr = B.data_ptr();
+            const int m = B.rows();
+            const int nrhs = B.cols();
+            const int lda = A.ld();
+            const int ldb = B.ld();
+            const int strideA = A.stride();
+            const int strideB = B.stride();
+            const int work_dim = (side == Side::Left) ? nrhs : m;
+
+            ctx->parallel_for(sycl::range<2>(static_cast<size_t>(batch_size), static_cast<size_t>(work_dim)),
+                              [=](sycl::id<2> tid) {
+                                  const int b = static_cast<int>(tid[0]);
+                                  const int p = static_cast<int>(tid[1]);
+
+                                  const T* Ab = A_ptr + b * strideA;
+                                  T* Bb = B_ptr + b * strideB;
+
+                                  const bool do_conj = (transA == Transpose::ConjTrans);
+                                  const bool do_trans = (transA != Transpose::NoTrans);
+                                  const bool op_is_lower = (uplo == Uplo::Lower) ? !do_trans : do_trans;
+                                  const bool unit_diag = (diag == Diag::Unit);
+
+                                  auto conj_if = [=](T v) {
+                                      if (!do_conj) return v;
+                                      using std::conj;
+                                      return conj(v);
+                                  };
+
+                                  // Return op(A) element at (r, c) in column-major storage.
+                                  auto opA = [=](int r, int c) {
+                                      if (transA == Transpose::NoTrans) {
+                                          return Ab[c * lda + r];
+                                      }
+                                      // op(A) = A^T or A^H
+                                      return conj_if(Ab[r * lda + c]);
+                                  };
+
+                                  if (side == Side::Left) {
+                                      const int j = p; // RHS column
+                                      if (op_is_lower) {
+                                          // Forward substitution (i = 0..m-1)
+                                          for (int i = 0; i < m; ++i) {
+                                              T sum = T(0);
+                                              for (int k = 0; k < i; ++k) {
+                                                  sum += opA(i, k) * Bb[j * ldb + k];
+                                              }
+                                              T x = alpha * Bb[j * ldb + i] - sum;
+                                              if (!unit_diag) {
+                                                  x /= opA(i, i);
+                                              }
+                                              Bb[j * ldb + i] = x;
+                                          }
+                                      } else {
+                                          // Backward substitution (i = m-1..0)
+                                          for (int i = m - 1; i >= 0; --i) {
+                                              T sum = T(0);
+                                              for (int k = i + 1; k < m; ++k) {
+                                                  sum += opA(i, k) * Bb[j * ldb + k];
+                                              }
+                                              T x = alpha * Bb[j * ldb + i] - sum;
+                                              if (!unit_diag) {
+                                                  x /= opA(i, i);
+                                              }
+                                              Bb[j * ldb + i] = x;
+                                          }
+                                      }
+                                  } else {
+                                      // Side::Right: solve X*op(A) = alpha*B, row-by-row.
+                                      const int i = p; // row
+                                      if (op_is_lower) {
+                                          // Lower: solve backward in columns (j = nrhs-1..0)
+                                          for (int j = nrhs - 1; j >= 0; --j) {
+                                              T sum = T(0);
+                                              for (int k = j + 1; k < nrhs; ++k) {
+                                                  sum += Bb[k * ldb + i] * opA(k, j);
+                                              }
+                                              T x = alpha * Bb[j * ldb + i] - sum;
+                                              if (!unit_diag) {
+                                                  x /= opA(j, j);
+                                              }
+                                              Bb[j * ldb + i] = x;
+                                          }
+                                      } else {
+                                          // Upper: solve forward in columns (j = 0..nrhs-1)
+                                          for (int j = 0; j < nrhs; ++j) {
+                                              T sum = T(0);
+                                              for (int k = 0; k < j; ++k) {
+                                                  sum += Bb[k * ldb + i] * opA(k, j);
+                                              }
+                                              T x = alpha * Bb[j * ldb + i] - sum;
+                                              if (!unit_diag) {
+                                                  x /= opA(j, j);
+                                              }
+                                              Bb[j * ldb + i] = x;
+                                          }
+                                      }
+                                  }
+                              });
         } else {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched, 
-                handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs(ctx).data(), A.ld(), B.data_ptrs(ctx).data(), B.ld(), batch_size);
+            if (batch_size == 1) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm,
+                    handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptr(), A.ld(), B.data_ptr(), B.ld());
+            } else {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched,
+                    handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs(ctx).data(), A.ld(), B.data_ptrs(ctx).data(), B.ld(), batch_size);
+            }
         }
         return ctx.get_event();
     }

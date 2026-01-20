@@ -83,6 +83,13 @@ protected:
     
     // Verify that the TRSM solution satisfies A*X = B or A^T*X = B depending on transpose
     bool verifyTrsmResult(int batch_idx, Transpose trans = Transpose::NoTrans) {
+        const bool trace_enabled = []() {
+            const char* v = std::getenv("BATCHLAS_TRSM_TRACE");
+            if (!v) return false;
+            return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
+                    std::string(v) == "on" || std::string(v) == "ON");
+        }();
+
         // First check if B was actually modified from original
         bool anyChanges = false;
         for (int i = 0; i < rows && !anyChanges; ++i) {
@@ -95,6 +102,14 @@ protected:
         }
         
         if (!anyChanges) {
+            if (trace_enabled) {
+                std::cerr << "TRSM TRACE: output appears unchanged for batch " << batch_idx
+                          << " (trans=" << static_cast<int>(trans) << ")" << std::endl;
+                for (int k = 0; k < std::min(rows * cols, 4); ++k) {
+                    std::cerr << "  B[" << k << "]=" << B_data[batch_idx * rows * cols + k]
+                              << " (orig=" << B_data_original[batch_idx * rows * cols + k] << ")" << std::endl;
+                }
+            }
             return false;
         }
         
@@ -116,6 +131,14 @@ protected:
                 // Use a reasonable tolerance for floating point comparisons
                 auto tolerance = test_utils::tolerance<ScalarType>();
                 if (std::abs(calculated - expected) > tolerance) {
+                    if (trace_enabled) {
+                        std::cerr << "TRSM TRACE: mismatch at (i=" << i << ", j=" << j << ") batch=" << batch_idx
+                                  << " (trans=" << static_cast<int>(trans) << ")\n"
+                                  << "  expected=" << expected << "\n"
+                                  << "  calculated=" << calculated << "\n"
+                                  << "  |diff|=" << std::abs(calculated - expected) << " tol=" << tolerance
+                                  << std::endl;
+                    }
                     allMatch = false;
                     break;
                 }
