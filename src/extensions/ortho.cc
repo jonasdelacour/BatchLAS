@@ -165,7 +165,13 @@ namespace batchlas {
                 auto bid = item.get_group_linear_id();
                 auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
                 auto diags_acc = diags.subspan(bid * k, k);
-                diags_acc[tid] = sycl::rsqrt(real_part(ATA_acc[tid * k + tid]));
+
+                // D = diag(A^H A)^(-1/2)
+                // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
+                // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
+                const float_t diag = sycl::fmax(float_t(0), real_part(ATA_acc[tid * k + tid]));
+                const float_t tau = std::numeric_limits<float_t>::min();
+                diags_acc[tid] = (diag <= tau) ? float_t(0) : sycl::rsqrt(diag);
                 });
             });
             //Compute StS = D * StS * D
