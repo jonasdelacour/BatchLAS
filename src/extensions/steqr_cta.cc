@@ -382,6 +382,7 @@ namespace batchlas {
                               T zero_threshold,
                               SteqrShiftStrategy cta_shift_strategy,
                               size_t cta_wg_size_multiplier,
+                              int32_t* status,
                               BumpAllocator& pool) {
         (void)pool;
         const auto batch_size = d.batch_size();
@@ -455,6 +456,11 @@ namespace batchlas {
                     T diag = (lane < n) ? d_prob(lane) : T(0);
                     T offdiag = (lane < (n - 1)) ? e_prob(lane) : T(0);
 
+                    // Defensive convergence budget to avoid unbounded looping on hard inputs.
+                    // Each implicit step consumes one unit. Budget scales with problem size.
+                    int32_t sweep_budget = static_cast<int32_t>(max_sweeps) * n;
+                    bool failed = false;
+
                     // ---- Outer split loop over blocks separated by E==0 ----
                     for (int32_t next_block_begin = 0; next_block_begin < n;) {
                         const int32_t block_begin = next_block_begin;
@@ -526,14 +532,15 @@ namespace batchlas {
                         const bool use_ql = (d_last < d_first);
                         if (use_ql) {
                             // ---------------- QL iteration: converge from the top (l grows) ----------------
-                            for (int32_t l = block_begin; l <= block_end;) {
+                            for (int32_t l = block_begin; l <= block_end && !failed;) {
                                 if (l == block_end) {
                                     l += 1;
                                     continue;
                                 }
 
                                 // Iterate up to max_sweeps times to converge eigenvalue at position l.
-                                for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
+                                bool advanced = false;
+                                for (int32_t sweep = 0; sweep < static_cast<int32_t>(max_sweeps); ++sweep) {
                                     // Deflate within current active subproblem [l..lend].
                                     deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
 
@@ -544,6 +551,7 @@ namespace batchlas {
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
                                         l += 1;
+                                        advanced = true;
                                         break;
                                     }
 
@@ -552,12 +560,24 @@ namespace batchlas {
                                         solve_2x2_and_update<T, P>(partition, diag, offdiag, l, /*ql=*/true, qcache);
 
                                         l += 2;
+                                        advanced = true;
                                         break;
                                     }
 
-                                // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
+                                    if (sweep_budget <= 0) {
+                                        failed = true;
+                                        break;
+                                    }
+                                    sweep_budget -= 1;
+
+                                    // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
                                     implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
                                 }  // end sweep loop for QL
+
+                                if (!advanced) {
+                                    // Did not converge within max_sweeps (or hit the sweep budget).
+                                    failed = true;
+                                }
                             }  // end QL l loop
                         } else {
                             // ---------------- QR iteration: converge from the bottom (l shrinks) ----------------
@@ -565,12 +585,14 @@ namespace batchlas {
                             for (int32_t l = static_cast<int32_t>(block_end);
                                  l >= static_cast<int32_t>(block_begin);
                                  /* manual step */) {
+                                if (failed) break;
                                 if (l == static_cast<int32_t>(block_begin)) {
                                     break;
                                 }
 
                                 // Iterate up to max_sweeps times to converge eigenvalue at position l.
-                                for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
+                                bool advanced = false;
+                                for (int32_t sweep = 0; sweep < static_cast<int32_t>(max_sweeps); ++sweep) {
                                     deflate(partition, offdiag, diag, n, block_begin, static_cast<int32_t>(l) + 1, zero_threshold);
 
                                     // Find m scanning downward: look for E(i)==0 and take the largest i+1.
@@ -582,6 +604,7 @@ namespace batchlas {
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
                                         l -= 1;
+                                        advanced = true;
                                         break;
                                     }
 
@@ -595,13 +618,25 @@ namespace batchlas {
                                         } else {
                                             l -= 2;
                                         }
+                                        advanced = true;
                                         break;
                                     }
 
 
-                                // ---- Implicit QR step on subblock [m..l] ----
+                                    if (sweep_budget <= 0) {
+                                        failed = true;
+                                        break;
+                                    }
+                                    sweep_budget -= 1;
+
+                                    // ---- Implicit QR step on subblock [m..l] ----
                                     implicit_qr_step<T, P>(partition, diag, offdiag, qcache, n, m, l_u, cta_shift_strategy);
                                 }  // end sweep loop for QR
+
+                                if (!advanced) {
+                                    failed = true;
+                                    break;
+                                }
                             }  // end QR l loop
                         }  // end if (do_ql) else
 
@@ -613,6 +648,15 @@ namespace batchlas {
                             if (lane >= block_begin && lane < block_end) {
                                 offdiag *= inv_scale;
                             }
+                        }
+
+                        if (failed) {
+                            // Mark the problem as failed to converge.
+                            // We cannot throw from device code; host can decide how to handle it.
+                            if (lane == 0 && status) {
+                                status[prob_id] = 1;
+                            }
+                            break;
                         }
                     }  // end outer block split loop
 
@@ -658,6 +702,9 @@ namespace batchlas {
         auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
                                n - 1, batch_size, increment, e_stride);
 
+        auto status = pool.allocate<int32_t>(ctx, std::max<int64_t>(int64_t(1), batch_size)).data();
+        ctx->memset(status, 0, sizeof(int32_t) * static_cast<size_t>(std::max<int64_t>(int64_t(1), batch_size)));
+
         VectorView<T>::copy(ctx, d, d_in);
         VectorView<T>::copy(ctx, e, e_in);
 
@@ -691,11 +738,15 @@ namespace batchlas {
             if (jobz == JobType::EigenVectors) {
                 steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
                                            params.max_sweeps, params.zero_threshold,
-                                           params.cta_shift_strategy, params.cta_wg_size_multiplier, pool);
+                                           params.cta_shift_strategy, params.cta_wg_size_multiplier,
+                                           status,
+                                           pool);
             } else {
                 steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
                                             params.max_sweeps, params.zero_threshold,
-                                            params.cta_shift_strategy, params.cta_wg_size_multiplier, pool);
+                                            params.cta_shift_strategy, params.cta_wg_size_multiplier,
+                                            status,
+                                            pool);
             }
         };
 
@@ -711,6 +762,20 @@ namespace batchlas {
 
         // Copy back eigenvalues.
         VectorView<T>::copy(ctx, eigenvalues, d);
+
+        // Optional fail-fast diagnostics: avoids silent non-convergence.
+        // Note: checking requires synchronization, so keep it opt-in.
+        if (const char* v = std::getenv("BATCHLAS_STEQR_CTA_CHECK")) {
+            const bool enabled = (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
+            if (enabled) {
+                ctx.wait();
+                for (int64_t i = 0; i < batch_size; ++i) {
+                    if (status[i] != 0) {
+                        throw std::runtime_error("steqr_cta: failed to converge within sweep budget.");
+                    }
+                }
+            }
+        }
 
         if (params.sort) {
             auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
@@ -731,7 +796,10 @@ namespace batchlas {
         const auto e_size = VectorView<T>::required_span_length(n - 1, e.inc(), e_stride, batch_size);
 
         size_t size = BumpAllocator::allocation_size<T>(ctx, d_size)
-                    + BumpAllocator::allocation_size<T>(ctx, e_size);
+                + BumpAllocator::allocation_size<T>(ctx, e_size);
+
+        // steqr_cta allocates a per-problem status array (int32_t) for non-convergence tracking.
+        size += BumpAllocator::allocation_size<int32_t>(ctx, std::max<int64_t>(int64_t(1), batch_size));
 
         size += sort_buffer_size<T>(ctx, eigenvalues.data(),
                                     MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
