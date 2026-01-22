@@ -6,6 +6,7 @@
 
 namespace {
 class QueueGetEventNoopKernel;
+class QueueEnqueueNoopKernel;
 }
 
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
@@ -70,17 +71,38 @@ QueueImpl& Queue::operator*() const {
 
 void Queue::enqueue(Event& event) {
     if(event.impl_.get() == nullptr) return;
-    impl_->submit([&](sycl::handler& h) { 
-        h.depends_on(static_cast<sycl::event>(*event));
-    });
+    // Ensure the queue is ordered after `event`.
+    // A command group with only depends_on() is not guaranteed to create an actual
+    // scheduling node on all backends. Use a barrier when available, else fall
+    // back to a no-op kernel.
+    try {
+        sycl::event e = impl_->ext_oneapi_submit_barrier({static_cast<sycl::event>(*event)});
+        impl_->last_event_ = e;
+    } catch (const sycl::exception&) {
+        impl_->submit([&](sycl::handler& h) {
+            h.depends_on(static_cast<sycl::event>(*event));
+            h.single_task<QueueEnqueueNoopKernel>([]() {});
+        });
+    }
 }
 
 Event Queue::get_event() const {
-    // Return an event that is ordered after all previously enqueued work.
+    // For in-order queues, the last submitted event is ordered after all
+    // previously enqueued work. Returning it avoids submitting an extra
+    // barrier/no-op kernel, which can be very expensive on some backends.
+    if (in_order_ && impl_->last_event_.has_value()) {
+        EventImpl event = sycl::event(*impl_->last_event_);
+        return event;
+    }
+
+    // For out-of-order queues (or if no work has been submitted yet), return an
+    // event that is ordered after all previously enqueued work.
     // Submitting an unnamed `single_task` can fail under AOT/kernel-bundle
     // builds ("No kernel named ... was found"), especially on CUDA backends.
     try {
-        EventImpl event = impl_->ext_oneapi_submit_barrier();
+        sycl::event e = impl_->ext_oneapi_submit_barrier();
+        impl_->last_event_ = e;
+        EventImpl event = std::move(e);
         return event;
     } catch (const sycl::exception&) {
         // Some backends (notably certain CUDA/UR stacks) don't support

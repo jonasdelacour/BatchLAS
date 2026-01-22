@@ -5,6 +5,9 @@
 #include <cstddef>
 #include <cstdlib>
 
+#include <mutex>
+#include <unordered_map>
+
 #include "util/kernel-trace.hh"
 
 inline bool batchlas_queue_profiling_enabled() {
@@ -23,6 +26,24 @@ inline bool batchlas_queue_profiling_enabled() {
 struct QueueImpl : public sycl::queue{
     using sycl::queue::queue;
 
+    // Tracks the last event submitted to this queue via the wrappers below.
+    // Used to implement a cheap get_event() for in-order queues.
+    mutable std::optional<sycl::event> last_event_;
+
+    static const sycl::context& shared_context(Device dev) {
+        static std::mutex m;
+        static std::unordered_map<std::uint64_t, sycl::context> contexts;
+        const std::uint64_t key = (static_cast<std::uint64_t>(dev.idx) & 0xffffffffull) |
+                                  (static_cast<std::uint64_t>(static_cast<int>(dev.type)) << 32);
+        std::lock_guard<std::mutex> lock(m);
+        auto it = contexts.find(key);
+        if (it != contexts.end()) return it->second;
+
+        const sycl::device sycl_dev = device_arrays.at((int)dev.type).at(dev.idx);
+        auto [new_it, _] = contexts.emplace(key, sycl::context(sycl_dev));
+        return new_it->second;
+    }
+
     inline static const auto device_arrays = std::array{ 
                 sycl::device::get_devices(sycl::info::device_type::cpu), 
                 sycl::device::get_devices(sycl::info::device_type::gpu), 
@@ -32,7 +53,8 @@ struct QueueImpl : public sycl::queue{
     static_assert(device_arrays.size() == (int)DeviceType::NUM_DEV_TYPES && "DeviceType enum does not match device_arrays size");
     
     QueueImpl(Device dev, bool in_order)
-        : sycl::queue(device_arrays.at((int)dev.type).at(dev.idx),
+        : sycl::queue(shared_context(dev),
+                      device_arrays.at((int)dev.type).at(dev.idx),
                       [&] {
                           const bool prof = batchlas_queue_profiling_enabled();
                           if (in_order && prof)
@@ -65,7 +87,8 @@ struct QueueImpl : public sycl::queue{
           trace_tid_(batchlas_kernel_trace::enabled() ? ++trace_tid_counter_ : 0) {}
 
     QueueImpl()
-        : sycl::queue(device_arrays.at((int)DeviceType::CPU).at(0),
+        : sycl::queue(shared_context(Device{0, DeviceType::CPU}),
+                      device_arrays.at((int)DeviceType::CPU).at(0),
                       batchlas_queue_profiling_enabled()
                           ? sycl::property_list{sycl::property::queue::enable_profiling{}}
                           : sycl::property_list{}),
@@ -77,6 +100,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_submit";
         sycl::event e = sycl::queue::submit(std::forward<SubmitFunc>(f));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -86,6 +110,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_parallel_for";
         sycl::event e = sycl::queue::parallel_for(num_work_items, std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -98,6 +123,7 @@ struct QueueImpl : public sycl::queue{
         sycl::event e = sycl::queue::parallel_for(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {
             kfunc(static_cast<std::size_t>(idx[0]));
         });
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -107,6 +133,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_parallel_for";
         sycl::event e = sycl::queue::parallel_for(exec_range, std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -116,6 +143,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_parallel_for";
         sycl::event e = sycl::queue::parallel_for<KernelName>(num_work_items, std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -128,6 +156,7 @@ struct QueueImpl : public sycl::queue{
         sycl::event e = sycl::queue::parallel_for<KernelName>(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {
             kfunc(static_cast<std::size_t>(idx[0]));
         });
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -137,6 +166,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_parallel_for";
         sycl::event e = sycl::queue::parallel_for<KernelName>(exec_range, std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -146,6 +176,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_single_task";
         sycl::event e = sycl::queue::single_task(std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
@@ -155,6 +186,7 @@ struct QueueImpl : public sycl::queue{
         const char* scope = batchlas_kernel_trace::current_scope_name();
         const char* label = scope ? scope : "sycl_single_task";
         sycl::event e = sycl::queue::single_task<KernelName>(std::forward<KernelFunc>(kernel_func));
+        last_event_ = e;
         batchlas_kernel_trace::record_event(*this, e, label, trace_tid_);
         return e;
     }
