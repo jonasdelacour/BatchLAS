@@ -960,7 +960,10 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 
     // Set all elements to zero
     result.fill(T(0));
-    result.view().template fill_diagonal<MType>(diag_values);
+    // Ensure the returned matrix is fully initialized before returning.
+    // The fill_diagonal(Span<...>) convenience overload uses an internal Queue;
+    // without waiting here, callers can race when they immediately use a different Queue.
+    result.view().template fill_diagonal<MType>(diag_values).wait();
 
     return result;
 }
@@ -1047,7 +1050,8 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    result.view().template fill_tridiag_toeplitz<MType>(diag, sub, super);
+    // Ensure the returned matrix is fully initialized before returning.
+    result.view().template fill_tridiag_toeplitz<MType>(diag, sub, super).wait();
     return result;
 }
 
