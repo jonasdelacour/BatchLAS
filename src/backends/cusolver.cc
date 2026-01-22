@@ -77,12 +77,18 @@ namespace batchlas {
                 int l_work_device_elems = 0; // legacy API returns lwork in elements of T
                 cusolverDnParams_t params;
                 check_status(cusolverDnCreateParams(&params));
-                syevjInfo_t syevj_info;
-                check_status(cusolverDnCreateSyevjInfo(&syevj_info));
-
                 const auto eig_mode = enum_convert<BackendLibrary::CUSOLVER>(jobtype);
                 const auto fill_mode = enum_convert<BackendLibrary::CUSOLVER>(uplo);
-                if (descrA.batch_size() == 1) {
+                // cuSOLVER's batched SYEV APIs assume the batch is tightly packed with
+                // per-matrix stride == lda * n (no extra padding between matrices).
+                // MatrixView can represent subviews/slices with arbitrary stride, so we
+                // dispatch to a per-batch loop when the batch isn't tightly packed.
+                const bool tightly_packed =
+                    (descrA.batch_size() > 1) &&
+                    (descrA.stride() == descrA.ld() * descrA.cols());
+
+                if (descrA.batch_size() == 1 || !tightly_packed) {
+                    // Per-batch loop (also used for batch_size==1).
                     check_status(cusolverDnXsyevd_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
                                                             BackendScalar<T, BackendLibrary::CUSOLVER>::type,
                                                             descrA.data_ptr(), descrA.ld(),
@@ -90,7 +96,31 @@ namespace batchlas {
                                                             eigenvalues.data(),
                                                             BackendScalar<T, BackendLibrary::CUSOLVER>::type,
                                                             &l_work_device_bytes, &l_work_host_bytes));
+
+                    auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
+                    auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
+
+                    auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                    for (int i = 0; i < descrA.batch_size(); ++i) {
+                        check_status(cusolverDnXsyevd(handle,
+                                                     params,
+                                                     eig_mode,
+                                                     fill_mode,
+                                                     descrA.rows(),
+                                                     BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                     descrA.data_ptr() + i * descrA.stride(),
+                                                     descrA.ld(),
+                                                     BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                     eigenvalues.data() + i * descrA.rows(),
+                                                     BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                     device_workspace_bytes.data(),
+                                                     l_work_device_bytes,
+                                                     host_workspace.data(),
+                                                     l_work_host_bytes,
+                                                     info.data() + i));
+                    }
                 } else {
+                    // Tightly packed batch: safe to use cuSOLVER batched API.
                     #if USE_CUSOLVER_X_API
                         check_status(cusolverDnXsyevBatched_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
                                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
@@ -99,61 +129,40 @@ namespace batchlas {
                                                                       eigenvalues.data(),
                                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
                                                                       &l_work_device_bytes, &l_work_host_bytes, descrA.batch_size()));
+
+                        auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
+                        auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
+                        auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                        check_status(cusolverDnXsyevBatched(handle,
+                                                           params,
+                                                           eig_mode,
+                                                           fill_mode,
+                                                           descrA.rows(),
+                                                           BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                           descrA.data_ptr(),
+                                                           descrA.ld(),
+                                                           BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                           eigenvalues.data(),
+                                                           BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                           device_workspace_bytes.data(),
+                                                           l_work_device_bytes,
+                                                           host_workspace.data(),
+                                                           l_work_host_bytes,
+                                                           info.data(),
+                                                           descrA.batch_size()));
                     #else
+                        syevjInfo_t syevj_info;
+                        check_status(cusolverDnCreateSyevjInfo(&syevj_info));
                         call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
                             handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_elems, syevj_info, descrA.batch_size());
+
+                        auto device_workspace_elems = pool.allocate<T>(ctx, static_cast<size_t>(l_work_device_elems));
+                        auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                        call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
+                            handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
+                        check_status(cusolverDnDestroySyevjInfo(syevj_info));
                     #endif
                 }
-
-                auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
-                auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
-                auto device_workspace_elems = pool.allocate<T>(ctx, static_cast<size_t>(l_work_device_elems));
-
-                if (descrA.batch_size() == 1) {
-                    auto info = pool.allocate<int>(ctx, 1);
-                    check_status(cusolverDnXsyevd(handle,
-                                                 params,
-                                                 eig_mode,
-                                                 fill_mode,
-                                                 descrA.rows(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                 descrA.data_ptr(),
-                                                 descrA.ld(),
-                                                 BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                 eigenvalues.data(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                 device_workspace_bytes.data(),
-                                                 l_work_device_bytes,
-                                                 host_workspace.data(),
-                                                 l_work_host_bytes,
-                                                 info.data()));
-                } else {
-                    auto info = pool.allocate<int>(ctx, descrA.batch_size());
-                    #if USE_CUSOLVER_X_API
-                    check_status(cusolverDnXsyevBatched(handle,
-                                                       params,
-                                                       eig_mode,
-                                                       fill_mode,
-                                                       descrA.rows(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                       descrA.data_ptr(),
-                                                       descrA.ld(),
-                                                       BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                       eigenvalues.data(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                       device_workspace_bytes.data(),
-                                                       l_work_device_bytes,
-                                                       host_workspace.data(),
-                                                       l_work_host_bytes,
-                                                       info.data(),
-                                                       descrA.batch_size()));
-                    #else
-                    call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
-                        handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
-                    #endif
-                }
-
-                check_status(cusolverDnDestroySyevjInfo(syevj_info));
                 check_status(cusolverDnDestroyParams(params));
                 return ctx.get_event();
             });
@@ -173,12 +182,14 @@ namespace batchlas {
                 int l_work_device_elems = 0;
                 cusolverDnParams_t params;
                 check_status(cusolverDnCreateParams(&params));
-                syevjInfo_t syevj_info;
-                check_status(cusolverDnCreateSyevjInfo(&syevj_info));
-
                 const auto eig_mode = enum_convert<BackendLibrary::CUSOLVER>(jobtype);
                 const auto fill_mode = enum_convert<BackendLibrary::CUSOLVER>(uplo);
-                if (descrA.batch_size() == 1) {
+                const bool tightly_packed =
+                    (descrA.batch_size() > 1) &&
+                    (descrA.stride() == descrA.ld() * descrA.cols());
+
+                if (descrA.batch_size() == 1 || !tightly_packed) {
+                    // Per-batch loop uses Xsyevd workspace for a single matrix.
                     check_status(cusolverDnXsyevd_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
                                                             BackendScalar<T, BackendLibrary::CUSOLVER>::type,
                                                             descrA.data_ptr(), descrA.ld(),
@@ -196,12 +207,14 @@ namespace batchlas {
                                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
                                                                       &l_work_device_bytes, &l_work_host_bytes, descrA.batch_size()));
                     #else
+                        syevjInfo_t syevj_info;
+                        check_status(cusolverDnCreateSyevjInfo(&syevj_info));
                         call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
                             handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_elems, syevj_info, descrA.batch_size());
+                        check_status(cusolverDnDestroySyevjInfo(syevj_info));
                     #endif
-                };
+                }
 
-                check_status(cusolverDnDestroySyevjInfo(syevj_info));
                 check_status(cusolverDnDestroyParams(params));
 
                 return BumpAllocator::allocation_size<std::byte>(ctx, l_work_host_bytes)
