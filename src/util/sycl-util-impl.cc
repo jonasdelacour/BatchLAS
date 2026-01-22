@@ -36,7 +36,10 @@ constexpr std::ostream& operator<<(std::ostream& os, const std::array<U,N>& arr)
 
 template <typename T>
 UnifiedVector<T>::UnifiedVector(size_t size) : size_(size), capacity_(size) {
-    data_ = sycl::malloc_shared<T>(size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+    Device dev = Device::default_device();
+    const auto& ctx = QueueImpl::shared_context(dev);
+    const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+    data_ = sycl::malloc_shared<T>(size, sycl_dev, ctx);
     if (!data_ && size > 0) {
         std::cout << "Could not allocate " + std::to_string(size) + " elements of type " + typeid(T).name() << std::endl;
         throw std::bad_alloc();
@@ -54,14 +57,22 @@ UnifiedVector<T>::UnifiedVector(const UnifiedVector<T>& other) : UnifiedVector<T
 }
 
 template <typename T>
-UnifiedVector<T>::~UnifiedVector() {if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));}
+UnifiedVector<T>::~UnifiedVector() {
+    if (!data_) return;
+    Device dev = Device::default_device();
+    const auto& ctx = QueueImpl::shared_context(dev);
+    sycl::free(data_, ctx);
+}
 
 template <typename T>
 void UnifiedVector<T>::resize(size_t new_size) {
     if(new_size > capacity_){
-        T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        T* new_data = sycl::malloc_shared<T>(new_size, sycl_dev, ctx);
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));
+        if(data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_size;
     }
@@ -155,9 +166,12 @@ Event Span<T>::prefetch(const Queue &ctx) const {
 template <typename T>
 void UnifiedVector<T>::resize(size_t new_size, T val){
     if(new_size > capacity_){
-        T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        T* new_data = sycl::malloc_shared<T>(new_size, sycl_dev, ctx);
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));
+        if(data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_size;
         std::generate(data_ + size_ , data_ + new_size, [val](){return val;});
@@ -168,7 +182,10 @@ void UnifiedVector<T>::resize(size_t new_size, T val){
 template <typename T>
 void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t seg_size){
     if(new_size > capacity_){
-        T* new_data = sycl::malloc_shared<T>(new_size, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        T* new_data = sycl::malloc_shared<T>(new_size, sycl_dev, ctx);
         std::fill_n(new_data, new_size, T{});
         if (capacity_ > 0){
             auto n_first_segment = back < front ? capacity_ - front : (back - front + seg_size);
@@ -178,7 +195,7 @@ void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t
             memcpy(new_data, data_ + front, n_first_segment*sizeof(T));
             if( back < front) memcpy(new_data + n_first_segment, data_, (back + seg_size)*sizeof(T));
         }
-        if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));
+        if(data_) sycl::free(data_, ctx);
         data_ = new_data;
         size_ = new_size;
         capacity_ = new_size;
@@ -188,9 +205,12 @@ void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t
 template <typename T>
 void UnifiedVector<T>::reserve(size_t new_capacity) {
     if(new_capacity > capacity_){
-        T* new_data = sycl::malloc_shared<T>(new_capacity, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        T* new_data = sycl::malloc_shared<T>(new_capacity, sycl_dev, ctx);
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));
+        if(data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_capacity;
     }
@@ -202,12 +222,18 @@ UnifiedVector<T>& UnifiedVector<T>::operator=(const UnifiedVector<T>& other) {
     //Only perform memory allocation if the new size is greater than the current capacity
     if (capacity_ < other.capacity_) {
         capacity_ = other.capacity_;
-        if(data_) sycl::free(data_,  sycl::context(device(default_selector_v)));
-        data_ = sycl::malloc_shared<T>(capacity_, sycl::device(default_selector_v), sycl::context(device(default_selector_v)));
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        if(data_) sycl::free(data_, ctx);
+        data_ = sycl::malloc_shared<T>(capacity_, sycl_dev, ctx);
     }
     //If the type is trivially copyable, use the sycl memcpy function
     if constexpr(std::is_trivially_copyable_v<T>){
-        sycl::queue q{default_selector_v};
+        Device dev = Device::default_device();
+        const auto& ctx = QueueImpl::shared_context(dev);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        sycl::queue q{ctx, sycl_dev};
         q.memcpy(data_, other.data_, size_*sizeof(T)).wait();
     } else {
         for(size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
@@ -287,6 +313,10 @@ template struct UnifiedVector<std::complex<float>*>;
 template struct UnifiedVector<std::complex<double>*>;
 template struct UnifiedVector<int*>;
 template struct UnifiedVector<size_t*>;
+template struct UnifiedVector<std::array<double,2>*>;
+template struct UnifiedVector<std::array<double,3>*>;
+template struct UnifiedVector<std::array<float,2>*>;
+template struct UnifiedVector<std::array<float,3>*>;
 //template struct UnifiedVector<NodeNeighbours<uint16_t>>;
 //template struct UnifiedVector<NodeNeighbours<uint32_t>>;
 //template struct UnifiedVector<Constants<float,uint16_t>>;
