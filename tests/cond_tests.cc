@@ -7,6 +7,7 @@
 #include "test_utils.hh"
 #include <cmath>
 #include <vector>
+#include <type_traits>
 
 using namespace batchlas;
 
@@ -106,6 +107,42 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
             EXPECT_NEAR(conds[b], expected, this->tolerance())
                 << "Batch " << b;
         }
+    }
+}
+
+TYPED_TEST(CondTest, RandomMatrixLogCondFrobenius) {
+    using T = TypeParam;
+    using real_t = typename CondTest<T>::real_t;
+    constexpr Backend B = test_utils::gpu_backend;
+    const int n = 8;
+    const int batch_size = 3;
+    const real_t log10_cond = real_t(4);
+
+    auto mat = random_with_log10_cond<B, T>(*this->ctx, n, log10_cond, batch_size, /*seed=*/123);
+
+    // Expected Frobenius condition number from the constructed singular values.
+    real_t sum_sq = 0;
+    real_t sum_inv_sq = 0;
+    if (n == 1) {
+        sum_sq = real_t(1);
+        sum_inv_sq = real_t(1);
+    } else {
+        const real_t step = log10_cond / real_t(n - 1);
+        for (int i = 0; i < n; ++i) {
+            const real_t s = std::pow(real_t(10), step * real_t(i));
+            sum_sq += s * s;
+            sum_inv_sq += real_t(1) / (s * s);
+        }
+    }
+    const real_t expected = std::sqrt(sum_sq * sum_inv_sq);
+
+    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    this->ctx->wait();
+
+    const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(1e-4f) : real_t(1e-8);
+    const real_t tol = expected * rel_tol;
+    for (int b = 0; b < batch_size; ++b) {
+        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
     }
 }
 
