@@ -76,10 +76,27 @@ namespace batchlas::blas::dispatch {
 namespace detail {
 
 template <typename T>
+inline SteqrParams<T> syev_cta_steqr_params(JobType jobtype) {
+    SteqrParams<T> params{};
+    // CTA STEQR defaults are tuned for speed; for some ill-conditioned small
+    // projected problems (e.g. Rayleigh–Ritz in iterative eigensolvers) we want
+    // a bit more robustness.
+    params.max_sweeps = 400;
+    // Wilkinson shifts tend to converge faster on tough small problems.
+    // This is especially important when SYEV is used inside an outer
+    // iterative eigensolver (syevx), where slow/incorrect Ritz solves can
+    // lead to stagnation.
+    params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+    return params;
+}
+
+template <typename T>
 inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int64_t n = A.rows();
     if (A.rows() != A.cols()) return false;
     if (n < 1 || n > 32) return false;
+    // CTA supports small sizes (n<=32). Note: some sizes may be slower than others,
+    // but this predicate is about functional support, not performance heuristics.
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
     return true;
@@ -107,7 +124,16 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                      Uplo uplo) {
     Provider chosen = normalize_vendor_like(policy.forced);
-    if (chosen != Provider::Auto) return chosen;
+    // If the user requested a specific provider, try it first. If it cannot support
+    // the current matrix/problem (e.g. CTA for n>32), fall back to the regular order
+    // instead of hard-failing.
+    if (chosen != Provider::Auto) {
+        if (chosen == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return chosen;
+        if (chosen == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return chosen;
+        if (chosen == Provider::Vendor) return Provider::Vendor;
+        // Unsupported request: fall through to Auto selection.
+        chosen = Provider::Auto;
+    }
 
     for (Provider p : policy.order) {
         p = normalize_vendor_like(p);
@@ -142,7 +168,7 @@ inline Event syev_dispatch(Queue& ctx,
     if (chosen == Provider::Vendor) {
         need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     } else if (chosen == Provider::BatchLAS_CTA) {
-        need_ws = syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, SteqrParams<T>{});
+        need_ws = syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
     } else if (chosen == Provider::BatchLAS_Blocked) {
         need_ws = syev_blocked_buffer_size<B, T>(ctx,
                                                  descrA,
@@ -161,7 +187,7 @@ inline Event syev_dispatch(Queue& ctx,
     }
 
     Queue* run_q = &ctx;
-    Queue in_order_q;
+    Queue in_order_q(run_q->device(), true);
     if (!ctx.in_order()) {
         in_order_q = Queue(ctx, true);
         Event dep = ctx.get_event();
@@ -179,7 +205,7 @@ inline Event syev_dispatch(Queue& ctx,
                            jobtype,
                            uplo,
                            workspace,
-                           SteqrParams<T>{},
+                           detail::syev_cta_steqr_params<T>(jobtype),
                            /*cta_wg_size_multiplier=*/1);
     } else {
         e = syev_blocked<B, T>(*run_q,
@@ -215,7 +241,7 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
         return backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     }
     if (chosen == Provider::BatchLAS_CTA) {
-        return syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, SteqrParams<T>{});
+        return syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
     }
     return syev_blocked_buffer_size<B, T>(ctx,
                                           descrA,
