@@ -2,6 +2,7 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <blas/extensions.hh>
+#include <blas/extra.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -9,8 +10,20 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <type_traits>
 
 using namespace batchlas;
+
+namespace {
+#if BATCHLAS_HAS_HOST_BACKEND
+template <typename Real>
+UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
+                                              const VectorView<Real>& sub);
+
+template <typename Real>
+UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A);
+#endif
+}
 
 template <typename T, Backend B>
 struct SteqrConfig {
@@ -145,12 +158,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
 
     auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
 
-    UnifiedVector<float_type> ref_eigs(n * batch);
-    
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B, float_type>(*this->ctx, dense_A, ref_eigs, JobType::NoEigenVectors, Uplo::Lower), std::byte(0));
-    syev<B>(*this->ctx, dense_A, ref_eigs, JobType::NoEigenVectors, Uplo::Lower, syev_ws.to_span());
-    
-    this->ctx->wait();
+    const auto ref_eigs = netlib_ref_eigs_dense(dense_A.view());
     auto eps = test_utils::tolerance<float_type>();
 
     for (int j = 0; j < batch; ++j) {
@@ -361,13 +369,8 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
         auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
         this->ctx->wait();
 
-        // Reference eigenvalues via SYEV
-        UnifiedVector<float_type> ref_eigs(n * batch);
-        auto syev_ws = UnifiedVector<std::byte>(
-            syev_buffer_size<B, float_type>(*this->ctx, dense_A_copy, ref_eigs, JobType::EigenVectors, Uplo::Lower),
-            std::byte(0));
-        syev<B>(*this->ctx, dense_A_copy, ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
-        this->ctx->wait();
+        // Reference eigenvalues via NETLIB double
+        const auto ref_eigs = netlib_ref_eigs_dense(dense_A_copy.view());
 
         for (int j = 0; j < batch; ++j) {
             for (int i = 0; i < n; ++i) {
@@ -387,7 +390,126 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
     }
 }
 
+TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "STEQR_CTA is not supported on NETLIB backend";
+    } else {
+#if !BATCHLAS_HAS_HOST_BACKEND
+        GTEST_SKIP() << "Host backend required for NETLIB reference";
+#else
+    const int n = 32;
+    const int batch = 32;
+    const float_type log10_cond = float_type(10.0);
+
+    auto dense_A = random_hermitian_tridiagonal_with_log10_cond<B, float_type>(
+        *this->ctx, n, log10_cond, batch, 1234u);
+
+    Vector<float_type> diag(n, float_type(0), batch);
+    Vector<float_type> sub(n - 1, float_type(0), batch);
+    auto A_view = dense_A.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            diag(i, b) = A_view.at(i, i, b);
+            if (i < n - 1) {
+                sub(i, b) = A_view.at(i + 1, i, b);
+            }
+        }
+    }
+
+    auto conds = cond<B>(*this->ctx, dense_A.view(), NormType::Frobenius);
+    this->ctx->wait();
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_GE(std::log10(conds[b]), log10_cond - float_type(0.5)) << "Batch " << b;
+    }
+
+    Vector<float_type> eigenvalues(n, batch);
+    auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
+    SteqrParams<float_type> params = {};
+    params.max_sweeps = 100;
+    params.sort = true;
+    params.transpose_working_vectors = false;
+    params.sort_order = SortOrder::Ascending;
+    params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+
+    auto ws = UnifiedVector<std::byte>(
+        steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub, eigenvalues, JobType::EigenVectors, params),
+        std::byte(0));
+    steqr_cta<B, float_type>(*this->ctx, diag, sub, eigenvalues,
+                             ws.to_span(), JobType::EigenVectors, params, eigvects);
+    this->ctx->wait();
+
+    const auto ref_eigs = netlib_ref_eigs_tridiag(VectorView(diag), VectorView(sub));
+    const bool use_rel_tol = std::is_same_v<float_type, float>;
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const float_type ref = static_cast<float_type>(ref_eigs[i + b * n]);
+            const float_type tol = use_rel_tol
+                ? std::max(float_type(5e-3f), float_type(3e-7f) * (float_type(1) + std::abs(ref)))
+                : float_type(5e-7);
+            ASSERT_NEAR(eigenvalues(i, b), ref, tol)
+                << "Eigenvalue mismatch at index " << i << ", batch " << b;
+        }
+    }
+#endif
+    }
+}
+
 namespace {
+
+#if BATCHLAS_HAS_HOST_BACKEND
+template <typename Real>
+UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
+                                              const VectorView<Real>& sub) {
+    const int n = diag.size();
+    const int batch = diag.batch_size();
+
+    Queue ctx_cpu("cpu");
+    auto diag_d = diag.template astype<double>();
+    auto sub_d = sub.template astype<double>();
+
+    Matrix<double> A = Matrix<double>::Zeros(n, n, batch);
+    auto A_view = A.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            A_view.at(i, i, b) = diag_d(i, b);
+            if (i < n - 1) {
+                const double off = sub_d(i, b);
+                A_view.at(i + 1, i, b) = off;
+                A_view.at(i, i + 1, b) = off;
+            }
+        }
+    }
+
+    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    UnifiedVector<std::byte> ws(
+        syev_buffer_size<Backend::NETLIB, double>(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<Backend::NETLIB, double>(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+    ctx_cpu.wait();
+
+    return ref_eigs;
+}
+
+template <typename Real>
+UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+
+    Queue ctx_cpu("cpu");
+    auto A_d = A.template astype<double>();
+
+    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    UnifiedVector<std::byte> ws(
+        syev_buffer_size<Backend::NETLIB, double>(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<Backend::NETLIB, double>(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+    ctx_cpu.wait();
+
+    return ref_eigs;
+}
+#endif
 
 inline bool stress_debug_enabled() {
     return std::getenv("BATCHLAS_STEQR_STRESS_DEBUG") != nullptr;
@@ -580,12 +702,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
         // Case 1: very large magnitude (expects scale-down to kick in)
         fill_stress_tridiag(diag, sub, stress_large_scale<float_type>(), stress_large_scale<float_type>());
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                   (std::is_same_v<float_type, float> ? float_type(5e-2f) : float_type(1e-6)));
+                   (std::is_same_v<float_type, float> ? float_type(5e-5f) : float_type(5e-10)));
 
         // Case 2: very small magnitude (expects scale-up to kick in)
         fill_stress_tridiag(diag, sub, stress_small_scale<float_type>(), stress_small_scale<float_type>());
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                   (std::is_same_v<float_type, float> ? float_type(5e-2f) : float_type(1e-6)));
+                   (std::is_same_v<float_type, float> ? float_type(5e-5f) : float_type(5e-10)));
 
         // Case 3: mixed dynamic range without underflow.
         // We keep the “small” entries O(1) so this still stresses conditioning and the

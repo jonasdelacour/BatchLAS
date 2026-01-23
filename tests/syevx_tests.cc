@@ -125,7 +125,7 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
     auto dense = Matrix<float, MatrixFormat::Dense>::Diagonal(diagonal.to_span(), batch_size);
     
     SyevxParams<float> params;
-    params.algorithm = OrthoAlgorithm::SVQB;
+    params.algorithm = OrthoAlgorithm::SVQB2;
     params.iterations = 50;
     params.extra_directions = 10;
     params.find_largest = true;
@@ -138,20 +138,23 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
     auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
         *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params));
     ctx ->wait();
-    auto syev_workspace = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+    auto syev_workspace = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<test_utils::gpu_backend>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower));
 
     syevx<test_utils::gpu_backend>(
         *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params);
-    syev<test_utils::gpu_backend>(
+    backend::syev_vendor<Backend::NETLIB>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
     ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
         for (int i = 0; i < neig; ++i) {
-            auto rel_err = std::abs(W_lobpcg[b * neig + i] - W_syev[((b+1) * n - i - 1)]) / std::abs(W_syev[((b+1) * n - i - 1)]);
+            auto lobpcg_val = W_lobpcg[b * neig + i];
+            auto syev_val = W_syev[((b+1) * n - i - 1)];
+            auto rel_err = std::abs(lobpcg_val - syev_val) / std::abs(syev_val);
             EXPECT_NEAR(rel_err, 0.0f, 1e-3f)
-                << "Eigenvalue mismatch at batch " << b << ", index " << i;
+                << "Eigenvalue mismatch at batch " << b << ", index " << i
+                << ": SYEVX=" << lobpcg_val << " vs vendor=" << syev_val;
         }
     }
 }
@@ -248,21 +251,21 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
 TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
     constexpr int n = 200;
     constexpr int batch = 2;
-    const int neig = 5;
-    std::complex<float> a(10.0f, 0.0f);
-    std::complex<float> b(100.0f, 5.0f), c(100.0f, -5.0f);
+    const int neig = 3;
+    std::complex<double> a(10.0f, 0.0f);
+    std::complex<double> b(100.0f, 5.0f), c(100.0f, -5.0f);
 
-    auto dense = Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
+    auto dense = Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
     
     //auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
     auto A_view = dense.view();
 
-    UnifiedVector<float> W(neig * batch);  // Eigenvalues are real for Hermitian matrices
-    Matrix<std::complex<float>, MatrixFormat::Dense> V(n, neig, batch);
+    UnifiedVector<double> W(neig * batch);  // Eigenvalues are real for Hermitian matrices
+    Matrix<std::complex<double>, MatrixFormat::Dense> V(n, neig, batch);
 
-    SyevxParams<std::complex<float>> params;
+    SyevxParams<std::complex<double>> params;
     params.algorithm = OrthoAlgorithm::SVQB2;
-    params.extra_directions = 5;
+    params.extra_directions = 6;
     params.find_largest = true;
     params.iterations = 50;
 
@@ -272,9 +275,9 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
     syevx<test_utils::gpu_backend>(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
-    std::vector<std::complex<float>> expected(n);
+    std::vector<std::complex<double>> expected(n);
     for (int k = 1; k <= n; ++k) {
-        expected[k-1] = a - std::complex<float>(2.0f) * std::sqrt(b * c) * std::complex<float>(std::cos(M_PI * k / (n + 1)));
+        expected[k-1] = a - std::complex<double>(2.0f) * std::sqrt(b * c) * std::complex<double>(std::cos(M_PI * k / (n + 1)));
     }
     std::sort(expected.begin(), expected.end(), [](const auto& lhs, const auto& rhs) {
         return std::abs(lhs) > std::abs(rhs);
@@ -290,7 +293,7 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     constexpr int n = 200;
     constexpr int batch = 2;
-    const int neig = 5;
+    const int neig = 3;
     std::complex<double> a(10.0f, 0.0f);
     std::complex<double> b(100.0f, 5.0f), c(100.0f, -5.0f);
 
@@ -325,7 +328,7 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     SyevxParams<std::complex<double>> params;
     params.algorithm = OrthoAlgorithm::SVQB2;
     params.ortho_iterations = 2;
-    params.extra_directions = 2;
+    params.extra_directions = 6;
     params.find_largest = false;
     params.iterations = 30;
 

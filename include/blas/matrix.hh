@@ -390,6 +390,10 @@ namespace batchlas {
         MatrixView<T, MType> view() const;
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
+        // Convert to a different scalar type (dense only)
+        template <typename U>
+        Matrix<U, MType> astype() const;
+
         // Dense-only slicing operators producing MatrixView (non-owning)
         template <MatrixFormat M = MType, typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
@@ -648,6 +652,10 @@ namespace batchlas {
         int batch_size() const { return batch_size_; }
         int rows() const { return rows_; }
         int cols() const { return cols_; }
+
+        // Convert to a different scalar type (dense only)
+        template <typename U>
+        Matrix<U, MType> astype() const;
         
         // Dense matrix specific
         template <MatrixFormat M = MType, 
@@ -1097,6 +1105,10 @@ namespace batchlas {
         int stride() const { return stride_; }
         int batch_size() const { return batch_size_; }
 
+        // Convert to a different scalar type
+        template <typename U>
+        Vector<U> astype() const;
+
         // Access element at (i, batch)
         T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
         //const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
@@ -1186,6 +1198,10 @@ namespace batchlas {
         int inc() const { return inc_; }
         int stride() const { return stride_; }
         int batch_size() const { return batch_size_; }
+
+        // Convert to a different scalar type
+        template <typename U>
+        Vector<U> astype() const;
 
         static Event copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src);
 
@@ -1288,6 +1304,62 @@ namespace batchlas {
         int batch_size_ = 1;
         //std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
     };
+
+    // ------------------------------------------------------------------
+    // Conversion helpers
+    // ------------------------------------------------------------------
+    template <typename T, MatrixFormat MType>
+    template <typename U>
+    Matrix<U, MType> Matrix<T, MType>::astype() const {
+        static_assert(MType == MatrixFormat::Dense, "Matrix::astype only supports dense matrices");
+        Matrix<U, MType> result(rows_, cols_, batch_size_, ld_, stride_);
+        auto src = data();
+        auto dst = result.data();
+        for (std::size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = static_cast<U>(src[i]);
+        }
+        return result;
+    }
+
+    template <typename T, MatrixFormat MType>
+    template <typename U>
+    Matrix<U, MType> MatrixView<T, MType>::astype() const {
+        static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
+        Matrix<U, MType> result(rows_, cols_, batch_size_);
+        auto out = result.view();
+        for (int b = 0; b < batch_size_; ++b) {
+            for (int j = 0; j < cols_; ++j) {
+                for (int i = 0; i < rows_; ++i) {
+                    out.at(i, j, b) = static_cast<U>(this->at(i, j, b));
+                }
+            }
+        }
+        return result;
+    }
+
+    template <typename T>
+    template <typename U>
+    Vector<U> Vector<T>::astype() const {
+        Vector<U> result(size_, batch_size_, stride_, inc_);
+        auto src = data();
+        auto dst = result.data();
+        for (std::size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = static_cast<U>(src[i]);
+        }
+        return result;
+    }
+
+    template <typename T>
+    template <typename U>
+    Vector<U> VectorView<T>::astype() const {
+        Vector<U> result(size_, batch_size_, stride_, inc_);
+        for (int b = 0; b < batch_size_; ++b) {
+            for (int i = 0; i < size_; ++i) {
+                result(i, b) = static_cast<U>((*this)(i, b));
+            }
+        }
+        return result;
+    }
 
     // Helper utility to get effective dimensions accounting for transpose
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
