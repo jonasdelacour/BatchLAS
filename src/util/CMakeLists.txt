@@ -3,7 +3,7 @@ set(UTIL_SOURCES
     sycl-util-impl.cc
 )
 
-target_sources(batchlas PRIVATE ${UTIL_SOURCES})
+target_sources(batchlas_util_obj PRIVATE ${UTIL_SOURCES})
 
 # Add specific SYCL compiler flags for these files
 #set_source_files_properties(

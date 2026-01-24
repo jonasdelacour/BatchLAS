@@ -1,3 +1,10 @@
+set(EXTENSIONS_CTA_SOURCES
+    ormqr_cta.cc
+    steqr_cta.cc
+    sytrd_cta.cc
+    sytrd_sb2st_cta.cc
+)
+
 set(EXTENSIONS_SOURCES
     ortho.cc
     syevx.cc
@@ -7,16 +14,12 @@ set(EXTENSIONS_SOURCES
     tridiag_solver.cc
     lanczos.cc
     trmm.cc
-    ormqr_cta.cc
     ormqr_blocked.cc
     steqr.cc
-    steqr_cta.cc
-    sytrd_cta.cc
     latrd_lower_panel.cc
     sytrd_blocked.cc
     sytrd_sy2sb.cc
     sytrd_sb2st.cc
-    sytrd_sb2st_cta.cc
     band_reduction.cc
     stedc.cc
     stedc_flat.cc
@@ -24,5 +27,6 @@ set(EXTENSIONS_SOURCES
     lascl.cc
 )
 
-target_sources(batchlas PRIVATE ${EXTENSIONS_SOURCES})
+target_sources(batchlas_extensions_obj PRIVATE ${EXTENSIONS_SOURCES})
+target_sources(batchlas_extensions_cta_obj PRIVATE ${EXTENSIONS_CTA_SOURCES})
 

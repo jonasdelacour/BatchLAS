@@ -30,4 +30,4 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
     )
 endif()
 
-target_sources(batchlas PRIVATE ${BACKEND_SOURCES})
+target_sources(batchlas_backends_obj PRIVATE ${BACKEND_SOURCES})

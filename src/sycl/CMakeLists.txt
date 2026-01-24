@@ -4,8 +4,9 @@ set(SYCL_SOURCES
     # but additional SYCL-specific files can be added here
 )
 
+
 # SYCL-specific compiler flags and options
-if(BATCHLAS_ENABLE_SYCL)
+if(BATCHLAS_ENABLE_SYCL AND TARGET batchlas)
     # Intel oneAPI DPC++ specific settings
     target_compile_options(batchlas PRIVATE -fsycl)
     target_link_options(batchlas PRIVATE -fsycl)
@@ -15,4 +16,4 @@ if(BATCHLAS_ENABLE_SYCL)
     # target_compile_options(batchlas PRIVATE -fsycl-targets=spir64_gen)
 endif()
 
-target_sources(batchlas PRIVATE ${SYCL_SOURCES})
+target_sources(batchlas_sycl_obj PRIVATE ${SYCL_SOURCES})

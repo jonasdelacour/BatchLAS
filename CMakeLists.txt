@@ -67,8 +67,9 @@ if(BATCHLAS_SANITIZER_FRIENDLY_DEBUG)
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O1 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-inline")
 endif()
 
-# Include CMakeDependentOption module
+# Include CMake modules
 include(CMakeDependentOption)
+include(CheckCXXCompilerFlag)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -87,6 +88,15 @@ option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
 option(BATCHLAS_ENABLE_CPU_TESTS "Enable tests/benchmarks requiring CPU SYCL kernel compilation" ON)
+set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
+# The native_cpu backend is still experimental and we have observed compiler
+# crashes in vecz (whole-function vectorization) on some Intel LLVM builds.
+# Default to disabling vecz on the dpcpp-cuda toolchain, but keep it opt-out.
+set(_BATCHLAS_DEFAULT_NATIVE_CPU_DISABLE_VECZ OFF)
+if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda")
+    set(_BATCHLAS_DEFAULT_NATIVE_CPU_DISABLE_VECZ ON)
+endif()
+option(BATCHLAS_NATIVE_CPU_DISABLE_VECZ "Disable vecz for native_cpu backend (workaround for clang crash)" ${_BATCHLAS_DEFAULT_NATIVE_CPU_DISABLE_VECZ})
 
 # Opt-in: bottom-up tuning harness (runs benchmark grid-search and writes a JSON profile).
 # This is intentionally OFF-by-default and only meaningful when benchmarks are enabled.
@@ -102,6 +112,7 @@ set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA"
 
 # SYCL is mandatory for this project
 message(STATUS "SYCL support is mandatory for BatchLAS")
+set(BATCHLAS_ENABLE_SYCL ON)
 
 # Find dependencies
 find_package(OpenMP QUIET)
@@ -315,6 +326,36 @@ endfunction()
 
 # Detect whether a SYCL CPU device exists and, if so, add a CPU target
 function(detect_sycl_cpu_target)
+    if(NOT BATCHLAS_CPU_TARGET STREQUAL "auto")
+        if(BATCHLAS_CPU_TARGET STREQUAL "none")
+            message(STATUS "CPU target override set to 'none' - disabling CPU target")
+            set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
+            return()
+        elseif(BATCHLAS_CPU_TARGET STREQUAL "native_cpu")
+            message(STATUS "CPU target override set to native_cpu")
+            set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
+            list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _cpu_idx)
+            if(_cpu_idx EQUAL -1)
+                list(APPEND BATCHLAS_SYCL_TARGETS "native_cpu")
+                message(STATUS "Added CPU target to SYCL compilation: native_cpu")
+            endif()
+            set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+            return()
+        elseif(BATCHLAS_CPU_TARGET STREQUAL "spir64_x86_64")
+            message(STATUS "CPU target override set to spir64_x86_64")
+            set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
+            list(FIND BATCHLAS_SYCL_TARGETS "spir64_x86_64" _cpu_idx)
+            if(_cpu_idx EQUAL -1)
+                list(APPEND BATCHLAS_SYCL_TARGETS "spir64_x86_64")
+                message(STATUS "Added CPU target to SYCL compilation: spir64_x86_64")
+            endif()
+            set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+            return()
+        else()
+            message(WARNING "Unknown BATCHLAS_CPU_TARGET value: ${BATCHLAS_CPU_TARGET} (expected auto|native_cpu|spir64_x86_64|none). Falling back to auto.")
+        endif()
+    endif()
+
     if(NOT SYCL_LS)
         message(STATUS "sycl-ls not found, skipping CPU target detection")
         set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
@@ -334,18 +375,30 @@ function(detect_sycl_cpu_target)
         return()
     endif()
 
-    # Check for native_cpu backend (LLVM's built-in CPU support)
-    if(SYCL_LS_CPU_OUTPUT MATCHES "\\[native_cpu:cpu\\]")
-        message(STATUS "Detected SYCL native_cpu device")
-        set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
     # Check for OpenCL-based CPU backend (Intel's implementation)
-    elseif(SYCL_LS_CPU_OUTPUT MATCHES "\\[opencl:cpu\\]" OR SYCL_LS_CPU_OUTPUT MATCHES "\\[host:cpu\\]")
+    if(SYCL_LS_CPU_OUTPUT MATCHES "\\[opencl:cpu\\]" OR SYCL_LS_CPU_OUTPUT MATCHES "\\[host:cpu\\]")
         message(STATUS "Detected SYCL OpenCL CPU device")
         set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
+        list(FIND BATCHLAS_SYCL_TARGETS "spir64_x86_64" _cpu_idx)
+        if(_cpu_idx EQUAL -1)
+            list(APPEND BATCHLAS_SYCL_TARGETS "spir64_x86_64")
+            message(STATUS "Added CPU target to SYCL compilation: spir64_x86_64")
+        endif()
+    # Check for native_cpu backend (LLVM's built-in CPU support)
+    elseif(SYCL_LS_CPU_OUTPUT MATCHES "\\[native_cpu:cpu\\]")
+        message(STATUS "Detected SYCL native_cpu device")
+        set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
+        list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _cpu_idx)
+        if(_cpu_idx EQUAL -1)
+            list(APPEND BATCHLAS_SYCL_TARGETS "native_cpu")
+            message(STATUS "Added CPU target to SYCL compilation: native_cpu")
+        endif()
     else()
         message(STATUS "No SYCL CPU device detected")
         set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
     endif()
+
+    set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
 endfunction()
 
 # Add SYCL specific compiler flags
@@ -357,6 +410,18 @@ detect_sycl_gpu_architectures()
 
 # Detect CPU target if available
 detect_sycl_cpu_target()
+
+# Workaround: native_cpu backend vecz crashes in clang (assert in SelectInst)
+# Disable whole-function vectorization (vecz) for native_cpu when requested.
+# See: -mllvm -sycl-native-cpu-no-vecz
+if(BATCHLAS_NATIVE_CPU_DISABLE_VECZ)
+    list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _native_cpu_idx)
+    if(NOT _native_cpu_idx EQUAL -1)
+        message(STATUS "Disabling vecz for native_cpu backend (-mllvm -sycl-native-cpu-no-vecz)")
+        add_compile_options(-Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
+        add_link_options(-Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # Device line info (CUDA/NVIDIA)
@@ -776,8 +841,21 @@ function(find_netlib_libs)
 
     message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
 
-    find_library(LAPACKE_LIBRARY NAMES lapacke)
-    find_library(CBLAS_LIBRARY NAMES cblas blas)
+    # Prefer system libraries over /usr/local to avoid mismatched/partial installs.
+    find_library(LAPACKE_LIBRARY NAMES lapacke
+        PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH)
+    find_library(CBLAS_LIBRARY NAMES cblas blas
+        PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH)
+
+    # Fallback to default search paths if system libs are not found.
+    if(NOT LAPACKE_LIBRARY)
+        find_library(LAPACKE_LIBRARY NAMES lapacke)
+    endif()
+    if(NOT CBLAS_LIBRARY)
+        find_library(CBLAS_LIBRARY NAMES cblas blas)
+    endif()
 
     if(LAPACKE_LIBRARY AND CBLAS_LIBRARY)
         message(STATUS "Found LAPACKE: ${LAPACKE_LIBRARY}")
@@ -796,11 +874,21 @@ find_netlib_libs()
 
 # Apply final SYCL target flags
 list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
+set(BATCHLAS_SYCL_TARGETS_STRING "")
+set(BATCHLAS_SYCL_TARGETS_NO_CPU "${BATCHLAS_SYCL_TARGETS}")
+list(FILTER BATCHLAS_SYCL_TARGETS_NO_CPU EXCLUDE REGEX "cpu|spir64")
+set(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING "")
 if(BATCHLAS_SYCL_TARGETS)
-    string(REPLACE ";" "," SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
-    add_compile_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    add_link_options(-fsycl-targets=${SYCL_TARGETS_STRING})
-    message(STATUS "Using SYCL targets: ${SYCL_TARGETS_STRING}")
+    string(REPLACE ";" "," BATCHLAS_SYCL_TARGETS_STRING "${BATCHLAS_SYCL_TARGETS}")
+    message(STATUS "Using SYCL targets: ${BATCHLAS_SYCL_TARGETS_STRING}")
+endif()
+if(BATCHLAS_SYCL_TARGETS_NO_CPU)
+    string(REPLACE ";" "," BATCHLAS_SYCL_TARGETS_NO_CPU_STRING "${BATCHLAS_SYCL_TARGETS_NO_CPU}")
+endif()
+
+# If CPU target was explicitly requested, ensure BATCHLAS_HAS_CPU_TARGET reflects that.
+if(BATCHLAS_CPU_TARGET STREQUAL "native_cpu" OR BATCHLAS_CPU_TARGET STREQUAL "spir64_x86_64")
+    set(BATCHLAS_HAS_CPU_TARGET ON)
 endif()
 
 # Check if CPU kernels will actually be compiled based on SYCL targets
@@ -868,6 +956,14 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     /opt/include
 )
+
+# oneDPL (DPC++ STL) headers are not installed in /opt/dpcpp-cuda by default.
+# If a oneAPI oneDPL install exists, add it explicitly.
+set(ONEDPL_ROOT "/opt/intel/oneapi/dpl/latest")
+if(EXISTS "${ONEDPL_ROOT}/include/oneapi/dpl")
+    message(STATUS "Adding oneDPL include dir: ${ONEDPL_ROOT}/include")
+    include_directories("${ONEDPL_ROOT}/include")
+endif()
 
 # Add library subdirectories
 add_subdirectory(src)

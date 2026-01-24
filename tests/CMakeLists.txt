@@ -10,9 +10,7 @@ if(NOT GTest_FOUND)
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG release-1.12.1
     )
-    
-    # Do not force BUILD_SHARED_LIBS globally: it also affects BatchLAS and can
-    # break SYCL kernel availability (device images end up in a shared lib).
+
     FetchContent_MakeAvailable(googletest)
 endif()
 
@@ -75,6 +73,11 @@ foreach(test ${TEST_TARGETS})
         GTest::gtest 
         GTest::gtest_main
     )
+
+    if(BATCHLAS_SYCL_TARGETS_STRING)
+        target_compile_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
+        target_link_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
+    endif()
     
     # Add to CTest
     add_test(NAME ${test} COMMAND ${test})
