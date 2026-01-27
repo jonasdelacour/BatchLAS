@@ -395,12 +395,6 @@ TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
 
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "STEQR_CTA is not supported on NETLIB backend";
-    } else {
-#if !BATCHLAS_HAS_HOST_BACKEND
-        GTEST_SKIP() << "Host backend required for NETLIB reference";
-#else
     const int n = 32;
     const int batch = 32;
     const float_type log10_cond = float_type(10.0);
@@ -453,8 +447,6 @@ TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
             ASSERT_NEAR(eigenvalues(i, b), ref, tol)
                 << "Eigenvalue mismatch at index " << i << ", batch " << b;
         }
-    }
-#endif
     }
 }
 

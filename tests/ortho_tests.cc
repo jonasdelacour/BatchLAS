@@ -1,4 +1,3 @@
-\
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
@@ -7,9 +6,12 @@
 #include <complex>
 #include <vector>
 #include <iostream>
+#include <algorithm>
 
 using namespace batchlas;
-#if BATCHLAS_HAS_GPU_BACKEND
+
+std::string GetTestName(Transpose trans, OrthoAlgorithm algo);
+std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorithm algo);
 
 template <typename T>
 void print_matrix(const MatrixView<T, MatrixFormat::Dense>& mat, const std::string& name) {
@@ -30,39 +32,44 @@ void print_matrix(const MatrixView<T, MatrixFormat::Dense>& mat, const std::stri
 }
 
 
-template <typename T>
-class OrthoTest : public ::testing::Test {
-protected:
-    std::shared_ptr<Queue> ctx;
+template <typename T, Backend B>
+struct OrthoConfig {
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
+};
 
-    void SetUp() override {
-        ctx = std::make_shared<Queue>(Device::default_device());
-    }
+using OrthoTestTypes = typename test_utils::backend_types<OrthoConfig>::type;
+
+template <typename Config>
+class OrthoTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using ScalarType = typename Config::ScalarType;
+    static constexpr Backend BackendType = Config::BackendVal;
 
     // Helper to check for orthonormality: Q^T * Q = I or Q * Q^T = I
     // For column orthonormality (transA = NoTrans), check Q^T * Q = I
     // For row orthonormality (transA = Trans), check Q * Q^T = I
-    void check_orthonormality(const MatrixView<T, MatrixFormat::Dense>& Q_view, Transpose transQ, typename base_type<T>::type tolerance) {
+    void check_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q_view, Transpose transQ, typename base_type<ScalarType>::type tolerance) {
         int m = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols();
         int k = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows();
         int batch_size = Q_view.batch_size();
 
-        Matrix<T, MatrixFormat::Dense> I_expected = Matrix<T, MatrixFormat::Dense>::Identity(k, batch_size);
-        Matrix<T, MatrixFormat::Dense> Result_actual(k, k, batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> I_expected = Matrix<ScalarType, MatrixFormat::Dense>::Identity(k, batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> Result_actual(k, k, batch_size);
         auto I_expected_view = I_expected.view();
         auto Result_actual_view = Result_actual.view();
 
         // print_matrix(Q_view, "Q_view for check");
 
-        auto transp = std::is_same_v<T, std::complex<typename base_type<T>::type>> ? Transpose::ConjTrans : Transpose::Trans;
+        auto transp = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
         if (transQ == Transpose::NoTrans) { // Columns are orthogonal, Q is m x k
             // Result_actual = Q^T * Q
-            gemm<test_utils::gpu_backend>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), transp, Transpose::NoTrans);
+            gemm<BackendType>(*(this->ctx), Q_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), transp, Transpose::NoTrans);
         } else { // Rows are orthogonal, Q is k x m
             // Result_actual = Q * Q^T
-            gemm<test_utils::gpu_backend>(*ctx, Q_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, transp);
+            gemm<BackendType>(*(this->ctx), Q_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, transp);
         }
-        ctx->wait();
+        this->ctx->wait();
         // print_matrix(Result_actual_view, "Result_actual (Q^T*Q or Q*Q^T)");
         // print_matrix(I_expected_view, "I_expected");
 
@@ -73,7 +80,7 @@ protected:
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < k; ++i) {
                 for (int j = 0; j < k; ++j) {
-                    T expected_val = (i == j) ? T(1.0) : T(0.0);
+                    ScalarType expected_val = (i == j) ? ScalarType(1.0) : ScalarType(0.0);
                     // Indexing for Result_actual_view (k x k) and I_expected_view (k x k)
                     // These are always k x k, ld = k, stride = k*k
                     size_t idx = b * k * k + i * k + j;
@@ -84,10 +91,10 @@ protected:
     }
 
     // Helper to check M-orthogonality: Q^T * M * Q = I
-    void check_M_orthonormality(const MatrixView<T, MatrixFormat::Dense>& Q_view,
-                                const MatrixView<T, MatrixFormat::Dense>& M_view,
+    void check_M_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q_view,
+                                const MatrixView<ScalarType, MatrixFormat::Dense>& M_view,
                                 Transpose transQ, // Determines orientation of Q for M-orthogonality check
-                                typename base_type<T>::type tolerance) {
+                                typename base_type<ScalarType>::type tolerance) {
         int m_q = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols(); // num_vectors in Q
         int k_q = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows(); // dimension of vectors in Q
 
@@ -101,9 +108,9 @@ protected:
         // or Q * M * Q^T = I (if transQ = Trans, Q is num_vecs x dim)
         // The identity matrix will be k_q x k_q
 
-        Matrix<T, MatrixFormat::Dense> I_expected = Matrix<T, MatrixFormat::Dense>::Identity(k_q, batch_size);
-        Matrix<T, MatrixFormat::Dense> Temp_MQ(m_m, k_q, batch_size); // M*Q or M^T*Q
-        Matrix<T, MatrixFormat::Dense> Result_actual(k_q, k_q, batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> I_expected = Matrix<ScalarType, MatrixFormat::Dense>::Identity(k_q, batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> Temp_MQ(m_m, k_q, batch_size); // M*Q or M^T*Q
+        Matrix<ScalarType, MatrixFormat::Dense> Result_actual(k_q, k_q, batch_size);
 
         auto I_expected_view = I_expected.view();
         auto Temp_MQ_view = Temp_MQ.view();
@@ -112,17 +119,17 @@ protected:
         if (transQ == Transpose::NoTrans) { // Q is m x k_q (vectors are columns)
             // M is m x m (assuming M is symmetric and defines inner product for columns of Q)
             // Temp_MQ (m x k_q) = M (m x m) * Q (m x k_q)
-            gemm<test_utils::gpu_backend>(*ctx, M_view, Q_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<BackendType>(*(this->ctx), M_view, Q_view, Temp_MQ_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::NoTrans);
             // Result_actual (k_q x k_q) = Q^T (k_q x m) * Temp_MQ (m x k_q)
-            gemm<test_utils::gpu_backend>(*ctx, Q_view, Temp_MQ_view, Result_actual_view, T(1.0), T(0.0), Transpose::Trans, Transpose::NoTrans);
+            gemm<BackendType>(*(this->ctx), Q_view, Temp_MQ_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::Trans, Transpose::NoTrans);
         } else { // Q is k_q x m (vectors are rows)
             // M is m x m
             // Temp_MQ (k_q x m) = Q (k_q x m) * M (m x m)
-            gemm<test_utils::gpu_backend>(*ctx, Q_view, M_view, Temp_MQ_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<BackendType>(*(this->ctx), Q_view, M_view, Temp_MQ_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::NoTrans);
             // Result_actual (k_q x k_q) = Temp_MQ (k_q x m) * Q^T (m x k_q)
-            gemm<test_utils::gpu_backend>(*ctx, Temp_MQ_view, Q_view, Result_actual_view, T(1.0), T(0.0), Transpose::NoTrans, Transpose::Trans);
+            gemm<BackendType>(*(this->ctx), Temp_MQ_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::Trans);
         }
-        ctx->wait();
+        this->ctx->wait();
 
         // print_matrix(Result_actual_view, "Result_actual (M-ortho)");
         // print_matrix(I_expected_view, "I_expected (M-ortho)");
@@ -131,7 +138,7 @@ protected:
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < k_q; ++i) {
                 for (int j = 0; j < k_q; ++j) {
-                    T expected_val = (i == j) ? T(1.0) : T(0.0);
+                    ScalarType expected_val = (i == j) ? ScalarType(1.0) : ScalarType(0.0);
                     size_t idx = b * k_q * k_q + i * k_q + j;
                     test_utils::assert_near(res_data[idx], expected_val, tolerance);
                 }
@@ -139,11 +146,11 @@ protected:
         }
     }
     // Helper to check A is orthogonal to M_basis: A^T * M_basis = 0 or A * M_basis^T = 0
-    void check_orthogonality_to_M(const MatrixView<T, MatrixFormat::Dense>& A_view,
-                                   const MatrixView<T, MatrixFormat::Dense>& M_basis_view,
+    void check_orthogonality_to_M(const MatrixView<ScalarType, MatrixFormat::Dense>& A_view,
+                                   const MatrixView<ScalarType, MatrixFormat::Dense>& M_basis_view,
                                    Transpose transA, // Orientation of A
                                    Transpose transM, // Orientation of M_basis
-                                   typename base_type<T>::type tolerance) {
+                                   typename base_type<ScalarType>::type tolerance) {
         int a_rows = A_view.rows();
         int a_cols = A_view.cols();
         int m_rows = M_basis_view.rows();
@@ -156,7 +163,7 @@ protected:
         // Then A^T * M_basis should be zero (nA x nM)
         int res_rows, res_cols;
         Transpose opA, opM;
-        auto trans = std::is_same_v<T, std::complex<typename base_type<T>::type>> ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
         if (transA == Transpose::NoTrans) { // A vectors are columns (dim x nA)
             opA = trans;
             res_rows = a_cols; // nA
@@ -176,11 +183,11 @@ protected:
         }
 
 
-        Matrix<T, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
         auto Result_AM_view = Result_AM.view();
 
-        gemm<test_utils::gpu_backend>(*ctx, A_view, M_basis_view, Result_AM_view, T(1.0), T(0.0), opA, opM);
-        ctx->wait();
+        gemm<BackendType>(*(this->ctx), A_view, M_basis_view, Result_AM_view, ScalarType(1.0), ScalarType(0.0), opA, opM);
+        this->ctx->wait();
 
         // print_matrix(Result_AM_view, "Result_AM (A vs M_basis)");
 
@@ -189,89 +196,61 @@ protected:
             for (int r = 0; r < res_rows; ++r) {
                 for (int c = 0; c < res_cols; ++c) {
                     size_t idx = b * res_rows * res_cols + r * res_cols + c; // Assuming result is row-major
-                    test_utils::assert_near(res_data[idx], T(0.0), tolerance);
+                    test_utils::assert_near(res_data[idx], ScalarType(0.0), tolerance);
                 }
             }
         }
     }
 };
 
-// Separate implementations for different types
-// Float version of ortho matrix test
-class OrthoMatrixFloatTest : public OrthoTest<float>,
-                           public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
-};
+template <typename Config>
+class OrthoMatrixTest : public OrthoTest<Config> {};
 
-class OrthoMatrixComplexFloatTest : public OrthoTest<std::complex<float>>,
-                           public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
-};
+template <typename Config>
+class OrthoAgainstMTest : public OrthoTest<Config> {};
 
-// Double version of ortho matrix test
-class OrthoMatrixDoubleTest : public OrthoTest<double>,
-                            public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
-};
-
-class OrthoMatrixComplexDoubleTest : public OrthoTest<std::complex<double>>,
-                            public ::testing::WithParamInterface<std::tuple<Transpose, OrthoAlgorithm>> {
-};
-
-// Float version of ortho against M test
-class OrthoAgainstMFloatTest : public OrthoTest<float>,
-                             public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
-};
-
-class OrthoAgainstMComplexFloatTest : public OrthoTest<std::complex<float>>,
-                             public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
-};
-
-// Double version of ortho against M test
-class OrthoAgainstMDoubleTest : public OrthoTest<double>,
-                              public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
-};
-
-class OrthoAgainstMComplexDoubleTest : public OrthoTest<std::complex<double>>,
-                             public ::testing::WithParamInterface<std::tuple<Transpose, Transpose, OrthoAlgorithm>> {
-};
+TYPED_TEST_SUITE(OrthoMatrixTest, OrthoTestTypes);
+TYPED_TEST_SUITE(OrthoAgainstMTest, OrthoTestTypes);
 
 // Test implementations
-TEST_P(OrthoMatrixFloatTest, OrthogonalizeMatrix) {
-    auto tol = test_utils::tolerance<float>();
-    Transpose transA = std::get<0>(GetParam());
-    OrthoAlgorithm algo = std::get<1>(GetParam());
-    
-    const int m = 10, k = 5, batch_size = 2;
-    int rows = (transA == Transpose::NoTrans) ? m : k;
-    int cols = (transA == Transpose::NoTrans) ? k : m;
+TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    auto tol = test_utils::tolerance<T>();
 
-    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
+    const std::vector<Transpose> transposes = {Transpose::NoTrans};
+    std::vector<OrthoAlgorithm> algos = {
+        OrthoAlgorithm::Chol2,
+        OrthoAlgorithm::ShiftChol3,
+        OrthoAlgorithm::CGS2,
+        OrthoAlgorithm::SVQB,
+        OrthoAlgorithm::SVQB2,
+        OrthoAlgorithm::Householder
+    };
+    if constexpr (std::is_same_v<T, std::complex<double>>) {
+        algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::Householder), algos.end());
+    }
 
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, transA, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
+    for (auto transA : transposes) {
+        for (auto algo : algos) {
+            SCOPED_TRACE(test_utils::backend_to_string(BackendType));
+            SCOPED_TRACE(GetTestName(transA, algo));
 
-    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, transA, workspace.to_span(), algo);
-    this->ctx->wait();
+            const int m = 10, k = 5, batch_size = 2;
+            int rows = (transA == Transpose::NoTrans) ? m : k;
+            int cols = (transA == Transpose::NoTrans) ? k : m;
 
-    this->check_orthonormality(A, transA, tol);
-}
+            Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
-TEST_P(OrthoMatrixComplexFloatTest, OrthogonalizeMatrix) {
-    auto tol = test_utils::tolerance<std::complex<float>>();
-    Transpose transA = std::get<0>(GetParam());
-    OrthoAlgorithm algo = std::get<1>(GetParam());
-    
-    const int m = 10, k = 5, batch_size = 2;
-    int rows = (transA == Transpose::NoTrans) ? m : k;
-    int cols = (transA == Transpose::NoTrans) ? k : m;
+            size_t buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), A, transA, algo);
+            UnifiedVector<std::byte> workspace(buffer_size);
 
-    Matrix<std::complex<float>, MatrixFormat::Dense> A = Matrix<std::complex<float>, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
+            ortho<BackendType, T>(*(this->ctx), A, transA, workspace.to_span(), algo);
+            this->ctx->wait();
 
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, transA, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-
-    ortho<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, transA, workspace.to_span(), algo);
-    this->ctx->wait();
-
-    this->check_orthonormality(A, transA, tol);
+            this->check_orthonormality(A, transA, tol);
+        }
+    }
 }
 
 /* TEST_F(OrthoMatrixFloatTest, DiagnosticTest) {
@@ -297,190 +276,55 @@ TEST_P(OrthoMatrixComplexFloatTest, OrthogonalizeMatrix) {
 
 } */
 
-TEST_P(OrthoMatrixDoubleTest, OrthogonalizeMatrix) {
-    auto tol = test_utils::tolerance<double>();
-    Transpose transA = std::get<0>(GetParam());
-    OrthoAlgorithm algo = std::get<1>(GetParam());
-    
-    const int m = 10, k = 5, batch_size = 2;
-    int rows = (transA == Transpose::NoTrans) ? m : k;
-    int cols = (transA == Transpose::NoTrans) ? k : m;
+TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    auto tol = test_utils::tolerance<T>();
 
-    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
+    const std::vector<Transpose> transposes = {Transpose::NoTrans};
+    const std::vector<OrthoAlgorithm> algos = {
+        OrthoAlgorithm::Chol2,
+        OrthoAlgorithm::ShiftChol3,
+        OrthoAlgorithm::CGS2,
+        OrthoAlgorithm::SVQB,
+        OrthoAlgorithm::SVQB2
+    };
 
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), A, transA, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
+    for (auto transA : transposes) {
+        for (auto transM : transposes) {
+            for (auto algo : algos) {
+                SCOPED_TRACE(test_utils::backend_to_string(BackendType));
+                SCOPED_TRACE(GetAgainstMTestName(transA, transM, algo));
 
-    ortho<test_utils::gpu_backend, double>(*(this->ctx), A, transA, workspace.to_span(), algo);
-    this->ctx->wait();
+                const int dim = 12, nA = 3, nM = 2, batch_size = 2;
 
-    this->check_orthonormality(A, transA, tol);
-}
+                int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
+                int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
+                int M_rows = (transM == Transpose::NoTrans) ? dim : nM;
+                int M_cols = (transM == Transpose::NoTrans) ? nM : dim;
 
-TEST_P(OrthoMatrixComplexDoubleTest, OrthogonalizeMatrix) {
-    auto tol = test_utils::tolerance<std::complex<double>>();
-    Transpose transA = std::get<0>(GetParam());
-    OrthoAlgorithm algo = std::get<1>(GetParam());
-    
-    const int m = 10, k = 5, batch_size = 2;
-    int rows = (transA == Transpose::NoTrans) ? m : k;
-    int cols = (transA == Transpose::NoTrans) ? k : m;
+                Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
+                Matrix<T, MatrixFormat::Dense> M = Matrix<T, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
 
-    Matrix<std::complex<double>, MatrixFormat::Dense> A = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
+                size_t ortho_M_buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), M, transM, algo);
+                UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
+                ortho<BackendType, T>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
+                this->ctx->wait();
 
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A, transA, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
+                this->check_orthonormality(M, transM, tol);
 
-    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A, transA, workspace.to_span(), algo);
-    this->ctx->wait();
+                size_t buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), A, M, transA, transM, algo);
+                UnifiedVector<std::byte> workspace(buffer_size);
+                const size_t iterations = 2;
 
-    this->check_orthonormality(A, transA, tol);
-}
+                ortho<BackendType, T>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
+                this->ctx->wait();
 
-TEST_P(OrthoAgainstMFloatTest, OrthogonalizeMatrixAgainstM) {
-    auto tol = test_utils::tolerance<float>();
-    Transpose transA = std::get<0>(GetParam());
-    Transpose transM = std::get<1>(GetParam());
-    OrthoAlgorithm algo = std::get<2>(GetParam());
-    
-    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
-    
-    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
-    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
-    int M_rows = (transM == Transpose::NoTrans) ? dim : nM;
-    int M_cols = (transM == Transpose::NoTrans) ? nM : dim;
-
-    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
-    Matrix<float, MatrixFormat::Dense> M = Matrix<float, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
-
-    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), M, transM, algo);
-    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<test_utils::gpu_backend, float>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
-    this->ctx->wait();
-
-    this->check_orthonormality(M, transM, tol);
-
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, M, transA, transM, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-    const size_t iterations = 2;
-
-    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
-    this->ctx->wait();
-
-    this->check_orthonormality(A, transA, tol);
-    this->check_orthogonality_to_M(A, M, transA, transM, tol);
-}
-
-TEST_P(OrthoAgainstMComplexFloatTest, OrthogonalizeMatrixAgainstM) {
-    auto tol = test_utils::tolerance<std::complex<float>>();
-    Transpose transA = std::get<0>(GetParam());
-    Transpose transM = std::get<1>(GetParam());
-    OrthoAlgorithm algo = std::get<2>(GetParam());
-    
-    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
-    
-    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
-    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
-    int M_rows = (transM == Transpose::NoTrans) ? dim : nM;
-    int M_cols = (transM == Transpose::NoTrans) ? nM : dim;
-
-    Matrix<std::complex<float>, MatrixFormat::Dense> A = Matrix<std::complex<float>, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
-    Matrix<std::complex<float>, MatrixFormat::Dense> M = Matrix<std::complex<float>, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
-
-    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), M, transM, algo);
-    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
-    this->ctx->wait();
-
-    this->check_orthonormality(M, transM, tol);
-
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, M, transA, transM, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-    const size_t iterations = 2;
-
-    ortho<test_utils::gpu_backend, std::complex<float>>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
-    this->ctx->wait();
-
-    this->check_orthonormality(A, transA, tol);
-    this->check_orthogonality_to_M(A, M, transA, transM, tol);
-}
-
-
-
-TEST_P(OrthoAgainstMDoubleTest, OrthogonalizeMatrixAgainstM) {
-    auto tol = test_utils::tolerance<double>();
-    Transpose transA = std::get<0>(GetParam());
-    Transpose transM_basis = std::get<1>(GetParam());
-    OrthoAlgorithm algo = std::get<2>(GetParam());
-    
-    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
-    
-    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
-    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
-    int M_basis_rows = (transM_basis == Transpose::NoTrans) ? dim : nM;
-    int M_basis_cols = (transM_basis == Transpose::NoTrans) ? nM : dim;
-
-    Matrix<double, MatrixFormat::Dense> A = Matrix<double, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
-    auto A_view = A.view();
-
-    Matrix<double, MatrixFormat::Dense> M_basis_orig = Matrix<double, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, false, batch_size);
-    auto M_basis_view_orig = M_basis_orig.view();
-    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
-    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<test_utils::gpu_backend, double>(*(this->ctx), M_basis_view_orig, transM_basis, workspace_M_ortho.to_span(), algo);
-    this->ctx->wait();
-    
-    this->check_orthonormality(M_basis_view_orig, transM_basis, tol);
-
-    auto M_ortho_basis_view = M_basis_view_orig;
-
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-    const size_t iterations = 2;
-
-    ortho<test_utils::gpu_backend, double>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, workspace.to_span(), algo, iterations);
-    this->ctx->wait();
-
-    this->check_orthonormality(A_view, transA, tol);
-    this->check_orthogonality_to_M(A_view, M_ortho_basis_view, transA, transM_basis, tol);
-}
-
-TEST_P(OrthoAgainstMComplexDoubleTest, OrthogonalizeMatrixAgainstM) {
-    auto tol = test_utils::tolerance<std::complex<double>>();
-    Transpose transA = std::get<0>(GetParam());
-    Transpose transM_basis = std::get<1>(GetParam());
-    OrthoAlgorithm algo = std::get<2>(GetParam());
-    
-    const int dim = 12, nA = 3, nM = 2, batch_size = 2;
-    
-    int A_rows = (transA == Transpose::NoTrans) ? dim : nA;
-    int A_cols = (transA == Transpose::NoTrans) ? nA : dim;
-    int M_basis_rows = (transM_basis == Transpose::NoTrans) ? dim : nM;
-    int M_basis_cols = (transM_basis == Transpose::NoTrans) ? nM : dim;
-
-    Matrix<std::complex<double>, MatrixFormat::Dense> A = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
-    auto A_view = A.view();
-
-    Matrix<std::complex<double>, MatrixFormat::Dense> M_basis_orig = Matrix<std::complex<double>, MatrixFormat::Dense>::Random(M_basis_rows, M_basis_cols, false, batch_size);
-    auto M_basis_view_orig = M_basis_orig.view();
-    size_t ortho_M_buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), M_basis_view_orig, transM_basis, algo);
-    UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), M_basis_view_orig, transM_basis, workspace_M_ortho.to_span(), algo);
-    this->ctx->wait();
-    
-    this->check_orthonormality(M_basis_view_orig, transM_basis, tol);
-
-    auto M_ortho_basis_view = M_basis_view_orig;
-
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-    const size_t iterations = 2;
-
-    ortho<test_utils::gpu_backend, std::complex<double>>(*(this->ctx), A_view, M_ortho_basis_view, transA, transM_basis, workspace.to_span(), algo, iterations);
-    this->ctx->wait();
-
-    this->check_orthonormality(A_view, transA, tol);
-    this->check_orthogonality_to_M(A_view, M_ortho_basis_view, transA, transM_basis, tol);
+                this->check_orthonormality(A, transA, tol);
+                this->check_orthogonality_to_M(A, M, transA, transM, tol);
+            }
+        }
+    }
 }
 
 // Helper function for test name generation
@@ -515,117 +359,3 @@ std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorit
     return "A" + transA_str + "_M" + transM_str + "_" + algo_str;
 }
 
-// Instantiate the value-parameterized tests
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoMatrixFloatTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2, OrthoAlgorithm::Householder) 
-    ),
-    [](const ::testing::TestParamInfo<OrthoMatrixFloatTest::ParamType>& info) {
-        Transpose trans = std::get<0>(info.param);
-        OrthoAlgorithm algo = std::get<1>(info.param);
-        return GetTestName(trans, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoMatrixComplexFloatTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2, OrthoAlgorithm::Householder)
-    ),
-    [](const ::testing::TestParamInfo<OrthoMatrixComplexFloatTest::ParamType>& info) {
-        Transpose trans = std::get<0>(info.param);
-        OrthoAlgorithm algo = std::get<1>(info.param);
-        return GetTestName(trans, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoMatrixDoubleTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2, OrthoAlgorithm::Householder)
-    ),
-    [](const ::testing::TestParamInfo<OrthoMatrixDoubleTest::ParamType>& info) {
-        Transpose trans = std::get<0>(info.param);
-        OrthoAlgorithm algo = std::get<1>(info.param);
-        return GetTestName(trans, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoMatrixComplexDoubleTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
-    ),
-    [](const ::testing::TestParamInfo<OrthoMatrixComplexDoubleTest::ParamType>& info) {
-        Transpose trans = std::get<0>(info.param);
-        OrthoAlgorithm algo = std::get<1>(info.param);
-        return GetTestName(trans, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoAgainstMFloatTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
-    ),
-    [](const ::testing::TestParamInfo<OrthoAgainstMFloatTest::ParamType>& info) {
-        Transpose transA = std::get<0>(info.param);
-        Transpose transM = std::get<1>(info.param);
-        OrthoAlgorithm algo = std::get<2>(info.param);
-        return GetAgainstMTestName(transA, transM, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoAgainstMComplexFloatTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
-    ),
-    [](const ::testing::TestParamInfo<OrthoAgainstMComplexFloatTest::ParamType>& info) {
-        Transpose transA = std::get<0>(info.param);
-        Transpose transM = std::get<1>(info.param);
-        OrthoAlgorithm algo = std::get<2>(info.param);
-        return GetAgainstMTestName(transA, transM, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoAgainstMDoubleTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
-    ),
-    [](const ::testing::TestParamInfo<OrthoAgainstMDoubleTest::ParamType>& info) {
-        Transpose transA = std::get<0>(info.param);
-        Transpose transM = std::get<1>(info.param);
-        OrthoAlgorithm algo = std::get<2>(info.param);
-        return GetAgainstMTestName(transA, transM, algo);
-    }
-);
-
-INSTANTIATE_TEST_SUITE_P(
-    Combinations, OrthoAgainstMComplexDoubleTest,
-    ::testing::Combine(
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(Transpose::NoTrans/* , Transpose::Trans */),
-        ::testing::Values(OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3, OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2)
-    ),
-    [](const ::testing::TestParamInfo<OrthoAgainstMComplexDoubleTest::ParamType>& info) {
-        Transpose transA = std::get<0>(info.param);
-        Transpose transM = std::get<1>(info.param);
-        OrthoAlgorithm algo = std::get<2>(info.param);
-        return GetAgainstMTestName(transA, transM, algo);
-    }
-);
-
-#endif // BATCHLAS_HAS_GPU_BACKEND

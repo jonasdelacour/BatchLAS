@@ -20,32 +20,37 @@ using namespace batchlas;
  * Uses matrix factory methods to generate test matrices.
  */
 
+template <typename T, Backend B>
+struct TestConfig {
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
+};
+
+using NormTestTypes = typename test_utils::backend_types<TestConfig>::type;
+
 // Test fixture for norm operations
-template <typename T>
-class NormTest : public ::testing::Test {
+template <typename Config>
+class NormTest : public test_utils::BatchLASTest<Config> {
 protected:
+    using ScalarType = typename Config::ScalarType;
+    static constexpr Backend BackendType = Config::BackendVal;
+
     void SetUp() override {
-        ctx = std::make_shared<Queue>();
-    }
-    
-    void TearDown() override {
-        if (ctx) {
-            ctx->wait();
-        }
+        test_utils::BatchLASTest<Config>::SetUp();
     }
     
     // Helper function to compute expected Frobenius norm
-    typename base_type<T>::type expected_frobenius_norm(const Matrix<T, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<T>::type;
+    typename base_type<ScalarType>::type expected_frobenius_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
+        using real_t = typename base_type<ScalarType>::type;
         real_t sum = real_t(0);
         auto data = mat.data();
         int stride = mat.stride();
         int size = mat.rows() * mat.cols();
         
         for (int i = 0; i < size; ++i) {
-            T val = data[batch_idx * stride + i];
-            if constexpr (std::is_same_v<T, std::complex<float>> || 
-                         std::is_same_v<T, std::complex<double>>) {
+            ScalarType val = data[batch_idx * stride + i];
+            if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
+                         std::is_same_v<ScalarType, std::complex<double>>) {
                 sum += val.real() * val.real() + val.imag() * val.imag();
             } else {
                 sum += val * val;
@@ -55,8 +60,8 @@ protected:
     }
     
     // Helper function to compute expected one norm (max column sum)
-    typename base_type<T>::type expected_one_norm(const Matrix<T, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<T>::type;
+    typename base_type<ScalarType>::type expected_one_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
+        using real_t = typename base_type<ScalarType>::type;
         auto data = mat.data();
         int rows = mat.rows();
         int cols = mat.cols();
@@ -66,9 +71,9 @@ protected:
         for (int j = 0; j < cols; ++j) {
             real_t col_sum = real_t(0);
             for (int i = 0; i < rows; ++i) {
-                T val = data[batch_idx * stride + j * ld + i];
-                if constexpr (std::is_same_v<T, std::complex<float>> || 
-                             std::is_same_v<T, std::complex<double>>) {
+                ScalarType val = data[batch_idx * stride + j * ld + i];
+                if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
+                             std::is_same_v<ScalarType, std::complex<double>>) {
                     col_sum += std::abs(val);
                 } else {
                     col_sum += std::abs(val);
@@ -80,8 +85,8 @@ protected:
     }
     
     // Helper function to compute expected infinity norm (max row sum)
-    typename base_type<T>::type expected_inf_norm(const Matrix<T, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<T>::type;
+    typename base_type<ScalarType>::type expected_inf_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
+        using real_t = typename base_type<ScalarType>::type;
         auto data = mat.data();
         int rows = mat.rows();
         int cols = mat.cols();
@@ -92,9 +97,9 @@ protected:
         for (int i = 0; i < rows; ++i) {
             real_t row_sum = real_t(0);
             for (int j = 0; j < cols; ++j) {
-                T val = data[batch_idx * stride + j * ld + i];
-                if constexpr (std::is_same_v<T, std::complex<float>> || 
-                             std::is_same_v<T, std::complex<double>>) {
+                ScalarType val = data[batch_idx * stride + j * ld + i];
+                if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
+                             std::is_same_v<ScalarType, std::complex<double>>) {
                     row_sum += std::abs(val);
                 } else {
                     row_sum += std::abs(val);
@@ -106,17 +111,17 @@ protected:
     }
     
     // Helper function to compute expected max norm (max element magnitude)
-    typename base_type<T>::type expected_max_norm(const Matrix<T, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<T>::type;
+    typename base_type<ScalarType>::type expected_max_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
+        using real_t = typename base_type<ScalarType>::type;
         auto data = mat.data();
         int stride = mat.stride();
         int size = mat.rows() * mat.cols();
         
         real_t max_val = real_t(0);
         for (int i = 0; i < size; ++i) {
-            T val = data[batch_idx * stride + i];
-            if constexpr (std::is_same_v<T, std::complex<float>> || 
-                         std::is_same_v<T, std::complex<double>>) {
+            ScalarType val = data[batch_idx * stride + i];
+            if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
+                         std::is_same_v<ScalarType, std::complex<double>>) {
                 max_val = std::max(max_val, real_t(std::abs(val)));
             } else {
                 max_val = std::max(max_val, std::abs(val));
@@ -125,11 +130,9 @@ protected:
         return max_val;
     }
     
-    std::shared_ptr<Queue> ctx;
-    
     // Test tolerances based on type
     static constexpr auto tolerance() {
-        return test_utils::tolerance<T>();
+        return test_utils::tolerance<ScalarType>();
     }
 
     // Small helper to map NormType to a string for readable failure messages
@@ -150,14 +153,14 @@ protected:
 
     // Run norm for all types and compare against the provided expected function
     template <typename ExpectedFn>
-    void check_all_norms(const Matrix<T, MatrixFormat::Dense>& mat,
+    void check_all_norms(const Matrix<ScalarType, MatrixFormat::Dense>& mat,
                          ExpectedFn&& expected_fn) {
-        using real_t = typename base_type<T>::type;
+        using real_t = typename base_type<ScalarType>::type;
         UnifiedVector<real_t> result(mat.batch_size());
 
         for (auto ntype : all_norms) {
-            norm(*ctx, mat.view(), ntype, result.to_span());
-            ctx->wait();
+            norm(*(this->ctx), mat.view(), ntype, result.to_span());
+            this->ctx->wait();
 
             for (int b = 0; b < mat.batch_size(); ++b) {
                 auto expected = expected_fn(ntype, b);
@@ -168,13 +171,13 @@ protected:
     }
 
     // Check that all norms are strictly positive
-    void check_all_norms_positive(const Matrix<T, MatrixFormat::Dense>& mat) {
-        using real_t = typename base_type<T>::type;
+    void check_all_norms_positive(const Matrix<ScalarType, MatrixFormat::Dense>& mat) {
+        using real_t = typename base_type<ScalarType>::type;
         UnifiedVector<real_t> result(mat.batch_size());
 
         for (auto ntype : all_norms) {
-            norm(*ctx, mat.view(), ntype, result.to_span());
-            ctx->wait();
+            norm(*(this->ctx), mat.view(), ntype, result.to_span());
+            this->ctx->wait();
 
             for (int b = 0; b < mat.batch_size(); ++b) {
                 EXPECT_GT(result[b], real_t(0))
@@ -186,12 +189,11 @@ protected:
 };
 
 // Typed tests for different scalar types
-using TestTypes = ::testing::Types<float, double>;
-TYPED_TEST_SUITE(NormTest, TestTypes);
+TYPED_TEST_SUITE(NormTest, NormTestTypes);
 
 // Test all norm types with a random matrix
 TYPED_TEST(NormTest, RandomMatrixAllNorms) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     const int rows = 5, cols = 4, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 123);
@@ -211,7 +213,7 @@ TYPED_TEST(NormTest, RandomMatrixAllNorms) {
 
 // Test with Identity matrix
 TYPED_TEST(NormTest, NormsIdentityMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     const int n = 5, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
@@ -232,7 +234,7 @@ TYPED_TEST(NormTest, NormsIdentityMatrix) {
 
 // Test with Zero matrix
 TYPED_TEST(NormTest, NormsZeroMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     const int rows = 4, cols = 3, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Zeros(rows, cols, batch_size);
@@ -247,7 +249,7 @@ TYPED_TEST(NormTest, NormsZeroMatrix) {
 
 // Test with Ones matrix
 TYPED_TEST(NormTest, NormsOnesMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     const int rows = 3, cols = 4, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Ones(rows, cols, batch_size);
@@ -268,7 +270,7 @@ TYPED_TEST(NormTest, NormsOnesMatrix) {
 
 // Test with diagonal matrix
 TYPED_TEST(NormTest, NormsDiagonalMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
 
@@ -302,7 +304,7 @@ TYPED_TEST(NormTest, NormsDiagonalMatrix) {
 
 // Test with triangular matrix
 TYPED_TEST(NormTest, NormsTriangularMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
     
@@ -324,7 +326,7 @@ TYPED_TEST(NormTest, NormsTriangularMatrix) {
 
 // Test single matrix (batch_size = 1)
 TYPED_TEST(NormTest, SingleMatrixNorms) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     const int rows = 100, cols = 100, batch_size = 1;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 555);
@@ -334,14 +336,14 @@ TYPED_TEST(NormTest, SingleMatrixNorms) {
 
 // Test large batch size
 TYPED_TEST(NormTest, LargeBatchNorms) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int rows = 3, cols = 3, batch_size = 10;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 777);
     auto result = UnifiedVector<real_t>(batch_size);
     
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
+    norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
     this->ctx->wait();
     
     for (int b = 0; b < batch_size; ++b) {
@@ -352,7 +354,7 @@ TYPED_TEST(NormTest, LargeBatchNorms) {
 
 // Test different matrix sizes
 TYPED_TEST(NormTest, DifferentMatrixSizes) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     
     std::vector<std::pair<int, int>> sizes = {{1, 1}, {2, 3}, {5, 2}, {10, 10}};
@@ -361,7 +363,7 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
         auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, 1, 888);
         auto result = UnifiedVector<real_t>(1);
         
-        norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
+        norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
         this->ctx->wait();
         
         EXPECT_GT(result[0], real_t(0))
@@ -371,7 +373,7 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
 
 // Test norm consistency (compare with manual calculation)
 TYPED_TEST(NormTest, NormConsistency) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int rows = 2, cols = 2, batch_size = 1;
     
@@ -408,7 +410,7 @@ TYPED_TEST(NormTest, NormConsistency) {
 
 // Performance/stress test with larger matrices
 TYPED_TEST(NormTest, StressTestLargeMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int rows = 100, cols = 100, batch_size = 5;
 
@@ -417,7 +419,7 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
     
     auto start = std::chrono::high_resolution_clock::now();
 
-    norm(*this->ctx, mat.view(), NormType::Frobenius, result.to_span());
+    norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
     this->ctx->wait();
     
     auto end = std::chrono::high_resolution_clock::now();

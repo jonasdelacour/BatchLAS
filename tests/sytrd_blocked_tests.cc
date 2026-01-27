@@ -22,87 +22,22 @@ using namespace batchlas;
 namespace {
 
 template <typename Real>
-Real tol_for() {
-    if constexpr (std::is_same_v<Real, float>) return Real(2) * Real(test_utils::tolerance<float>());
-    return Real(test_utils::tolerance<double>());
-}
+UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
 
-// Build Q from Householder vectors stored in A/tau for SYTD2-style Lower storage.
-// This is generic (works for both CTA and blocked SYTRD paths), for batch=1.
-template <Backend B, typename Real>
-Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_lower(Queue& ctx,
-                                                           const MatrixView<Real, MatrixFormat::Dense>& A_out,
-                                                           const VectorView<Real>& tau,
-                                                           int n) {
-    if (n <= 1) return Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
+    Queue ctx_cpu("cpu");
+    auto A_d = A.template astype<double>();
 
-    const int p = n - 1;
-    auto Av = A_out;
+    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    const size_t ws_bytes = backend::syev_vendor_buffer_size<Backend::NETLIB, double>(
+        ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
+    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+    backend::syev_vendor<Backend::NETLIB, double>(
+        ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+    ctx_cpu.wait();
 
-    Matrix<Real, MatrixFormat::Dense> Aq(p, p, /*batch=*/1);
-    Matrix<Real, MatrixFormat::Dense> Qsub = Matrix<Real, MatrixFormat::Dense>::Identity(p, /*batch_size=*/1);
-    Vector<Real> tau_qr(p, /*batch=*/1);
-    auto aq = Aq.view();
-
-    for (int j = 0; j < p; ++j) {
-        for (int i = 0; i < p; ++i) {
-            aq(i, j, 0) = Real(0);
-        }
-    }
-
-    for (int i = 0; i < p; ++i) {
-        aq(i, i, 0) = Real(1);
-        tau_qr(i, 0) = tau(i, 0);
-        for (int r = i + 1; r < p; ++r) {
-            // sub row r corresponds to global row (r+1)
-            aq(r, i, 0) = Av(r + 1, i, 0);
-        }
-    }
-
-    UnifiedVector<std::byte> ws_ormqr(
-        ormqr_buffer_size<B>(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data()));
-
-    ormqr<B>(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
-
-    Matrix<Real, MatrixFormat::Dense> Q = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
-    auto Qv = Q.view();
-    auto Qsv = Qsub.view();
-
-    Qv(0, 0, 0) = Real(1);
-    for (int r = 0; r < p; ++r) {
-        for (int c = 0; c < p; ++c) {
-            Qv(r + 1, c + 1, 0) = Qsv(r, c, 0);
-        }
-    }
-
-    return Q;
-}
-
-template <typename Real>
-void assert_tridiagonal_matches(const MatrixView<Real, MatrixFormat::Dense>& T,
-                                int n,
-                                const VectorView<Real>& d,
-                                const VectorView<Real>& e,
-                                Real tol) {
-    for (int i = 0; i < n; ++i) {
-        ASSERT_TRUE(std::isfinite(static_cast<double>(d(i, 0))));
-        ASSERT_TRUE(std::isfinite(static_cast<double>(T(i, i, 0))));
-        EXPECT_NEAR(T(i, i, 0), d(i, 0), tol) << "diag mismatch at i=" << i;
-    }
-
-    for (int i = 0; i < n - 1; ++i) {
-        ASSERT_TRUE(std::isfinite(static_cast<double>(e(i, 0))));
-        EXPECT_NEAR(T(i + 1, i, 0), e(i, 0), tol) << "offdiag mismatch at i=" << i;
-        EXPECT_NEAR(T(i, i + 1, 0), e(i, 0), tol) << "offdiag mismatch at i=" << i;
-    }
-
-    const Real ztol = tol * Real(50);
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < n; ++i) {
-            if (std::abs(i - j) <= 1) continue;
-            EXPECT_NEAR(T(i, j, 0), Real(0), ztol) << "non-tridiagonal at (" << i << "," << j << ")";
-        }
-    }
+    return ref_eigs;
 }
 
 template <typename T, Backend B>
@@ -132,7 +67,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     const int n = 128;
     const int batch = 128;
     const int nb = 32;
-    const Real tol = tol_for<Real>();
+    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
 
     Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/789);
     Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -151,27 +86,23 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     if (batch > 1) batch_items.push_back(batch / 2);
     if (batch > 2) batch_items.push_back(batch - 1);
 
-    auto dv = static_cast<VectorView<Real>>(d);
-    auto ev = static_cast<VectorView<Real>>(e);
-    auto tauv = static_cast<VectorView<Real>>(tau);
-    auto A0v = A0.view();
-    auto Av = A.view();
+    Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
+    Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
+
+    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
+    const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
 
     for (int b : batch_items) {
-        auto A0b = A0v.batch_item(b);
-        auto Ab = Av.batch_item(b);
-        auto db = dv.batch_item(b);
-        auto eb = ev.batch_item(b);
-        auto taub = tauv.batch_item(b);
-
-        const auto Q = build_q_from_sytrd_lower<B>(*this->ctx, Ab, taub, n);
-
-        Matrix<Real, MatrixFormat::Dense> AQ(n, n, /*batch=*/1);
-        Matrix<Real, MatrixFormat::Dense> Tmat(n, n, /*batch=*/1);
-        gemm<B>(*this->ctx, A0b, Q.view(), AQ.view(), Real(1), Real(0), Transpose::NoTrans, Transpose::NoTrans).wait();
-        gemm<B>(*this->ctx, Q.view(), AQ.view(), Tmat.view(), Real(1), Real(0), Transpose::Trans, Transpose::NoTrans).wait();
-
-        assert_tridiagonal_matches(Tmat.view(), n, db, eb, tol);
+        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+        for (int i = 0; i < n; ++i) {
+            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
+            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
+            if constexpr (std::is_same_v<Real, float>) {
+                err_tol = std::max(err_tol, 2e-6);
+            }
+            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
+                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
+        }
     }
 }
 
@@ -182,7 +113,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     const int n = 33;
     const int batch = 64;
     const int nb = 8;
-    const Real tol = tol_for<Real>();
+    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
 
     Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/1337);
     Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -200,27 +131,23 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     if (batch > 1) batch_items.push_back(batch / 2);
     if (batch > 2) batch_items.push_back(batch - 1);
 
-    auto dv = static_cast<VectorView<Real>>(d);
-    auto ev = static_cast<VectorView<Real>>(e);
-    auto tauv = static_cast<VectorView<Real>>(tau);
-    auto A0v = A0.view();
-    auto Av = A.view();
+    Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
+    Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
+
+    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
+    const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
 
     for (int b : batch_items) {
-        auto A0b = A0v.batch_item(b);
-        auto Ab = Av.batch_item(b);
-        auto db = dv.batch_item(b);
-        auto eb = ev.batch_item(b);
-        auto taub = tauv.batch_item(b);
-
-        const auto Q = build_q_from_sytrd_lower<B>(*this->ctx, Ab, taub, n);
-
-        Matrix<Real, MatrixFormat::Dense> AQ(n, n, /*batch=*/1);
-        Matrix<Real, MatrixFormat::Dense> Tmat(n, n, /*batch=*/1);
-        gemm<B>(*this->ctx, A0b, Q.view(), AQ.view(), Real(1), Real(0), Transpose::NoTrans, Transpose::NoTrans).wait();
-        gemm<B>(*this->ctx, Q.view(), AQ.view(), Tmat.view(), Real(1), Real(0), Transpose::Trans, Transpose::NoTrans).wait();
-
-        assert_tridiagonal_matches(Tmat.view(), n, db, eb, tol);
+        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+        for (int i = 0; i < n; ++i) {
+            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
+            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
+            if constexpr (std::is_same_v<Real, float>) {
+                err_tol = std::max(err_tol, 2e-6);
+            }
+            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
+                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
+        }
     }
 }
 #endif

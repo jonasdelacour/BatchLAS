@@ -33,56 +33,16 @@ protected:
     const int batch_size = 3;
     const ScalarType alpha = static_cast<ScalarType>(1.0);
 
-    UnifiedVector<ScalarType> A_data;
-    UnifiedVector<ScalarType> B_data;
-    UnifiedVector<ScalarType> B_data_original;
-    
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        
-        if (!this->ctx) {
-            return;
-        }
-        
-        // Initialize test matrices
-        A_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
-        B_data_original = UnifiedVector<ScalarType>(rows * cols * batch_size);
-        B_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
-        
-        // Initialize matrix A as a lower triangular matrix with ones on the diagonal
-        for (int b = 0; b < batch_size; ++b) {
-            for (int i = 0; i < rows; ++i) {
-                for (int j = 0; j < cols; ++j) {
-                    if (i == j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(1.0);
-                    } else if (i > j) {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.5);
-                    } else {
-                        A_data[b * rows * cols + i * cols + j] = static_cast<ScalarType>(0.0);
-                    }
-                }
-            }
-        }
-        
-        // Initialize matrix B with some test values
-        std::mt19937 rng(42);
-        std::uniform_real_distribution<typename base_type<ScalarType>::type> dist(
-            static_cast<typename base_type<ScalarType>::type>(1.0), 
-            static_cast<typename base_type<ScalarType>::type>(10.0));
-        
-        for (int b = 0; b < batch_size; ++b) {
-            for (int i = 0; i < rows; ++i) {
-                for (int j = 0; j < cols; ++j) {
-                    ScalarType val = dist(rng);
-                    B_data_original[b * rows * cols + i * cols + j] = val;
-                    B_data[b * rows * cols + i * cols + j] = val;
-                }
-            }
-        }
     }
     
     // Verify that the TRSM solution satisfies A*X = B or A^T*X = B depending on transpose
-    bool verifyTrsmResult(int batch_idx, Transpose trans = Transpose::NoTrans) {
+    bool verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
+                          const MatrixView<ScalarType, MatrixFormat::Dense>& B,
+                          const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
+                          int batch_idx,
+                          Transpose trans = Transpose::NoTrans) {
         const bool trace_enabled = []() {
             const char* v = std::getenv("BATCHLAS_TRSM_TRACE");
             if (!v) return false;
@@ -94,8 +54,7 @@ protected:
         bool anyChanges = false;
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
-                int idx = batch_idx * rows * cols + i * cols + j;
-                if (std::abs(B_data[idx] - B_data_original[idx]) > test_utils::tolerance<ScalarType>()) {
+                if (std::abs(B.at(i, j, batch_idx) - B_original.at(i, j, batch_idx)) > test_utils::tolerance<ScalarType>()) {
                     anyChanges = true;
                 }
             }
@@ -106,8 +65,10 @@ protected:
                 std::cerr << "TRSM TRACE: output appears unchanged for batch " << batch_idx
                           << " (trans=" << static_cast<int>(trans) << ")" << std::endl;
                 for (int k = 0; k < std::min(rows * cols, 4); ++k) {
-                    std::cerr << "  B[" << k << "]=" << B_data[batch_idx * rows * cols + k]
-                              << " (orig=" << B_data_original[batch_idx * rows * cols + k] << ")" << std::endl;
+                    int col = k / rows;
+                    int row = k % rows;
+                    std::cerr << "  B[" << k << "]=" << B.at(row, col, batch_idx)
+                              << " (orig=" << B_original.at(row, col, batch_idx) << ")" << std::endl;
                 }
             }
             return false;
@@ -117,15 +78,14 @@ protected:
         bool allMatch = true;
         for (int i = 0; i < rows; ++i) {
             for (int j = 0; j < cols; ++j) {
-                ScalarType expected = B_data_original[batch_idx * rows * cols + i * cols + j];
+                ScalarType expected = B_original.at(i, j, batch_idx);
                 ScalarType calculated = static_cast<ScalarType>(0.0);
                 
                 // Calculate the result of A*X or A^T*X for this position
                 for (int k = 0; k < cols; ++k) {
                     int a_row = (trans == Transpose::NoTrans) ? i : k;
                     int a_col = (trans == Transpose::NoTrans) ? k : i;
-                    calculated += A_data[batch_idx * rows * cols + a_row * cols + a_col] * 
-                                  B_data[batch_idx * rows * cols + k * cols + j];
+                    calculated += A.at(a_row, a_col, batch_idx) * B.at(k, j, batch_idx);
                 }
                 
                 // Use a reasonable tolerance for floating point comparisons
@@ -149,21 +109,48 @@ protected:
     }
     
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
-        // Create matrices using convenience factory methods
-        auto A_matrix = Matrix<ScalarType, MatrixFormat::Dense>::Triangular(rows, uplo, static_cast<ScalarType>(1.0), static_cast<ScalarType>(0.5), test_batch_size);
-        auto B_matrix = Matrix<ScalarType, MatrixFormat::Dense>::Random(rows, cols, false, test_batch_size);
+        // Create matrices and fill on host to avoid device-side state or kernel ordering issues
+        Matrix<ScalarType, MatrixFormat::Dense> A_matrix(rows, rows, test_batch_size);
+        Matrix<ScalarType, MatrixFormat::Dense> B_matrix(rows, cols, test_batch_size);
+
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<batchlas::float_t<ScalarType>> dist(-1.0, 1.0);
+
+        auto A_view_full = A_matrix.view();
+        auto B_view_full = B_matrix.view();
+
+        for (int b = 0; b < test_batch_size; ++b) {
+            for (int j = 0; j < rows; ++j) {
+                for (int i = 0; i < rows; ++i) {
+                    if (i == j) {
+                        A_view_full.at(i, j, b) = static_cast<ScalarType>(1.0);
+                    } else if ((uplo == Uplo::Lower && i > j) || (uplo == Uplo::Upper && i < j)) {
+                        A_view_full.at(i, j, b) = static_cast<ScalarType>(0.5);
+                    } else {
+                        A_view_full.at(i, j, b) = static_cast<ScalarType>(0.0);
+                    }
+                }
+            }
+
+            for (int j = 0; j < cols; ++j) {
+                for (int i = 0; i < rows; ++i) {
+                    if constexpr (std::is_same_v<ScalarType, std::complex<float>> ||
+                                  std::is_same_v<ScalarType, std::complex<double>>) {
+                        B_view_full.at(i, j, b) = ScalarType(dist(rng), dist(rng));
+                    } else {
+                        B_view_full.at(i, j, b) = static_cast<ScalarType>(dist(rng));
+                    }
+                }
+            }
+        }
         
         // Keep original B for verification
         auto B_original = B_matrix.clone();
-        
-        // Convert to column-major format
-        auto A_colmajor = A_matrix.to_column_major();
-        auto B_colmajor = B_matrix.to_column_major();
-        
-        // Create matrix views
+
+        // Create matrix views (matrices are already column-major)
         if (test_batch_size == 1) {
-            auto A_view = A_colmajor.view();
-            auto B_view = B_colmajor.view();
+            auto A_view = A_matrix.view();
+            auto B_view = B_matrix.view();
             
             try {
                 trsm<BackendType>(
@@ -181,8 +168,8 @@ protected:
                 FAIL() << "TRSM operation failed with exception: " << e.what();
             }
         } else {
-            auto A_parent_view = A_colmajor.view();
-            auto B_parent_view = B_colmajor.view();
+            auto A_parent_view = A_matrix.view();
+            auto B_parent_view = B_matrix.view();
             
             // Process each batch using batch_item
             for (int b = 0; b < test_batch_size; ++b) {
@@ -206,19 +193,13 @@ protected:
             }
             this->ctx->wait();
         }
-        
-        // Convert result back to row-major for verification
-        auto B_result = B_colmajor.to_row_major();
-        
-        // Copy to our fixture's data for verification
+
+        auto A_view = A_matrix.view();
+        auto B_view = B_matrix.view();
+        auto B_original_view = B_original.view();
         for (int b = 0; b < test_batch_size; ++b) {
-            for (int i = 0; i < rows * cols; ++i) {
-                B_data[b * rows * cols + i] = B_result.data()[b * rows * cols + i];
-                A_data[b * rows * cols + i] = A_matrix.data()[b * rows * cols + i];
-                B_data_original[b * rows * cols + i] = B_original.data()[b * rows * cols + i];
-            }
-            
-            EXPECT_TRUE(verifyTrsmResult(b, trans)) << "TRSM solution verification failed for batch " << b;
+            EXPECT_TRUE(verifyTrsmResult(A_view, B_view, B_original_view, b, trans))
+                << "TRSM solution verification failed for batch " << b;
         }
     }
 };

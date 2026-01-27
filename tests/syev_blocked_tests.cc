@@ -123,15 +123,8 @@ struct SyevBlockedConfig {
 
 } // namespace
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-using SyevBlockedTestTypes = ::testing::Types<
-	SyevBlockedConfig<float, Backend::CUDA>,
-	SyevBlockedConfig<double, Backend::CUDA>,
-	SyevBlockedConfig<std::complex<float>, Backend::CUDA>,
-	SyevBlockedConfig<std::complex<double>, Backend::CUDA>>;
-#else
-using SyevBlockedTestTypes = ::testing::Types<>;
-#endif
+#include "test_utils.hh"
+using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
 template <typename Config>
 class SyevBlockedTest : public test_utils::BatchLASTest<Config> {};

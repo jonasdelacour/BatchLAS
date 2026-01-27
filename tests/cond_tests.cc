@@ -6,29 +6,60 @@
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
 #include <cmath>
+#include <tuple>
 #include <vector>
 #include <type_traits>
 
 using namespace batchlas;
 
-#if BATCHLAS_HAS_GPU_BACKEND
+template <typename T, Backend B>
+struct CondConfig {
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
+};
+
+template <template <typename, Backend> class Config>
+struct backend_real_types {
+    using tuple_type = decltype(std::tuple_cat(
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+        std::tuple<Config<float, Backend::NETLIB>,
+                   Config<double, Backend::NETLIB>>{},
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+        std::tuple<Config<float, Backend::CUDA>,
+                   Config<double, Backend::CUDA>>{},
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+        std::tuple<Config<float, Backend::ROCM>,
+                   Config<double, Backend::ROCM>>{},
+#endif
+#if BATCHLAS_HAS_MKL_BACKEND
+        std::tuple<Config<float, Backend::MKL>,
+                   Config<double, Backend::MKL>>{},
+#endif
+        std::tuple<>{}));
+
+    using type = typename test_utils::tuple_to_types<tuple_type>::type;
+};
+
+using CondTestTypes = typename backend_real_types<CondConfig>::type;
 
 // Typed test fixture for condition number computations
-template <typename T>
-class CondTest : public ::testing::Test {
+template <typename Config>
+class CondTest : public test_utils::BatchLASTest<Config> {
 protected:
+    using ScalarType = typename Config::ScalarType;
+    using real_t = typename base_type<ScalarType>::type;
+
     void SetUp() override {
-        ctx = std::make_shared<Queue>();
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (!this->ctx) {
+            return;
+        }
     }
-
-    void TearDown() override {
-        if (ctx) ctx->wait();
-    }
-
-    using real_t = typename base_type<T>::type;
 
     static constexpr real_t tolerance() {
-        return test_utils::tolerance<T>();
+        return test_utils::tolerance<ScalarType>();
     }
 
     // Compute expected condition number for a diagonal matrix
@@ -69,39 +100,38 @@ protected:
         return std::sqrt(sum_sq * sum_inv_sq);
     }
 
-    std::shared_ptr<Queue> ctx;
 };
 
-using TestTypes = ::testing::Types<float, double>;
-TYPED_TEST_SUITE(CondTest, TestTypes);
+TYPED_TEST_SUITE(CondTest, CondTestTypes);
 
 TYPED_TEST(CondTest, IdentityMatrix) {
-    using T = TypeParam;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 4;
     const int batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
 
     for (auto nt : {NormType::One, NormType::Inf, NormType::Max}) {
-        auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), nt);
+        auto conds = cond<B>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
-            EXPECT_NEAR(conds[b], static_cast<typename CondTest<T>::real_t>(1), this->tolerance())
-                << "Batch " << b;
+            test_utils::expect_near(conds[b], static_cast<T>(real_t(1)), this->tolerance());
         }
     }
 
-    auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
     this->ctx->wait();
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], n, this->tolerance()) // Frobenius norm of identity is sqrt(n) so ||I|| * ||I^-1|| = sqrt(n) * sqrt(n) = n
-            << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(real_t(n)), this->tolerance());
     }
 }
 
 TYPED_TEST(CondTest, DiagonalMatrix) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 3;
     const int batch_size = 2;
 
@@ -114,20 +144,19 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
     auto mat = Matrix<T, MatrixFormat::Dense>::Diagonal(diag_vals.to_span(), batch_size);
 
     for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
-        real_t expected = CondTest<T>::expected_cond_diagonal(diag, nt);
-        auto conds = cond<test_utils::gpu_backend>(*this->ctx, mat.view(), nt);
+        real_t expected = this->expected_cond_diagonal(diag, nt);
+        auto conds = cond<B>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
-            EXPECT_NEAR(conds[b], expected, this->tolerance())
-                << "Batch " << b;
+            test_utils::expect_near(conds[b], static_cast<T>(expected), this->tolerance());
         }
     }
 }
 
 TYPED_TEST(CondTest, RandomMatrixLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int batch_size = 4;
     const real_t log10_cond = real_t(5);
@@ -143,14 +172,14 @@ TYPED_TEST(CondTest, RandomMatrixLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 }
 
 TYPED_TEST(CondTest, RandomHermitianLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int batch_size = 4;
     const real_t log10_cond = real_t(4);
@@ -164,14 +193,14 @@ TYPED_TEST(CondTest, RandomHermitianLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 }
 
 TYPED_TEST(CondTest, RandomBandedLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int kd = 6;
     const int batch_size = 3;
@@ -186,7 +215,7 @@ TYPED_TEST(CondTest, RandomBandedLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 
     const real_t ztol = std::is_same_v<real_t, float> ? real_t(5e-5f) : real_t(1e-12);
@@ -194,7 +223,7 @@ TYPED_TEST(CondTest, RandomBandedLogCondFrobenius) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 if (std::abs(i - j) > kd) {
-                    EXPECT_NEAR(mat(i, j, b), T(0), ztol) << "(i,j)= (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), T(0), ztol);
                 }
             }
         }
@@ -202,9 +231,9 @@ TYPED_TEST(CondTest, RandomBandedLogCondFrobenius) {
 }
 
 TYPED_TEST(CondTest, RandomHermitianBandedLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int kd = 6;
     const int batch_size = 3;
@@ -219,7 +248,7 @@ TYPED_TEST(CondTest, RandomHermitianBandedLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 
     const real_t ztol = std::is_same_v<real_t, float> ? real_t(5e-5f) : real_t(1e-12);
@@ -227,9 +256,9 @@ TYPED_TEST(CondTest, RandomHermitianBandedLogCondFrobenius) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 if (std::abs(i - j) > kd) {
-                    EXPECT_NEAR(mat(i, j, b), T(0), ztol) << "(i,j)= (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), T(0), ztol);
                 } else {
-                    EXPECT_NEAR(mat(i, j, b), mat(j, i, b), ztol) << "symmetry mismatch at (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), mat(j, i, b), ztol);
                 }
             }
         }
@@ -237,9 +266,9 @@ TYPED_TEST(CondTest, RandomHermitianBandedLogCondFrobenius) {
 }
 
 TYPED_TEST(CondTest, RandomTridiagonalLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int batch_size = 4;
     const real_t log10_cond = real_t(4);
@@ -253,7 +282,7 @@ TYPED_TEST(CondTest, RandomTridiagonalLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 
     const real_t ztol = std::is_same_v<real_t, float> ? real_t(1e-5f) : real_t(1e-12);
@@ -261,7 +290,7 @@ TYPED_TEST(CondTest, RandomTridiagonalLogCondFrobenius) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 if (std::abs(i - j) > 1) {
-                    EXPECT_NEAR(mat(i, j, b), T(0), ztol) << "(i,j)= (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), T(0), ztol);
                 }
             }
         }
@@ -269,9 +298,9 @@ TYPED_TEST(CondTest, RandomTridiagonalLogCondFrobenius) {
 }
 
 TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondFrobenius) {
-    using T = TypeParam;
-    using real_t = typename CondTest<T>::real_t;
-    constexpr Backend B = test_utils::gpu_backend;
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
     const int n = 32;
     const int batch_size = 4;
     const real_t log10_cond = real_t(4);
@@ -285,7 +314,7 @@ TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondFrobenius) {
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
     const real_t tol = expected * rel_tol;
     for (int b = 0; b < batch_size; ++b) {
-        EXPECT_NEAR(conds[b], expected, tol) << "Batch " << b;
+        test_utils::expect_near(conds[b], static_cast<T>(expected), tol);
     }
 
     const real_t ztol = std::is_same_v<real_t, float> ? real_t(1e-5f) : real_t(1e-12);
@@ -293,14 +322,12 @@ TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondFrobenius) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 if (std::abs(i - j) > 1) {
-                    EXPECT_NEAR(mat(i, j, b), T(0), ztol) << "(i,j)= (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), T(0), ztol);
                 } else {
-                    EXPECT_NEAR(mat(i, j, b), mat(j, i, b), ztol) << "symmetry mismatch at (" << i << "," << j << ") batch=" << b;
+                    test_utils::expect_near(mat(i, j, b), mat(j, i, b), ztol);
                 }
             }
         }
     }
 }
-
-#endif // BATCHLAS_HAS_GPU_BACKEND
 
