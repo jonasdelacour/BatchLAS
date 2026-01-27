@@ -12,10 +12,11 @@ namespace batchlas {
               const MatrixView<T, MatrixFormat::Dense>& Ainv,
               Span<std::byte> workspace) {
         BumpAllocator pool(workspace);
-        auto Acopy = MatrixView<T, MatrixFormat::Dense>::deep_copy(
-            A,
+        auto Acopy = MatrixView<T, MatrixFormat::Dense>(
             pool.allocate<T>(ctx, A.data().size()).data(),
+            A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
             pool.allocate<T*>(ctx, A.batch_size()).data());
+        MatrixView<T, MatrixFormat::Dense>::copy(ctx, Acopy, A);
         auto pivots = pool.allocate<int64_t>(ctx, A.rows()*A.batch_size());
         auto getri_ws = pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, Acopy));
         auto getrf_ws = pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, Acopy));
