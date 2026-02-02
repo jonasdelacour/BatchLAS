@@ -21,11 +21,14 @@ namespace batchlas {
         //   [ b  c ]
         // Return the eigenvalue closest to c.
         const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
-        return sycl::fabs(lambda1 - c) < sycl::fabs(lambda2 - c) ? lambda1 : lambda2;
+        return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
     }
 
     template <typename T, size_t P, bool ComputeVecs>
     class SteqrCTAKernel;
+
+    template <typename T, size_t P, bool ComputeVecs>
+    class SteqrWgKernel;
 
     // Compile-time selectable shared-memory cache for Q.
     // Storage is column-major in local memory: Q_local[base_q + row + col*P] = Q(row, col)
@@ -194,8 +197,130 @@ namespace batchlas {
                                  int32_t n,
                                  int32_t l,
                                  int32_t m,
-                                 SteqrShiftStrategy shift_strategy) {
+                                 SteqrShiftStrategy shift_strategy,
+                                 SteqrUpdateScheme update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // EXP update scheme = explicit similarity update (bulge-chase), matching the logic in steqr.cc.
+        // We implement QL by operating on a *virtual reversed* indexing inside [l..m] and running a QR-style
+        // bulge chase in that virtual space.
+        const auto explicit_ql_step_exp = [&]() {
+            // Preload shift inputs.
+            const T p0  = sycl::select_from_group(partition, diag, l);
+            const T e0  = sycl::select_from_group(partition, offdiag, l);
+            const T dlp1 = sycl::select_from_group(partition, diag, l + 1);
+
+            // Leader-only scalar state for the virtual QR bulge chase.
+            T mu = T(0);
+            T bulge = T(0);
+            T eprev = T(0);
+            bool first = true;
+
+            invoke_one(partition, [&]() {
+                if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                    // For QL, the shift is formed from the leading 2x2 of the physical block (l,l+1).
+                    // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
+                    mu = wilkinson_shift(dlp1, e0, p0);
+                } else {
+                    const T gg = (dlp1 - p0) / (T(2) * e0);
+                    const T rr = sycl::hypot(gg, T(1));
+                    mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                }
+                bulge = T(0);
+                eprev = T(0);
+                first = true;
+            });
+
+            const int32_t nb = m - l + 1; // block length
+            // Virtual index v in [0..nb-2] maps to physical indices:
+            //   d_v(v)   = d( m - v )
+            //   d_v(v+1) = d( m - v - 1 )
+            //   e_v(v)   = e( m - v - 1 )  (couples the two diags above)
+            //   e_v(v+1) = e( m - v - 2 )
+            for (int32_t v = 0; v < nb - 1; ++v) {
+                const int32_t hi = m - v;
+                const int32_t lo = m - v - 1;
+
+                const T di = sycl::select_from_group(partition, diag, hi);
+                const T dj = sycl::select_from_group(partition, diag, lo);
+                const T ei = sycl::select_from_group(partition, offdiag, lo);
+
+                // Next virtual offdiag (toward physical l). It is safe to read outside the block because
+                // deflation boundaries force those couplings to zero.
+                const bool have_ej = (lo - 1) >= 0;
+                const T ej = have_ej ? sycl::select_from_group(partition, offdiag, lo - 1) : T(0);
+
+                const auto upd = invoke_one_broadcast(partition, [&]() {
+                    T x = T(0);
+                    T y = T(0);
+                    if (first) {
+                        // First rotation uses (d(m)-mu, e(m-1)) in physical, i.e. (di - mu, ei) in our mapping.
+                        x = di - mu;
+                        y = ei;
+                    } else {
+                        // Subsequent rotations eliminate the bulge using (e_prev, bulge).
+                        x = eprev;
+                        y = bulge;
+                    }
+
+                    const auto [c1, s1, r1] = internal::lartg(x, y);
+                    const T sigma = -s1; // match steqr.cc / saved-rotation convention
+
+                    // Update the offdiagonal to the *higher* physical index (virtual e(v-1) -> physical e(hi)).
+                    // This corresponds to LAPACK's QL inner-loop assignment E(i+1)=r.
+                    const T e_hi_new = x * c1 - y * sigma; // only meaningful when !first
+
+                    // Explicit similarity update for the local (di, ei, dj) pair plus propagation into ej.
+                    // This matches the formulas used in steqr.cc's apply_givens_rotation for QR sweeps,
+                    // applied in the virtual ordering.
+                    const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
+                    const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
+                    const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
+
+                    const T ej_new = c1 * ej;
+                    const T bulge_new = -ej * sigma;
+
+                    // Advance leader state.
+                    eprev = ei_new;
+                    bulge = bulge_new;
+                    first = false;
+
+                    // Return {c, sigma, di_new, dj_new, ei_new, ej_new, e_hi_new}
+                    return std::array<T, 7>{c1, sigma, di_new, dj_new, ei_new, ej_new, e_hi_new};
+                });
+
+                const T c1 = upd[0];
+                const T sigma = upd[1];
+
+                // Write back updated diagonal entries.
+                if (lane == hi) {
+                    diag = upd[2];
+                }
+                if (lane == lo) {
+                    diag = upd[3];
+                    offdiag = upd[4]; // e(lo)
+                }
+
+                // Propagate ej (physical e(lo-1)) if it exists.
+                if (have_ej && lane == (lo - 1)) {
+                    offdiag = upd[5];
+                }
+
+                // Update physical e(hi) (virtual e(v-1)) for v>0.
+                if (v > 0 && lane == hi && hi < (n - 1)) {
+                    offdiag = upd[6];
+                }
+
+                // QL eigenvector update: columns are reversed in physical ordering.
+                // In your existing PG path you do apply(i+1, i, c, -s); here the physical pair is (hi, lo).
+                qcache.apply(hi, lo, c1, sigma);
+            }
+        };
+
+        if (update_scheme == SteqrUpdateScheme::EXP) {
+            explicit_ql_step_exp();
+            return;
+        }
 
         // Broadcast values needed for the shift (all lanes participate).
         const T p0 = sycl::select_from_group(partition, diag, l);
@@ -288,8 +413,104 @@ namespace batchlas {
                                  int32_t n,
                                  int32_t m,
                                  int32_t l,
-                                 SteqrShiftStrategy shift_strategy) {
+                                 SteqrShiftStrategy shift_strategy,
+                                 SteqrUpdateScheme update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        // EXP update scheme = explicit similarity update (bulge-chase), matching steqr.cc.
+        const auto explicit_qr_step_exp = [&]() {
+            // Shift from trailing 2x2 of the physical block (l-1,l).
+            const T p0  = sycl::select_from_group(partition, diag, l);
+            const T e0  = sycl::select_from_group(partition, offdiag, l - 1);
+            const T dlm1 = sycl::select_from_group(partition, diag, l - 1);
+
+            T mu = T(0);
+            T bulge = T(0);
+            T eprev = T(0);
+            bool first = true;
+
+            invoke_one(partition, [&]() {
+                if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                    mu = wilkinson_shift(dlm1, e0, p0);
+                } else {
+                    const T gg = (dlm1 - p0) / (T(2) * e0);
+                    const T rr = sycl::hypot(gg, T(1));
+                    mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                }
+                bulge = T(0);
+                eprev = T(0);
+                first = true;
+            });
+
+            for (int32_t i = m; i < l; ++i) {
+                const T di = sycl::select_from_group(partition, diag, i);
+                const T dj = sycl::select_from_group(partition, diag, i + 1);
+                const T ei = sycl::select_from_group(partition, offdiag, i);
+
+                const bool have_ej = (i + 1) < (n - 1);
+                const T ej = have_ej ? sycl::select_from_group(partition, offdiag, i + 1) : T(0);
+
+                const auto upd = invoke_one_broadcast(partition, [&]() {
+                    T x = T(0);
+                    T y = T(0);
+                    if (first) {
+                        // First rotation uses (d(m)-mu, e(m)).
+                        x = di - mu;
+                        y = ei;
+                    } else {
+                        // Subsequent rotations eliminate the bulge using (e_prev, bulge).
+                        x = eprev;
+                        y = bulge;
+                    }
+
+                    const auto [c1, s1, r1] = internal::lartg(x, y);
+                    const T sigma = -s1;
+
+                    // Update physical e(i-1) for i>m.
+                    const T e_im1_new = x * c1 - y * sigma;
+
+                    // Explicit similarity update for local pair (di, ei, dj) and propagation into ej.
+                    const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
+                    const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
+                    const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
+
+                    const T ej_new = c1 * ej;
+                    const T bulge_new = -ej * sigma;
+
+                    eprev = ei_new;
+                    bulge = bulge_new;
+                    first = false;
+
+                    // Return {c, sigma, di_new, dj_new, ei_new, ej_new, e_im1_new}
+                    return std::array<T, 7>{c1, sigma, di_new, dj_new, ei_new, ej_new, e_im1_new};
+                });
+
+                const T c1 = upd[0];
+                const T sigma = upd[1];
+
+                if (lane == i) {
+                    diag = upd[2];
+                    offdiag = upd[4];
+                }
+                if (lane == (i + 1)) {
+                    diag = upd[3];
+                    if (have_ej) {
+                        offdiag = upd[5];
+                    }
+                }
+                if (i > m && lane == (i - 1)) {
+                    offdiag = upd[6];
+                }
+
+                // QR eigenvector update: columns (i, i+1).
+                qcache.apply(i, i + 1, c1, sigma);
+            }
+        };
+
+        if (update_scheme == SteqrUpdateScheme::EXP) {
+            explicit_qr_step_exp();
+            return;
+        }
 
         // Broadcast values needed for the shift (all lanes participate).
         const T p0 = sycl::select_from_group(partition, diag, l);
@@ -372,6 +593,378 @@ namespace batchlas {
         }
     }
 
+    template <typename T>
+    struct is_std_array : std::false_type {};
+
+    template <typename T, std::size_t N>
+    struct is_std_array<std::array<T, N>> : std::true_type {};
+
+    template <typename Group, typename Fn>
+    inline auto invoke_one_broadcast_wg(const Group& group, Fn&& fn) {
+        using R = decltype(fn());
+        R value{};
+        if (group.leader()) {
+            value = fn();
+        }
+        if constexpr (is_std_array<R>::value) {
+            constexpr std::size_t N = std::tuple_size<R>::value;
+            for (std::size_t i = 0; i < N; ++i) {
+                value[i] = sycl::group_broadcast(group, value[i]);
+            }
+            return value;
+        } else {
+            return sycl::group_broadcast(group, value);
+        }
+    }
+
+    template <typename T, size_t P, typename Group, typename LocalAcc>
+    inline void deflate_wg(const Group& group,
+                           LocalAcc& D_local,
+                           LocalAcc& E_local,
+                           int32_t n,
+                           int32_t start_ix,
+                           int32_t end_ix,
+                           int32_t lane,
+                           T zero_threshold) {
+        (void)zero_threshold;
+        sycl::group_barrier(group);
+        const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);
+        if (lane_in_active_range && lane < (n - 1)) {
+            const T d_i = D_local[lane];
+            const T d_ip1 = D_local[lane + 1];
+            const T e_i = E_local[lane];
+            if (e_i != T(0)) {
+                const T rhs = internal::eps2<T>() * std::abs(d_i) * std::abs(d_ip1) + internal::safmin<T>();
+                if (std::abs(e_i) * std::abs(e_i) <= rhs) {
+                    E_local[lane] = T(0);
+                }
+            }
+        }
+        sycl::group_barrier(group);
+    }
+
+    template <typename T, size_t P, typename Group, typename QCache, typename LocalAcc>
+    inline void solve_2x2_and_update_wg(const Group& group,
+                                        LocalAcc& D_local,
+                                        LocalAcc& E_local,
+                                        int32_t l0,
+                                        bool ql,
+                                        int32_t lane,
+                                        QCache& qcache) {
+        sycl::group_barrier(group);
+        const T a = D_local[l0];
+        const T b = E_local[l0];
+        const T c2 = D_local[l0 + 1];
+
+        const auto [rt1, rt2, cs, sn] = invoke_one_broadcast_wg(group, [&]() {
+            return internal::laev2(a, b, c2);
+        });
+
+        if (lane == l0) {
+            D_local[l0] = rt1;
+            E_local[l0] = T(0);
+        }
+        if (lane == (l0 + 1)) {
+            D_local[l0 + 1] = rt2;
+        }
+
+        const int32_t col0 = ql ? (l0 + 1) : l0;
+        const int32_t col1 = ql ? l0 : (l0 + 1);
+        const T s_eff = ql ? sn : -sn;
+        qcache.apply(col0, col1, cs, s_eff);
+        sycl::group_barrier(group);
+    }
+
+    template <typename T, size_t P, typename Group, typename QCache, typename LocalAcc>
+    inline void implicit_ql_step_wg(const Group& group,
+                                    LocalAcc& D_local,
+                                    LocalAcc& E_local,
+                                    QCache& qcache,
+                                    int32_t n,
+                                    int32_t l,
+                                    int32_t m,
+                                    int32_t lane,
+                                    SteqrShiftStrategy shift_strategy,
+                                    SteqrUpdateScheme update_scheme) {
+        sycl::group_barrier(group);
+        // EXP update scheme = explicit similarity update (bulge-chase), matching steqr.cc.
+        if (update_scheme == SteqrUpdateScheme::EXP) {
+            // QL as reversed QR on [l..m].
+            const T p0 = D_local[l];
+            const T e0 = E_local[l];
+            const T dlp1 = D_local[l + 1];
+            T mu = T(0);
+            if (group.leader()) {
+                if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                    mu = wilkinson_shift(dlp1, e0, p0);
+                } else {
+                    const T gg = (dlp1 - p0) / (T(2) * e0);
+                    const T rr = sycl::hypot(gg, T(1));
+                    mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                }
+            }
+            mu = sycl::group_broadcast(group, mu);
+            T bulge = T(0);
+            T eprev = T(0);
+            bool first = true;
+            const int32_t nb = m - l + 1;
+            for (int32_t v = 0; v < nb - 1; ++v) {
+                sycl::group_barrier(group);
+                const int32_t hi = m - v;
+                const int32_t lo = m - v - 1;
+                T di = D_local[hi];
+                T dj = D_local[lo];
+                T ei = E_local[lo];
+                const bool have_ej = (lo - 1) >= 0;
+                T ej = have_ej ? E_local[lo - 1] : T(0);
+                T x = T(0), y = T(0);
+                if (first) {
+                    x = di - mu;
+                    y = ei;
+                } else {
+                    x = eprev;
+                    y = bulge;
+                }
+                auto [c1, s1, _] = internal::lartg(x, y);
+                T sigma = -s1;
+                T e_hi_new = x * c1 - y * sigma;
+                T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
+                T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
+                T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
+                T ej_new = c1 * ej;
+                T bulge_new = -ej * sigma;
+                if (lane == hi) D_local[hi] = di_new;
+                if (lane == lo) {
+                    D_local[lo] = dj_new;
+                    E_local[lo] = ei_new;
+                }
+                if (have_ej && lane == (lo - 1)) E_local[lo - 1] = ej_new;
+                if (v > 0 && lane == hi && hi < (n - 1)) E_local[hi] = e_hi_new;
+                qcache.apply(hi, lo, c1, sigma);
+                eprev = ei_new;
+                bulge = bulge_new;
+                first = false;
+            }
+            sycl::group_barrier(group);
+            return;
+        }
+        // --- original path ---
+        const T p0 = D_local[l];
+        const T e0 = E_local[l];
+        const T dlp1 = D_local[l + 1];
+        const T dm = D_local[m];
+
+        T g = T(0);
+        T c = T(1);
+        T s = T(1);
+        T p = T(0);
+
+        invoke_one(group, [&]() {
+            T mu = T(0);
+            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                mu = wilkinson_shift(dlp1, e0, p0);
+            } else {
+                const T gg = (dlp1 - p0) / (T(2) * e0);
+                const T rr = sycl::hypot(gg, T(1));
+                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+            }
+            g = dm - mu;
+        });
+
+        for (int32_t i = m; i-- > l;) {
+            sycl::group_barrier(group);
+            const T ei = E_local[i];
+            const T di = D_local[i];
+            const T dip1 = D_local[i + 1];
+            const bool do_e_upd = (i != (m - 1)) && ((i + 1) < (n - 1));
+
+            const auto [c1b, s1b, d_ip1_new_b, r1_out_b] = invoke_one_broadcast_wg(group, [&]() {
+                const T f = s * ei;
+                T rout = T(0);
+
+                const auto [c1, s1, r1] = internal::lartg(g, f);
+                if (do_e_upd) {
+                    rout = r1;
+                }
+
+                const T g2 = dip1 - p;
+                const T r2 = (di - g2) * s1 + T(2) * c1 * (c * ei);
+                p = s1 * r2;
+
+                const T d_ip1_new = g2 + p;
+                g = c1 * r2 - (c * ei);
+                c = c1;
+                s = s1;
+
+                return std::array{c1, s1, d_ip1_new, rout};
+            });
+
+            if (lane == (i + 1)) {
+                D_local[i + 1] = d_ip1_new_b;
+                if (do_e_upd) {
+                    E_local[i + 1] = r1_out_b;
+                }
+            }
+
+            qcache.apply(i + 1, i, c1b, -s1b);
+        }
+
+        const auto [d_l_new_b, e_l_new_b] = invoke_one_broadcast_wg(group, [&]() {
+            return std::array{p0 - p, g};
+        });
+        if (lane == l) {
+            D_local[l] = d_l_new_b;
+            if (l < (n - 1)) {
+                E_local[l] = e_l_new_b;
+            }
+        }
+        sycl::group_barrier(group);
+    }
+
+    template <typename T, size_t P, typename Group, typename QCache, typename LocalAcc>
+    inline void implicit_qr_step_wg(const Group& group,
+                                    LocalAcc& D_local,
+                                    LocalAcc& E_local,
+                                    QCache& qcache,
+                                    int32_t n,
+                                    int32_t m,
+                                    int32_t l,
+                                    int32_t lane,
+                                    SteqrShiftStrategy shift_strategy,
+                                    SteqrUpdateScheme update_scheme) {
+        sycl::group_barrier(group);
+        // EXP update scheme = explicit similarity update (bulge-chase), matching steqr.cc.
+        if (update_scheme == SteqrUpdateScheme::EXP) {
+            const T p0 = D_local[l];
+            const T e0 = E_local[l - 1];
+            const T dlm1 = D_local[l - 1];
+            T mu = T(0);
+            if (group.leader()) {
+                if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                    mu = wilkinson_shift(dlm1, e0, p0);
+                } else {
+                    const T gg = (dlm1 - p0) / (T(2) * e0);
+                    const T rr = sycl::hypot(gg, T(1));
+                    mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                }
+            }
+            mu = sycl::group_broadcast(group, mu);
+            T bulge = T(0);
+            T eprev = T(0);
+            bool first = true;
+            for (int32_t i = m; i < l; ++i) {
+                sycl::group_barrier(group);
+                T di = D_local[i];
+                T dj = D_local[i + 1];
+                T ei = E_local[i];
+                const bool have_ej = (i + 1) < (n - 1);
+                T ej = have_ej ? E_local[i + 1] : T(0);
+                T x = T(0), y = T(0);
+                if (first) {
+                    x = di - mu;
+                    y = ei;
+                } else {
+                    x = eprev;
+                    y = bulge;
+                }
+                auto [c1, s1, _] = internal::lartg(x, y);
+                T sigma = -s1;
+                T e_im1_new = x * c1 - y * sigma;
+                T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
+                T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
+                T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
+                T ej_new = c1 * ej;
+                T bulge_new = -ej * sigma;
+                if (lane == i) {
+                    D_local[i] = di_new;
+                    E_local[i] = ei_new;
+                }
+                if (lane == (i + 1)) {
+                    D_local[i + 1] = dj_new;
+                    if (have_ej) E_local[i + 1] = ej_new;
+                }
+                if (i > m && lane == (i - 1)) E_local[i - 1] = e_im1_new;
+                qcache.apply(i, i + 1, c1, sigma);
+                eprev = ei_new;
+                bulge = bulge_new;
+                first = false;
+            }
+            sycl::group_barrier(group);
+            return;
+        }
+        // --- original path ---
+        const T p0 = D_local[l];
+        const T e0 = E_local[l - 1];
+        const T dlm1 = D_local[l - 1];
+        const T dm = D_local[m];
+
+        T g = T(0);
+        T c = T(1);
+        T s = T(1);
+        T p = T(0);
+
+        invoke_one(group, [&]() {
+            T mu = T(0);
+            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
+                mu = wilkinson_shift(dlm1, e0, p0);
+            } else {
+                const T gg = (dlm1 - p0) / (T(2) * e0);
+                const T rr = sycl::hypot(gg, T(1));
+                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+            }
+            g = dm - mu;
+        });
+
+        for (int32_t i = m; i < l; ++i) {
+            sycl::group_barrier(group);
+            const T ei = E_local[i];
+            const T di = D_local[i];
+            const T dip1 = D_local[i + 1];
+            const bool do_e_upd = (i != m);
+
+            const auto [c1b, s1b, d_i_new_b, r1_out_b] = invoke_one_broadcast_wg(group, [&]() {
+                const T f = s * ei;
+                T rout = T(0);
+
+                const auto [c1, s1, r1] = internal::lartg(g, f);
+                if (do_e_upd) {
+                    rout = r1;
+                }
+
+                const T g2 = di - p;
+                const T r2 = (dip1 - g2) * s1 + T(2) * c1 * (c * ei);
+                p = s1 * r2;
+
+                const T d_i_new = g2 + p;
+                g = c1 * r2 - (c * ei);
+                c = c1;
+                s = s1;
+
+                return std::array{c1, s1, d_i_new, rout};
+            });
+
+            if (lane == i) {
+                D_local[i] = d_i_new_b;
+            }
+            if (do_e_upd && lane == (i - 1)) {
+                E_local[i - 1] = r1_out_b;
+            }
+
+            qcache.apply(i, i + 1, c1b, -s1b);
+        }
+
+        const auto [d_l_new_b, e_lm1_new_b] = invoke_one_broadcast_wg(group, [&]() {
+            return std::array{p0 - p, g};
+        });
+        if (lane == l) {
+            D_local[l] = d_l_new_b;
+        }
+        if (lane == (l - 1)) {
+            E_local[l - 1] = e_lm1_new_b;
+        }
+        sycl::group_barrier(group);
+    }
+
     template <typename T, size_t P, bool ComputeVecs>
     inline void steqr_cta_impl(Queue& ctx,
                               VectorView<T>& d,
@@ -381,6 +974,7 @@ namespace batchlas {
                               size_t max_sweeps,
                               T zero_threshold,
                               SteqrShiftStrategy cta_shift_strategy,
+                              SteqrUpdateScheme cta_update_scheme,
                               size_t cta_wg_size_multiplier,
                               int32_t* status,
                               BumpAllocator& pool) {
@@ -422,7 +1016,7 @@ namespace batchlas {
 
             cgh.parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(
                 sycl::nd_range<1>(global_size, wg_size),
-                [=](sycl::nd_item<1> it) {
+                [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(sg_size)]] {
                     const auto wg = it.get_group();
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
@@ -497,10 +1091,10 @@ namespace batchlas {
                         stage_tridiag_to_local<T, P>(partition, n, D_local, E_local, base_d, base_e, lane, diag, offdiag);
 
                         const T scale = invoke_one_broadcast(partition, [&]() {
-                            T anorm = sycl::fabs(D_local[base_d + block_end]);
+                            T anorm = std::abs(D_local[base_d + block_end]);
                             for (int32_t idx = block_begin; idx < block_end; ++idx) {
-                                anorm = sycl::fmax(anorm, sycl::fabs(D_local[base_d + idx]));
-                                anorm = sycl::fmax(anorm, sycl::fabs(E_local[base_e + idx]));
+                                anorm = sycl::fmax(anorm, std::abs(D_local[base_d + idx]));
+                                anorm = sycl::fmax(anorm, std::abs(E_local[base_e + idx]));
                             }
 
                             if (anorm > internal::ssfmax<T>()) {
@@ -527,8 +1121,8 @@ namespace batchlas {
                         // Choose between QL and QR (matches steqr.cc):
                         // - QR if |D(l)| <= |D(lend)|
                         // - QL otherwise
-                        const T d_first = sycl::fabs(sycl::select_from_group(partition, diag, block_begin));
-                        const T d_last = sycl::fabs(sycl::select_from_group(partition, diag, block_end));
+                        const T d_first = std::abs(sycl::select_from_group(partition, diag, block_begin));
+                        const T d_last = std::abs(sycl::select_from_group(partition, diag, block_end));
                         const bool use_ql = (d_last < d_first);
                         if (use_ql) {
                             // ---------------- QL iteration: converge from the top (l grows) ----------------
@@ -571,7 +1165,7 @@ namespace batchlas {
                                     sweep_budget -= 1;
 
                                     // ---- Implicit QL step on subblock [l..m] (m>=l+2) ----
-                                    implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
+                                    implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, cta_update_scheme);
                                 }  // end sweep loop for QL
 
                                 if (!advanced) {
@@ -630,7 +1224,7 @@ namespace batchlas {
                                     sweep_budget -= 1;
 
                                     // ---- Implicit QR step on subblock [m..l] ----
-                                    implicit_qr_step<T, P>(partition, diag, offdiag, qcache, n, m, l_u, cta_shift_strategy);
+                                    implicit_qr_step<T, P>(partition, diag, offdiag, qcache, n, m, l_u, cta_shift_strategy, cta_update_scheme);
                                 }  // end sweep loop for QR
 
                                 if (!advanced) {
@@ -677,6 +1271,254 @@ namespace batchlas {
 
     }
 
+    template <typename T, size_t P, bool ComputeVecs>
+    inline void steqr_cta_wg_impl(Queue& ctx,
+                                 VectorView<T>& d,
+                                 VectorView<T>& e,
+                                 MatrixView<T, MatrixFormat::Dense>& eigvects,
+                                 int32_t n,
+                                 size_t max_sweeps,
+                                 T zero_threshold,
+                                 SteqrShiftStrategy cta_shift_strategy,
+                                 SteqrUpdateScheme cta_update_scheme,
+                                 size_t cta_wg_size_multiplier,
+                                 int32_t* status,
+                                 BumpAllocator& pool) {
+        (void)pool;
+        (void)cta_wg_size_multiplier;
+        const auto batch_size = d.batch_size();
+        if (n < 1 || n > static_cast<int32_t>(P) || d.size() != n || e.size() != (n - 1)) {
+            throw std::runtime_error("steqr_cta_wg_impl: invalid n or vector sizes for work-group partition.");
+        }
+
+        ctx->submit([&](sycl::handler& cgh) {
+            auto Q_view = eigvects.kernel_view();
+            const int32_t wg_size = static_cast<int32_t>(P);
+            const int32_t num_wg = static_cast<int32_t>(batch_size);
+            const int32_t global_size = num_wg * wg_size;
+
+            auto Q_local = sycl::local_accessor<T, 1>(
+                sycl::range<1>(ComputeVecs ? (P * P) : 1), cgh);
+            auto D_local = sycl::local_accessor<T, 1>(sycl::range<1>(P), cgh);
+            auto E_local = sycl::local_accessor<T, 1>(sycl::range<1>(P - 1), cgh);
+
+            cgh.parallel_for<SteqrWgKernel<T, P, ComputeVecs>>(
+                sycl::nd_range<1>(global_size, wg_size),
+                [=](sycl::nd_item<1> it) {
+                    const auto wg = it.get_group();
+                    const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
+                    const int32_t lane = static_cast<int32_t>(it.get_local_linear_id());
+                    const int32_t prob_id = wg_id;
+                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
+
+                    auto d_prob = d.batch_item(prob_id);
+                    auto e_prob = e.batch_item(prob_id);
+
+                    const int32_t base_q = 0;
+                    using QLocalAccT = decltype(Q_local);
+                    QSharedCache<T, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
+
+                    if constexpr (ComputeVecs) {
+                        auto Q_prob = Q_view.batch_item(prob_id);
+                        qcache.load(Q_prob);
+                    }
+
+                    if (lane < n) {
+                        D_local[lane] = d_prob(lane);
+                    } else if (lane < static_cast<int32_t>(P)) {
+                        D_local[lane] = T(0);
+                    }
+                    if (lane < (n - 1)) {
+                        E_local[lane] = e_prob(lane);
+                    } else if (lane < static_cast<int32_t>(P - 1)) {
+                        E_local[lane] = T(0);
+                    }
+
+                    sycl::group_barrier(wg);
+
+                    int32_t sweep_budget = static_cast<int32_t>(max_sweeps) * n;
+                    bool failed = false;
+
+                    for (int32_t next_block_begin = 0; next_block_begin < n;) {
+                        const int32_t block_begin = next_block_begin;
+
+                        if (block_begin > 0 && lane == (block_begin - 1) && lane < (n - 1)) {
+                            E_local[lane] = T(0);
+                        }
+
+                        deflate_wg<T, P>(wg, D_local, E_local, n, block_begin, n, lane, zero_threshold);
+
+                        const int32_t block_end_candidate =
+                            (lane >= block_begin && lane < (n - 1) && E_local[lane] == T(0)) ? lane : (n - 1);
+                        const int32_t block_end =
+                            sycl::reduce_over_group(wg, block_end_candidate, sycl::minimum<int32_t>());
+
+                        next_block_begin = block_end + 1;
+
+                        if (block_end <= block_begin) {
+                            continue;
+                        }
+
+                        sycl::group_barrier(wg);
+                        const T scale = invoke_one_broadcast_wg(wg, [&]() {
+                            T anorm = std::abs(D_local[block_end]);
+                            for (int32_t idx = block_begin; idx < block_end; ++idx) {
+                                anorm = sycl::fmax(anorm, std::abs(D_local[idx]));
+                                anorm = sycl::fmax(anorm, std::abs(E_local[idx]));
+                            }
+
+                            if (anorm > internal::ssfmax<T>()) {
+                                return internal::ssfmax<T>() / anorm;
+                            }
+                            if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                                return internal::ssfmin<T>() / anorm;
+                            }
+                            return T(1);
+                        });
+                        const T inv_scale = T(1) / scale;
+
+                        if (scale != T(1)) {
+                            if (lane >= block_begin && lane <= block_end) {
+                                D_local[lane] *= scale;
+                            }
+                            if (lane >= block_begin && lane < block_end) {
+                                E_local[lane] *= scale;
+                            }
+                        }
+
+                        sycl::group_barrier(wg);
+                        const T d_first = std::abs(D_local[block_begin]);
+                        const T d_last = std::abs(D_local[block_end]);
+                        const bool use_ql = (d_last < d_first);
+
+                        if (use_ql) {
+                            for (int32_t l = block_begin; l <= block_end && !failed;) {
+                                if (l == block_end) {
+                                    l += 1;
+                                    continue;
+                                }
+
+                                bool advanced = false;
+                                for (int32_t sweep = 0; sweep < static_cast<int32_t>(max_sweeps); ++sweep) {
+                                    deflate_wg<T, P>(wg, D_local, E_local, n, l, block_end + 1, lane, zero_threshold);
+
+                                    const int32_t m_candidate =
+                                        (lane >= l && lane < block_end && E_local[lane] == T(0)) ? lane : block_end;
+                                    const int32_t m =
+                                        sycl::reduce_over_group(wg, m_candidate, sycl::minimum<int32_t>());
+
+                                    if (m == l) {
+                                        l += 1;
+                                        advanced = true;
+                                        break;
+                                    }
+
+                                    if (m == l + 1) {
+                                        solve_2x2_and_update_wg<T, P>(wg, D_local, E_local, l, true, lane, qcache);
+                                        l += 2;
+                                        advanced = true;
+                                        break;
+                                    }
+
+                                    if (sweep_budget <= 0) {
+                                        failed = true;
+                                        break;
+                                    }
+                                    sweep_budget -= 1;
+
+                                    implicit_ql_step_wg<T, P>(wg, D_local, E_local, qcache, n, l, m, lane, cta_shift_strategy, cta_update_scheme);
+                                }
+
+                                if (!advanced) {
+                                    failed = true;
+                                }
+                            }
+                        } else {
+                            for (int32_t l = static_cast<int32_t>(block_end);
+                                 l >= static_cast<int32_t>(block_begin);
+                                 /* manual step */) {
+                                if (failed) break;
+                                if (l == static_cast<int32_t>(block_begin)) {
+                                    break;
+                                }
+
+                                bool advanced = false;
+                                for (int32_t sweep = 0; sweep < static_cast<int32_t>(max_sweeps); ++sweep) {
+                                    deflate_wg<T, P>(wg, D_local, E_local, n, block_begin, static_cast<int32_t>(l) + 1, lane, zero_threshold);
+
+                                    const int32_t l_u = static_cast<int32_t>(l);
+                                    const int32_t m_candidate =
+                                        (lane >= block_begin && lane < l_u && E_local[lane] == T(0)) ? (lane + 1) : block_begin;
+                                    const int32_t m =
+                                        sycl::reduce_over_group(wg, m_candidate, sycl::maximum<int32_t>());
+
+                                    if (m == l) {
+                                        l -= 1;
+                                        advanced = true;
+                                        break;
+                                    }
+
+                                    if (m + 1 == l) {
+                                        const size_t l0 = l_u - 1;
+                                        solve_2x2_and_update_wg<T, P>(wg, D_local, E_local, l0, false, lane, qcache);
+
+                                        if (l <= 1) {
+                                            l = static_cast<int32_t>(block_begin);
+                                        } else {
+                                            l -= 2;
+                                        }
+                                        advanced = true;
+                                        break;
+                                    }
+
+                                    if (sweep_budget <= 0) {
+                                        failed = true;
+                                        break;
+                                    }
+                                    sweep_budget -= 1;
+
+                                    implicit_qr_step_wg<T, P>(wg, D_local, E_local, qcache, n, m, l_u, lane, cta_shift_strategy, cta_update_scheme);
+                                }
+
+                                if (!advanced) {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (scale != T(1)) {
+                            if (lane >= block_begin && lane <= block_end) {
+                                D_local[lane] *= inv_scale;
+                            }
+                            if (lane >= block_begin && lane < block_end) {
+                                E_local[lane] *= inv_scale;
+                            }
+                        }
+
+                        if (failed) {
+                            if (lane == 0 && status) {
+                                status[prob_id] = 1;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (lane < n) {
+                        d_prob(lane) = D_local[lane];
+                    }
+                    if (lane < (n - 1)) {
+                        e_prob(lane) = E_local[lane];
+                    }
+
+                    if constexpr (ComputeVecs) {
+                        auto Q_prob = Q_view.batch_item(prob_id);
+                        qcache.store(Q_prob);
+                    }
+                });
+        });
+    }
+
     template <Backend B, typename T>
     Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in,
                     const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
@@ -716,19 +1558,24 @@ namespace batchlas {
             throw std::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
         }
 
+        const auto dev = ctx->get_device();
+        const auto dev_type = dev.get_info<sycl::info::device::device_type>();
+        const bool is_cpu_or_host = (dev_type == sycl::info::device_type::cpu) ||
+                                    (dev_type == sycl::info::device_type::host);
+
+        bool has32 = false;
         {
-            const auto dev = ctx->get_device();
             const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-            bool has32 = false;
             for (auto sgs : sg_sizes) {
                 if (static_cast<int32_t>(sgs) == 32) {
                     has32 = true;
                     break;
                 }
             }
-            if (!has32) {
-                throw std::runtime_error("steqr_cta: device does not support subgroup size 32 required for CTA kernels.");
-            }
+        }
+
+        if (!has32 && is_cpu_or_host) {
+            return steqr<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects);
         }
 
         const int32_t n_i32 = static_cast<int32_t>(n);
@@ -736,17 +1583,33 @@ namespace batchlas {
         auto launch = [&](auto P_tag) {
             constexpr int32_t P = decltype(P_tag)::value;
             if (jobz == JobType::EigenVectors) {
-                steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
-                                           params.max_sweeps, params.zero_threshold,
-                                           params.cta_shift_strategy, params.cta_wg_size_multiplier,
-                                           status,
-                                           pool);
+                if (has32) {
+                    steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
+                                               params.max_sweeps, params.zero_threshold,
+                                               params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                               status,
+                                               pool);
+                } else {
+                    steqr_cta_wg_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
+                                                  params.max_sweeps, params.zero_threshold,
+                                                  params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                                  status,
+                                                  pool);
+                }
             } else {
-                steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
-                                            params.max_sweeps, params.zero_threshold,
-                                            params.cta_shift_strategy, params.cta_wg_size_multiplier,
-                                            status,
-                                            pool);
+                if (has32) {
+                    steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
+                                                params.max_sweeps, params.zero_threshold,
+                                                params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                                status,
+                                                pool);
+                } else {
+                    steqr_cta_wg_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
+                                                   params.max_sweeps, params.zero_threshold,
+                                                   params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                                   status,
+                                                   pool);
+                }
             }
         };
 
@@ -803,6 +1666,26 @@ namespace batchlas {
 
         size += sort_buffer_size<T>(ctx, eigenvalues.data(),
                                     MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
+
+        const auto dev = ctx->get_device();
+        const auto dev_type = dev.get_info<sycl::info::device::device_type>();
+        const bool is_cpu_or_host = (dev_type == sycl::info::device_type::cpu) ||
+                        (dev_type == sycl::info::device_type::host);
+        bool has32 = false;
+        {
+            const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
+            for (auto sgs : sg_sizes) {
+                if (static_cast<int32_t>(sgs) == 32) {
+                    has32 = true;
+                    break;
+                }
+            }
+        }
+
+        if (!has32 && is_cpu_or_host) {
+            const auto steqr_size = steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
+            size = std::max<size_t>(size, steqr_size);
+        }
         return size;
     }
 
