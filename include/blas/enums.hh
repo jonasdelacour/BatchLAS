@@ -114,7 +114,8 @@ namespace batchlas {
         Frobenius, //Most commonly used
         One,       //Maximum absolute column sum
         Inf,       //Maximum absolute row sum
-        Max       //Maximum absolute value
+        Max,       //Maximum absolute value
+        Spectral   //Spectral (L2) norm, symmetric/Hermitian only
     };
 
     enum class Layout {
