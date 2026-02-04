@@ -149,6 +149,47 @@ struct backend_types {
     using type = typename tuple_to_types<tuple_type>::type;
 };
 
+// Helper to optionally exclude complex types per test suite
+template <template <typename, batchlas::Backend> class Config, bool IncludeComplex>
+struct backend_types_filtered {
+    using tuple_type = decltype(std::tuple_cat(
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+    std::tuple<Config<float, batchlas::Backend::NETLIB>,
+           Config<double, batchlas::Backend::NETLIB>>{},
+    std::conditional_t<IncludeComplex,
+           std::tuple<Config<std::complex<float>, batchlas::Backend::NETLIB>,
+                      Config<std::complex<double>, batchlas::Backend::NETLIB>>,
+           std::tuple<>>{},
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+        std::tuple<Config<float, batchlas::Backend::CUDA>,
+                   Config<double, batchlas::Backend::CUDA>>{},
+        std::conditional_t<IncludeComplex,
+                   std::tuple<Config<std::complex<float>, batchlas::Backend::CUDA>,
+                              Config<std::complex<double>, batchlas::Backend::CUDA>>,
+                   std::tuple<>>{},
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+        std::tuple<Config<float, batchlas::Backend::ROCM>,
+                   Config<double, batchlas::Backend::ROCM>>{},
+        std::conditional_t<IncludeComplex,
+                   std::tuple<Config<std::complex<float>, batchlas::Backend::ROCM>,
+                              Config<std::complex<double>, batchlas::Backend::ROCM>>,
+                   std::tuple<>>{},
+#endif
+#if BATCHLAS_HAS_MKL_BACKEND
+        std::tuple<Config<float, batchlas::Backend::MKL>,
+                   Config<double, batchlas::Backend::MKL>>{},
+        std::conditional_t<IncludeComplex,
+                   std::tuple<Config<std::complex<float>, batchlas::Backend::MKL>,
+                              Config<std::complex<double>, batchlas::Backend::MKL>>,
+                   std::tuple<>>{},
+#endif
+        std::tuple<>{}));
+
+    using type = typename tuple_to_types<tuple_type>::type;
+};
+
 // Choose one available GPU backend at compile time
 #if BATCHLAS_HAS_CUDA_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
