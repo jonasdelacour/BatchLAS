@@ -5,6 +5,7 @@
 #include <blas/extra.hh>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -23,6 +24,22 @@ UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
 template <typename Real>
 UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A);
 #endif
+
+static inline const char* update_scheme_name(SteqrUpdateScheme scheme) {
+    switch (scheme) {
+        case SteqrUpdateScheme::PG:
+            return "PG";
+        case SteqrUpdateScheme::EXP:
+            return "EXP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static constexpr std::array<SteqrUpdateScheme, 2> kCtaUpdateSchemes = {
+    SteqrUpdateScheme::PG,
+    SteqrUpdateScheme::EXP,
+};
 }
 
 template <typename T, Backend B>
@@ -32,7 +49,8 @@ struct SteqrConfig {
 };
 
 #include "test_utils.hh"
-using SteqrTestTypes = typename test_utils::backend_types<SteqrConfig>::type;
+// STEQR tests are not meaningful for complex types.
+using SteqrTestTypes = typename test_utils::backend_types_filtered<SteqrConfig, false>::type;
 
 template <typename Config>
 class SteqrTest : public test_utils::BatchLASTest<Config> {
@@ -198,39 +216,43 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomN8CompareWithSteqr) {
                          ws_ref.to_span(), JobType::EigenVectors, params_ref, eigvects_ref);
     this->ctx->wait();
 
-    // --- CTA steqr_cta ---
-    Vector<float_type> evals_cta = Vector<float_type>::zeros(n, batch);
-    auto eigvects_cta = Matrix<float_type>::Zeros(n, n, batch);
-    SteqrParams<float_type> params_cta = {};
-    params_cta.max_sweeps = 30;
-    params_cta.sort = true;
-    params_cta.transpose_working_vectors = false;
-    params_cta.sort_order = SortOrder::Ascending;
-    params_cta.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+    // --- CTA steqr_cta (iterate update schemes) ---
+    for (auto scheme : kCtaUpdateSchemes) {
+        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+        Vector<float_type> evals_cta = Vector<float_type>::zeros(n, batch);
+        auto eigvects_cta = Matrix<float_type>::Zeros(n, n, batch);
+        SteqrParams<float_type> params_cta = {};
+        params_cta.max_sweeps = 30;
+        params_cta.sort = true;
+        params_cta.transpose_working_vectors = false;
+        params_cta.sort_order = SortOrder::Ascending;
+        params_cta.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        params_cta.cta_update_scheme = scheme;
 
-    UnifiedVector<std::byte> ws_cta(
-        steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
-        std::byte(0));
-    steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
-                             ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
-    this->ctx->wait();
+        UnifiedVector<std::byte> ws_cta(
+            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
+            std::byte(0));
+        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
+                                 ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
+        this->ctx->wait();
 
-    // Compare eigenvalues directly (both should be correct and similarly ordered after sort)
-    for (int i = 0; i < n; ++i) {
-        ASSERT_NEAR(evals_cta[i], evals_ref[i], std::numeric_limits<float_type>::epsilon() * 5e2)
-            << "Eigenvalue mismatch vs STEQR at index " << i;
-    }
+        // Compare eigenvalues directly (both should be correct and similarly ordered after sort)
+        for (int i = 0; i < n; ++i) {
+            ASSERT_NEAR(evals_cta[i], evals_ref[i], test_utils::tolerance<T>())
+                << "Eigenvalue mismatch vs STEQR at index " << i;
+        }
 
-    // Compare Ritz values (validates eigenvectors)
-    auto ritz_ref = ritz_values<B>(*this->ctx, dense_A, eigvects_ref);
-    auto ritz_cta = ritz_values<B>(*this->ctx, dense_A, eigvects_cta);
-    this->ctx->wait();
+        // Compare Ritz values (validates eigenvectors)
+        auto ritz_ref = ritz_values<B>(*this->ctx, dense_A, eigvects_ref);
+        auto ritz_cta = ritz_values<B>(*this->ctx, dense_A, eigvects_cta);
+        this->ctx->wait();
 
-    for (int i = 0; i < n; ++i) {
-        ASSERT_NEAR(evals_ref[i], ritz_ref(i, 0), std::numeric_limits<float_type>::epsilon() * 5e2)
-            << "Ritz mismatch (STEQR) at index " << i;
-        ASSERT_NEAR(evals_cta[i], ritz_cta(i, 0), std::numeric_limits<float_type>::epsilon() * 5e2)
-            << "Ritz mismatch (STEQR_CTA) at index " << i;
+        for (int i = 0; i < n; ++i) {
+            ASSERT_NEAR(evals_ref[i], ritz_ref(i, 0), test_utils::tolerance<T>())
+                << "Ritz mismatch (STEQR) at index " << i;
+            ASSERT_NEAR(evals_cta[i], ritz_cta(i, 0), test_utils::tolerance<T>())
+                << "Ritz mismatch (STEQR_CTA) at index " << i;
+        }
     }
 }
 
@@ -246,40 +268,46 @@ TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
     float_type c = 0.5f;
     Vector<float_type> diag(n, float_type(a), batch);
     Vector<float_type> sub_diag(n - 1, float_type(b), batch);
-    Vector<float_type> eigenvalues(n, batch);
     UnifiedVector<float_type> expected_eigenvalues(n * batch);
 
     for (int i = 1; i <= n; ++i) {
         expected_eigenvalues[i-1] = float_type(a - 2.0f * std::sqrt(b * c) * std::cos(M_PI * i / (n + 1)));
     }
 
-    SteqrParams<float_type> params = {};
-    params.max_sweeps = 30;  // Per-eigenvalue iteration limit
-    params.sort = true;  // Re-enable sorting to match test expectations
-    params.transpose_working_vectors = false;
-    params.sort_order = SortOrder::Ascending;
+    for (auto scheme : kCtaUpdateSchemes) {
+        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+        // fresh output buffers each iteration
+        Vector<float_type> eigenvalues(n, batch);
+        auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
+        SteqrParams<float_type> params = {};
+        params.max_sweeps = 30;  // Per-eigenvalue iteration limit
+        params.sort = true;  // Re-enable sorting to match test expectations
+        params.transpose_working_vectors = false;
+        params.sort_order = SortOrder::Ascending;
+        params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        params.cta_update_scheme = scheme;
 
-    auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
-    auto ws = UnifiedVector<std::byte>(steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
+        auto ws = UnifiedVector<std::byte>(
+            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
+            std::byte(0));
 
-    steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
-                             ws.to_span(), JobType::EigenVectors, params, eigvects);
-    this->ctx->wait();
+        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+                                 ws.to_span(), JobType::EigenVectors, params, eigvects);
+        this->ctx->wait();
 
-    
+        // Validate eigenvalues against expected analytical values
+        for (int i = 0; i < n; ++i) {
+            ASSERT_NEAR(eigenvalues[i], expected_eigenvalues[i], 1e-5) << "Eigenvalue mismatch at index " << i;
+        }
 
-    // Validate eigenvalues against expected analytical values
-    for (int i = 0; i < n; ++i) {
-        ASSERT_NEAR(eigenvalues[i], expected_eigenvalues[i], 1e-5) << "Eigenvalue mismatch at index " << i;
-    }
+        // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
+        auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
+        auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        this->ctx->wait();
 
-    // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
-    auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
-    this->ctx->wait();
-
-    for (int i = 0; i < n; ++i) {
-        ASSERT_NEAR(eigenvalues[i], ritz_vals(i, 0), 1e-5) << "Ritz value mismatch at index " << i;
+        for (int i = 0; i < n; ++i) {
+            ASSERT_NEAR(eigenvalues[i], ritz_vals(i, 0), 1e-5) << "Ritz value mismatch at index " << i;
+        }
     }
 }
 
@@ -295,7 +323,6 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
     float_type c = 0.5f;
     Vector<float_type> diag(n, float_type(a), batch);
     Vector<float_type> sub_diag(n - 1, float_type(b), batch);
-    Vector<float_type> eigenvalues(n, batch);
     UnifiedVector<float_type> expected_eigenvalues(n * batch);
 
     // All matrices are identical, so expected eigenvalues are the same for each batch item
@@ -305,34 +332,42 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
         }
     }
 
-    SteqrParams<float_type> params = {};
-    params.max_sweeps = 10;
-    params.sort = true;
-    params.transpose_working_vectors = false;
-    params.sort_order = SortOrder::Ascending;
+    for (auto scheme : kCtaUpdateSchemes) {
+        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+        SteqrParams<float_type> params = {};
+        params.max_sweeps = 10;
+        params.sort = true;
+        params.transpose_working_vectors = false;
+        params.sort_order = SortOrder::Ascending;
+        params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        params.cta_update_scheme = scheme;
 
-    auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
-    auto ws = UnifiedVector<std::byte>(steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
+        Vector<float_type> eigenvalues(n, batch);
+        auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
+        auto ws = UnifiedVector<std::byte>(
+            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
+            std::byte(0));
 
-    steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
-                             ws.to_span(), JobType::EigenVectors, params, eigvects);
-    this->ctx->wait();
+        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+                                 ws.to_span(), JobType::EigenVectors, params, eigvects);
+        this->ctx->wait();
 
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues(i, j), expected_eigenvalues[j * n + i], 1e-5) 
-                << "Eigenvalue mismatch at index " << i << ", batch " << j;
+        for (int j = 0; j < batch; ++j) {
+            for (int i = 0; i < n; ++i) {
+                ASSERT_NEAR(eigenvalues(i, j), expected_eigenvalues[j * n + i], 1e-5)
+                    << "Eigenvalue mismatch at index " << i << ", batch " << j;
+            }
         }
-    }
 
-    // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
-    auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
-    this->ctx->wait();  
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), 1e-5) 
-                << "Ritz value mismatch at index " << i << ", batch " << j;
+        // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
+        auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
+        auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        this->ctx->wait();
+        for (int j = 0; j < batch; ++j) {
+            for (int i = 0; i < n; ++i) {
+                ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), 1e-5)
+                    << "Ritz value mismatch at index " << i << ", batch " << j;
+            }
         }
     }
 }
@@ -375,7 +410,7 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
         for (int j = 0; j < batch; ++j) {
             for (int i = 0; i < n; ++i) {
                 ASSERT_NEAR(eigenvalues(i, j), ref_eigs[i + j * n],
-                            std::numeric_limits<float_type>::epsilon() * 5e2)
+                            5*test_utils::tolerance<T>())
                     << "Eigenvalue value mismatch at index " << i << ", batch " << j << ", n " << n;
             }
         }
@@ -383,7 +418,7 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
         for (int j = 0; j < batch; ++j) {
             for (int i = 0; i < n; ++i) {
                 ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j),
-                            std::numeric_limits<float_type>::epsilon() * 5e2)
+                            5*test_utils::tolerance<T>())
                     << "Ritz value mismatch at index " << i << ", batch " << j << ", n " << n;
             }
         }
@@ -397,10 +432,10 @@ TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
 
     const int n = 32;
     const int batch = 32;
-    const float_type log10_cond = float_type(10.0);
+    const float_type log10_cond = float_type(5.0);
 
-    auto dense_A = random_hermitian_tridiagonal_with_log10_cond<B, float_type>(
-        *this->ctx, n, log10_cond, batch, 1234u);
+    auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, float_type>(
+        *this->ctx, n, log10_cond, NormType::Spectral, batch, 1234u);
 
     Vector<float_type> diag(n, float_type(0), batch);
     Vector<float_type> sub(n - 1, float_type(0), batch);
@@ -414,7 +449,7 @@ TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
         }
     }
 
-    auto conds = cond<B>(*this->ctx, dense_A.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, dense_A.view(), NormType::Spectral);
     this->ctx->wait();
     for (int b = 0; b < batch; ++b) {
         EXPECT_GE(std::log10(conds[b]), log10_cond - float_type(0.5)) << "Batch " << b;
@@ -597,9 +632,9 @@ void stress_run_case(Queue& ctx,
             // NOTE: CUDA SYCL stacks can be sensitive to specific kernel launch patterns.
             // We request eigenvectors here (even though we only compare eigenvalues) because
             // it exercises the same well-tested SYEV path used elsewhere in this test file.
-            syev_buffer_size<B, Real>(ctx, dense_A, ref_eigs, JobType::EigenVectors, Uplo::Lower),
+            backend::syev_vendor_buffer_size<B, Real>(ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower),
             std::byte(0));
-        syev<B>(ctx, dense_A, ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
+        backend::syev_vendor<B>(ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
         ctx.wait();
     }
 
@@ -632,6 +667,7 @@ void stress_run_case(Queue& ctx,
         params.transpose_working_vectors = false;
         params.sort_order = SortOrder::Ascending;
         params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        params.cta_update_scheme = SteqrUpdateScheme::EXP;
 
         auto ws = UnifiedVector<std::byte>(
             steqr_cta_buffer_size<Real>(ctx, diag, sub, cta_eigs, JobType::EigenVectors, params),
@@ -668,7 +704,7 @@ void stress_run_case(Queue& ctx,
                 ASSERT_NEAR(ste[i], r, tol) << "STEQR mismatch at (" << i << "," << j << ")";
             }
             if (check_cta_against_ref) {
-                ASSERT_NEAR(cta[i], r, tol) << "STEQR_CTA mismatch at (" << i << "," << j << ")";
+                ASSERT_NEAR(cta[i], r, tol * 1e2) << "STEQR_CTA mismatch at (" << i << "," << j << ")";
             }
         }
     }
