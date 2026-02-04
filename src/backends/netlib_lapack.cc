@@ -6,8 +6,10 @@
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <utility>
+#include <algorithm>
 #include <lapack.h>
 #include <blas/linalg.hh>
+#include <util/mempool.hh>
 
 #include <blas/functions/ormqr.hh>
 #include <blas/functions/syev.hh>
@@ -18,12 +20,17 @@ namespace batchlas{
     namespace detail {
     template <typename F>
     Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
-        Event dep = ctx.get_event();
-        EventImpl ev = ctx->submit([&](sycl::handler& h) {
-            h.depends_on(static_cast<sycl::event>(*dep));
-            h.host_task([=] { f(); });
-        });
-        return Event(std::move(ev));
+        ctx.wait();
+        f();
+        try {
+            sycl::event e = ctx->ext_oneapi_submit_barrier();
+            return Event(EventImpl(std::move(e)));
+        } catch (const sycl::exception&) {
+            EventImpl ev = ctx->submit([&](sycl::handler& h) {
+                h.single_task([]() {});
+            });
+            return Event(std::move(ev));
+        }
     }
     } // namespace detail
 
@@ -152,7 +159,8 @@ namespace batchlas{
         auto X_view = X;
         auto Y_view = Y;
         return detail::submit_host_task(ctx, "netlib.gemv", [=] {
-            auto [m, n] = get_effective_dims(A_view, transA);
+            const int m = A_view.rows();
+            const int n = A_view.cols();
             if (A_view.batch_size() > 1) {
                 for (int i = 0; i < A_view.batch_size(); ++i) {
                     auto Xi = X_view.batch_item(i);
@@ -203,24 +211,96 @@ namespace batchlas{
         auto A_view = descrA;
         auto B_view = descrB;
         return detail::submit_host_task(ctx, "netlib.trsm", [=] {
-            auto [kB, n] = get_effective_dims(B_view, Transpose::NoTrans);
-            if (A_view.batch_size() == 1) {
-                call_backend_nh<T, BackendLibrary::CBLAS>(
-                    cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
-                    Layout::ColMajor, side, uplo, transA, diag,
-                    kB, n,
-                    alpha,
-                    A_view.data_ptr(), A_view.ld(),
-                    B_view.data_ptr(), B_view.ld());
-            } else {
-                for (int i = 0; i < A_view.batch_size(); ++i) {
-                    call_backend_nh<T, BackendLibrary::CBLAS>(
-                        cblas_strsm, cblas_dtrsm, cblas_ctrsm, cblas_ztrsm,
-                        Layout::ColMajor, side, uplo, transA, diag,
-                        kB, n,
-                        alpha,
-                        A_view[i].data_ptr(), A_view[i].ld(),
-                        B_view[i].data_ptr(), B_view[i].ld());
+            const int m = B_view.rows();
+            const int n = B_view.cols();
+            constexpr bool is_complex = std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
+            const bool do_conj = (transA == Transpose::ConjTrans) && is_complex;
+            const bool do_trans = (transA != Transpose::NoTrans);
+            const bool op_is_lower = (uplo == Uplo::Lower) ? !do_trans : do_trans;
+            const bool unit_diag = (diag == Diag::Unit);
+
+            auto conj_if = [=](T v) {
+                if constexpr (is_complex) {
+                    if (!do_conj) return v;
+                    using std::conj;
+                    return conj(v);
+                } else {
+                    return v;
+                }
+            };
+
+            const int batch = A_view.batch_size();
+            for (int b = 0; b < batch; ++b) {
+                auto Ab = A_view.batch_item(b);
+                auto Bb = B_view.batch_item(b);
+                const int rows = Bb.rows();
+                const int cols = Bb.cols();
+
+                auto opA = [&](int r, int c) {
+                    if (transA == Transpose::NoTrans) {
+                        return Ab.at(r, c, 0);
+                    }
+                    return conj_if(Ab.at(c, r, 0));
+                };
+
+                if (side == Side::Left) {
+                    const int dim = rows;
+                    for (int j = 0; j < cols; ++j) {
+                        if (op_is_lower) {
+                            for (int i = 0; i < dim; ++i) {
+                                T sum = T(0);
+                                for (int k = 0; k < i; ++k) {
+                                    sum += opA(i, k) * Bb.at(k, j, 0);
+                                }
+                                T x = alpha * Bb.at(i, j, 0) - sum;
+                                if (!unit_diag) {
+                                    x /= opA(i, i);
+                                }
+                                Bb.at(i, j, 0) = x;
+                            }
+                        } else {
+                            for (int i = dim - 1; i >= 0; --i) {
+                                T sum = T(0);
+                                for (int k = i + 1; k < dim; ++k) {
+                                    sum += opA(i, k) * Bb.at(k, j, 0);
+                                }
+                                T x = alpha * Bb.at(i, j, 0) - sum;
+                                if (!unit_diag) {
+                                    x /= opA(i, i);
+                                }
+                                Bb.at(i, j, 0) = x;
+                            }
+                        }
+                    }
+                } else {
+                    const int dim = cols;
+                    for (int i = 0; i < rows; ++i) {
+                        if (op_is_lower) {
+                            for (int j = dim - 1; j >= 0; --j) {
+                                T sum = T(0);
+                                for (int k = j + 1; k < dim; ++k) {
+                                    sum += Bb.at(i, k, 0) * opA(k, j);
+                                }
+                                T x = alpha * Bb.at(i, j, 0) - sum;
+                                if (!unit_diag) {
+                                    x /= opA(j, j);
+                                }
+                                Bb.at(i, j, 0) = x;
+                            }
+                        } else {
+                            for (int j = 0; j < dim; ++j) {
+                                T sum = T(0);
+                                for (int k = 0; k < j; ++k) {
+                                    sum += Bb.at(i, k, 0) * opA(k, j);
+                                }
+                                T x = alpha * Bb.at(i, j, 0) - sum;
+                                if (!unit_diag) {
+                                    x /= opA(j, j);
+                                }
+                                Bb.at(i, j, 0) = x;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -303,12 +383,24 @@ namespace batchlas{
                 Transpose transA,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
-        static_cast<void>(workspace);
+        BumpAllocator pool(workspace);
         auto A_view = A;
         auto B_view = B;
         auto piv = pivots;
+        const int n = A_view.rows();
+        const int batch = A_view.batch_size();
+        auto piv_i32 = pool.allocate<int>(ctx, n * batch);
+
+        EventImpl conv_impl = ctx->submit([&](sycl::handler& h) {
+            auto piv_in = piv.as_span<int64_t>();
+            auto piv_out = piv_i32;
+            h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> idx) {
+                piv_out[static_cast<int>(idx[0])] = static_cast<int>(piv_in[static_cast<int>(idx[0])]);
+            });
+        });
+        Event conv_event(std::move(conv_impl));
+        ctx.enqueue(conv_event);
         return detail::submit_host_task(ctx, "netlib.getrs", [=] {
-            int n = A_view.rows();
             int nrhs = B_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
@@ -319,7 +411,7 @@ namespace batchlas{
                     nrhs,
                     A_view[i].data_ptr(),
                     A_view.ld(),
-                    piv.as_span<int>().data() + i * n,
+                    piv_i32.data() + i * n,
                     B_view[i].data_ptr(),
                     B_view.ld());
             }
@@ -335,7 +427,7 @@ namespace batchlas{
         static_cast<void>(A);
         static_cast<void>(B);
         static_cast<void>(transA);
-        return 0;
+        return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
     template <Backend B, typename T>
@@ -343,12 +435,15 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
-        static_cast<void>(workspace);
+        BumpAllocator pool(workspace);
         auto A_view = A;
         auto piv = pivots;
-        return detail::submit_host_task(ctx, "netlib.getrf", [=] {
-            int n = A_view.rows();
-            for (int i = 0; i < A_view.batch_size(); ++i) {
+        const int n = A_view.rows();
+        const int batch = A_view.batch_size();
+        auto piv_i32 = pool.allocate<int>(ctx, n * batch);
+
+        Event getrf_event = detail::submit_host_task(ctx, "netlib.getrf", [=] {
+            for (int i = 0; i < batch; ++i) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
                     Layout::ColMajor,
@@ -356,9 +451,22 @@ namespace batchlas{
                     n,
                     A_view[i].data_ptr(),
                     A_view.ld(),
-                    piv.as_span<int>().data() + i * n);
+                    piv_i32.data() + i * n);
             }
         });
+        ctx.enqueue(getrf_event);
+
+        EventImpl piv_impl = ctx->submit([&](sycl::handler& h) {
+            auto piv_out = piv.as_span<int64_t>();
+            auto piv_in = piv_i32;
+            h.depends_on(static_cast<sycl::event>(*ctx.get_event()));
+            h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> idx) {
+                piv_out[static_cast<int>(idx[0])] = static_cast<int64_t>(piv_in[static_cast<int>(idx[0])]);
+            });
+        });
+        Event piv_event(std::move(piv_impl));
+        ctx.enqueue(piv_event);
+        return ctx.get_event();
     }
 
     template <Backend B, typename T>
@@ -366,7 +474,7 @@ namespace batchlas{
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
-        return 0;
+        return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
     template <Backend B, typename T>
@@ -375,20 +483,30 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
-        static_cast<void>(workspace);
+        BumpAllocator pool(workspace);
         auto A_view = A;
         auto C_view = C;
         auto piv = pivots;
+        const int n = A_view.rows();
+        const int batch = A_view.batch_size();
+        auto piv_i32 = pool.allocate<int>(ctx, n * batch);
         return detail::submit_host_task(ctx, "netlib.getri", [=] {
-            int n = A_view.rows();
-            for (int i = 0; i < A_view.batch_size(); ++i) {
+            auto piv_in = piv.as_span<int64_t>();
+            for (int b = 0; b < batch; ++b) {
+                auto Ab = A_view[b];
+                auto Cb = C_view[b];
+                std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
+                for (int i = 0; i < n; ++i) {
+                    piv_i32[b * n + i] = static_cast<int>(piv_in[b * n + i]);
+                }
+
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetri, LAPACKE_dgetri, LAPACKE_cgetri, LAPACKE_zgetri,
                     Layout::ColMajor,
                     n,
-                    C_view[i].data_ptr(),
-                    C_view.ld(),
-                    piv.as_span<int>().data() + i * n);
+                    Cb.data_ptr(),
+                    Cb.ld(),
+                    piv_i32.data() + b * n);
             }
         });
     }
@@ -398,7 +516,7 @@ namespace batchlas{
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
-        return 0;
+        return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
     template <Backend B, typename T>
