@@ -42,7 +42,9 @@ def load_results(csv_path: str) -> pd.DataFrame:
 
 def save_figure(fig: plt.Figure, path: str) -> None:
     _ensure_dir_for(path)
-    fig.savefig(path)
+    # Many plots use figure-level legends placed outside the axes.
+    # Using a tight bounding box prevents them from being clipped.
+    fig.savefig(path, bbox_inches="tight")
     print(f"Saved plot to {path}")
 
 
