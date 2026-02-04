@@ -12,7 +12,8 @@ static void BM_STEQR_CTA(minibench::State& state) {
     const size_t batch = state.range(1);
     const size_t n_sweeps = state.range(2) > 0 ? state.range(2) : 10;
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
-    const int shift_kind = state.range(4);
+    const int update_scheme = state.range(4);
+    const int shift_kind = state.range(5);
     //const int use_block_rotations = state.range(4);
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
@@ -25,6 +26,7 @@ static void BM_STEQR_CTA(minibench::State& state) {
     params.max_sweeps = n_sweeps;
     params.cta_wg_size_multiplier = wg_mult;
     params.cta_shift_strategy = (shift_kind == 1) ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
+    params.cta_update_scheme = static_cast<SteqrUpdateScheme>(update_scheme);
     params.back_transform = false;
     params.block_rotations = false;
     params.transpose_working_vectors = false;
@@ -42,7 +44,7 @@ static void BM_STEQR_CTA(minibench::State& state) {
                     std::move(eigvals),
                     std::move(ws),
                     jobz,
-                    params,
+                    params,  
                     bench::pristine(eigvects),
                         [](Queue& q, auto&&... xs) {
                             steqr_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
