@@ -378,13 +378,20 @@ namespace batchlas {
         Wilkinson = 1,
     };
 
+    enum class SteqrUpdateScheme {
+        // Parlett-Gray style recurrence (current default).
+        PG = 0,
+        // Explicit similarity update mirroring steqr.cc bulge-chasing math.
+        EXP = 1,
+    };
+
     template <typename T>
     struct SteqrParams {
         //Givens rotations are applied in blocks of this size, increasing this number will lead to excess FLOPs but memory reuse and hence arithmetic intensity improves.
         //Setting this number to 1 is equivalent to full serialization of givens rotation applications, i.e. rotations are applied 1 at a time in the order they were applied to the tridiagonal matrix.
         size_t block_size = 32;
         //Maximum number of sweeps in each Francis QR iteration on average 2-3 iteartions are sufficient to converge to an eigenvalue. 
-        size_t max_sweeps = 5; 
+        size_t max_sweeps = 10; 
         //Threshold for regarding off-diagonal elements as zero  
         T zero_threshold = std::numeric_limits<T>::epsilon(); 
         //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
@@ -404,6 +411,9 @@ namespace batchlas {
         // - Lapack: stable LAPACK-style implicit shift formulation.
         // - Wilkinson: explicit Wilkinson shift via the eigenvalues of the 2x2 block.
         SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;
+
+        // CTA STEQR only: select the update scheme used in implicit QR/QL steps.
+        SteqrUpdateScheme cta_update_scheme = SteqrUpdateScheme::EXP;
     };
 
     template <Backend B, typename T>

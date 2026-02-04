@@ -73,63 +73,69 @@ namespace batchlas
         return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
     }
 
-    // Create a batch of random dense matrices with a specified log10 condition number.
-    // The condition number is enforced in the 2-norm via singular values spanning [1, 10^log10_cond].
+    // Create a batch of random dense matrices with a specified log10 conditioning metric.
+    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_with_log10_cond(Queue &ctx,
-                                                          int n,
-                                                          float_t<T> log10_cond,
-                                                          int batch_size = 1,
-                                                          unsigned int seed = 42,
-                                                          OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
+    Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
+                                                                  int n,
+                                                                  float_t<T> log10_kappa,
+                                                                  NormType metric,
+                                                                  int batch_size = 1,
+                                                                  unsigned int seed = 42,
+                                                                  OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
-    // Create a batch of random symmetric/Hermitian dense matrices with a specified log10 condition number.
-    // The condition number is enforced in the 2-norm via eigenvalues spanning [1, 10^log10_cond].
+    // Create a batch of random symmetric/Hermitian dense matrices with a specified log10 conditioning metric.
+    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond(Queue &ctx,
-                                                                    int n,
-                                                                    float_t<T> log10_cond,
-                                                                    int batch_size = 1,
-                                                                    unsigned int seed = 42,
-                                                                    OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
-
-    // Create a batch of random dense banded matrices (general) with a specified log10 condition number.
-    // The resulting bandwidth is <= kd. For small kd, this may produce diagonal matrices.
-    template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond(Queue &ctx,
-                                                                 int n,
-                                                                 int kd,
-                                                                 float_t<T> log10_cond,
-                                                                 int batch_size = 1,
-                                                                 unsigned int seed = 42);
-
-    // Create a batch of random symmetric/Hermitian banded matrices with a specified log10 condition number.
-    // The resulting bandwidth is <= kd. For small kd, this may produce diagonal matrices.
-    template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond(Queue &ctx,
+    Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ctx,
                                                                            int n,
-                                                                           int kd,
-                                                                           float_t<T> log10_cond,
+                                                                           float_t<T> log10_kappa,
+                                                                           NormType metric,
                                                                            int batch_size = 1,
-                                                                           unsigned int seed = 42);
+                                                                           unsigned int seed = 42,
+                                                                           OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
-    // Create a batch of random tridiagonal dense matrices (general) with a specified log10 condition number.
+    // Create a batch of random dense banded matrices (general) with a specified log10 conditioning metric.
+    // The resulting bandwidth is <= kd. For small kd, this may produce diagonal matrices.
+    template <Backend B, typename T>
+    Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
+                                                                         int n,
+                                                                         int kd,
+                                                                         float_t<T> log10_kappa,
+                                                                         NormType metric,
+                                                                         int batch_size = 1,
+                                                                         unsigned int seed = 42);
+
+    // Create a batch of random symmetric/Hermitian banded matrices with a specified log10 conditioning metric.
+    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
+    template <Backend B, typename T>
+    Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue &ctx,
+                                                                                  int n,
+                                                                                  int kd,
+                                                                                  float_t<T> log10_kappa,
+                                                                                  NormType metric,
+                                                                                  int batch_size = 1,
+                                                                                  unsigned int seed = 42);
+
+    // Create a batch of random tridiagonal dense matrices (general) with a specified log10 conditioning metric.
     // The condition number is enforced via the diagonal spectrum; off-diagonals are zero.
     template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond(Queue &ctx,
-                                                                      int n,
-                                                                      float_t<T> log10_cond,
-                                                                      int batch_size = 1,
-                                                                      unsigned int seed = 42);
+    Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &ctx,
+                                                                             int n,
+                                                                             float_t<T> log10_kappa,
+                                                                             NormType metric,
+                                                                             int batch_size = 1,
+                                                                             unsigned int seed = 42);
 
-    // Create a batch of random symmetric/Hermitian tridiagonal dense matrices with a specified log10 condition number.
-    // The condition number is enforced via the diagonal spectrum; off-diagonals are zero.
+    // Create a batch of random symmetric/Hermitian tridiagonal dense matrices with a specified log10 conditioning metric.
+    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond(Queue &ctx,
-                                                                                int n,
-                                                                                float_t<T> log10_cond,
-                                                                                int batch_size = 1,
-                                                                                unsigned int seed = 42);
+    Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue &ctx,
+                                                                                       int n,
+                                                                                       float_t<T> log10_kappa,
+                                                                                       NormType metric,
+                                                                                       int batch_size = 1,
+                                                                                       unsigned int seed = 42);
 
     // Batched matrix transpose into preallocated output
     template <typename T, MatrixFormat MF>
