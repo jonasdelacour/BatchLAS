@@ -12,12 +12,48 @@
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
+#include <iostream>
 
 #include "../math-helpers.hh"
 
 namespace batchlas {
 
 namespace {
+
+template <typename U>
+inline U conj_if_complex(const U& x) {
+    if constexpr (internal::is_complex<U>::value) {
+        return U(x.real(), -x.imag());
+    } else {
+        return x;
+    }
+}
+
+inline bool cta_debug_sync_enabled() {
+    auto env_truthy = [](const char* v) {
+        if (!v) return false;
+        return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
+                std::string(v) == "on" || std::string(v) == "ON");
+    };
+    return env_truthy(std::getenv("BATCHLAS_CTA_DEBUG_SYNC"));
+}
+
+inline void cta_debug_log(const char* stage) {
+    if (!cta_debug_sync_enabled()) return;
+    std::cerr << "[cta-debug] " << stage << std::endl;
+}
+
+inline void cta_debug_sync(Queue& ctx, const char* stage) {
+    if (!cta_debug_sync_enabled()) return;
+    cta_debug_log(stage);
+    try {
+        ctx.wait_and_throw();
+    } catch (const std::exception& e) {
+        std::cerr << "[cta-debug] failure at stage: " << stage << "\n";
+        std::cerr << "[cta-debug] exception: " << e.what() << std::endl;
+        throw;
+    }
+}
 
 inline std::byte* align_up(std::byte* p, std::size_t align) {
     const std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(p);
@@ -70,6 +106,7 @@ Event syev_cta(Queue& ctx,
                const Span<std::byte>& ws,
                SteqrParams<T> steqr_params,
                size_t cta_wg_size_multiplier) {
+    cta_debug_log("syev_cta: entry");
     if (a_in.rows() != a_in.cols()) {
         throw std::invalid_argument("syev_cta: A must be square.");
     }
@@ -93,11 +130,54 @@ Event syev_cta(Queue& ctx,
     // We overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
 
+    // NOTE: The CTA SYTRD/SYEV pipeline currently exhibits severe correctness issues
+    // specifically for the Uplo::Lower path. Until the lower-path kernel is fixed,
+    // we run the (known-good) Uplo::Upper pipeline.
+    //
+    // To preserve the public API contract when callers only initialize the lower
+    // triangle, we first explicitly symmetrize: A_upper := conj(A_lower).
+    Uplo uplo_eff = uplo;
+    if (uplo == Uplo::Lower) {
+        uplo_eff = Uplo::Upper;
+        ctx->submit([&](sycl::handler& cgh) {
+            auto A = a.kernel_view();
+            const int32_t nn = n;
+            const int32_t nb = batch;
+            const int64_t total = static_cast<int64_t>(nb) * nn * nn;
+            cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+                const int64_t idx = static_cast<int64_t>(tid[0]);
+                const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
+                const int32_t row = static_cast<int32_t>(rem % nn);
+                const int32_t col = static_cast<int32_t>(rem / nn);
+
+                if (row < col) {
+                    A(row, col, b) = conj_if_complex(A(col, row, b));
+                } else if (row == col) {
+                    if constexpr (internal::is_complex<T>::value) {
+                        A(row, col, b) = T(A(row, col, b).real(), typename base_type<T>::type(0));
+                    }
+                }
+            });
+        });
+    }
+
     // Workspace is treated as mutable storage by the implementation.
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
 
     if constexpr (internal::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
+
+        // CTA STEQR defaults are speed-oriented; for correctness (especially in large batches)
+        // we want more robust settings unless the caller explicitly tuned them.
+        {
+            const SteqrParams<T> defaults{};
+            if (steqr_params.max_sweeps == defaults.max_sweeps &&
+                steqr_params.cta_shift_strategy == defaults.cta_shift_strategy) {
+                steqr_params.max_sweeps = 400;
+                steqr_params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+            }
+        }
 
         // Workspace layout (complex Hermitian):
         //  - d_c (n) complex (diag should be real, imag~0)
@@ -144,7 +224,8 @@ Event syev_cta(Queue& ctx,
         VectorView<T> tau_q_view(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
 
         // Reduce Hermitian A to Hermitian tridiagonal (d_c real-ish, e_c generally complex).
-        sytrd_cta<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo, Span<std::byte>(), cta_wg_size_multiplier);
+        sytrd_cta<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
+        cta_debug_sync(ctx, "syev_cta: after sytrd_cta");
 
         // Convert Hermitian tridiagonal (complex off-diagonal) to real symmetric tridiagonal via a
         // diagonal unitary similarity: T' = S^H T S with real off-diagonal |e|.
@@ -157,7 +238,7 @@ Event syev_cta(Queue& ctx,
             auto S = phase_view;
             const int32_t nn = n;
             const int32_t nb = batch;
-            const Uplo u = uplo;
+            const Uplo u = uplo_eff;
 
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
@@ -183,6 +264,7 @@ Event syev_cta(Queue& ctx,
                 }
             });
         });
+        cta_debug_sync(ctx, "syev_cta: after complex phase transform");
 
         // Solve tridiagonal eigenproblem in real arithmetic.
         SteqrParams<Real> steqr_params_local;
@@ -202,6 +284,7 @@ Event syev_cta(Queue& ctx,
 
         auto steqr_ws = ws_remaining(ws_mut, ws_off);
         steqr_cta<B, Real>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+        cta_debug_sync(ctx, "syev_cta: after steqr_cta (real) ");
 
         if (jobz == JobType::EigenVectors) {
             // Lift real Z to complex and apply the diagonal phase scaling: Zc = S * Z.
@@ -221,6 +304,7 @@ Event syev_cta(Queue& ctx,
                     ZC(row, col, b) = S(row, b) * T(Z(row, col, b), Real(0));
                 });
             });
+            cta_debug_sync(ctx, "syev_cta: after lift Z and phase");
 
             // Pack reflectors into QR/QL-compatible layout for ormqx_cta.
             ctx->submit([&](sycl::handler& cgh) {
@@ -242,7 +326,7 @@ Event syev_cta(Queue& ctx,
 
                     AQ(row, col, b) = T(0);
 
-                    if (uplo == Uplo::Lower) {
+                    if (uplo_eff == Uplo::Lower) {
                         if (col >= 1) {
                             const int32_t i = col - 1;
                             if (row >= (col + 1) && row < nn) {
@@ -260,6 +344,7 @@ Event syev_cta(Queue& ctx,
                     }
                 });
             });
+            cta_debug_sync(ctx, "syev_cta: after pack AQ");
 
             ctx->submit([&](sycl::handler& cgh) {
                 auto TAU = tau_c_view;
@@ -273,7 +358,7 @@ Event syev_cta(Queue& ctx,
                     const int32_t b = static_cast<int32_t>(idx / nn);
                     const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
 
-                    if (uplo == Uplo::Lower) {
+                    if (uplo_eff == Uplo::Lower) {
                         if (j == 0) {
                             TAUQ(j, b) = T(0);
                         } else {
@@ -288,8 +373,9 @@ Event syev_cta(Queue& ctx,
                     }
                 });
             });
+            cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
 
-            const Uplo ormq_factorization = (uplo == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
+            const Uplo ormq_factorization = (uplo_eff == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
             ormqx_cta<B, T>(ctx,
                             aq_view,
                             tau_q_view,
@@ -300,8 +386,10 @@ Event syev_cta(Queue& ctx,
                             /*k=*/n,
                             Span<std::byte>(),
                             cta_wg_size_multiplier);
+            cta_debug_sync(ctx, "syev_cta: after ormqx_cta");
 
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
+            cta_debug_sync(ctx, "syev_cta: after copy eigenvectors out");
         }
 
         return ctx.get_event();
@@ -339,7 +427,8 @@ Event syev_cta(Queue& ctx,
 
     // Reduce A to tridiagonal: A overwritten with reflectors/tridiagonal.
     // Note: sytrd_cta's workspace is currently unused.
-    sytrd_cta<B, T>(ctx, a, d_view, e_view, tau_view, uplo, Span<std::byte>(), cta_wg_size_multiplier);
+    sytrd_cta<B, T>(ctx, a, d_view, e_view, tau_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
+    cta_debug_sync(ctx, "syev_cta: after sytrd_cta");
 
     // Solve tridiagonal eigenproblem; compute Z from identity when jobz==EigenVectors.
     // We force back_transform=false here because we apply the sytrd back-transform explicitly.
@@ -348,10 +437,21 @@ Event syev_cta(Queue& ctx,
     steqr_params_local.back_transform = false;
     steqr_params_local.cta_wg_size_multiplier = cta_wg_size_multiplier;
 
+    // Same robustness bump for real types.
+    {
+        const SteqrParams<T> defaults{};
+        if (steqr_params_local.max_sweeps == defaults.max_sweeps &&
+            steqr_params_local.cta_shift_strategy == defaults.cta_shift_strategy) {
+            steqr_params_local.max_sweeps = 400;
+            steqr_params_local.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        }
+    }
+
     VectorView<T> evals_view(reinterpret_cast<T*>(eigenvalues.data()), /*size=*/n, /*batch_size=*/batch,
                              /*inc=*/1, /*stride=*/n);
 
     steqr_cta<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+    cta_debug_sync(ctx, "syev_cta: after steqr_cta");
 
     if (jobz == JobType::EigenVectors) {
         // Pack SYTRD Householder reflectors into a QR/QL-compatible layout for ormqx_cta.
@@ -382,7 +482,7 @@ Event syev_cta(Queue& ctx,
                 // Default: zero fill.
                 AQ(row, col, b) = T(0);
 
-                if (uplo == Uplo::Lower) {
+                if (uplo_eff == Uplo::Lower) {
                     // Fill below-diagonal tails for QR reflectors stored in columns 1..n-1.
                     // Reflector i (0..n-2) from SYTRD column i maps to QR column (i+1).
                     if (col >= 1) {
@@ -406,6 +506,7 @@ Event syev_cta(Queue& ctx,
                 }
             });
         });
+        cta_debug_sync(ctx, "syev_cta: after pack AQ");
 
         ctx->submit([&](sycl::handler& cgh) {
             auto TAU = tau_view;
@@ -419,7 +520,7 @@ Event syev_cta(Queue& ctx,
                 const int32_t b = static_cast<int32_t>(idx / nn);
                 const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
 
-                if (uplo == Uplo::Lower) {
+                if (uplo_eff == Uplo::Lower) {
                     // tau_q[0] = 0, tau_q[j] = tau[j-1] for j>=1.
                     if (j == 0) {
                         TAUQ(j, b) = T(0);
@@ -436,8 +537,9 @@ Event syev_cta(Queue& ctx,
                 }
             });
         });
+        cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
 
-        const Uplo ormq_factorization = (uplo == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
+        const Uplo ormq_factorization = (uplo_eff == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
         // Apply Q (from SYTRD reflectors) to Z: Z := Q * Z.
         ormqx_cta<B, T>(ctx,
                         aq_view,
@@ -449,9 +551,11 @@ Event syev_cta(Queue& ctx,
                         /*k=*/n,
                         Span<std::byte>(),
                         cta_wg_size_multiplier);
+                cta_debug_sync(ctx, "syev_cta: after ormqx_cta");
 
         // Overwrite A with eigenvectors.
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
+        cta_debug_sync(ctx, "syev_cta: after copy eigenvectors out");
     }
 
     return ctx.get_event();

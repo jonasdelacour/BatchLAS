@@ -424,8 +424,17 @@ Event sytrd_blocked(Queue& ctx,
     }
 
     if (n <= 32) {
-        // For small matrices prefer the CTA (unblocked) path.
-        return sytrd_cta<B, T>(ctx, a_in, d_out, e_out, tau_out, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
+        // For small matrices prefer the CTA (unblocked) path when subgroup size 32 is supported.
+        bool has_sg32 = false;
+        try {
+            const auto sizes = ctx->get_device().get_info<sycl::info::device::sub_group_sizes>();
+            has_sg32 = std::find(sizes.begin(), sizes.end(), 32) != sizes.end();
+        } catch (...) {
+            has_sg32 = false;
+        }
+        if (has_sg32) {
+            return sytrd_cta<B, T>(ctx, a_in, d_out, e_out, tau_out, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
+        }
     }
 
     // Optional: local-memory unblocked kernel.
