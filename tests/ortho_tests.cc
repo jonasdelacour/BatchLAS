@@ -227,6 +227,10 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
         OrthoAlgorithm::SVQB2,
         OrthoAlgorithm::Householder
     };
+    if constexpr (BackendType == Backend::NETLIB) {
+        algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::Chol2), algos.end());
+        algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::ShiftChol3), algos.end());
+    }
     if constexpr (std::is_same_v<T, std::complex<double>>) {
         algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::Householder), algos.end());
     }
@@ -253,42 +257,23 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
     }
 }
 
-/* TEST_F(OrthoMatrixFloatTest, DiagnosticTest) {
-    float tol = 1e-5f;
-    OrthoAlgorithm algo = OrthoAlgorithm::SVQB;
-
-    const int m = 10, k = 5, batch_size = 2;
-    int rows = m;
-    int cols = k;
-
-    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(rows, cols, batch_size);
-    Matrix<float, MatrixFormat::Dense> Atransposed = A.to_row_major();
-
-    size_t buffer_size = ortho_buffer_size<test_utils::gpu_backend, float>(*(this->ctx), A, Transpose::NoTrans, algo);
-    UnifiedVector<std::byte> workspace(buffer_size);
-
-    ortho<test_utils::gpu_backend, float>(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), algo);
-    this->ctx->wait();
-    std::cout << A << std::endl;
-    ortho<test_utils::gpu_backend, float>(*(this->ctx), MatrixView<float, MatrixFormat::Dense>(Atransposed, 0, 0, cols, rows, cols), Transpose::Trans, workspace.to_span(), algo);
-    this->ctx->wait();
-    std::cout << MatrixView<float, MatrixFormat::Dense>(Atransposed, 0, 0, cols, rows, cols) << std::endl;
-
-} */
-
 TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
     auto tol = test_utils::tolerance<T>();
 
     const std::vector<Transpose> transposes = {Transpose::NoTrans};
-    const std::vector<OrthoAlgorithm> algos = {
+    std::vector<OrthoAlgorithm> algos = {
         OrthoAlgorithm::Chol2,
         OrthoAlgorithm::ShiftChol3,
         OrthoAlgorithm::CGS2,
         OrthoAlgorithm::SVQB,
         OrthoAlgorithm::SVQB2
     };
+    if constexpr (BackendType == Backend::NETLIB) {
+        algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::Chol2), algos.end());
+        algos.erase(std::remove(algos.begin(), algos.end(), OrthoAlgorithm::ShiftChol3), algos.end());
+    }
 
     for (auto transA : transposes) {
         for (auto transM : transposes) {

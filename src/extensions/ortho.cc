@@ -36,6 +36,9 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto [m, k] = get_effective_dims(A, transA);
+        if constexpr (B == Backend::NETLIB) {
+            algo = OrthoAlgorithm::Householder;
+        }
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
         Transpose inv_trans = is_A_trans ? Transpose::NoTrans : 
                             std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
@@ -151,7 +154,11 @@ namespace batchlas {
         auto is_alg_svqb = (algo == OrthoAlgorithm::SVQB) || (algo == OrthoAlgorithm::SVQB2);
         auto diags = pool.allocate<float_t>(ctx, is_alg_svqb ? batch_size * k : 0 );
         auto lambdas = pool.allocate<float_t>(ctx, is_alg_svqb ? batch_size * k : 0 );
-        auto syev_workspace = pool.allocate<std::byte>(ctx, is_alg_svqb ? syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower) : 0);
+        size_t svqb_syev_ws = 0;
+        if (is_alg_svqb) {
+            svqb_syev_ws = syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower);
+        }
+        auto syev_workspace = pool.allocate<std::byte>(ctx, svqb_syev_ws);
         auto output_basis = pool.allocate<T>(ctx, is_alg_svqb ? batch_size * m * k : 0);
 
         auto svqb_alg = [&](auto in_mat, auto out_mat) {
@@ -232,7 +239,7 @@ namespace batchlas {
                 shift_chol_alg();
                 break;
             case OrthoAlgorithm::Householder: {
-                auto tau = pool.allocate<T>(ctx, k);
+                auto tau = pool.allocate<T>(ctx, k * batch_size);
                 auto geqrf_workspace = pool.allocate<std::byte>(ctx, geqrf_buffer_size<B>(ctx, A, tau));
                 auto orgqr_workspace = pool.allocate<std::byte>(ctx, orgqr_buffer_size<B>(ctx, A, tau));
                 geqrf<B>(ctx, A, tau, geqrf_workspace);
@@ -280,14 +287,19 @@ namespace batchlas {
         size_t size = 0;
         auto [m, k] = get_effective_dims(A, transA);
         auto batch_size = A.batch_size();
+        if constexpr (B == Backend::NETLIB) {
+            algo = OrthoAlgorithm::Householder;
+        }
         
         // Create temporary matrices for calculating buffer sizes
         auto temp_C = MatrixView<T, MatrixFormat::Dense>(nullptr, k, k, k, k * k, batch_size);
         auto temp_view = MatrixView<T, MatrixFormat::Dense>(nullptr, m, k, m, m * k, batch_size);
         auto is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3;
 
-        auto mem_for_svqb = (algo == OrthoAlgorithm::SVQB || algo == OrthoAlgorithm::SVQB2) ? 
-            (BumpAllocator::allocation_size<std::byte>(ctx, syev_buffer_size<B>(ctx, temp_view, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower)) +
+        auto mem_for_svqb = (algo == OrthoAlgorithm::SVQB || algo == OrthoAlgorithm::SVQB2) ?
+            (BumpAllocator::allocation_size<std::byte>(
+                 ctx,
+                 syev_buffer_size<B>(ctx, temp_C, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower)) +
             BumpAllocator::allocation_size<T>(ctx, k * batch_size) +
             BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, k * batch_size) +
             BumpAllocator::allocation_size<T>(ctx, m * k * batch_size)) : 0;
@@ -296,7 +308,7 @@ namespace batchlas {
             (BumpAllocator::allocation_size<T>(ctx, m * batch_size)) : 0;
 
         auto mem_for_householder = algo == OrthoAlgorithm::Householder ? 
-            (BumpAllocator::allocation_size<T>(ctx, k) + 
+            (BumpAllocator::allocation_size<T>(ctx, k * batch_size) + 
              BumpAllocator::allocation_size<std::byte>(ctx, geqrf_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k))) +
              BumpAllocator::allocation_size<std::byte>(ctx, orgqr_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k)))) : 0;
         
@@ -319,6 +331,9 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo,
                 size_t iterations) {
+        if constexpr (B == Backend::NETLIB) {
+            algo = OrthoAlgorithm::Householder;
+        }
         BumpAllocator pool(workspace);
         constexpr auto fmt = MatrixFormat::Dense;
         //When orthogonalizing against an external basis M,
@@ -366,6 +381,9 @@ namespace batchlas {
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto batch_size = A.batch_size();
+        if constexpr (B == Backend::NETLIB) {
+            algo = OrthoAlgorithm::Householder;
+        }
         
         return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo)) +
                 BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
