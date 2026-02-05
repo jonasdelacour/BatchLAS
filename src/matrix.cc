@@ -557,9 +557,7 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
         auto grid_stride = n_wgs / wg_per_matrix;
         auto batch_id = bid / wg_per_matrix;
         auto matrix_wg_ix = bid % wg_per_matrix;
-        for (batch_id; 
-             batch_id < batch_size; 
-             batch_id += grid_stride) {
+        for (; batch_id < batch_size; batch_id += grid_stride) {
             for (auto flat_idx = matrix_wg_ix; 
                  flat_idx < n*n; 
                  flat_idx += bdim * wg_per_matrix) {
