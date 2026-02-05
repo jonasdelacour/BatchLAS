@@ -129,6 +129,19 @@ protected:
         }
         return max_val;
     }
+
+    typename base_type<ScalarType>::type expected_spectral_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
+        // For testing purposes, we can use a simple power iteration method
+        using real_t = typename base_type<ScalarType>::type;
+        UnifiedVector<real_t> eigs(mat.rows());
+
+        Queue &queue = *(this->ctx);
+        UnifiedVector<std::byte> ws = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<Backend::NETLIB>(queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+        backend::syev_vendor<Backend::NETLIB>(queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
+        queue.wait();
+        auto max_eig = *std::max_element(eigs.begin(), eigs.end(), [](real_t a, real_t b) { return std::abs(a) < std::abs(b); });
+        return std::abs(max_eig);
+    }   
     
     // Test tolerances based on type
     static constexpr auto tolerance() {
@@ -142,6 +155,7 @@ protected:
             case NormType::One:       return "One";
             case NormType::Inf:       return "Inf";
             case NormType::Max:       return "Max";
+            case NormType::Spectral:  return "Spectral";
         }
         return "";
     }
@@ -204,6 +218,7 @@ TYPED_TEST(NormTest, RandomMatrixAllNorms) {
             case NormType::One:       return this->expected_one_norm(mat, b);
             case NormType::Inf:       return this->expected_inf_norm(mat, b);
             case NormType::Max:       return this->expected_max_norm(mat, b);
+            default : std::cerr << "Unsupported norm type for random matrix" << std::endl; return typename base_type<T>::type(0);
         }
         return typename base_type<T>::type(0);
     };
@@ -225,6 +240,7 @@ TYPED_TEST(NormTest, NormsIdentityMatrix) {
             case NormType::One:
             case NormType::Inf:
             case NormType::Max: return real_t(1);
+            case NormType::Spectral: return real_t(1);
         }
         return real_t(0);
     };
@@ -261,6 +277,7 @@ TYPED_TEST(NormTest, NormsOnesMatrix) {
             case NormType::One:       return static_cast<real_t>(rows);
             case NormType::Inf:       return static_cast<real_t>(cols);
             case NormType::Max:       return real_t(1);
+            default: std::cerr << "Unsupported norm type for rectangular matrix" << std::endl; return real_t(0);
         }
         return real_t(0);
     };
@@ -295,6 +312,7 @@ TYPED_TEST(NormTest, NormsDiagonalMatrix) {
             case NormType::One:
             case NormType::Inf:
             case NormType::Max: return r_t(4);
+            default: std::cerr << "Unsupported norm type for diagonal matrix" << std::endl; return r_t(0);
         }
         return r_t(0);
     };
@@ -401,6 +419,7 @@ TYPED_TEST(NormTest, NormConsistency) {
             case NormType::One:       return real_t(7);
             case NormType::Inf:       return real_t(6);
             case NormType::Max:       return real_t(4);
+            case NormType::Spectral:  return real_t(5.3722813233); // Approximate spectral norm
         }
         return real_t(0);
     };

@@ -1,4 +1,3 @@
-#pragma once
 #include "../queue.hh"
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
@@ -140,12 +139,11 @@ size_t Device::get_property(DeviceProperty property) const {
         case 3: return d.get_info<sycl::info::device::max_mem_alloc_size>();
         case 4: return d.get_info<sycl::info::device::global_mem_size>();
         case 5: return d.get_info<sycl::info::device::local_mem_size>();
-        case 7: return d.get_info<sycl::info::device::max_constant_args>();
-        case 8: return d.get_info<sycl::info::device::max_num_sub_groups>();
-        case 9: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
-        case 10: return d.get_info<sycl::info::device::mem_base_addr_align>();
-        case 11: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
-        case 12: return d.get_info<sycl::info::device::global_mem_cache_size>();
+        case 6: return d.get_info<sycl::info::device::max_num_sub_groups>();
+        case 7: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
+        case 8: return d.get_info<sycl::info::device::mem_base_addr_align>();
+        case 9: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
+        case 10: return d.get_info<sycl::info::device::global_mem_cache_size>();
         default: std::cerr << "Unknown property" << std::endl; return 0;
     }
 }

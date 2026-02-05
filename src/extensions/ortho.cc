@@ -1,6 +1,7 @@
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 #include "../queue.hh"
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
@@ -105,7 +106,7 @@ namespace batchlas {
                             auto bid = item.get_group_linear_id();
                             auto cta = item.get_group();
                             auto A_local_vector = Aspan.subspan(bid * A_stride + i*m, m);
-                            auto Anext_squared_span = Span(static_cast<float_t*>(Anext_squared.get_pointer()), m);
+                            auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
                             
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
                                 Anext_squared_span[j] = square(A_local_vector[j]);
@@ -257,7 +258,7 @@ namespace batchlas {
                 auto Adata = A.data();
                 auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
                 ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
-                    auto batch_idx = item.get_group().get_id(0);
+                    auto batch_idx = item.get_group().get_group_id()[0];
                     for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
                     auto i = linear_ix % m;
                     auto j = linear_ix / m;

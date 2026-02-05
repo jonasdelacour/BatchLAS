@@ -4,6 +4,7 @@
 #include <blas/extra.hh>
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -357,7 +358,7 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
         cgh.parallel_for(sycl::nd_range(sycl::range(batch_size*(Nb + 1)), sycl::range(Nb + 1)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
-            auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(local_mem.get_pointer(), N, N) :  givens_view.batch_item(bid);
+            auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(util::get_raw_ptr(local_mem), N, N) :  givens_view.batch_item(bid);
             auto Gglobal = givens_view.batch_item(bid);
             for (size_t j = 0; j < N; ++j){
                 G(k, j) = k == j ? T(1) : T(0); //Identity fill-in
@@ -404,7 +405,7 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
             cgh.parallel_for(sycl::nd_range(sycl::range(N * batch_size), sycl::range(N)), [=](sycl::nd_item<1> item) {
                 auto k =      item.get_local_linear_id();
                 auto bid =      item.get_group(0);
-                auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(local_mem.get_pointer(), N, N) :  givens_view.batch_item(bid);
+                auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(util::get_raw_ptr(local_mem), N, N) :  givens_view.batch_item(bid);
                 auto Gglobal = givens_view.batch_item(bid);
                 for (size_t j = 0; j < N; ++j){
                    G(k, j) = k == j ? T(1) : T(0); //Identity fill-in
@@ -458,7 +459,7 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
         cgh.parallel_for(sycl::nd_range(sycl::range(batch_size*(N)), sycl::range(N)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
-            auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(local_mem.get_pointer(), N, N) :  givens_view.batch_item(bid);
+            auto G = smem_possible ? KernelMatrixView<T, MatrixFormat::Dense>(util::get_raw_ptr(local_mem), N, N) :  givens_view.batch_item(bid);
             auto Gglobal = givens_view.batch_item(bid);
             for (size_t j = 0; j < N; ++j){
                 G(k, j) = k == j ? T(1) : T(0); //Identity fill-in

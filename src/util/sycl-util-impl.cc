@@ -1,4 +1,3 @@
-#pragma once
 #include <sycl/sycl.hpp>
 #include <numeric>
 #include <unordered_map>

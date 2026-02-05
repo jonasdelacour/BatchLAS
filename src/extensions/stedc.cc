@@ -2,6 +2,7 @@
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <util/mempool.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 #include <internal/sort.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
@@ -27,12 +28,12 @@ auto sec_eval(const sycl::group<1>& cta, const VectorView<T>& v, const VectorVie
 
     for (int k = tid; k < n; k += bdim) { psi_buffer[k] = v(k, bid) / (d(k, bid) - x); }
     sycl::group_barrier(cta);
-    auto psi1 = sycl::joint_reduce(cta, psi_buffer.get_pointer(), psi_buffer.get_pointer() + i + 1, sycl::plus<T>());
-    auto psi2 = (i + 1) < n ? sycl::joint_reduce(cta, psi_buffer.get_pointer() + i + 1, psi_buffer.get_pointer() + n, sycl::plus<T>()) : T(0);
+    auto psi1 = sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
+    auto psi2 = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
     for (int k = tid; k < n; k += bdim) { psi_buffer[k] = v(k, bid) / ( (d(k, bid) - x) * (d(k, bid) - x)); }
     sycl::group_barrier(cta);
-    auto psi1_prime = sycl::joint_reduce(cta, psi_buffer.get_pointer(), psi_buffer.get_pointer() + i + 1, sycl::plus<T>());
-    auto psi2_prime = (i + 1) < n ? sycl::joint_reduce(cta, psi_buffer.get_pointer() + i + 1, psi_buffer.get_pointer() + n, sycl::plus<T>()) : T(0);
+    auto psi1_prime = sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
+    auto psi2_prime = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
 }
 
@@ -671,7 +672,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     shared_mem[k] = sycl::log(diff);
                 }
                 sycl::group_barrier(cta);
-                auto log_den2 = i > 0 ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + i, sycl::plus<T>()) : T(0);
+                auto log_den2 = i > 0 ? sycl::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + i, sycl::plus<T>()) : T(0);
 
                 for (int k = tid; k < n - i - 1; k += bdim) {
                     auto diff = sycl::fabs(d(k + i + 1, bid) - d(i, bid));
@@ -679,7 +680,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     shared_mem[k] = sycl::log(diff);
                 }
                 sycl::group_barrier(cta);
-                auto log_den1 = (i + 1) < n ? sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + (n - i - 1), sycl::plus<T>()) : T(0);
+                auto log_den1 = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + (n - i - 1), sycl::plus<T>()) : T(0);
 
                 if (tid == 0) log_denominators[i] = log_den1 + log_den2;
                 
@@ -715,7 +716,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
             for (int i = 0; i < n; i++) {
                 //for (int k = tid; k < n; k += bdim) shared_mem[k] = Qview(k, i, bid) * Qview(k, i, bid);
 
-                //auto norm = std::sqrt(sycl::joint_reduce(cta, shared_mem.get_pointer(), shared_mem.get_pointer() + n, sycl::plus<T>()));
+                //auto norm = std::sqrt(sycl::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + n, sycl::plus<T>()));
                 auto norm = internal::nrm2<T>(cta, VectorView<T>(Qview.data() + i * Qview.ld(), n, Qview.batch_size(), 1, Qview.stride()));
 
                 for (int k = tid; k < n; k += bdim) Qview(k, i, bid) = Qview(k, i, bid) / norm;
@@ -847,7 +848,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         }
 
         sycl::group_barrier(cta);
-        //auto v_norm = std::sqrt(sycl::joint_reduce(cta, norm_mem.get_pointer(), norm_mem.get_pointer() + n, sycl::plus<T>()));
+        //auto v_norm = std::sqrt(sycl::joint_reduce(cta, util::get_raw_ptr(norm_mem), util::get_raw_ptr(norm_mem) + n, sycl::plus<T>()));
         //LAPACK LAED8 based tolerance:
         
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
