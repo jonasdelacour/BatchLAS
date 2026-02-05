@@ -57,7 +57,7 @@ namespace batchlas {
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
                 handle, uplo, descrA.rows(), descrA.data_ptrs(ctx).data(), descrA.ld(), info.data(), descrA.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     namespace backend {
@@ -164,7 +164,7 @@ namespace batchlas {
                     #endif
                 }
                 check_status(cusolverDnDestroyParams(params));
-                return ctx.get_event();
+                return ctx.create_event_after_external_work();
             });
         }
 

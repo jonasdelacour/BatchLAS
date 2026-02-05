@@ -157,6 +157,9 @@ struct Queue{
     
     void enqueue(Event& event);
     Event get_event() const;
+    // Force creation of a barrier event for tracking external library calls (cuBLAS, rocBLAS, etc.)
+    // that execute on the queue's underlying stream but don't go through SYCL submission.
+    Event create_event_after_external_work();
 
     template <typename EventContainer>
     void enqueue(EventContainer& events){

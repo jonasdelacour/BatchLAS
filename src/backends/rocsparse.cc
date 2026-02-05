@@ -37,7 +37,7 @@ namespace batchlas {
                        rocsparse_spmm_stage_compute,
                        &buffer_size,
                        buffer.data());
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend Back, typename T, MatrixFormat MFormat>

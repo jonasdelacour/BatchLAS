@@ -55,7 +55,7 @@ namespace batchlas {
             CUSPARSE_SPMM_ALG_DEFAULT,
             buffer.data()
         );
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T, MatrixFormat MFormat>

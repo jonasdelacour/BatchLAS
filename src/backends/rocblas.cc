@@ -45,7 +45,7 @@ namespace batchlas {
                             C.data_ptr(), C.ld(), C.stride(),
                             A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -71,7 +71,7 @@ namespace batchlas {
                 handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha,
                 A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), 1, X.stride(), &beta, Y.data_ptr(), 1, Y.stride(), batch_size);
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -100,7 +100,7 @@ namespace batchlas {
                 enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
                 kB, n, &alpha, A.data_ptr(), A.ld(), A.stride(), Bmat.data_ptr(), Bmat.ld(), Bmat.stride(), batch_size);
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER

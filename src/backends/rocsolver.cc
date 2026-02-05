@@ -45,7 +45,7 @@ namespace batchlas {
                 rocsolver_cpotrf_strided_batched, rocsolver_zpotrf_strided_batched,
                 handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), A.stride(), info.data(), A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -71,7 +71,7 @@ namespace batchlas {
                                                          tau.data(), std::min(A.rows(), A.cols()),
                                                          A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -124,7 +124,7 @@ namespace batchlas {
                 }
                 sub_queue.wait();
             }
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
         });
     }
 
@@ -171,7 +171,7 @@ namespace batchlas {
             }
             sub_queue.wait();
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -210,7 +210,7 @@ namespace batchlas {
                                                          std::min(A.rows(), A.cols()), info.data(),
                                                          A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -251,7 +251,7 @@ namespace batchlas {
                                                          B.data_ptr(), B.ld(), B.stride(),
                                                          A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend Back, typename T>
@@ -294,7 +294,7 @@ namespace batchlas {
                                                          ipiv.data(), std::min(A.rows(), A.cols()),
                                                          info.data(), A.batch_size());
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -329,7 +329,7 @@ namespace batchlas {
                     handle, jobtype, uplo,
                     A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
             }
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
         });
     }
 

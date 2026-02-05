@@ -6,6 +6,7 @@
 namespace {
 class QueueGetEventNoopKernel;
 class QueueEnqueueNoopKernel;
+class QueueExternalWorkBarrierKernel;
 }
 
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
@@ -108,6 +109,23 @@ Event Queue::get_event() const {
         // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
         EventImpl event = impl_->submit([&](sycl::handler& h) {
             h.single_task<QueueGetEventNoopKernel>([]() {});
+        });
+        return event;
+    }
+}
+
+Event Queue::create_event_after_external_work() {
+    // Always create a new barrier event, never use the cached last_event_.
+    // This ensures the returned event properly depends on external library calls
+    // (cuBLAS, rocBLAS, etc.) that execute on the stream but don't update last_event_.
+    try {
+        sycl::event e = impl_->ext_oneapi_submit_barrier();
+        impl_->last_event_ = e;
+        EventImpl event = std::move(e);
+        return event;
+    } catch (const sycl::exception&) {
+        EventImpl event = impl_->submit([&](sycl::handler& h) {
+            h.single_task<QueueExternalWorkBarrierKernel>([]() {});
         });
         return event;
     }

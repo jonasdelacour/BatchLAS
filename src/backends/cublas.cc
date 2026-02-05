@@ -76,7 +76,7 @@ namespace batchlas {
                 enum_convert<BackendLibrary::CUBLAS, T>(precision),
                 CUBLAS_GEMM_DFALT);
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -99,7 +99,7 @@ namespace batchlas {
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
                 handle, transA, m, n, &alpha, A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend Back, typename T>
@@ -235,7 +235,7 @@ namespace batchlas {
                     handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs(ctx).data(), A.ld(), B.data_ptrs(ctx).data(), B.ld(), batch_size);
             }
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -277,7 +277,7 @@ namespace batchlas {
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
                 handle, m, n, A.data_ptrs(ctx).data(), A.ld(), tau_ptrs.data(), info.data(), batch_size);
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -353,7 +353,7 @@ namespace batchlas {
                     ormqr_vendor<B>(ctx, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
                 }
             }
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
         });
     }
 
@@ -433,7 +433,7 @@ namespace batchlas {
             }
             sub_queue.wait();
         }
-        return ctx.get_event();
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -493,7 +493,7 @@ namespace batchlas {
                     A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
                     B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
             }
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
         }
     
     template <Backend Back, typename T>
@@ -519,7 +519,7 @@ namespace batchlas {
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
                 handle, n,
                 A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(), info.data(), batch_size);
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
         }
 
     template <Backend B, typename T>
@@ -545,7 +545,7 @@ namespace batchlas {
                 handle, n,
                 A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
                 C.data_ptrs(ctx).data(), C.ld(), info_arr.data(), batch_size);
-            return ctx.get_event();
+            return ctx.create_event_after_external_work();
             
         }
 

@@ -187,8 +187,8 @@ inline Event syev_dispatch(Queue& ctx,
     }
 
     Queue* run_q = &ctx;
-    Queue in_order_q(run_q->device(), true);
     if (!ctx.in_order()) {
+        Queue in_order_q(run_q->device(), true);
         in_order_q = Queue(ctx, true);
         Event dep = ctx.get_event();
         in_order_q.enqueue(dep);
@@ -219,8 +219,7 @@ inline Event syev_dispatch(Queue& ctx,
                                StedcParams<typename base_type<T>::type>{});
     }
 
-    ctx.enqueue(e);
-    return ctx.get_event();
+    return e;
 }
 
 template <Backend B, typename T>

@@ -182,8 +182,7 @@ inline Event ormqr_dispatch(Queue& ctx,
         e = ormqr_blocked<B, T>(*run_q, A, C, side, trans, tau, workspace, block_size);
     }
 
-    ctx.enqueue(e);
-    return ctx.get_event();
+    return e;
 }
 
 template <Backend B, typename T>
