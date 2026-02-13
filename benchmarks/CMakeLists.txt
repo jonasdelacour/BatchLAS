@@ -1,4 +1,5 @@
 set(BENCHMARK_TARGETS
+    band_reduction_benchmark
     bandr1_dump
     geqrf_benchmark
     gemm_benchmark
@@ -19,6 +20,7 @@ set(BENCHMARK_TARGETS
     steqr_benchmark
     steqr_cta_benchmark
     steqr_accuracy
+    orthogonality_accuracy
     transpose_benchmark
     permuted_copy_benchmark
     matrix_copy_benchmark
