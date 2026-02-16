@@ -15,6 +15,7 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
 
     T cfrom1, cto1, mul;
     bool done = false;
+    Event last_event;
 
     while (!done) {
         cfrom1 = cfromc * smlnum;
@@ -34,8 +35,10 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
         }
 
         // Scale the matrix by mul
-        scale(ctx, mul, mat);
+        last_event = scale(ctx, mul, mat);
     }
+
+    return last_event;
 }
 
 template Event lascl<MatrixFormat::Dense, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, float, float);

@@ -21,6 +21,7 @@ set(BENCHMARK_TARGETS
     steqr_cta_benchmark
     steqr_accuracy
     orthogonality_accuracy
+    eigensolver_accuracy
     transpose_benchmark
     permuted_copy_benchmark
     matrix_copy_benchmark
