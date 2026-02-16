@@ -11,6 +11,7 @@
 #include <blas/extra.hh>
 #include <blas/functions/syev.hh>
 #include "../math-helpers.hh"
+#include <internal/sort.hh>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -45,10 +46,9 @@ namespace batchlas {
             std::cout << msg << std::endl;
         };
         auto trace_wait = [&](const char* msg) {
-            if (trace_enabled) {
-                std::cout << msg << std::endl;
-            }
-            ctx->wait_and_throw();
+            if (!trace_enabled) return;
+            std::cout << msg << std::endl;
+            ctx.wait_and_throw();
         };
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
@@ -65,7 +65,8 @@ namespace batchlas {
         auto lambdas =      pool.allocate<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);
         auto residuals =    pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
-        
+        auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
+
         auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto X = S({0,n}, {0,block_vectors});                       //First block of S
         auto P = S({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S
@@ -78,7 +79,10 @@ namespace batchlas {
         auto AR =   AS({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS
 
         auto StAS_base = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto XtAX = MatrixView(StASdata.data(), block_vectors, block_vectors, block_vectors, block_vectors * block_vectors, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        // XtAX is a per-batch (block_vectors x block_vectors) matrix. It lives in the
+        // top-left corner of the backing StAS_base buffer for each batch.
+        // IMPORTANT: keep StAS_base's stride so batches do not overlap.
+        auto XtAX = StAS_base({0, block_vectors}, {0, block_vectors});
         auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
 
@@ -92,19 +96,38 @@ namespace batchlas {
         auto AP_new = AS_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS_new
         auto AR_new = AS_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS_new
 
-
         Span<std::byte> spmm_workspace;
         if constexpr (MFormat == MatrixFormat::CSR) {
             spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, S, AS, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        // NOTE: syevx relies on repeated small eigenproblems (XtAX, StAS). The default
-        // SYEV provider order prefers BatchLAS_CTA for n<=32, but that path has been
-        // observed to hang intermittently for this workload. Use the vendor backend
-        // here for robustness.
-        auto syev_workspace = pool.allocate<std::byte>(ctx, backend::syev_vendor_buffer_size<B>(ctx, StAS_base, W, JobType::EigenVectors, Uplo::Lower));
+        // NOTE: SYEVX repeatedly solves *tiny* dense eigenproblems (XtAX, StAS).
+        // For diagnosis and benchmarking, allow opting into/out of using the vendor
+        // implementation for these projected solves.
+        const bool prefer_vendor_projected_syev =
+            (B != Backend::NETLIB) &&
+            ([]() {
+                if (const char* v = std::getenv("BATCHLAS_SYEVX_PROJECTED_VENDOR")) {
+                    return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
+                }
+                return false;
+            })();
+
+        // NOTE: syevx relies on repeated small eigenproblems (XtAX, StAS).
+        // The chosen SYEV provider can change with matrix size (e.g. CTA for n<=32
+        // but blocked/vendor for larger n), so a single pre-sized workspace must cover
+        // the maximum of the internal problems.
+        const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+        size_t ws_projected = std::max(ws_xtax, ws_stas);
+        if (prefer_vendor_projected_syev) {
+            const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+            ws_projected = std::max(ws_projected, std::max(ws_xtax_vendor, ws_stas_vendor));
+        }
+        auto syev_workspace = pool.allocate<std::byte>(ctx, ws_projected);
         auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(  ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
-                                                                        ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
+                          ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
         
         //Double buffering pointer swap approach as opposed to copying data unnecessarily                                                                        
         auto swap_subspace = [&](){
@@ -143,7 +166,11 @@ namespace batchlas {
         trace_wait("syevx: XtAX gemm done");
         //Solve the eigenvalue problem
         trace("syevx: syev XtAX");
-        backend::syev_vendor<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+        if (prefer_vendor_projected_syev) {
+            backend::syev_vendor<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+        } else {
+            syev<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+        }
         trace_wait("syevx: syev XtAX done");
 
         // If we are looking for the largest eigenpairs, reorder the eigenvectors so that
@@ -192,6 +219,11 @@ namespace batchlas {
         swap_subspace();
         bool restart = true;
 
+        // Tracks how many eigenvalues are currently stored per batch in `lambdas`.
+        // After the initial XtAX solve, this is `block_vectors`. After subsequent StAS
+        // solves it becomes 2*block_vectors (restart step) or 3*block_vectors.
+        int64_t current_num_eigvals = block_vectors;
+
         size_t residual_wg_size = std::min(get_kernel_max_wg_size<SyevxResidualsKernel<B,T,MFormat>>(ctx), size_t(n));
 
         //Compute R = AX - X * diag(lambdas)
@@ -199,10 +231,14 @@ namespace batchlas {
             int Nvecs = restart ? block_vectors * 2 : block_vectors * 3;
             //Compute R = AX - X * diag(lambdas)
             trace("syevx: residual kernel submit");
+            const float_type abs_tol = static_cast<float_type>(std::abs(params.absolute_tolerance));
+            const float_type rel_tol = static_cast<float_type>(std::abs(params.relative_tolerance));
+            const float_type tol = std::max(abs_tol, rel_tol);
             ctx -> submit([&](sycl::handler& h){
                 auto Rdata = R.data_ptr();
                 auto Xdata = X.data_ptr();
                 auto AXdata = AX.data_ptr();
+                auto flags = converged_flags.data();
                 h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
@@ -252,14 +288,41 @@ namespace batchlas {
                     if (tid < neigs){
                         auto bestresidual = blockbestresiduals[tid];
                         auto residual = blockresiduals[tid];
-                        if (bestresidual > residual || it == 0){
+                        const bool update = (bestresidual > residual) || (it == 0);
+                        if (update){
                             blockbestresiduals[tid] = residual;
                             blockW[tid] = blockLambdas[params.find_largest ? (num_eigvals - 1 - tid) : tid];
                         }
                     }
+
+                    sycl::group_barrier(cta);
+                    if (tid == 0) {
+                        int32_t ok = 1;
+                        for (size_t i = 0; i < neigs; ++i) {
+                            if (blockbestresiduals[i] > tol) {
+                                ok = 0;
+                                break;
+                            }
+                        }
+                        flags[bid] = ok;
+                    }
                 });
             });
+
             trace_wait("syevx: residual kernel done");
+
+            // Early exit once all batches have converged for the requested eigenpairs.
+            // This is intentionally conservative: it checks the best residual so far.
+            bool all_converged = true;
+            for (int64_t b = 0; b < batch_size; ++b) {
+                if (converged_flags[static_cast<std::size_t>(b)] == 0) {
+                    all_converged = false;
+                    break;
+                }
+            }
+            if (all_converged) {
+                break;
+            }
 
             trace("syevx: ortho R vs (X or XP)");
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
@@ -302,8 +365,15 @@ namespace batchlas {
             trace_wait("syevx: StAS gemm done");
             //Solve the eigenvalue problem
             trace("syevx: syev StAS");
-            backend::syev_vendor<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            if (prefer_vendor_projected_syev) {
+                backend::syev_vendor<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            } else {
+                syev<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            }
             trace_wait("syevx: syev StAS done");
+            current_num_eigvals = static_cast<int64_t>(Nvecs);
+
+            trace("syevx: post syev StAS (host)");
 
             // syev returns eigenvalues in ascending order.
             // For find_largest=true, we take the last `block_vectors` eigenvectors, but we also
@@ -347,6 +417,7 @@ namespace batchlas {
             //Compute C_p = C_x - [I 
             //                     0
             //                     0]
+            trace("syevx: build C_p submit");
             ctx -> submit([&](sycl::handler& h){
                 const int64_t Nactive = block_vectors; // When we start soft-locking, update this
                 const auto* Z_ptr = Z.data_ptr();
@@ -385,12 +456,15 @@ namespace batchlas {
 
             //Compute new search directions
             //X = [X, P, R] * C_x
+            trace("syevx: update X/AX submit");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
             gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
+            trace("syevx: ortho C_p vs Z submit");
             ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
+            trace("syevx: update P/AP submit");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AP
             gemm<B>(ctx, AS({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
@@ -398,12 +472,14 @@ namespace batchlas {
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
         }
-        //Copy back the eigenvectors if needed
-        if (jobz == JobType::EigenVectors){
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X({0,n}, {0,int64_t(neigs)}));
-        }
-       return ctx.get_event();
 
+        // The residual kernel already populated W with the best eigenvalues seen during iterations.
+        // For eigenvectors, copy the final X to V (they should be reasonably close to the true eigenvectors).
+        if (jobz == JobType::EigenVectors){
+            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, int64_t(neigs)}));
+        }
+
+        return ctx.get_event();
     }
 
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -420,22 +496,34 @@ namespace batchlas {
             size_t work_size = 0;
             auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
             auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
-            // Match syevx(): we use the vendor SYEV backend for robustness.
-            work_size += BumpAllocator::allocation_size<std::byte>(
-                ctx,
-                backend::syev_vendor_buffer_size<B>(
-                    ctx,
-                    MatrixView<T, MatrixFormat::Dense>(
-                        A.data_ptr(),
-                        block_vectors * 3,
-                        block_vectors * 3,
-                        block_vectors * 3,
-                        3 * 3 * block_vectors * block_vectors,
-                        batch_size,
-                        nullptr),
-                    W,
-                    JobType::EigenVectors,
-                    Uplo::Lower));
+
+            {
+                // Match runtime: XtAX is a (block_vectors x block_vectors) view into the
+                // top-left corner of a (3*block_vectors x 3*block_vectors) backing buffer.
+                auto XtAX_dummy = MatrixView<T, MatrixFormat::Dense>(nullptr,
+                    static_cast<int>(block_vectors), static_cast<int>(block_vectors),
+                    static_cast<int>(block_vectors * 3),
+                    static_cast<int>(3 * 3 * block_vectors * block_vectors),
+                    static_cast<int>(batch_size), nullptr);
+                auto StAS_base_dummy = MatrixView<T, MatrixFormat::Dense>(nullptr,
+                    static_cast<int>(block_vectors * 3), static_cast<int>(block_vectors * 3),
+                    static_cast<int>(block_vectors * 3), static_cast<int>(3 * 3 * block_vectors * block_vectors),
+                    static_cast<int>(batch_size), nullptr);
+
+                const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                size_t ws_projected = std::max(ws_xtax, ws_stas);
+
+                // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
+                if constexpr (B != Backend::NETLIB) {
+                    const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    ws_projected = std::max(ws_projected, std::max(ws_xtax_vendor, ws_stas_vendor));
+                }
+
+                work_size += BumpAllocator::allocation_size<std::byte>(ctx, ws_projected);
+            }
+
             work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(    ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
                                                                                     ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
             if constexpr (MFormat == MatrixFormat::CSR) {
@@ -443,12 +531,14 @@ namespace batchlas {
             }
                         
             work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
+            work_size += BumpAllocator::allocation_size<int32_t>(ctx, batch_size); // converged_flags
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //lambdas
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals
+
             return work_size;
     }
 
