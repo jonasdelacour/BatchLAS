@@ -82,6 +82,7 @@ option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
 option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)
+option(BATCHLAS_DISABLE_CUDA_FTZ "Disable flush-to-zero (FTZ) for CUDA device code" ON)
 option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
@@ -402,7 +403,7 @@ function(detect_sycl_cpu_target)
 endfunction()
 
 # Add SYCL specific compiler flags
-add_compile_options(-fsycl -Wno-c++20-extensions)
+add_compile_options(-fsycl -Wno-c++20-extensions -Wno-option-ignored)
 add_link_options(-fsycl)
 
 # Detect and add GPU architecture targets
@@ -431,6 +432,14 @@ endif()
 # With clang-based SYCL/CUDA toolchains this is typically passed to ptxas.
 # Scope it only to the CUDA device backend and only for Debug/RelWithDebInfo.
 if(BATCHLAS_ENABLE_CUDA)
+    if(BATCHLAS_DISABLE_CUDA_FTZ)
+        message(STATUS "Disabling FTZ for CUDA device code (link-time device compilation)")
+        # PTXAS option: disable flush-to-zero. Pass at *link* time so it applies
+        # when the CUDA device image is produced.
+        add_link_options(-Xsycl-target-backend=nvptx64-nvidia-cuda "--ftz=false")
+        # Also forward directly to ptxas via the CUDA-specific flag for safety.
+        add_link_options(-Xcuda-ptxas --ftz=false)
+    endif()
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
         message(STATUS "Enabling line info for CUDA device code")
         # NOTE: DPC++/Clang emits device IR per TU, but the CUDA device binary is
