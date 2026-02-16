@@ -41,6 +41,9 @@ Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const
 }
 
 template <typename T, typename K>
+struct PermutedCopyKernel {};
+
+template <typename T, typename K>
 Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
     auto n = src.rows();
     auto batch_size = src.batch_size();
@@ -62,7 +65,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        h.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        h.parallel_for<PermutedCopyKernel<T, K>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             auto gid = item.get_global_linear_id();
             for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
                 int batch_id = index / (cols * n);
