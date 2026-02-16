@@ -426,6 +426,18 @@ inline Span<T> alloc_from_ws(Queue& ctx,
     return Span<T>(ptr, count);
 }
 
+// Helper struct to hold initialized buffers for band reduction
+template <typename T>
+struct BandrBuffers {
+    MatrixView<T, MatrixFormat::Dense> Bmat;
+    MatrixView<T, MatrixFormat::Dense> Symmat;
+    MatrixView<T, MatrixFormat::Dense> Postmat;
+    MatrixView<T, MatrixFormat::Dense> Premat;
+    MatrixView<T, MatrixFormat::Dense> Rightmat;
+    Span<T> tau_buf;
+    Span<std::byte> ws_backend;
+};
+
 } // namespace
 
 namespace {
@@ -772,6 +784,226 @@ inline void bandr1_one_qr_step(Queue& ctx,
     }
 }
 
+// Helper: Initialize ABw from input band and allocate scratch buffers for chase steps.
+// Returns all initialized buffers and workspace offset.
+template <typename T>
+inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
+    Queue& ctx,
+    const MatrixView<T, MatrixFormat::Dense>& ab_in,
+    const MatrixView<T, MatrixFormat::Dense>& abw_out,
+    int32_t kd,
+    int32_t kd_work,
+    int32_t nb_target,
+    const Span<std::byte>& ws,
+    size_t& off) {
+    const int n = abw_out.cols();
+    const int batch = abw_out.batch_size();
+
+    // Initialize ABw = 0; then copy input band into the top kd+1 rows.
+    {
+        auto ABW = abw_out.kernel_view();
+        ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+                                           static_cast<size_t>(abw_out.rows()),
+                                           static_cast<size_t>(n)),
+                             [=](sycl::id<3> idx) {
+                                 const int b = static_cast<int>(idx[0]);
+                                 const int r = static_cast<int>(idx[1]);
+                                 const int j = static_cast<int>(idx[2]);
+                                 ABW(r, j, b) = T(0);
+                             });
+        });
+
+        auto ABin = ab_in.kernel_view();
+        ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+                                           static_cast<size_t>(kd + 1),
+                                           static_cast<size_t>(n)),
+                             [=](sycl::id<3> idx) {
+                                 const int b = static_cast<int>(idx[0]);
+                                 const int r = static_cast<int>(idx[1]);
+                                 const int j = static_cast<int>(idx[2]);
+                                 ABW(r, j, b) = ABin(r, j, b);
+                             });
+        });
+    }
+
+    // Scratch buffers sized to worst-case within a sweep.
+    const int nb_max = std::min(nb_target, std::max(1, kd - 1));
+    const int m_max = kd;
+    auto B_buf = alloc_from_ws<T>(ctx, ws, off,
+                                  static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    auto B_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Sym_buf = alloc_from_ws<T>(ctx, ws, off,
+                                    static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Sym_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Post_buf = alloc_from_ws<T>(ctx, ws, off,
+                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Post_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Pre_buf = alloc_from_ws<T>(ctx, ws, off,
+                                    static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Pre_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Right_buf = alloc_from_ws<T>(ctx, ws, off,
+                                      static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
+    auto Right_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto tau_buf = alloc_from_ws<T>(ctx, ws, off, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+
+    MatrixView<T, MatrixFormat::Dense> Bmat(B_buf.data(), m_max, nb_max, m_max, m_max * nb_max, batch, B_ptrs.data());
+    MatrixView<T, MatrixFormat::Dense> Symmat(Sym_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Sym_ptrs.data());
+    MatrixView<T, MatrixFormat::Dense> Postmat(Post_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Post_ptrs.data());
+    MatrixView<T, MatrixFormat::Dense> Premat(Pre_buf.data(), kd_work, m_max, kd_work, static_cast<int64_t>(kd_work) * m_max, batch, Pre_ptrs.data());
+    MatrixView<T, MatrixFormat::Dense> Rightmat(Right_buf.data(), m_max, kd_work, m_max, static_cast<int64_t>(m_max) * kd_work, batch, Right_ptrs.data());
+
+    // Ensure batched pointer arrays are initialized before any backend kernels
+    // potentially consume them.
+    (void)Bmat.data_ptrs(ctx);
+    (void)Symmat.data_ptrs(ctx);
+    (void)Postmat.data_ptrs(ctx);
+    (void)Premat.data_ptrs(ctx);
+    (void)Rightmat.data_ptrs(ctx);
+
+    return BandrBuffers<T>{
+        .Bmat = Bmat,
+        .Symmat = Symmat,
+        .Postmat = Postmat,
+        .Premat = Premat,
+        .Rightmat = Rightmat,
+        .tau_buf = tau_buf,
+        .ws_backend = ws.subspan(off)
+    };
+}
+
+// Helper: Run the common BANDR1 chase loop. Updates b to final bandwidth.
+template <Backend B, typename T>
+inline int bandr1_run_chase_sweeps(
+    Queue& ctx,
+    const MatrixView<T, MatrixFormat::Dense>& abw,
+    int32_t kd_work,
+    int32_t kd_initial,
+    int32_t n,
+    int32_t nb_target,
+    int32_t d_per_sweep,
+    int32_t max_sweeps,
+    int32_t max_steps,
+    const BandrBuffers<T>& buffers) {
+    int b = kd_initial;
+    int steps_done = 0;
+
+    for (int sweep = 0; sweep < max_sweeps && b > 1 && steps_done < max_steps; ++sweep) {
+        int step_in_sweep = 0;
+        const int d_red = (d_per_sweep > 0) ? std::min(d_per_sweep, b - 1)
+                                            : std::max(1, b - std::min(nb_target, b - 1));
+        const int b_tilde = b - d_red;
+        const int nb = std::min(std::max(1, nb_target), b_tilde);
+
+        bool hit_step_limit = false;
+
+        // Match the reference schedule (portable_banded_tridiagonal.py):
+        // for each starting panel (j1_start), chase the bulge by updating (j1,j2,i1,i2)
+        // along the diagonal chain.
+        for (int j1_start = 0; j1_start < std::max(0, n - b_tilde - 1) && steps_done < max_steps; j1_start += nb) {
+            int j1 = j1_start;
+            int j2 = std::min(j1 + nb - 1, n - 1);
+            int i1 = j1 + b_tilde;
+            int i2 = std::min(j1 + b + nb - 1, n - 1);
+
+            while (i1 < n && steps_done < max_steps) {
+                if (i1 > i2) {
+                    break;
+                }
+
+                const int m = i2 - i1 + 1;
+                const int r = j2 - j1 + 1;
+                if (m <= 0 || r <= 0) {
+                    break;
+                }
+
+                bandr1_one_qr_step<B, T>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
+                                         buffers.Bmat, buffers.Symmat, buffers.Postmat, 
+                                         buffers.Premat, buffers.Rightmat,
+                                         buffers.tau_buf, buffers.ws_backend);
+                ++steps_done;
+                ++step_in_sweep;
+
+                if (steps_done >= max_steps) {
+                    hit_step_limit = true;
+                    break;
+                }
+
+                const int new_j1 = i1;
+                const int new_j2 = std::min(new_j1 + nb - 1, n - 1);
+                const int new_i1 = i1 + b;
+                const int new_i2 = std::min(i2 + b, n - 1);
+                j1 = new_j1;
+                j2 = new_j2;
+                i1 = new_i1;
+                i2 = new_i2;
+            }
+
+            if (hit_step_limit) {
+                break;
+            }
+        }
+
+        // If we stopped mid-sweep due to max_steps, do NOT apply sweep-finalization
+        // operations that are not similarity transforms (e.g. explicit band truncation).
+        if (hit_step_limit) {
+            break;
+        }
+
+        if (b_tilde + 1 <= kd_work) {
+            band_zero_rows_from<T>(ctx, abw, b_tilde + 1);
+        }
+
+        b = b_tilde;
+    }
+
+    return b;
+}
+
+// Helper: Extract (d, e, tau) output from final ABw.
+template <typename T>
+inline void bandr1_extract_tridiagonal_output(
+    Queue& ctx,
+    const MatrixView<T, MatrixFormat::Dense>& abw,
+    int32_t n,
+    int32_t batch,
+    const VectorView<typename base_type<T>::type>& d_out,
+    const VectorView<typename base_type<T>::type>& e_out,
+    const VectorView<T>& tau_out) {
+    auto AB = abw.kernel_view();
+    auto dptr = d_out.data_ptr();
+    const int d_inc = d_out.inc();
+    const int d_stride = d_out.stride();
+    auto eptr = e_out.data_ptr();
+    const int e_inc = e_out.inc();
+    const int e_stride = e_out.stride();
+    auto tauptr = tau_out.data_ptr();
+    const int tau_inc = tau_out.inc();
+    const int tau_stride = tau_out.stride();
+
+    ctx->submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)),
+                         [=](sycl::id<2> idx) {
+                             const int b = static_cast<int>(idx[0]);
+                             const int j = static_cast<int>(idx[1]);
+                             dptr[b * d_stride + j * d_inc] = real_part(AB(0, j, b));
+                         });
+    });
+
+    if (n > 1) {
+        ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)),
+                             [=](sycl::id<2> idx) {
+                                 const int b = static_cast<int>(idx[0]);
+                                 const int j = static_cast<int>(idx[1]);
+                                 eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
+                                 tauptr[b * tau_stride + j * tau_inc] = T(0);
+                             });
+        });
+    }
+}
+
 template <Backend B, typename T>
 size_t sytrd_band_reduction_single_step_buffer_size_core(Queue& ctx,
                                                          int32_t kd,
@@ -889,150 +1121,11 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
         max_steps = 1;
     }
 
-    // Initialize ABw = 0; then copy input band into the top kd+1 rows.
-    {
-        auto ABW = abw_out.kernel_view();
-        ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
-                                           static_cast<size_t>(kd_work + 1),
-                                           static_cast<size_t>(n)),
-                             [=](sycl::id<3> idx) {
-                                 const int b = static_cast<int>(idx[0]);
-                                 const int r = static_cast<int>(idx[1]);
-                                 const int j = static_cast<int>(idx[2]);
-                                 ABW(r, j, b) = T(0);
-                             });
-        });
-
-        auto ABin = ab_in.kernel_view();
-        ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
-                                           static_cast<size_t>(kd + 1),
-                                           static_cast<size_t>(n)),
-                             [=](sycl::id<3> idx) {
-                                 const int b = static_cast<int>(idx[0]);
-                                 const int r = static_cast<int>(idx[1]);
-                                 const int j = static_cast<int>(idx[2]);
-                                 ABW(r, j, b) = ABin(r, j, b);
-                             });
-        });
-    }
-
-    // Scratch buffers sized to worst-case within a sweep.
-    const int nb_max = std::min(nb_target, std::max(1, kd - 1));
-    const int m_max = kd;
     size_t off = 0;
-    auto B_buf = alloc_from_ws<T>(ctx, ws, off,
-                                  static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    auto B_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Sym_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Sym_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Post_buf = alloc_from_ws<T>(ctx, ws, off,
-                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Post_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Pre_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Pre_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Right_buf = alloc_from_ws<T>(ctx, ws, off,
-                                      static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
-    auto Right_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto tau_buf = alloc_from_ws<T>(ctx, ws, off, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-
-    MatrixView<T, MatrixFormat::Dense> Bmat(B_buf.data(), m_max, nb_max, m_max, m_max * nb_max, batch, B_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Symmat(Sym_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Sym_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Postmat(Post_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Post_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Premat(Pre_buf.data(), kd_work, m_max, kd_work, static_cast<int64_t>(kd_work) * m_max, batch, Pre_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Rightmat(Right_buf.data(), m_max, kd_work, m_max, static_cast<int64_t>(m_max) * kd_work, batch, Right_ptrs.data());
-
-    // Ensure batched pointer arrays are initialized before any backend kernels
-    // potentially consume them.
-    (void)Bmat.data_ptrs(ctx);
-    (void)Symmat.data_ptrs(ctx);
-    (void)Postmat.data_ptrs(ctx);
-    (void)Premat.data_ptrs(ctx);
-    (void)Rightmat.data_ptrs(ctx);
-
-    // Ensure batched pointer arrays are initialized before any backend kernels
-    // potentially consume them.
-    (void)Bmat.data_ptrs(ctx);
-    (void)Symmat.data_ptrs(ctx);
-    (void)Postmat.data_ptrs(ctx);
-    (void)Premat.data_ptrs(ctx);
-    (void)Rightmat.data_ptrs(ctx);
-
-    auto ws_backend = ws.subspan(off);
-
-    // Run up to max_steps chase steps using the same schedule as the full BANDR1 algorithm.
-    int b = kd;
-    int steps_done = 0;
+    auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, abw_out, kd, kd_work, nb_target, ws, off);
+    
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
-    for (int sweep = 0; sweep < max_sweeps && b > 1 && steps_done < max_steps; ++sweep) {
-        int step_in_sweep = 0;
-        const int d_red = (d_per_sweep > 0) ? std::min(d_per_sweep, b - 1)
-                                            : std::max(1, b - std::min(nb_target, b - 1));
-        const int b_tilde = b - d_red;
-        const int nb = std::min(std::max(1, nb_target), b_tilde);
-
-        bool hit_step_limit = false;
-
-        // Match the reference schedule (portable_banded_tridiagonal.py):
-        // for each starting panel (j1_start), chase the bulge by updating (j1,j2,i1,i2)
-        // along the diagonal chain.
-        for (int j1_start = 0; j1_start < std::max(0, n - b_tilde - 1) && steps_done < max_steps; j1_start += nb) {
-            int j1 = j1_start;
-            int j2 = std::min(j1 + nb - 1, n - 1);
-            int i1 = j1 + b_tilde;
-            int i2 = std::min(j1 + b + nb - 1, n - 1);
-
-            while (i1 < n && steps_done < max_steps) {
-                if (i1 > i2) {
-                    break;
-                }
-
-                const int m = i2 - i1 + 1;
-                const int r = j2 - j1 + 1;
-                if (m <= 0 || r <= 0) {
-                    break;
-                }
-
-                bandr1_one_qr_step<B, T>(ctx, abw_out, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         Bmat, Symmat, Postmat, Premat, Rightmat,
-                                         tau_buf, ws_backend);
-                ++steps_done;
-                ++step_in_sweep;
-
-                if (steps_done >= max_steps) {
-                    hit_step_limit = true;
-                    break;
-                }
-
-                const int new_j1 = i1;
-                const int new_j2 = std::min(new_j1 + nb - 1, n - 1);
-                const int new_i1 = i1 + b;
-                const int new_i2 = std::min(i2 + b, n - 1);
-                j1 = new_j1;
-                j2 = new_j2;
-                i1 = new_i1;
-                i2 = new_i2;
-            }
-
-            if (hit_step_limit) {
-                break;
-            }
-        }
-
-        // If we stopped mid-sweep due to max_steps, do NOT apply sweep-finalization
-        // operations that are not similarity transforms (e.g. explicit band truncation).
-        if (hit_step_limit) {
-            break;
-        }
-
-        if (b_tilde + 1 <= kd_work) {
-            band_zero_rows_from<T>(ctx, abw_out, b_tilde + 1);
-        }
-        b = b_tilde;
-    }
+    bandr1_run_chase_sweeps<B, T>(ctx, abw_out, kd_work, kd, n, nb_target, d_per_sweep, max_sweeps, max_steps, buffers);
 
     return ctx.get_event();
 }
@@ -1206,160 +1299,14 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> ABw(ABw_buf.data(), kd_work + 1, n, kd_work + 1,
                                            (kd_work + 1) * n, batch);
 
-    // Initialize ABw = 0; then copy input band into the top kd+1 rows.
-    {
-        auto ABW = ABw.kernel_view();
-        ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
-                                           static_cast<size_t>(kd_work + 1),
-                                           static_cast<size_t>(n)),
-                             [=](sycl::id<3> idx) {
-                                 const int b = static_cast<int>(idx[0]);
-                                 const int r = static_cast<int>(idx[1]);
-                                 const int j = static_cast<int>(idx[2]);
-                                 ABW(r, j, b) = T(0);
-                             });
-        });
+    // Use common buffer initialization helper
+    auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, ABw, kd, kd_work, nb_target, ws, off);
 
-        auto ABin = ab_in.kernel_view();
-        ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
-                                           static_cast<size_t>(kd + 1),
-                                           static_cast<size_t>(n)),
-                             [=](sycl::id<3> idx) {
-                                 const int b = static_cast<int>(idx[0]);
-                                 const int r = static_cast<int>(idx[1]);
-                                 const int j = static_cast<int>(idx[2]);
-                                 ABW(r, j, b) = ABin(r, j, b);
-                             });
-        });
-    }
+    // Run chase sweeps until full tridiagonal (b == 1)
+    bandr1_run_chase_sweeps<B, T>(ctx, ABw, kd_work, kd, n, nb_target, d_per_sweep, max_sweeps, INT_MAX, buffers);
 
-    // Scratch buffers sized to worst-case within a sweep.
-    const int nb_max = std::min(nb_target, std::max(1, kd - 1));
-    const int m_max = kd;
-    auto B_buf = alloc_from_ws<T>(ctx, ws, off,
-                                  static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    auto B_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Sym_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Sym_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Post_buf = alloc_from_ws<T>(ctx, ws, off,
-                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Post_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Pre_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Pre_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Right_buf = alloc_from_ws<T>(ctx, ws, off,
-                                      static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
-    auto Right_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto tau_buf = alloc_from_ws<T>(ctx, ws, off, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-
-    MatrixView<T, MatrixFormat::Dense> Bmat(B_buf.data(), m_max, nb_max, m_max, m_max * nb_max, batch, B_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Symmat(Sym_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Sym_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Postmat(Post_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Post_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Premat(Pre_buf.data(), kd_work, m_max, kd_work, static_cast<int64_t>(kd_work) * m_max, batch, Pre_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Rightmat(Right_buf.data(), m_max, kd_work, m_max, static_cast<int64_t>(m_max) * kd_work, batch, Right_ptrs.data());
-
-    // Ensure batched pointer arrays are initialized before any backend kernels
-    // potentially consume them.
-    (void)Bmat.data_ptrs(ctx);
-    (void)Symmat.data_ptrs(ctx);
-    (void)Postmat.data_ptrs(ctx);
-    (void)Premat.data_ptrs(ctx);
-    (void)Rightmat.data_ptrs(ctx);
-
-    auto ws_backend = ws.subspan(off);
-
-    int b = kd;
-    int steps_done = 0;
-
-    for (int sweep = 0; sweep < max_sweeps && b > 1; ++sweep) {
-        int step_in_sweep = 0;
-        // Scheduling constraints from the reference (bandr1):
-        //   b_tilde = b - d, with 1 <= d < b
-        //   1 <= nb <= b_tilde
-        // This ensures the QR panel block B is strictly below the diagonal.
-        const int d_red = (d_per_sweep > 0) ? std::min(d_per_sweep, b - 1)
-                                            : std::max(1, b - std::min(nb_target, b - 1));
-        const int b_tilde = b - d_red;
-        const int nb = std::min(std::max(1, nb_target), b_tilde);
-
-        for (int j1_start = 0; j1_start < std::max(0, n - b_tilde - 1); j1_start += nb) {
-            int j1 = j1_start;
-            int j2 = std::min(j1 + nb - 1, n - 1);
-            int i1 = j1 + b_tilde;
-            int i2 = std::min(j1 + b + nb - 1, n - 1);
-
-            while (i1 < n) {
-                if (i1 > i2) {
-                    break;
-                }
-
-                const int m = i2 - i1 + 1;
-                const int r = j2 - j1 + 1;
-                if (m <= 0 || r <= 0) {
-                    break;
-                }
-
-                bandr1_one_qr_step<B, T>(ctx, ABw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         Bmat, Symmat, Postmat, Premat, Rightmat,
-                                         tau_buf, ws_backend);
-
-                ++steps_done;
-                ++step_in_sweep;
-
-                const int new_j1 = i1;
-                const int new_j2 = std::min(new_j1 + nb - 1, n - 1);
-                const int new_i1 = i1 + b;
-                const int new_i2 = std::min(i2 + b, n - 1);
-                j1 = new_j1;
-                j2 = new_j2;
-                i1 = new_i1;
-                i2 = new_i2;
-            }
-        }
-
-        if (b_tilde + 1 <= kd_work) {
-            band_zero_rows_from<T>(ctx, ABw, b_tilde + 1);
-        }
-
-        b = b_tilde;
-    }
-
-    {
-        auto AB = ABw.kernel_view();
-        auto dptr = d_out.data_ptr();
-        const int d_inc = d_out.inc();
-        const int d_stride = d_out.stride();
-        auto eptr = e_out.data_ptr();
-        const int e_inc = e_out.inc();
-        const int e_stride = e_out.stride();
-        auto tauptr = tau_out.data_ptr();
-        const int tau_inc = tau_out.inc();
-        const int tau_stride = tau_out.stride();
-
-        ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)),
-                             [=](sycl::id<2> idx) {
-                                 const int b = static_cast<int>(idx[0]);
-                                 const int j = static_cast<int>(idx[1]);
-                                 dptr[b * d_stride + j * d_inc] = real_part(AB(0, j, b));
-                             });
-        });
-
-        if (n > 1) {
-            ctx->submit([&](sycl::handler& cgh) {
-                cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)),
-                                 [=](sycl::id<2> idx) {
-                                     const int b = static_cast<int>(idx[0]);
-                                     const int j = static_cast<int>(idx[1]);
-                                     eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
-                                     tauptr[b * tau_stride + j * tau_inc] = T(0);
-                                 });
-            });
-        }
-    }
+    // Extract output (d, e, tau)
+    bandr1_extract_tridiagonal_output<T>(ctx, ABw, n, batch, d_out, e_out, tau_out);
 
     return ctx.get_event();
 }
