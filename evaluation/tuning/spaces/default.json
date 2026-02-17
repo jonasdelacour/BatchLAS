@@ -14,8 +14,8 @@
       ]
     },
     {
-      "bench": "steqr_cta",
-      "exe": "steqr_cta_benchmark",
+      "bench": "steqr",
+      "exe": "steqr_benchmark",
       "metric": "T(µs)/Batch",
       "direction": "min",
       "arg_spec": ["n", "batch", "n_sweeps", "wg_multiplier", "shift_kind"],

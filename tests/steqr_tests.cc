@@ -36,7 +36,7 @@ static inline const char* update_scheme_name(SteqrUpdateScheme scheme) {
     }
 }
 
-static constexpr std::array<SteqrUpdateScheme, 2> kCtaUpdateSchemes = {
+static constexpr std::array<SteqrUpdateScheme, 2> kSteqrUpdateSchemes = {
     SteqrUpdateScheme::PG,
     SteqrUpdateScheme::EXP,
 };
@@ -187,7 +187,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrCtaRandomN8CompareWithSteqr) {
+TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -216,8 +216,8 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomN8CompareWithSteqr) {
                          ws_ref.to_span(), JobType::EigenVectors, params_ref, eigvects_ref);
     this->ctx->wait();
 
-    // --- CTA steqr_cta (iterate update schemes) ---
-    for (auto scheme : kCtaUpdateSchemes) {
+    // --- STEQR with explicit update schemes ---
+    for (auto scheme : kSteqrUpdateSchemes) {
         SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
         Vector<float_type> evals_cta = Vector<float_type>::zeros(n, batch);
         auto eigvects_cta = Matrix<float_type>::Zeros(n, n, batch);
@@ -230,10 +230,10 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomN8CompareWithSteqr) {
         params_cta.cta_update_scheme = scheme;
 
         UnifiedVector<std::byte> ws_cta(
-            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
+            steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
             std::byte(0));
-        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
-                                 ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
+        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
+                             ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
         this->ctx->wait();
 
         // Compare eigenvalues directly (both should be correct and similarly ordered after sort)
@@ -251,12 +251,12 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomN8CompareWithSteqr) {
             ASSERT_NEAR(evals_ref[i], ritz_ref(i, 0), test_utils::tolerance<T>())
                 << "Ritz mismatch (STEQR) at index " << i;
             ASSERT_NEAR(evals_cta[i], ritz_cta(i, 0), test_utils::tolerance<T>())
-                << "Ritz mismatch (STEQR_CTA) at index " << i;
+                << "Ritz mismatch (STEQR) at index " << i;
         }
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
+TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -274,7 +274,7 @@ TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
         expected_eigenvalues[i-1] = float_type(a - 2.0f * std::sqrt(b * c) * std::cos(M_PI * i / (n + 1)));
     }
 
-    for (auto scheme : kCtaUpdateSchemes) {
+    for (auto scheme : kSteqrUpdateSchemes) {
         SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
         // fresh output buffers each iteration
         Vector<float_type> eigenvalues(n, batch);
@@ -288,11 +288,11 @@ TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
         params.cta_update_scheme = scheme;
 
         auto ws = UnifiedVector<std::byte>(
-            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
+            steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
-                                 ws.to_span(), JobType::EigenVectors, params, eigvects);
+        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+                             ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
         // Validate eigenvalues against expected analytical values
@@ -311,7 +311,7 @@ TYPED_TEST(SteqrTest, SteqrCtaSingleMatrix) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
+TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -332,7 +332,7 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
         }
     }
 
-    for (auto scheme : kCtaUpdateSchemes) {
+    for (auto scheme : kSteqrUpdateSchemes) {
         SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
         SteqrParams<float_type> params = {};
         params.max_sweeps = 10;
@@ -345,11 +345,11 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
         Vector<float_type> eigenvalues(n, batch);
         auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
         auto ws = UnifiedVector<std::byte>(
-            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
+            steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
-                                 ws.to_span(), JobType::EigenVectors, params, eigvects);
+        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+                             ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
         for (int j = 0; j < batch; ++j) {
@@ -372,7 +372,7 @@ TYPED_TEST(SteqrTest, SteqrCtaBatchedMatrices) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
+TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -394,11 +394,11 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
         params.sort_order = SortOrder::Ascending;
 
         auto ws = UnifiedVector<std::byte>(
-            steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
+            steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr_cta<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
-                                 ws.to_span(), JobType::EigenVectors, params, eigvects);
+        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+                             ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
         auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
@@ -425,7 +425,7 @@ TYPED_TEST(SteqrTest, SteqrCtaRandomMatrices) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
+TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -465,10 +465,10 @@ TYPED_TEST(SteqrTest, SteqrCtaConditionedTridiagonalNetlibRef) {
     params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
 
     auto ws = UnifiedVector<std::byte>(
-        steqr_cta_buffer_size<float_type>(*this->ctx, diag, sub, eigenvalues, JobType::EigenVectors, params),
+        steqr_buffer_size<float_type>(*this->ctx, diag, sub, eigenvalues, JobType::EigenVectors, params),
         std::byte(0));
-    steqr_cta<B, float_type>(*this->ctx, diag, sub, eigenvalues,
-                             ws.to_span(), JobType::EigenVectors, params, eigvects);
+    steqr<B, float_type>(*this->ctx, diag, sub, eigenvalues,
+                         ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
     const auto ref_eigs = netlib_ref_eigs_tridiag(VectorView(diag), VectorView(sub));
@@ -658,9 +658,9 @@ void stress_run_case(Queue& ctx,
         ctx.wait();
     }
 
-    // steqr_cta: eigenvalues only, but still requires a square eigvects argument.
+    // steqr (alternate scheme): eigenvalues only, but still requires a square eigvects argument.
     {
-        stress_debug_log("stress_run_case: steqr_cta");
+        stress_debug_log("stress_run_case: steqr(alt-scheme)");
         SteqrParams<Real> params = {};
         params.max_sweeps = 200;
         params.sort = true;
@@ -670,10 +670,10 @@ void stress_run_case(Queue& ctx,
         params.cta_update_scheme = SteqrUpdateScheme::EXP;
 
         auto ws = UnifiedVector<std::byte>(
-            steqr_cta_buffer_size<Real>(ctx, diag, sub, cta_eigs, JobType::EigenVectors, params),
+            steqr_buffer_size<Real>(ctx, diag, sub, cta_eigs, JobType::EigenVectors, params),
             std::byte(0));
         auto eigvects = Matrix<Real>::Zeros(n, n, batch);
-        steqr_cta<B, Real>(ctx, diag, sub, cta_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        steqr<B, Real>(ctx, diag, sub, cta_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
         ctx.wait();
     }
 
@@ -704,7 +704,7 @@ void stress_run_case(Queue& ctx,
                 ASSERT_NEAR(ste[i], r, tol) << "STEQR mismatch at (" << i << "," << j << ")";
             }
             if (check_cta_against_ref) {
-                ASSERT_NEAR(cta[i], r, tol * 1e2) << "STEQR_CTA mismatch at (" << i << "," << j << ")";
+                ASSERT_NEAR(cta[i], r, tol * 1e2) << "STEQR mismatch at (" << i << "," << j << ")";
             }
         }
     }
@@ -717,7 +717,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
 
-    // steqr_cta supports {8,16,32}; use 32 for a heavier stress case.
+    // steqr dispatch uses CTA for n <= subgroup size on CUDA; use 32 for a heavier stress case.
     const int n = 32;
     const int batch = 16;
 

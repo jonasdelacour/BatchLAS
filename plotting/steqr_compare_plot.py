@@ -20,7 +20,7 @@ def _default_bench_path() -> str:
 
 
 def _default_bench_cta_path() -> str:
-    return os.path.join(_here(), "..", "build", "benchmarks", "steqr_cta_benchmark")
+    return os.path.join(_here(), "..", "build", "benchmarks", "steqr_benchmark")
 
 
 def _default_csv_path() -> str:
@@ -107,23 +107,23 @@ def plot_compare_time_vs_batch(
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{int(v)}" if v >= 1 else f"{v:g}"))
         ax.tick_params(axis="x", labelrotation=45)
 
-    fig.suptitle("STEQR vs STEQR_CTA (time per batch)", fontsize=22)
+    fig.suptitle("STEQR default vs tuned (time per batch)", fontsize=22)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     target_path = savepath or _default_plot_path()
     save_figure(fig, target_path)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run and plot STEQR vs STEQR_CTA")
+    parser = argparse.ArgumentParser(description="Run and plot STEQR default vs tuned")
     parser.add_argument("--run", action="store_true", help="run benchmarks before plotting")
     parser.add_argument("--bench-bin", default=_default_bench_path(), help="path to steqr_benchmark binary")
     parser.add_argument(
         "--bench-bin-cta",
         default=_default_bench_cta_path(),
-        help="path to steqr_cta_benchmark binary",
+        help="path to second steqr_benchmark binary/config to compare",
     )
     parser.add_argument("--csv", default=_default_csv_path(), help="CSV output path for steqr")
-    parser.add_argument("--csv-cta", default=_default_csv_cta_path(), help="CSV output path for steqr_cta")
+    parser.add_argument("--csv-cta", default=_default_csv_cta_path(), help="CSV output path for tuned steqr run")
     parser.add_argument("--output", default=None, help="optional path to save the plot")
 
     parser.add_argument("--backend", default="CUDA", help="minibench backend filter")
@@ -167,7 +167,7 @@ def main() -> None:
         raise FileNotFoundError(f"CSV not found: {args.csv_cta}")
 
     df_steqr = _load_with_impl(args.csv, impl="steqr")
-    df_steqr_cta = _load_with_impl(args.csv_cta, impl="steqr_cta")
+    df_steqr_cta = _load_with_impl(args.csv_cta, impl="steqr_tuned")
 
     plot_compare_time_vs_batch(df_steqr, df_steqr_cta, n_values=args.n, savepath=args.output)
 

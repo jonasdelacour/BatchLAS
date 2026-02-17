@@ -18,7 +18,6 @@ set(BENCHMARK_TARGETS
     lanczos_benchmark
     ortho_benchmark
     steqr_benchmark
-    steqr_cta_benchmark
     steqr_accuracy
     orthogonality_accuracy
     eigensolver_accuracy

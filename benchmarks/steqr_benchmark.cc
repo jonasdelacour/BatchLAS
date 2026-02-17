@@ -2,16 +2,22 @@
 #include <blas/linalg.hh>
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
+#include <algorithm>
 
 using namespace batchlas;
 
 // Batched STEQR benchmark
+// Args:
+//   [n, batch]
+//   [n, batch, n_sweeps, transpose]
+//   [n, batch, n_sweeps, wg_multiplier, shift_kind]
 template <typename T, Backend B>
 static void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t n_sweeps = state.range(2) > 0 ? state.range(2) : 10;
-    const size_t transpose_layout = state.range(3);
+    const size_t arg3 = state.range(3);
+    const size_t arg4 = state.range(4);
     //const int use_block_rotations = state.range(4);
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
@@ -19,10 +25,20 @@ static void BM_STEQR(minibench::State& state) {
     const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  //Extra flops if eigvects are required.
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
-    bool transpose = static_cast<bool>(transpose_layout);
+
+    // Backward-compatible arg interpretation:
+    // - If arg4 is set, treat args as tuned CTA knobs: [.., wg_multiplier, shift_kind].
+    // - Otherwise treat arg3 as transpose flag from the legacy steqr benchmark schema.
+    const bool use_tuned_schema = (arg4 != 0);
+    const bool transpose = use_tuned_schema ? false : static_cast<bool>(arg3);
+    const size_t wg_multiplier = use_tuned_schema ? std::max<size_t>(size_t(1), arg3) : size_t(1);
+    const int shift_kind = use_tuned_schema ? static_cast<int>(arg4) : 1;
 
     SteqrParams<T> params;
     params.max_sweeps = n_sweeps;
+    params.cta_wg_size_multiplier = wg_multiplier;
+    params.cta_shift_strategy = (shift_kind == 1) ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
+    params.cta_update_scheme = SteqrUpdateScheme::EXP;
     params.back_transform = false;
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;

@@ -1012,7 +1012,7 @@ if(BATCHLAS_BUILD_BENCHMARKS)
                 --skip-failed
             DEPENDS
                 stedc_benchmark
-                steqr_cta_benchmark
+                steqr_benchmark
                 sytrd_blocked_benchmark
                 ormqr_blocked_benchmark
                 syev_blocked_benchmark

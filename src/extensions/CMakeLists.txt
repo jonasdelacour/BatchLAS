@@ -16,6 +16,8 @@ set(EXTENSIONS_SOURCES
     trmm.cc
     ormqr_blocked.cc
     steqr.cc
+    steqr_wg.cc
+    steqr_legacy.cc
     latrd_lower_panel.cc
     sytrd_blocked.cc
     sytrd_sy2sb.cc

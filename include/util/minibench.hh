@@ -810,6 +810,16 @@ inline void SteqrCtaBenchSizes(Benchmark* b) {
 }
 
 template <typename Benchmark>
+inline void SteqrTunedBenchSizes(Benchmark* b) {
+    SteqrCtaBenchSizes(b);
+}
+
+template <typename Benchmark>
+inline void SteqrTunedBenchSizesNetlib(Benchmark* b) {
+    SteqrCtaBenchSizesNetlib(b);
+}
+
+template <typename Benchmark>
 inline void SteqrCtaBenchSizesNetlib(Benchmark* b) {
     for (int s : {8, 16, 32}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {

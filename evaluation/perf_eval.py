@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 @dataclass(frozen=True)
 class Case:
-    bench: str  # "stedc" | "steqr" | "steqr_cta" | "sytrd_cta" | "ormx_cta" | "syev_cta"
+    bench: str  # "stedc" | "steqr" | "sytrd_cta" | "ormx_cta" | "syev_cta"
     args: List[int]
 
 
@@ -203,7 +203,6 @@ def _run_one_benchmark(
     expected_metric_by_bench = {
         "stedc": "Time (µs) / Batch",
         "steqr": "T(µs)/Batch",
-        "steqr_cta": "T(µs)/Batch",
         "sytrd_cta": "T(µs)/Batch",
         # Note: this runs the ormqx_cta kernel via the ormqr_cta_benchmark executable.
         "ormx_cta": "T(µs)/Batch",
@@ -401,7 +400,7 @@ def _compare(
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
-        description="BatchLAS perf eval (minibench; default CUDA FP32; STEDC/STEQR/CTA variants)"
+        description="BatchLAS perf eval (minibench; default CUDA FP32; STEDC/STEQR variants)"
     )
     p.add_argument("--build-dir", default="", help="Build directory (default: repo_root/build)")
     p.add_argument(
@@ -462,7 +461,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stedc_exe = _default_benchmark_path(build_dir, "stedc_benchmark")
     steqr_exe = _default_benchmark_path(build_dir, "steqr_benchmark")
-    steqr_cta_exe = _default_benchmark_path(build_dir, "steqr_cta_benchmark")
     sytrd_cta_exe = _default_benchmark_path(build_dir, "sytrd_cta_benchmark")
     # Historical naming: the executable is ormqr_cta_benchmark, but the kernel under test is ormqx_cta.
     ormx_cta_exe = _default_benchmark_path(build_dir, "ormqr_cta_benchmark")
@@ -497,20 +495,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         trace_events=trace_events,
         kernel_trace_dir=kernel_trace_dir,
     )
-    measurements += _run_one_benchmark(
-        exe=steqr_cta_exe,
-        bench="steqr_cta",
-        cases=cases,
-        backend=args.backend,
-        dtype=args.dtype,
-        warmup=args.warmup,
-        min_time_ms=args.min_time,
-        min_iters=args.min_iters,
-        max_iters=args.max_iters,
-        trace_events=trace_events,
-        kernel_trace_dir=kernel_trace_dir,
-    )
-
     measurements += _run_one_benchmark(
         exe=sytrd_cta_exe,
         bench="sytrd_cta",
