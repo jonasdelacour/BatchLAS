@@ -18,11 +18,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto n = d.size();
     auto batch_size = d.batch_size();
     if (n <= params.recursion_threshold){
-        if (n <= 32) {
-            return steqr_cta<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
-        } else {
-            return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
-        }
+        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
     }
 
     //Split the matrix into two halves
