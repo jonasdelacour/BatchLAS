@@ -66,7 +66,7 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
         });
 
     state.SetMetric("GFLOPS", approx_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(\u00b5s)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
     (void)state;
 #endif

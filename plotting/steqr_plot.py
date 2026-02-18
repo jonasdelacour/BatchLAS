@@ -30,7 +30,7 @@ def _default_plot_batch_path(n_values: Optional[Sequence[int]]) -> str:
 
 
 def plot_steqr_benchmark(df: pd.DataFrame, savepath: Optional[str] = None) -> None:
-    metric = "T(µs)/Batch"
+    metric = "T(µs)/matrix"
     metric_std = f"{metric}_std"
 
     fig, _ = plot_metric(
@@ -51,7 +51,7 @@ def plot_steqr_benchmark(df: pd.DataFrame, savepath: Optional[str] = None) -> No
 
 
 def plot_time_vs_batch(df: pd.DataFrame, n_values: Optional[Sequence[int]], savepath: Optional[str] = None) -> None:
-    metric = "T(µs)/Batch"
+    metric = "T(µs)/matrix"
     metric_std = f"{metric}_std"
 
     fig, _ = plot_metric(

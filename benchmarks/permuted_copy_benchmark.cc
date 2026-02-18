@@ -51,7 +51,7 @@ static void BM_PERMUTED_COPY(minibench::State& state) {
 
     const double bytes_moved = static_cast<double>(rows) * cols * batch * sizeof(T) * 2.0;
     state.SetMetric("GB/s", bytes_moved * 1e-9, minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK(BM_PERMUTED_COPY, SquareBatchSizes);

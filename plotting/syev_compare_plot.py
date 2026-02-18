@@ -51,7 +51,7 @@ def _require_columns(df: pd.DataFrame, cols: Sequence[str], *, label: str) -> No
 
 def _pick_metric_column(df: pd.DataFrame) -> str:
     # BatchLAS benchmarks have both styles in the tree.
-    for name in ("Time (µs) / Batch", "T(µs)/Batch"):
+    for name in ("Time (µs) / matrix", "T(µs)/matrix"):
         if name in df.columns:
             return name
     raise ValueError(

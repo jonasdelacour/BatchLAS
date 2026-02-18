@@ -63,7 +63,7 @@ def _resolve_output_template(template: Optional[str], *, dtype: str) -> Optional
 
 
 def _pick_time_metric_column(df: pd.DataFrame) -> str:
-    for name in ("Time (µs) / Batch", "T(µs)/Batch"):
+    for name in ("Time (µs) / matrix", "T(µs)/matrix"):
         if name in df.columns:
             return name
     raise ValueError(f"No known time-per-batch metric column found. Available: {list(df.columns)}")

@@ -201,12 +201,12 @@ def _run_one_benchmark(
         raise PermissionError(f"Benchmark executable is not runnable: {exe}")
 
     expected_metric_by_bench = {
-        "stedc": "Time (µs) / Batch",
-        "steqr": "T(µs)/Batch",
-        "sytrd_cta": "T(µs)/Batch",
+        "stedc": "Time (µs) / matrix",
+        "steqr": "T(µs)/matrix",
+        "sytrd_cta": "T(µs)/matrix",
         # Note: this runs the ormqx_cta kernel via the ormqr_cta_benchmark executable.
-        "ormx_cta": "T(µs)/Batch",
-        "syev_cta": "Time (µs) / Batch",
+        "ormx_cta": "T(µs)/matrix",
+        "syev_cta": "Time (µs) / matrix",
     }
     try:
         expected_metric = expected_metric_by_bench[bench]

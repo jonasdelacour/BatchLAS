@@ -63,7 +63,7 @@ def plot_compare_time_vs_batch(
     n_values: Sequence[int],
     savepath: Optional[str] = None,
 ) -> None:
-    metric = "T(µs)/Batch"
+    metric = "T(µs)/matrix"
     metric_std = f"{metric}_std"
 
     _require_columns(df_steqr, ["arg0", "arg1", metric], label="steqr")

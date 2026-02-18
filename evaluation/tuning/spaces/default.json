@@ -3,7 +3,7 @@
     {
       "bench": "stedc",
       "exe": "stedc_benchmark",
-      "metric": "Time (µs) / Batch",
+      "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "recursion_threshold", "flat"],
       "cases": [
@@ -16,7 +16,7 @@
     {
       "bench": "steqr",
       "exe": "steqr_benchmark",
-      "metric": "T(µs)/Batch",
+      "metric": "T(µs)/matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "n_sweeps", "wg_multiplier", "shift_kind"],
       "cases": [
@@ -33,7 +33,7 @@
     {
       "bench": "sytrd_blocked",
       "exe": "sytrd_blocked_benchmark",
-      "metric": "T(µs)/Batch",
+      "metric": "T(µs)/matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "nb", "uplo"],
       "cases": [
@@ -46,7 +46,7 @@
     {
       "bench": "ormqr_blocked",
       "exe": "ormqr_blocked_benchmark",
-      "metric": "Time (µs) / Batch",
+      "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "side", "trans", "block_size"],
       "cases": [
@@ -63,7 +63,7 @@
     {
       "bench": "syev_blocked",
       "exe": "syev_blocked_benchmark",
-      "metric": "Time (µs) / Batch",
+      "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "jobz", "sytrd_block_size", "ormqr_block_size"],
       "cases": [

@@ -129,7 +129,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
             sytrd_band_reduction<B, T>(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
 // Single-step band reduction benchmark (partial reduction with step limit)
@@ -176,7 +176,7 @@ static void BM_BAND_REDUCTION_SINGLE_STEP(minibench::State& state) {
             sytrd_band_reduction_single_step<B, T>(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
 // Register benchmarks

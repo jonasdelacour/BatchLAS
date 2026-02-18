@@ -51,7 +51,7 @@ static void BM_STEDC(minibench::State& state) {
                     params,
                     bench::pristine(eigvects),
                     kernel);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

@@ -39,7 +39,7 @@ static void BM_SPMM(minibench::State& state) {
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) *
                         (1e-9 * 2.0 * nnz * n), minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

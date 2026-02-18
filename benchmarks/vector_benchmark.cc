@@ -51,7 +51,7 @@ static void BM_STEQR(minibench::State& state) {
                         });
                     });
     state.SetMetric("TFLOPS", static_cast<double>(batch) * (1e-12 * double(n) * double(n_writes) * 3.0), minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 

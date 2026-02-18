@@ -37,7 +37,7 @@ static void BM_LANCZOS(minibench::State& state) {
                         });
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK(BM_LANCZOS, SquareBatchSizes);

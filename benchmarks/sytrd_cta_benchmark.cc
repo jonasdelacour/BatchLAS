@@ -52,7 +52,7 @@ static void BM_SYTRD_CTA(minibench::State& state) {
             sytrd_cta<B>(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
     (void)state;
 #endif

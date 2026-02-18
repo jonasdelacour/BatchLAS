@@ -114,7 +114,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
             sytrd_sb2st<B, T>(q, std::forward<decltype(xs)>(xs)...);
         });
 
-    state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
     (void)state;
 #endif
@@ -178,7 +178,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
             sytrd_band_reduction<B, T>(q, std::forward<decltype(xs)>(xs)...);
         });
 
-    state.SetMetric("T(\u00b5s)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
     (void)state;
 #endif

@@ -38,7 +38,7 @@ def _as_csv_arg(values: Iterable[int]) -> str:
 
 
 def _pick_metric_column(df: pd.DataFrame) -> str:
-    for name in ("Time (µs) / Batch", "T(µs)/Batch"):
+    for name in ("Time (µs) / matrix", "T(µs)/matrix"):
         if name in df.columns:
             return name
     raise ValueError(f"No known time-per-batch metric column found. Available: {list(df.columns)}")
@@ -263,7 +263,7 @@ def main() -> None:
         "--y-metric",
         choices=["throughput", "time"],
         default="throughput",
-        help="y-axis metric: throughput (matrices/s) or time (µs)/batch",
+        help="y-axis metric: throughput (matrices/s) or time (µs)/matrix",
     )
 
     parser.add_argument(

@@ -123,7 +123,7 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
                     block_size,
                     kernel);
     state.SetMetric("GFLOPS", gflops_nominal, minibench::Rate);
-    state.SetMetric("Time (\u00b5s) / Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_ORMQR_BLOCKED, OrmqrBlockedBenchSizes);

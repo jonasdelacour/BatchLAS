@@ -93,7 +93,7 @@ static void BM_ORMQR_CTA(minibench::State& state) {
                                     wg_mult);
                     });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
-    state.SetMetric("T(µs)/Batch", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 #else
     (void)state;
 #endif

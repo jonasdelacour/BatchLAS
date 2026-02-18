@@ -29,7 +29,7 @@ static void BM_GEMV(minibench::State& state) {
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
                     minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6,
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6,
                     minibench::Reciprocal);
 }
 

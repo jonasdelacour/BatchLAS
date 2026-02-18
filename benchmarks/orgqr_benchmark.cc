@@ -31,7 +31,7 @@ static void BM_ORGQR(minibench::State& state) {
                     });
     //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 
 }
 

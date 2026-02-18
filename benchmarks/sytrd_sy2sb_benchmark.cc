@@ -81,7 +81,7 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
     // Approximate: 4/3 * n^2 * kd for the upper-left panel work + trailing matrix updates
     const double flops = (4.0 / 3.0) * static_cast<double>(n) * static_cast<double>(n) * static_cast<double>(kd);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
-    state.SetMetric("Time (µs) / Batch", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYTRD_SY2SB, SytrdSy2sbBenchSizes);

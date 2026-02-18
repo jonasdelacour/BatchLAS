@@ -41,7 +41,7 @@ static void BM_SYEVX(minibench::State& state) {
                     [](Queue& q, auto&&... xs) {
                         syevx<B>(q, std::forward<decltype(xs)>(xs)...);
                     });
-    state.SetMetric("Time (µs) / Batch", (1.0 / batch) * 1e6, minibench::Reciprocal);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
 
