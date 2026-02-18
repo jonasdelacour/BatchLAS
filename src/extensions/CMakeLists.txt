@@ -24,6 +24,7 @@ set(EXTENSIONS_SOURCES
     sytrd_sb2st.cc
     band_reduction.cc
     stedc.cc
+    stedc_secular.cc
     stedc_flat.cc
     ritz_values.cc
     lascl.cc
