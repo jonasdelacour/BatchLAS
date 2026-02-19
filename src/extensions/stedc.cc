@@ -11,6 +11,15 @@
 
 namespace batchlas {
 
+// SYCL kernel class tags for profiling and naming (templated to avoid ODR violations)
+template <Backend B, typename T> class StedcModifyDiagonal;
+template <Backend B, typename T> class StedcComputeV;
+template <Backend B, typename T> class StedcDeflation;
+template <Backend B, typename T> class StedcSecularSolve;
+template <Backend B, typename T> class StedcRescaleV;
+template <Backend B, typename T> class StedcMatrixUpdate;
+template <Backend B, typename T> class StedcAssignEigenvalues;
+
 template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q)
@@ -42,7 +51,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto pool = BumpAllocator(ws);
     auto rho = pool.allocate<T>(ctx, batch_size);
 
-    ctx -> parallel_for(sycl::range(batch_size), [=](sycl::id<1> idx) {
+    ctx -> parallel_for<StedcModifyDiagonal<B, T>>(sycl::range(batch_size), [=](sycl::id<1> idx) {
         //Modify the two diagonal entries adjacent to the split
         auto ix = idx[0];
         rho[ix] = e(m - 1, ix);
@@ -68,7 +77,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     ctx -> submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        h.parallel_for<StedcComputeV<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
@@ -96,7 +105,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         auto scan_mem_include = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto scan_mem_exclude = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        h.parallel_for<StedcDeflation<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
@@ -215,7 +224,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         // Idea: As long as the columns of Qprime are the euclidean basis vectors, multiplying by Qprime is just a permutation of the columns of Q1 ⨂ Q2.
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+            h.parallel_for<StedcSecularSolve<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
                 auto bdim = item.get_local_range(0);
                 auto tid = item.get_local_linear_id();
@@ -246,7 +255,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         // but uses SYCL group collectives for the product reduction.
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for(
+            h.parallel_for<StedcRescaleV<B, T>>(
                 sycl::nd_range<1>(d.batch_size() * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
@@ -278,7 +287,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for(
+            h.parallel_for<StedcMatrixUpdate<B, T>>(
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();
@@ -306,7 +315,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     }
     
     ctx -> submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        h.parallel_for<StedcAssignEigenvalues<B, T>>(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
