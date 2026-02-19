@@ -260,11 +260,23 @@ size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat:
     // - permutation indices: int32_t[n * batch]
     // - optional temp eigenvectors matrix: T[rows * cols * batch]
     //
-    // Note: `W` is expected to be a flat span containing all eigenvalues across the batch
-    // (size == n * batch). Do not multiply by batch again.
-    const int64_t batch = V.batch_size();
-    const int64_t n_total = static_cast<int64_t>(W.size());
-    if (batch <= 0 || n_total < 0 || (n_total % batch) != 0) {
+    // Workspace used by sort is sized by (n, batch) and does not depend on any padding
+    // that may exist in the underlying eigenvalue storage.
+    //
+    // Many callers provide `W` via `VectorView::data()`, whose Span length is the
+    // *required span length* for a possibly-strided batched layout. In that case,
+    // `W.size()` may be larger than `n * batch` and not divisible by `batch`.
+    //
+    // Prefer deriving (n, batch) from the eigenvector view when available.
+    int64_t batch = V.batch_size();
+    int64_t n_total = static_cast<int64_t>(W.size());
+    if (batch > 0 && V.rows() > 0) {
+        n_total = static_cast<int64_t>(V.rows()) * static_cast<int64_t>(batch);
+    } else {
+        // Fallback: assume W is a packed flat span for a single batch.
+        batch = 1;
+    }
+    if (batch <= 0 || n_total < 0) {
         throw std::runtime_error("sort_buffer_size: invalid batch layout for eigenvalues span");
     }
 
