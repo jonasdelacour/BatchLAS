@@ -2,6 +2,7 @@
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <util/mempool.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 #include <internal/sort.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
@@ -14,7 +15,9 @@ template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q)
 {
-    constexpr auto steqr_params = SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, false};
+    // Ensure leaf subproblems return sorted eigenvalues so higher levels can safely
+    // rely on the "children sorted" invariant.
+    constexpr auto steqr_params = SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true};
     auto n = d.size();
     auto batch_size = d.batch_size();
     if (n <= params.recursion_threshold){
@@ -58,6 +61,9 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     
     //Once permutations are done we can free the memory once again
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
+    // Persistent mapping from logical (current) column order -> physical column in `eigvects`.
+    // We avoid physically permuting the eigenvector matrix until right before GEMM / function exit.
+    auto perm_map = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
     auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
     ctx -> submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
@@ -76,17 +82,17 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
             }
         });
     });
-    argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
-    permute(ctx, eigenvalues, permutation);
-    permute(ctx, v, permutation);
-    permuted_copy(ctx, eigvects, temp_Q, permutation);
+    argsort(ctx, eigenvalues, perm_map, SortOrder::Ascending, true);
+    permute(ctx, eigenvalues, perm_map);
+    permute(ctx, v, perm_map);
 
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
     //Deflation scheme
     T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
     ctx -> submit([&](sycl::handler& h) {
-        auto Q = temp_Q.kernel_view();
+        auto Q = eigvects.kernel_view();
+        auto perm_local = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto scan_mem_include = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto scan_mem_exclude = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
@@ -100,6 +106,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
             keep_indices(k, bid) = 0;
             scan_mem_exclude[k] = 0;
             permutation(k, bid) = -1;
+            perm_local[k] = perm_map(k, bid);
         }
 
         sycl::group_barrier(cta);
@@ -113,10 +120,15 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                     v(j, bid) = T(0.0);
                     v(j + 1, bid) = r;
                 }
+                const int32_t pj = perm_local[j];
+                const int32_t pj1 = perm_local[j + 1];
+                if (pj < 0 || pj >= n || pj1 < 0 || pj1 >= n) {
+                    continue;
+                }
                 for (int k = tid; k < n; k += bdim) {
-                    auto Qi = Q(k,j,bid), Qj = Q(k,j + 1,bid);
-                    Q(k,j,bid) = Qi*c - Qj*s;
-                    Q(k,j + 1,bid) = Qj*c + Qi*s;
+                    auto Qi = Q(k, pj, bid), Qj = Q(k, pj1, bid);
+                    Q(k, pj, bid) = Qi*c - Qj*s;
+                    Q(k, pj1, bid) = Qj*c + Qi*s;
                 }
             }
         }
@@ -127,15 +139,15 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
         auto eig_max = sycl::joint_reduce(cta,
-                          norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get(),
-                          norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
+                          util::get_raw_ptr(norm_mem),
+                          util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
 
         auto v_norm = internal::nrm2<T>(cta, v);
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid) / v_norm); }
         auto v_max = sycl::joint_reduce(cta,
-                        norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get(),
-                        norm_mem.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
+                        util::get_raw_ptr(norm_mem),
+                        util::get_raw_ptr(norm_mem) + n,
                         sycl::maximum<T>());
         auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max);
 
@@ -155,13 +167,13 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         sycl::joint_exclusive_scan(cta,
                        keep_indices.batch_item(bid).data_ptr(),
                        keep_indices.batch_item(bid).data_ptr() + n,
-                       scan_mem_include.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                       util::get_raw_ptr(scan_mem_include),
                        0,
                        sycl::plus<int32_t>());
         sycl::joint_exclusive_scan(cta,
-                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get(),
-                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get() + n,
-                       scan_mem_exclude.template get_multi_ptr<sycl::access::decorated::no>().get(),
+                       util::get_raw_ptr(scan_mem_exclude),
+                       util::get_raw_ptr(scan_mem_exclude) + n,
+                       util::get_raw_ptr(scan_mem_exclude),
                        0,
                        sycl::plus<int32_t>());
 
@@ -184,10 +196,14 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         
         });
     });
-    
-    permute(ctx, temp_Q, eigvects, permutation);
+
+    // Apply deflation permutation to contiguous vectors.
     permute(ctx, eigenvalues, permutation);
     permute(ctx, v, permutation);
+
+    // Update the logical->physical column map instead of physically permuting the eigenvector matrix.
+    // This composes the current column map with the deflation permutation.
+    permute(ctx, perm_map, permutation);
 
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), n, n, n, n * n, batch_size);
@@ -288,9 +304,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                 });
         });
     }
-
-    gemm<B>(ctx, temp_Q, Qprime, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-
+    
     ctx -> submit([&](sycl::handler& h) {
         h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
@@ -303,9 +317,14 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         }
         });
     });
+
     argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
     permute(ctx, eigenvalues, permutation);
-    permute(ctx, eigvects, temp_Q, permutation);
+
+    // Avoid full-matrix copy + permute by using out-of-place permuted_copy in scratch buffers.
+    permuted_copy(ctx, Qprime, temp_Q, permutation);
+    permuted_copy(ctx, eigvects, Qprime, perm_map);
+    gemm<B>(ctx, Qprime, temp_Q, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
 
     return ctx.get_event();
 }
@@ -356,6 +375,9 @@ size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType job
     size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
     size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
 
+    // Additional persistent column-map buffer used in the merge step (perm_map).
+    size += BumpAllocator::allocation_size<int32_t>(ctx, n * batch_size);
+
     return (size * n_rec) + 2 * BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
 }
 
@@ -377,6 +399,9 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     // Compute the workspace size based on the job type
     size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
     size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
+
+    // Additional persistent column-map buffer used in the merge step (perm_map).
+    size += BumpAllocator::allocation_size<int32_t>(ctx, n * batch_size);
 
     return (size * n_rec) + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
 }
