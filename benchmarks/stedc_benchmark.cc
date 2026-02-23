@@ -11,8 +11,6 @@ static void BM_STEDC(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
-    const bool flat = state.range(3) != 0;
-    
     JobType jobz = JobType::EigenVectors;
 
     auto diags = Vector<T>::random(n, batch);
@@ -26,7 +24,7 @@ static void BM_STEDC(minibench::State& state) {
     auto eigvects = Matrix<T>::Identity(n, batch);
     UnifiedVector<std::byte> ws(stedc_workspace_size<B, T>(*q, n, batch, jobz, params));
 
-    auto kernel = [q, flat](auto& diags,
+    auto kernel = [q](auto& diags,
                             auto& off_diags,
                             auto& eigvals,
                             auto& ws,
@@ -37,9 +35,6 @@ static void BM_STEDC(minibench::State& state) {
         auto e = static_cast<VectorView<T>>(off_diags);
         auto w = static_cast<VectorView<T>>(eigvals);
         auto Z = eigvects.view();
-        if (flat) {
-            return stedc_flat<B, T>(*q, d, e, w, ws.to_span(), jobz, params, Z);
-        }
         return stedc<B, T>(*q, d, e, w, ws.to_span(), jobz, params, Z);
     };
     state.SetKernel(q,
