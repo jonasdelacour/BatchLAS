@@ -949,6 +949,7 @@ namespace batchlas {
     struct StedcParams {
         int64_t recursion_threshold = 32; //Threshold below which the algorithm switches to a non-recursive method such as STEQR
         StedcSecularSolver secular_solver = StedcSecularSolver::Rocm;
+        SteqrParams<T> leaf_steqr_params = SteqrParams<T>(); 
     };
 
     template <Backend B, typename T>

@@ -26,7 +26,9 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 {
     // Ensure leaf subproblems return sorted eigenvalues so higher levels can safely
     // rely on the "children sorted" invariant.
-    constexpr auto steqr_params = SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true};
+    auto steqr_params = params.leaf_steqr_params;
+    steqr_params.sort = true;
+    steqr_params.sort_order = SortOrder::Ascending;
     auto n = d.size();
     auto batch_size = d.batch_size();
     if (n <= params.recursion_threshold){
