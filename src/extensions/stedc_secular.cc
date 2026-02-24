@@ -37,82 +37,108 @@ auto sec_eval(const sycl::group<1>& cta, const VectorView<T>& v, const VectorVie
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
 }
 
+enum class RocSecularEvalMode : int32_t {
+    full = 0,
+    skip_k = 1,
+    skip_k_and_next = 2,
+};
+
 template <typename T>
-auto sec_eval_roc(const int32_t type, const int32_t k, const int32_t dd, const VectorView<T>& D, const VectorView<T>& z, const T& rho, const T& cor, bool modif){
-    int32_t gout, hout;
-    T er, fx, gx, hx, fdx, gdx, hdx, zz, tmp;
-    // prepare computations
-    // if type = 0: evaluate secular equation
-    if(type == 0)
+struct RocSecularEvalResult {
+    T secular_value;
+    T secular_derivative;
+    T lower_sum;
+    T lower_derivative;
+    T upper_sum;
+    T upper_derivative;
+    T error_estimate;
+};
+
+template <typename T>
+auto evaluate_roc_secular(const RocSecularEvalMode mode,
+                          const int32_t pole_index,
+                          const int32_t degree,
+                          const VectorView<T>& poles,
+                          const VectorView<T>& weights,
+                          const T& rho_inverse,
+                          const T& correction,
+                          const bool apply_shift_to_poles) {
+    int32_t lower_exclusive_end = 0;
+    int32_t upper_exclusive_start = 0;
+
+    // The evaluation modes match the original ROCm algorithm variants.
+    if(mode == RocSecularEvalMode::full)
     {
-        gout = k + 1;
-        hout = k;
+        lower_exclusive_end = pole_index + 1;
+        upper_exclusive_start = pole_index;
     }
-    // if type = 1: evaluate secular equation without the k-th pole
-    else if(type == 1)
+    else if(mode == RocSecularEvalMode::skip_k)
     {
-        if(modif)
+        if(apply_shift_to_poles)
         {
-            tmp = D(k) - cor;
-            D(k) = tmp;
+            poles(pole_index) = poles(pole_index) - correction;
         }
-        gout = k;
-        hout = k;
+        lower_exclusive_end = pole_index;
+        upper_exclusive_start = pole_index;
     }
-    // if type = 2: evaluate secular equation without the k-th and (k+1)-th poles
-    else if(type == 2)
+    else if(mode == RocSecularEvalMode::skip_k_and_next)
     {
-        if(modif)
+        if(apply_shift_to_poles)
         {
-            tmp = D(k) - cor;
-            D(k) = tmp;
-            tmp = D(k + 1) - cor;
-            D(k + 1) = tmp;
+            poles(pole_index) = poles(pole_index) - correction;
+            poles(pole_index + 1) = poles(pole_index + 1) - correction;
         }
-        gout = k;
-        hout = k + 1;
+        lower_exclusive_end = pole_index;
+        upper_exclusive_start = pole_index + 1;
     }
     else
     {
-        // unexpected value for type, something is wrong
-        assert(false);
+        assert(false && "Invalid RocSecularEvalMode");
     }
 
-    // computations
-    gx = 0;
-    gdx = 0;
-    er = 0;
-    for(int i = 0; i < gout; ++i)
+    T lower_sum = T(0);
+    T lower_derivative = T(0);
+    T error_estimate = T(0);
+    for(int i = 0; i < lower_exclusive_end; ++i)
     {
-        tmp = D(i) - cor;
-        if(modif)
-            D(i) = tmp;
-        zz = z(i);
-        tmp = zz / tmp;
-        gx += zz * tmp;
-        gdx += tmp * tmp;
-        er += gx;
+        T shifted_pole = poles(i) - correction;
+        if(apply_shift_to_poles)
+        {
+            poles(i) = shifted_pole;
+        }
+        const T weight = weights(i);
+        const T ratio = weight / shifted_pole;
+        lower_sum += weight * ratio;
+        lower_derivative += ratio * ratio;
+        error_estimate += lower_sum;
     }
-    er = std::abs(er);
+    error_estimate = std::abs(error_estimate);
 
-    hx = 0;
-    hdx = 0;
-    for(int i = dd - 1; i > hout; --i)
+    T upper_sum = T(0);
+    T upper_derivative = T(0);
+    for(int i = degree - 1; i > upper_exclusive_start; --i)
     {
-        tmp = D(i) - cor;
-        if(modif)
-            D(i) = tmp;
-        zz = z(i);
-        tmp = zz / tmp;
-        hx += zz * tmp;
-        hdx += tmp * tmp;
-        er += hx;
+        T shifted_pole = poles(i) - correction;
+        if(apply_shift_to_poles)
+        {
+            poles(i) = shifted_pole;
+        }
+        const T weight = weights(i);
+        const T ratio = weight / shifted_pole;
+        upper_sum += weight * ratio;
+        upper_derivative += ratio * ratio;
+        error_estimate += upper_sum;
     }
 
-    fx = rho + gx + hx;
-    fdx = gdx + hdx;
-
-    return std::tuple{fx, fdx, gx, gdx, hx, hdx, er};
+    return RocSecularEvalResult<T>{
+        rho_inverse + lower_sum + upper_sum,
+        lower_derivative + upper_derivative,
+        lower_sum,
+        lower_derivative,
+        upper_sum,
+        upper_derivative,
+        error_estimate,
+    };
 }
 
 template <typename T>
@@ -122,126 +148,133 @@ SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
                                   const T p)
 {
     bool converged = false;
-    T lowb, uppb, aa, bb, cc, x;
-    T er, fx, fdx, gx, gdx, hx, hdx;
-    T tau, eta;
-    T dk, dkm1, ddk, ddkm1;
-    int32_t k = dd - 1;
-    int32_t km1 = dd - 2;
+    T lower_bound, upper_bound, quadratic_a, quadratic_b, quadratic_c, root;
+    T shift_from_origin, step;
+    T last_pole, prev_pole, shifted_last_pole, shifted_prev_pole;
+    const int32_t last_index = dd - 1;
+    const int32_t prev_index = dd - 2;
 
     // initialize
-    dk = D(k);
-    dkm1 = D(km1);
-    x = dk + p / 2;
-    T pinv = 1 / p;
+    last_pole = D(last_index);
+    prev_pole = D(prev_index);
+    root = last_pole + p / 2;
+    const T rho_inverse = 1 / p;
 
     // find bounds and initial guess
-    std::tie(cc, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(2, km1, dd, D, z, pinv, x, false);
-    gdx = z(km1) * z(km1);
-    hdx = z(k) * z(k);
-    fx = cc + gdx / (dkm1 - x) - 2 * hdx * pinv;
-    if(fx > 0)
+    auto eval = evaluate_roc_secular(RocSecularEvalMode::skip_k_and_next, prev_index, dd, D, z, rho_inverse, root, false);
+    const T secular_without_two_poles = eval.secular_value;
+    eval.lower_derivative = z(prev_index) * z(prev_index);
+    eval.upper_derivative = z(last_index) * z(last_index);
+    eval.secular_value = eval.secular_value + eval.lower_derivative / (prev_pole - root) - 2 * eval.upper_derivative * rho_inverse;
+    if(eval.secular_value > 0)
     {
         // if the secular eq at the midpoint is positive, the root is in between
         // D[k] and the midpoint take D[k] as the origin, i.e. x = D[k] + tau with
         // tau in (0, uppb)
-        lowb = 0;
-        uppb = p / 2;
-        tau = dk - dkm1;
-        aa = -cc * tau + gdx + hdx;
-        bb = hdx * tau;
-        eta = std::sqrt(aa * aa + 4 * bb * cc);
-        if(aa < 0)
-            tau = 2 * bb / (eta - aa);
+        lower_bound = 0;
+        upper_bound = p / 2;
+        shift_from_origin = last_pole - prev_pole;
+        quadratic_a = -secular_without_two_poles * shift_from_origin + eval.lower_derivative + eval.upper_derivative;
+        quadratic_b = eval.upper_derivative * shift_from_origin;
+        step = std::sqrt(quadratic_a * quadratic_a + 4 * quadratic_b * secular_without_two_poles);
+        if(quadratic_a < 0)
+            shift_from_origin = 2 * quadratic_b / (step - quadratic_a);
         else
-            tau = (aa + eta) / (2 * cc);
+            shift_from_origin = (quadratic_a + step) / (2 * secular_without_two_poles);
     }
     else
     {
         // otherwise, the root is in between the midpoint and D[k+1]
         // take D[k+1] as the origin, i.e. x = D[k+1] + tau with tau in (lowb, 0)
-        lowb = p / 2;
-        uppb = p;
-        eta = gdx / (dk - dkm1 + p) + hdx / p;
-        if(cc <= eta)
-            tau = p;
+        lower_bound = p / 2;
+        upper_bound = p;
+        step = eval.lower_derivative / (last_pole - prev_pole + p) + eval.upper_derivative / p;
+        if(secular_without_two_poles <= step)
+            shift_from_origin = p;
         else
         {
-            tau = dk - dkm1;
-            aa = -cc * tau + gdx + hdx;
-            bb = hdx * tau;
-            eta = std::sqrt(aa * aa + 4 * bb * cc);
-            if(aa < 0)
-                tau = 2 * bb / (eta - aa);
+            shift_from_origin = last_pole - prev_pole;
+            quadratic_a = -secular_without_two_poles * shift_from_origin + eval.lower_derivative + eval.upper_derivative;
+            quadratic_b = eval.upper_derivative * shift_from_origin;
+            step = std::sqrt(quadratic_a * quadratic_a + 4 * quadratic_b * secular_without_two_poles);
+            if(quadratic_a < 0)
+                shift_from_origin = 2 * quadratic_b / (step - quadratic_a);
             else
-                tau = (aa + eta) / (2 * cc);
+                shift_from_origin = (quadratic_a + step) / (2 * secular_without_two_poles);
         }
     }
-    x = dk + tau; // initial guess
+    root = last_pole + shift_from_origin; // initial guess
 
     // evaluate secular eq and get input values to calculate step correction
-    std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(0, km1, dd, D, z, pinv, dk, true);
-    std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(0, km1, dd, D, z, pinv, tau, true);
+    eval = evaluate_roc_secular(RocSecularEvalMode::full, prev_index, dd, D, z, rho_inverse, last_pole, true);
+    eval = evaluate_roc_secular(RocSecularEvalMode::full, prev_index, dd, D, z, rho_inverse, shift_from_origin, true);
 
     // calculate tolerance er for convergence test
-    er += std::abs(tau) * (hdx + gdx) - 8 * (hx + gx) - hx + pinv;
+    eval.error_estimate += std::abs(shift_from_origin) * (eval.upper_derivative + eval.lower_derivative)
+                           - 8 * (eval.upper_sum + eval.lower_sum)
+                           - eval.upper_sum
+                           + rho_inverse;
 
     // if the value of secular eq is small enough, no point to continue;
     // converged!!!
-    if(std::abs(fx) <= std::numeric_limits<T>::epsilon() * er)
+    if(std::abs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * eval.error_estimate)
         converged = true;
 
     // otherwise...
     else
     {
         // update bounds
-        lowb = (fx <= 0) ? std::max(lowb, tau) : lowb;
-        uppb = (fx > 0) ? std::min(uppb, tau) : uppb;
+        lower_bound = (eval.secular_value <= 0) ? std::max(lower_bound, shift_from_origin) : lower_bound;
+        upper_bound = (eval.secular_value > 0) ? std::min(upper_bound, shift_from_origin) : upper_bound;
 
         // calculate first step correction with fixed weight method
-        ddk = D(k);
-        ddkm1 = D(km1);
-        cc = std::abs(fx - ddkm1 * gdx - ddk * hdx);
-        aa = (ddk + ddkm1) * fx - ddk * ddkm1 * (gdx + hdx);
-        bb = ddk * ddkm1 * fx;
-        if(cc == 0)
+        shifted_last_pole = D(last_index);
+        shifted_prev_pole = D(prev_index);
+        quadratic_c = std::abs(eval.secular_value - shifted_prev_pole * eval.lower_derivative - shifted_last_pole * eval.upper_derivative);
+        quadratic_a = (shifted_last_pole + shifted_prev_pole) * eval.secular_value
+                      - shifted_last_pole * shifted_prev_pole * (eval.lower_derivative + eval.upper_derivative);
+        quadratic_b = shifted_last_pole * shifted_prev_pole * eval.secular_value;
+        if(quadratic_c == 0)
         {
-            eta = uppb - tau;
+            step = upper_bound - shift_from_origin;
         }
         else
         {
-            eta = std::sqrt(std::abs(aa * aa - 4 * bb * cc));
-            if(aa >= 0)
-                eta = (aa + eta) / (2 * cc);
+            step = std::sqrt(std::abs(quadratic_a * quadratic_a - 4 * quadratic_b * quadratic_c));
+            if(quadratic_a >= 0)
+                step = (quadratic_a + step) / (2 * quadratic_c);
             else
-                eta = (2 * bb) / (aa - eta);
+                step = (2 * quadratic_b) / (quadratic_a - step);
         }
 
         // verify that the correction eta will get x closer to the root
         // i.e. eta*fx should be negative. If not the case, take a Newton step
         // instead
-        if(fx * eta > 0)
-            eta = -fx / (gdx + hdx);
+        if(eval.secular_value * step > 0)
+            step = -eval.secular_value / (eval.lower_derivative + eval.upper_derivative);
 
         // now verify that applying the correction won't get the process out of
         // bounds if that is the case, bisect the interval instead
-        if(tau + eta > uppb || tau + eta < lowb)
+        if(shift_from_origin + step > upper_bound || shift_from_origin + step < lower_bound)
         {
-            if(fx < 0)
-                eta = (uppb - tau) / 2;
+            if(eval.secular_value < 0)
+                step = (upper_bound - shift_from_origin) / 2;
             else
-                eta = (lowb - tau) / 2;
+                step = (lower_bound - shift_from_origin) / 2;
         }
 
         // take the step
-        tau += eta;
-        x = dk + tau;
+        shift_from_origin += step;
+        root = last_pole + shift_from_origin;
 
         // evaluate secular eq and get input values to calculate step correction
-        std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(0, km1, dd, D, z, pinv, eta, true);
+        eval = evaluate_roc_secular(RocSecularEvalMode::full, prev_index, dd, D, z, rho_inverse, step, true);
 
         // calculate tolerance er for convergence test
-        er += std::abs(tau) * (hdx + gdx) - 8 * (hx + gx) - hx + pinv;
+        eval.error_estimate += std::abs(shift_from_origin) * (eval.upper_derivative + eval.lower_derivative)
+                               - 8 * (eval.upper_sum + eval.lower_sum)
+                               - eval.upper_sum
+                               + rho_inverse;
 
         // MAIN ITERATION LOOP
         // ==============================================
@@ -249,205 +282,221 @@ SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
         {
             // if the value of secular eq is small enough, no point to continue;
             // converged!!!
-            if(std::abs(fx) <= std::numeric_limits<T>::epsilon() * er)
+            if(std::abs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * eval.error_estimate)
             {
                 converged = true;
                 break;
             }
 
             // update bounds
-            lowb = (fx <= 0) ? std::max(lowb, tau) : lowb;
-            uppb = (fx > 0) ? std::min(uppb, tau) : uppb;
+            lower_bound = (eval.secular_value <= 0) ? std::max(lower_bound, shift_from_origin) : lower_bound;
+            upper_bound = (eval.secular_value > 0) ? std::min(upper_bound, shift_from_origin) : upper_bound;
 
                 // calculate step correction
-            ddk = D(k);
-            ddkm1 = D(km1);
-            cc = fx - ddkm1 * gdx - ddk * hdx;
-            aa = (ddk + ddkm1) * fx - ddk * ddkm1 * (gdx + hdx);
-            bb = ddk * ddkm1 * fx;
-            eta = std::sqrt(std::abs(aa * aa - 4 * bb * cc));
-            if(aa >= 0)
-                eta = (aa + eta) / (2 * cc);
+            shifted_last_pole = D(last_index);
+            shifted_prev_pole = D(prev_index);
+            quadratic_c = eval.secular_value - shifted_prev_pole * eval.lower_derivative - shifted_last_pole * eval.upper_derivative;
+            quadratic_a = (shifted_last_pole + shifted_prev_pole) * eval.secular_value
+                          - shifted_last_pole * shifted_prev_pole * (eval.lower_derivative + eval.upper_derivative);
+            quadratic_b = shifted_last_pole * shifted_prev_pole * eval.secular_value;
+            step = std::sqrt(std::abs(quadratic_a * quadratic_a - 4 * quadratic_b * quadratic_c));
+            if(quadratic_a >= 0)
+                step = (quadratic_a + step) / (2 * quadratic_c);
             else
-                eta = (2 * bb) / (aa - eta);
+                step = (2 * quadratic_b) / (quadratic_a - step);
 
             // verify that the correction eta will get x closer to the root
             // i.e. eta*fx should be negative. If not the case, take a Newton step
             // instead
-            if(fx * eta > 0)
-                eta = -fx / (gdx + hdx);
+            if(eval.secular_value * step > 0)
+                step = -eval.secular_value / (eval.lower_derivative + eval.upper_derivative);
 
             // now verify that applying the correction won't get the process out of
             // bounds if that is the case, bisect the interval instead
-            if(tau + eta > uppb || tau + eta < lowb)
+            if(shift_from_origin + step > upper_bound || shift_from_origin + step < lower_bound)
             {
-                if(fx < 0)
-                    eta = (uppb - tau) / 2;
+                if(eval.secular_value < 0)
+                    step = (upper_bound - shift_from_origin) / 2;
                 else
-                    eta = (lowb - tau) / 2;
+                    step = (lower_bound - shift_from_origin) / 2;
             }
 
             // take the step
-            tau += eta;
-            x = dk + tau;
+            shift_from_origin += step;
+            root = last_pole + shift_from_origin;
 
             // evaluate secular eq and get input values to calculate step correction
-            std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(0, km1, dd, D, z, pinv, eta, true);
+            eval = evaluate_roc_secular(RocSecularEvalMode::full, prev_index, dd, D, z, rho_inverse, step, true);
 
             // calculate tolerance er for convergence test
-            er += std::abs(tau) * (hdx + gdx) - 8 * (hx + gx) - hx + pinv;
+            eval.error_estimate += std::abs(shift_from_origin) * (eval.upper_derivative + eval.lower_derivative)
+                                   - 8 * (eval.upper_sum + eval.lower_sum)
+                                   - eval.upper_sum
+                                   + rho_inverse;
         }
     }
-    return x;
+    (void)converged;
+    return root;
 }
 
 template <typename T>
 SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, const T& rho, const int32_t k){
     bool converged = false;
-    bool up, fixed;
-    T lowb, uppb, aa, bb, cc, x;
-    T nx, er, fx, fdx, gx, gdx, hx, hdx, oldfx;
-    T tau, eta;
-    T dk, dk1, ddk, ddk1;
-    int32_t kk;
-    int32_t k1 = k + 1;
+    bool origin_at_lower_pole = false;
+    bool use_fixed_weight_update = false;
+    T lower_bound, upper_bound, quadratic_a, quadratic_b, quadratic_c, root;
+    T shift_from_origin, step, previous_secular_value;
+    T pole_k, pole_k1, shifted_pole_k, shifted_pole_k1;
+    int32_t working_index;
+    const int32_t k1 = k + 1;
+
     // initialize
-    dk = d(k);
-    dk1 = d(k1);
-    x = (dk + dk1) / 2; // midpoint of interval
-    tau = (dk1 - dk);
-    T pinv = 1 / rho;
+    pole_k = d(k);
+    pole_k1 = d(k1);
+    root = (pole_k + pole_k1) / 2; // midpoint of interval
+    shift_from_origin = (pole_k1 - pole_k);
+    const T rho_inverse = 1 / rho;
+
     // find bounds and initial guess; translate origin
-    std::tie(cc, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(2, k, dd, d, z, pinv, x, false);
-    gdx = z(k) * z(k);
-    hdx = z(k1) * z(k1);
-    fx = cc + 2 * (hdx - gdx) / tau;
-    if(fx > 0)
+    auto eval = evaluate_roc_secular(RocSecularEvalMode::skip_k_and_next, k, dd, d, z, rho_inverse, root, false);
+    const T secular_without_two_poles = eval.secular_value;
+    eval.lower_derivative = z(k) * z(k);
+    eval.upper_derivative = z(k1) * z(k1);
+    eval.secular_value = eval.secular_value + 2 * (eval.upper_derivative - eval.lower_derivative) / shift_from_origin;
+    if(eval.secular_value > 0)
     {
         // if the secular eq at the midpoint is positive, the root is in between
         // D(k) and the midpoint take D(k) as the origin, i.e. x = D(k) + tau with
         // tau in (0, uppb)
-        lowb = 0;
-        uppb = tau / 2;
-        up = true;
-        kk = k; // origin remains the same
-        aa = cc * tau + gdx + hdx;
-        bb = gdx * tau;
-        eta = std::sqrt(std::abs(aa * aa - 4 * bb * cc));
-        if(aa > 0)
-            tau = 2 * bb / (aa + eta);
+        lower_bound = 0;
+        upper_bound = shift_from_origin / 2;
+        origin_at_lower_pole = true;
+        working_index = k; // origin remains the same
+        quadratic_a = secular_without_two_poles * shift_from_origin + eval.lower_derivative + eval.upper_derivative;
+        quadratic_b = eval.lower_derivative * shift_from_origin;
+        step = std::sqrt(std::abs(quadratic_a * quadratic_a - 4 * quadratic_b * secular_without_two_poles));
+        if(quadratic_a > 0)
+            shift_from_origin = 2 * quadratic_b / (quadratic_a + step);
         else
-            tau = (aa - eta) / (2 * cc);
-        x = dk + tau; // initial guess
+            shift_from_origin = (quadratic_a - step) / (2 * secular_without_two_poles);
+        root = pole_k + shift_from_origin; // initial guess
     }
     else
     {
         // otherwise, the root is in between the midpoint and D(k+1)
         // take D(k+1) as the origin, i.e. x = D(k+1) + tau with tau in (lowb, 0)
-        lowb = -tau / 2;
-        uppb = 0;
-        up = false;
-        kk = k + 1; // translate the origin
-        aa = cc * tau - gdx - hdx;
-        bb = hdx * tau;
-        eta = std::sqrt(std::abs(aa * aa + 4 * bb * cc));
-        if(aa < 0)
-            tau = 2 * bb / (aa - eta);
+        lower_bound = -shift_from_origin / 2;
+        upper_bound = 0;
+        origin_at_lower_pole = false;
+        working_index = k + 1; // translate the origin
+        quadratic_a = secular_without_two_poles * shift_from_origin - eval.lower_derivative - eval.upper_derivative;
+        quadratic_b = eval.upper_derivative * shift_from_origin;
+        step = std::sqrt(std::abs(quadratic_a * quadratic_a + 4 * quadratic_b * secular_without_two_poles));
+        if(quadratic_a < 0)
+            shift_from_origin = 2 * quadratic_b / (quadratic_a - step);
         else
-            tau = -(aa + eta) / (2 * cc);
-        x = dk1 + tau; // initial guess
+            shift_from_origin = -(quadratic_a + step) / (2 * secular_without_two_poles);
+        root = pole_k1 + shift_from_origin; // initial guess
     }
 
     // evaluate secular eq and get input values to calculate step correction
-    std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(0, kk, dd, d, z, pinv, (up ? dk : dk1), true);
-    std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(1, kk, dd, d, z, pinv, tau, true);
-    bb = z(kk);
-    aa = bb / d(kk);
-    fdx += aa * aa;
-    bb *= aa;
-    fx += bb;
+    eval = evaluate_roc_secular(RocSecularEvalMode::full, working_index, dd, d, z, rho_inverse, (origin_at_lower_pole ? pole_k : pole_k1), true);
+    eval = evaluate_roc_secular(RocSecularEvalMode::skip_k, working_index, dd, d, z, rho_inverse, shift_from_origin, true);
+    quadratic_b = z(working_index);
+    quadratic_a = quadratic_b / d(working_index);
+    eval.secular_derivative += quadratic_a * quadratic_a;
+    quadratic_b *= quadratic_a;
+    eval.secular_value += quadratic_b;
 
     // calculate tolerance er for convergence test
-    er += 8 * (hx - gx) + 2 * pinv + 3 * std::abs(bb) + std::abs(tau) * fdx;
+    eval.error_estimate += 8 * (eval.upper_sum - eval.lower_sum)
+                           + 2 * rho_inverse
+                           + 3 * std::abs(quadratic_b)
+                           + std::abs(shift_from_origin) * eval.secular_derivative;
 
     // if the value of secular eq is small enough, no point to continue;
     // converged!!!
-    if(std::abs(fx) <= std::numeric_limits<T>::epsilon() * er)
+    if(std::abs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * eval.error_estimate)
         converged = true;
 
     // otherwise...
     else
     {
         // update bounds
-        lowb = (fx <= 0) ? std::max(lowb, tau) : lowb;
-        uppb = (fx > 0) ? std::min(uppb, tau) : uppb;
+        lower_bound = (eval.secular_value <= 0) ? std::max(lower_bound, shift_from_origin) : lower_bound;
+        upper_bound = (eval.secular_value > 0) ? std::min(upper_bound, shift_from_origin) : upper_bound;
 
         // calculate first step correction with fixed weight method
-        ddk = d(k);
-        ddk1 = d(k1);
-        if(up)
-            cc = fx - ddk1 * fdx - (dk - dk1) * z(k) * z(k) / ddk / ddk;
+        shifted_pole_k = d(k);
+        shifted_pole_k1 = d(k1);
+        if(origin_at_lower_pole)
+            quadratic_c = eval.secular_value - shifted_pole_k1 * eval.secular_derivative
+                          - (pole_k - pole_k1) * z(k) * z(k) / shifted_pole_k / shifted_pole_k;
         else
-            cc = fx - ddk * fdx - (dk1 - dk) * z(k1) * z(k1) / ddk1 / ddk1;
-        aa = (ddk + ddk1) * fx - ddk * ddk1 * fdx;
-        bb = ddk * ddk1 * fx;
-        if(cc == 0)
+            quadratic_c = eval.secular_value - shifted_pole_k * eval.secular_derivative
+                          - (pole_k1 - pole_k) * z(k1) * z(k1) / shifted_pole_k1 / shifted_pole_k1;
+        quadratic_a = (shifted_pole_k + shifted_pole_k1) * eval.secular_value - shifted_pole_k * shifted_pole_k1 * eval.secular_derivative;
+        quadratic_b = shifted_pole_k * shifted_pole_k1 * eval.secular_value;
+        if(quadratic_c == 0)
         {
-            if(aa == 0)
+            if(quadratic_a == 0)
             {
-                if(up)
-                    aa = z(k) * z(k) + ddk1 * ddk1 * (gdx + hdx);
+                if(origin_at_lower_pole)
+                    quadratic_a = z(k) * z(k) + shifted_pole_k1 * shifted_pole_k1 * (eval.lower_derivative + eval.upper_derivative);
                 else
-                    aa = z(k1) * z(k1) + ddk * ddk * (gdx + hdx);
+                    quadratic_a = z(k1) * z(k1) + shifted_pole_k * shifted_pole_k * (eval.lower_derivative + eval.upper_derivative);
             }
-            eta = bb / aa;
+            step = quadratic_b / quadratic_a;
         }
         else
         {
-            eta = std::sqrt(std::abs(aa * aa - 4 * bb * cc));
-            if(aa <= 0)
-                eta = (aa - eta) / (2 * cc);
+            step = std::sqrt(std::abs(quadratic_a * quadratic_a - 4 * quadratic_b * quadratic_c));
+            if(quadratic_a <= 0)
+                step = (quadratic_a - step) / (2 * quadratic_c);
             else
-                eta = (2 * bb) / (aa + eta);
+                step = (2 * quadratic_b) / (quadratic_a + step);
         }
 
         // verify that the correction eta will get x closer to the root
         // i.e. eta*fx should be negative. If not the case, take a Newton step
         // instead
-        if(fx * eta >= 0)
-            eta = -fx / fdx;
+        if(eval.secular_value * step >= 0)
+            step = -eval.secular_value / eval.secular_derivative;
 
         // now verify that applying the correction won't get the process out of
         // bounds if that is the case, bisect the interval instead
-        if(tau + eta > uppb || tau + eta < lowb)
+        if(shift_from_origin + step > upper_bound || shift_from_origin + step < lower_bound)
         {
-            if(fx < 0)
-                eta = (uppb - tau) / 2;
+            if(eval.secular_value < 0)
+                step = (upper_bound - shift_from_origin) / 2;
             else
-                eta = (lowb - tau) / 2;
+                step = (lower_bound - shift_from_origin) / 2;
         }
 
         // take the step
-        tau += eta;
-        x = (up ? dk : dk1) + tau;
+        shift_from_origin += step;
+        root = (origin_at_lower_pole ? pole_k : pole_k1) + shift_from_origin;
 
         // evaluate secular eq and get input values to calculate step correction
-        oldfx = fx;
-        std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(1, kk, dd, d, z, pinv, eta, true);
-        bb = z(kk);
-        aa = bb / d(kk);
-        fdx += aa * aa;
-        bb *= aa;
-        fx += bb;
+        previous_secular_value = eval.secular_value;
+        eval = evaluate_roc_secular(RocSecularEvalMode::skip_k, working_index, dd, d, z, rho_inverse, step, true);
+        quadratic_b = z(working_index);
+        quadratic_a = quadratic_b / d(working_index);
+        eval.secular_derivative += quadratic_a * quadratic_a;
+        quadratic_b *= quadratic_a;
+        eval.secular_value += quadratic_b;
 
         // calculate tolerance er for convergence test
-        er += 8 * (hx - gx) + 2 * pinv + 3 * std::abs(bb) + std::abs(tau) * fdx;
+        eval.error_estimate += 8 * (eval.upper_sum - eval.lower_sum)
+                               + 2 * rho_inverse
+                               + 3 * std::abs(quadratic_b)
+                               + std::abs(shift_from_origin) * eval.secular_derivative;
 
         // from now on, further step corrections will be calculated either with
         // fixed weights method or with normal interpolation depending on the value
         // of boolean fixed
-        cc = up ? -1 : 1;
-        fixed = (cc * fx) > (std::abs(oldfx) / 10);
+        quadratic_c = origin_at_lower_pole ? -1 : 1;
+        use_fixed_weight_update = (quadratic_c * eval.secular_value) > (std::abs(previous_secular_value) / 10);
 
         // MAIN ITERATION LOOP
         // ==============================================
@@ -455,101 +504,109 @@ SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorVi
         {
             // if the value of secular eq is small enough, no point to continue;
             // converged!!!
-            if(std::abs(fx) <= std::numeric_limits<T>::epsilon() * er)
+            if(std::abs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * eval.error_estimate)
             {
                 converged = true;
                 break;
             }
 
             // update bounds
-            lowb = (fx <= 0) ? std::max(lowb, tau) : lowb;
-            uppb = (fx > 0) ? std::min(uppb, tau) : uppb;
+            lower_bound = (eval.secular_value <= 0) ? std::max(lower_bound, shift_from_origin) : lower_bound;
+            upper_bound = (eval.secular_value > 0) ? std::min(upper_bound, shift_from_origin) : upper_bound;
 
             // calculate next step correction with either fixed weight method or
             // simple interpolation
-            ddk = d(k);
-            ddk1 = d(k1);
-            if(fixed)
+            shifted_pole_k = d(k);
+            shifted_pole_k1 = d(k1);
+            if(use_fixed_weight_update)
             {
-                if(up)
-                    cc = fx - ddk1 * fdx - (dk - dk1) * z(k) * z(k) / ddk / ddk;
+                if(origin_at_lower_pole)
+                    quadratic_c = eval.secular_value - shifted_pole_k1 * eval.secular_derivative
+                                  - (pole_k - pole_k1) * z(k) * z(k) / shifted_pole_k / shifted_pole_k;
                 else
-                    cc = fx - ddk * fdx - (dk1 - dk) * z(k1) * z(k1) / ddk1 / ddk1;
+                    quadratic_c = eval.secular_value - shifted_pole_k * eval.secular_derivative
+                                  - (pole_k1 - pole_k) * z(k1) * z(k1) / shifted_pole_k1 / shifted_pole_k1;
             }
             else
             {
-                if(up)
-                    gdx += aa * aa;
+                if(origin_at_lower_pole)
+                    eval.lower_derivative += quadratic_a * quadratic_a;
                 else
-                    hdx += aa * aa;
-                cc = fx - ddk * gdx - ddk1 * hdx;
+                    eval.upper_derivative += quadratic_a * quadratic_a;
+                quadratic_c = eval.secular_value - shifted_pole_k * eval.lower_derivative - shifted_pole_k1 * eval.upper_derivative;
             }
-            aa = (ddk + ddk1) * fx - ddk * ddk1 * fdx;
-            bb = ddk * ddk1 * fx;
-            if(cc == 0)
+            quadratic_a = (shifted_pole_k + shifted_pole_k1) * eval.secular_value
+                          - shifted_pole_k * shifted_pole_k1 * eval.secular_derivative;
+            quadratic_b = shifted_pole_k * shifted_pole_k1 * eval.secular_value;
+            if(quadratic_c == 0)
             {
-                if(aa == 0)
+                if(quadratic_a == 0)
                 {
-                    if(fixed)
+                    if(use_fixed_weight_update)
                     {
-                        if(up)
-                            aa = z(k) * z(k) + ddk1 * ddk1 * (gdx + hdx);
+                        if(origin_at_lower_pole)
+                            quadratic_a = z(k) * z(k) + shifted_pole_k1 * shifted_pole_k1 * (eval.lower_derivative + eval.upper_derivative);
                         else
-                            aa = z(k1) * z(k1) + ddk * ddk * (gdx + hdx);
+                            quadratic_a = z(k1) * z(k1) + shifted_pole_k * shifted_pole_k * (eval.lower_derivative + eval.upper_derivative);
                     }
                     else
-                        aa = ddk * ddk * gdx + ddk1 * ddk1 * hdx;
+                        quadratic_a = shifted_pole_k * shifted_pole_k * eval.lower_derivative
+                                      + shifted_pole_k1 * shifted_pole_k1 * eval.upper_derivative;
                 }
-                eta = bb / aa;
+                step = quadratic_b / quadratic_a;
             }
             else
             {
-                eta = std::sqrt(std::abs(aa * aa - 4 * bb * cc));
-                if(aa <= 0)
-                    eta = (aa - eta) / (2 * cc);
+                step = std::sqrt(std::abs(quadratic_a * quadratic_a - 4 * quadratic_b * quadratic_c));
+                if(quadratic_a <= 0)
+                    step = (quadratic_a - step) / (2 * quadratic_c);
                 else
-                    eta = (2 * bb) / (aa + eta);
+                    step = (2 * quadratic_b) / (quadratic_a + step);
             }
 
             // verify that the correction eta will get x closer to the root
             // i.e. eta*fx should be negative. If not the case, take a Newton step
             // instead
-            if(fx * eta >= 0)
-                eta = -fx / fdx;
+            if(eval.secular_value * step >= 0)
+                step = -eval.secular_value / eval.secular_derivative;
 
             // now verify that applying the correction won't get the process out of
             // bounds if that is the case, bisect the interval instead
-            if(tau + eta > uppb || tau + eta < lowb)
+            if(shift_from_origin + step > upper_bound || shift_from_origin + step < lower_bound)
             {
-                if(fx < 0)
-                    eta = (uppb - tau) / 2;
+                if(eval.secular_value < 0)
+                    step = (upper_bound - shift_from_origin) / 2;
                 else
-                    eta = (lowb - tau) / 2;
+                    step = (lower_bound - shift_from_origin) / 2;
             }
 
             // take the step
-            tau += eta;
-            x = (up ? dk : dk1) + tau;
+            shift_from_origin += step;
+            root = (origin_at_lower_pole ? pole_k : pole_k1) + shift_from_origin;
 
             // evaluate secular eq and get input values to calculate step correction
-            oldfx = fx;
-            std::tie(fx, fdx, gx, gdx, hx, hdx, er) = sec_eval_roc(1, kk, dd, d, z, pinv, eta, true);
-            bb = z(kk);
-            aa = bb / d(kk);
-            fdx += aa * aa;
-            bb *= aa;
-            fx += bb;
+            previous_secular_value = eval.secular_value;
+            eval = evaluate_roc_secular(RocSecularEvalMode::skip_k, working_index, dd, d, z, rho_inverse, step, true);
+            quadratic_b = z(working_index);
+            quadratic_a = quadratic_b / d(working_index);
+            eval.secular_derivative += quadratic_a * quadratic_a;
+            quadratic_b *= quadratic_a;
+            eval.secular_value += quadratic_b;
 
             // calculate tolerance er for convergence test
-            er += 8 * (hx - gx) + 2 * pinv + 3 * std::abs(bb) + std::abs(tau) * fdx;
+            eval.error_estimate += 8 * (eval.upper_sum - eval.lower_sum)
+                                   + 2 * rho_inverse
+                                   + 3 * std::abs(quadratic_b)
+                                   + std::abs(shift_from_origin) * eval.secular_derivative;
 
             // update boolean fixed if necessary
-            if(fx * oldfx > 0 && std::abs(fx) > std::abs(oldfx) / 10)
-                fixed = !fixed;
+            if(eval.secular_value * previous_secular_value > 0
+               && std::abs(eval.secular_value) > std::abs(previous_secular_value) / 10)
+                use_fixed_weight_update = !use_fixed_weight_update;
         }
     }
     assert(converged && "sec_solve_roc did not converge!");
-    return x; // return the computed root (k^{th} eigenvalue)
+    return root; // return the computed root (k^{th} eigenvalue)
 }
 
 template <typename T>

@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
+#include "stedc_merge_kernels.hh"
 #define DEBUG_STEDC 0
 
 namespace batchlas {
@@ -221,9 +222,11 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     Qprime.fill_identity(ctx);
     if (params.secular_solver == StedcSecularSolver::Legacy) {
         secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0));
+    } else if (params.merge_variant == StedcMergeVariant::Fused) {
+        // Fused path: warp-parallel root solve + build/normalize Qprime in one kernel
+        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
     } else {
-        // Problem: We ultimately need to compute Q1 ⨂ Q2 * Qprime, however since we are deflating the columns of Q1 ⨂ Q2 we need to be careful about how we form Qprime.
-        // Idea: As long as the columns of Qprime are the euclidean basis vectors, multiplying by Qprime is just a permutation of the columns of Q1 ⨂ Q2.
+        // Baseline ROCm path: 3 separate kernels
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             h.parallel_for<StedcSecularSolve<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {

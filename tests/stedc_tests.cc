@@ -163,6 +163,51 @@ TYPED_TEST(StedcTest, FlatMatchesRecursive) {
     }
 }
 
+TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 128;
+    const int batch = 64;
+    using float_type = typename base_type<T>::type;
+
+    // Generate identical inputs for both paths (stedc mutates its inputs)
+    auto a_base = Vector<float_type>::random(n, batch);
+    auto b_base = Vector<float_type>::random(n - 1, batch);
+    auto a_fused = a_base;
+    auto b_fused = b_base;
+
+    auto eigvals_base = Vector<float_type>::zeros(n, batch);
+    auto eigvals_fused = Vector<float_type>::zeros(n, batch);
+    auto eigvecs_base = Matrix<float_type>::Identity(n, batch);
+    auto eigvecs_fused = Matrix<float_type>::Identity(n, batch);
+
+    StedcParams<float_type> params_base{.recursion_threshold = 16};
+    StedcParams<float_type> params_fused{
+        .recursion_threshold = 16,
+        .merge_variant = StedcMergeVariant::Fused,
+        .enable_rescale = true,
+    };
+
+    UnifiedVector<std::byte> ws_base(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_base));
+    UnifiedVector<std::byte> ws_fused(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
+
+    stedc<B>(*this->ctx, a_base, b_base, eigvals_base, ws_base, JobType::EigenVectors, params_base, eigvecs_base);
+    stedc<B>(*this->ctx, a_fused, b_fused, eigvals_fused, ws_fused, JobType::EigenVectors, params_fused, eigvecs_fused);
+    this->ctx->wait();
+
+    auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3);
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            float_type diff = std::abs(eigvals_base(i, j) - eigvals_fused(i, j));
+            if (diff > tol) {
+                FAIL() << "FusedMerge eigenvalue mismatch at (" << i << ", batch " << j << ") : baseline="
+                       << eigvals_base(i, j) << " fused=" << eigvals_fused(i, j) << " diff=" << diff
+                       << " tol=" << tol;
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

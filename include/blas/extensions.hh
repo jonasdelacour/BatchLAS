@@ -945,11 +945,23 @@ namespace batchlas {
         Legacy,
     };
 
+    // Controls how the merge step (secular solve + eigenvector formation) is dispatched.
+    enum class StedcMergeVariant {
+        Baseline,           // Current serial-per-root path (3 separate kernels)
+        Fused,              // One kernel: warp-parallel root solve + build/normalize Qprime columns
+    };
+
     template <typename T>
     struct StedcParams {
         int64_t recursion_threshold = 32; //Threshold below which the algorithm switches to a non-recursive method such as STEQR
         StedcSecularSolver secular_solver = StedcSecularSolver::Rocm;
-        SteqrParams<T> leaf_steqr_params = SteqrParams<T>(); 
+        SteqrParams<T> leaf_steqr_params = SteqrParams<T>();
+
+        // --- Merge-step tuning knobs ---
+        StedcMergeVariant merge_variant = StedcMergeVariant::Baseline;
+        int merge_threads = 128;       // work-group size for fused kernel
+        int max_sec_iter = 50;         // iteration cap for secular root solver
+        bool enable_rescale = true;    // keep ROCm-style v rescale (disable for perf experiments)
     };
 
     template <Backend B, typename T>
