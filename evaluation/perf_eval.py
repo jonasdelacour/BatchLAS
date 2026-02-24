@@ -7,6 +7,7 @@ import csv
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,118 @@ def _default_benchmark_path(build_dir: Path, exe_name: str) -> Path:
 
 def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, check=True)
+
+
+def _run_cmd_capture(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+    try:
+        p = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except FileNotFoundError as e:
+        return 127, "", str(e)
+
+
+def _first_non_empty_line(*texts: str) -> str:
+    for txt in texts:
+        for ln in txt.splitlines():
+            s = ln.strip()
+            if s:
+                return s
+    return ""
+
+
+def _extract_first_match(pattern: str, text: str) -> str:
+    m = re.search(pattern, text)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _detect_perf_environment(backend: str) -> Dict[str, Any]:
+    env_meta: Dict[str, Any] = {
+        "platform": sys.platform,
+    }
+
+    # Always useful for provenance, regardless of backend.
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    env_meta["python_version"] = py_ver
+
+    if backend.upper() != "CUDA":
+        return env_meta
+
+    # Collect CUDA/NVIDIA metadata best-effort; missing tools should not hard-fail.
+    rc, out, err = _run_cmd_capture(["nvidia-smi", "--query-gpu=name,driver_version,cuda_version", "--format=csv,noheader"])
+    if rc == 0:
+        first_row = _first_non_empty_line(out)
+        if first_row:
+            parts = [x.strip() for x in first_row.split(",")]
+            if len(parts) >= 1 and parts[0]:
+                env_meta["gpu_name"] = parts[0]
+            if len(parts) >= 2 and parts[1]:
+                env_meta["nvidia_driver_version"] = parts[1]
+            if len(parts) >= 3 and parts[2]:
+                env_meta["cuda_driver_api_version"] = parts[2]
+    else:
+        env_meta["nvidia_smi_error"] = _first_non_empty_line(err, out)
+
+    rc, out, err = _run_cmd_capture(["nvcc", "--version"])
+    if rc == 0:
+        full = "\n".join([out, err])
+        env_meta["nvcc_version_line"] = _first_non_empty_line(out, err)
+        v = _extract_first_match(r"release\s+([0-9]+\.[0-9]+)", full)
+        if v:
+            env_meta["cuda_toolkit_version"] = v
+    else:
+        env_meta["nvcc_error"] = _first_non_empty_line(err, out)
+
+    rc, out, err = _run_cmd_capture(["nvc++", "--version"])
+    if rc == 0:
+        full = "\n".join([out, err])
+        env_meta["nvcxx_version_line"] = _first_non_empty_line(out, err)
+        v = _extract_first_match(r"NVHPC\s+([0-9]+\.[0-9]+)", full)
+        if v:
+            env_meta["nvhpc_version"] = v
+    else:
+        env_meta["nvcxx_error"] = _first_non_empty_line(err, out)
+
+    rc, out, err = _run_cmd_capture(["nsys", "--version"])
+    if rc == 0:
+        env_meta["nsys_version_line"] = _first_non_empty_line(out, err)
+
+    return env_meta
+
+
+def _compare_environment(baseline_meta: Dict[str, Any], current_meta: Dict[str, Any]) -> List[str]:
+    baseline_env = baseline_meta.get("environment")
+    current_env = current_meta.get("environment")
+
+    if not isinstance(baseline_env, dict) or not isinstance(current_env, dict):
+        return []
+
+    keys_to_compare = [
+        "gpu_name",
+        "nvidia_driver_version",
+        "cuda_driver_api_version",
+        "cuda_toolkit_version",
+        "nvhpc_version",
+    ]
+
+    mismatches: List[str] = []
+    for key in keys_to_compare:
+        b = baseline_env.get(key)
+        c = current_env.get(key)
+        if b is None or c is None:
+            continue
+        if str(b) != str(c):
+            mismatches.append(f"{key}: baseline='{b}' current='{c}'")
+
+    return mismatches
 
 
 def _now_us() -> float:
@@ -446,6 +559,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--min-time", type=float, default=200.0)
     p.add_argument("--min-iters", type=int, default=5)
     p.add_argument("--max-iters", type=int, default=100)
+    p.add_argument(
+        "--allow-env-mismatch",
+        action="store_true",
+        help=(
+            "Allow perf comparisons when baseline and current CUDA/NVHPC environment metadata differ. "
+            "By default, --check fails on mismatches to keep comparisons fair."
+        ),
+    )
 
     args = p.parse_args(argv)
 
@@ -543,6 +664,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "cases": str(cases_path),
         "backend": args.backend,
         "type": args.dtype,
+        "environment": _detect_perf_environment(args.backend),
         "minibench": {
             "warmup": args.warmup,
             "min_time_ms": args.min_time,
@@ -570,6 +692,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     baseline_payload = json.loads(baseline_path.read_text())
     baseline_measurements = _payload_to_measurements(baseline_payload)
+
+    baseline_meta = baseline_payload.get("meta", {})
+    if args.backend.upper() == "CUDA" and isinstance(baseline_meta, dict) and "environment" not in baseline_meta:
+        print(
+            "WARNING: baseline has no environment metadata; rerun with --record after toolkit upgrades for fair comparisons.",
+            file=sys.stderr,
+        )
+
+    env_mismatches = _compare_environment(baseline_meta, meta)
+    if env_mismatches and not args.allow_env_mismatch:
+        print("FAIL: environment mismatch between baseline and current run", file=sys.stderr)
+        for ln in env_mismatches:
+            print(f"  - {ln}", file=sys.stderr)
+        print(
+            "If this upgrade is intentional (e.g., newer NVIDIA HPC/CUDA toolkit), rerun with --record to refresh baseline or pass --allow-env-mismatch.",
+            file=sys.stderr,
+        )
+        return 3
+    elif env_mismatches and args.allow_env_mismatch:
+        print("WARNING: proceeding despite environment mismatch (--allow-env-mismatch)", file=sys.stderr)
+        for ln in env_mismatches:
+            print(f"  - {ln}", file=sys.stderr)
 
     ok, lines = _compare(baseline=baseline_measurements, current=measurements, tolerance=args.tolerance)
 
