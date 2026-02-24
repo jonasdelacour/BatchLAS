@@ -25,6 +25,7 @@ set(EXTENSIONS_SOURCES
     band_reduction.cc
     stedc.cc
     stedc_secular.cc
+    stedc_merge_kernels.cc
     stedc_flat.cc
     ritz_values.cc
     lascl.cc
