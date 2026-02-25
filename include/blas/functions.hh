@@ -1,5 +1,4 @@
-#ifndef BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
-#define BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
+#pragma once
 
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
@@ -27,4 +26,3 @@ namespace batchlas {
 
 } // namespace batchlas
 
-#endif // BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH

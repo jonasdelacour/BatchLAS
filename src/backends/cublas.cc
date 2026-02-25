@@ -1,5 +1,3 @@
-// filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
-//#include "../../include/blas/linalg.hh"
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>

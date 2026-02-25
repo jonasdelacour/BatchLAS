@@ -20,8 +20,6 @@ namespace batchlas {
      * 
      * @tparam T Data type
      */
-    #ifndef SYEVSTRUCTS
-    #define SYEVSTRUCTS
     template <typename T>
     struct SyevxParams {
         using float_type = typename base_type<T>::type;
@@ -48,7 +46,6 @@ namespace batchlas {
         bool sort_enabled = true;                                   // Whether to sort eigenvalues and eigenvectors
         SortOrder sort_order = SortOrder::Ascending;                // Order of sorted eigenvalues and eigenvectors
     };
-    #endif
 
     /**
      * @brief Orthogonalizes a matrix in-place

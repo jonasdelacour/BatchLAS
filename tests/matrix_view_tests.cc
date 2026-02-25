@@ -1,4 +1,3 @@
-// filepath: /home/jonaslacour/BatchLAS/tests/matrix_view_tests.cc
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-vector.hh>

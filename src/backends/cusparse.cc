@@ -1,4 +1,3 @@
-// filepath: /home/jonaslacour/BatchLAS/src/backends/cusparse_matrixview.cc
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
 #include <util/sycl-span.hh>

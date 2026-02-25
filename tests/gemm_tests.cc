@@ -6,15 +6,6 @@
 #include <vector>
 #include <cmath>
 #include <type_traits>
-
-#include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
-#include <sycl/sycl.hpp>
-#include <iostream>
-#include <vector>
-#include <cmath>
-#include <type_traits>
 #include "test_utils.hh"
 
 using namespace batchlas;
