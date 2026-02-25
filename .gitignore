@@ -98,3 +98,7 @@ evaluation/traces/*.json
 # Kernel trace output (default name + common folders)
 batchlas_kernels.trace.json
 evaluation/trace/
+
+# CodeQL build artifacts
+_codeql_build_dir/
+_codeql_detected_source_root
