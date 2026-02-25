@@ -57,6 +57,16 @@ def _unique_or_none(df: pd.DataFrame, col: str) -> Optional[str]:
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    if "impl" not in df.columns and "tag_impl" in df.columns:
+        df["impl"] = df["tag_impl"]
+    if "backend" not in df.columns and "tag_backend" in df.columns:
+        df["backend"] = df["tag_backend"]
+    if "dtype" not in df.columns and "tag_dtype" in df.columns:
+        df["dtype"] = df["tag_dtype"]
+    if "n" not in df.columns and "arg0" in df.columns:
+        df["n"] = pd.to_numeric(df["arg0"], errors="coerce")
+    if "relerr" not in df.columns and "max_relerr" in df.columns:
+        df["relerr"] = df["max_relerr"]
     if "dtype" in df.columns:
         bad_types = {"cfloat", "cdouble", "complex<float>", "complex<double>"}
         if any(str(v) in bad_types for v in df["dtype"].astype(str).tolist()):

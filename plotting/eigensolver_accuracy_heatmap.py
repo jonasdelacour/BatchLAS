@@ -97,6 +97,16 @@ def _prepare_dataframe(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     log_col = info["log"]
 
     df = df.copy()
+    if "impl" not in df.columns and "tag_impl" in df.columns:
+        df["impl"] = df["tag_impl"]
+    if "backend" not in df.columns and "tag_backend" in df.columns:
+        df["backend"] = df["tag_backend"]
+    if "dtype" not in df.columns and "tag_dtype" in df.columns:
+        df["dtype"] = df["tag_dtype"]
+    if "n" not in df.columns and "arg0" in df.columns:
+        df["n"] = pd.to_numeric(df["arg0"], errors="coerce")
+    if raw_col == "max_relerr" and "max_relerr" not in df.columns and "relerr" in df.columns:
+        df["max_relerr"] = df["relerr"]
     if "cond" in df.columns and "log10_cond" not in df.columns:
         df["log10_cond"] = np.log10(np.maximum(df["cond"].astype(float), np.finfo(float).tiny))
     if "target_log10_cond" in df.columns and "log10_cond" not in df.columns:
