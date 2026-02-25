@@ -403,9 +403,32 @@ inline double metric_mean_or_nan(const Result& r,
     return std::numeric_limits<double>::quiet_NaN();
 }
 
-inline void print_summary_header(size_t max_args) {
+struct SummaryMetricColumns {
+    bool show_r = false;
+    bool show_o = false;
+    bool show_relerr = false;
+};
+
+inline bool has_any_metric(const Result& r,
+                           const std::initializer_list<const char*>& keys) {
+    return std::isfinite(metric_mean_or_nan(r, keys));
+}
+
+inline SummaryMetricColumns detect_summary_columns(const std::vector<Result>& results) {
+    SummaryMetricColumns cols;
+    for (const auto& r : results) {
+        cols.show_r = cols.show_r || has_any_metric(r, {"R"});
+        cols.show_o = cols.show_o || has_any_metric(r, {"O", "orthogonality"});
+        cols.show_relerr = cols.show_relerr || has_any_metric(r, {"max_relerr", "relerr"});
+    }
+    return cols;
+}
+
+inline void print_summary_header(size_t name_width,
+                                 size_t max_args,
+                                 const SummaryMetricColumns& cols) {
     std::cout << kColorHeader
-              << std::left << std::setw(50) << "Name";
+              << std::left << std::setw(static_cast<int>(name_width)) << "Name";
     for (size_t i = 0; i < max_args; ++i) {
         std::ostringstream col;
         col << "Arg" << i;
@@ -413,15 +436,17 @@ inline void print_summary_header(size_t max_args) {
     }
     std::cout << std::setw(12) << "log10cond"
               << std::setw(10) << "Samples"
-              << std::setw(10) << "Fail%"
-              << std::setw(28) << "||AZ - Z\\Lambda||_F / n"
-              << std::setw(24) << "||Z^T Z - I||_F / n"
-              << std::setw(16) << "max_relerr"
-              << kColorReset << '\n';
+              << std::setw(10) << "Fail%";
+    if (cols.show_r) std::cout << std::setw(28) << "||AZ - Z\\Lambda||_F / n";
+    if (cols.show_o) std::cout << std::setw(24) << "||Z^T Z - I||_F / n";
+    if (cols.show_relerr) std::cout << std::setw(16) << "max_relerr";
+    std::cout << kColorReset << '\n';
 }
 
 inline void print_summary_row(const Result& r,
-                              size_t max_args) {
+                              size_t name_width,
+                              size_t max_args,
+                              const SummaryMetricColumns& cols) {
     const auto arg_at = [&](size_t i) -> double {
         return i < r.args.size() ? r.args[i] : std::numeric_limits<double>::quiet_NaN();
     };
@@ -432,18 +457,18 @@ inline void print_summary_row(const Result& r,
     const double mean_relerr = metric_mean_or_nan(r, {"max_relerr", "relerr"});
     const double fail_pct = r.sample_count > 0 ? 100.0 * r.failure_rate : 0.0;
 
-    std::cout << kColorName << std::left << std::setw(50) << r.name << kColorReset
+    std::cout << kColorName << std::left << std::setw(static_cast<int>(name_width)) << r.name << kColorReset
               << std::left;
     for (size_t i = 0; i < max_args; ++i) {
         std::cout << std::setw(10) << format_value(arg_at(i));
     }
     std::cout << std::setw(12) << format_value(std::isfinite(avg_log10_cond) ? avg_log10_cond : r.target_log10_cond)
               << std::setw(10) << r.sample_count
-              << std::setw(10) << format_value(fail_pct)
-              << std::setw(28) << format_value(mean_r)
-              << std::setw(24) << format_value(mean_o)
-              << std::setw(16) << format_value(mean_relerr)
-              << '\n';
+              << std::setw(10) << format_value(fail_pct);
+    if (cols.show_r) std::cout << std::setw(28) << format_value(mean_r);
+    if (cols.show_o) std::cout << std::setw(24) << format_value(mean_o);
+    if (cols.show_relerr) std::cout << std::setw(16) << format_value(mean_relerr);
+    std::cout << '\n';
 }
 
 inline void write_samples_csv(const std::string& path,
@@ -549,9 +574,15 @@ inline int RunRegisteredBenchmarks(const Config& cfg,
         }
     }
 
-    print_summary_header(max_args);
+    const SummaryMetricColumns cols = detect_summary_columns(results);
+    size_t name_width = 50;
     for (const auto& r : results) {
-        print_summary_row(r, max_args);
+        name_width = std::max(name_width, r.name.size() + 2);
+    }
+
+    print_summary_header(name_width, max_args, cols);
+    for (const auto& r : results) {
+        print_summary_row(r, name_width, max_args, cols);
     }
 
     if (!csv_path.empty()) {
