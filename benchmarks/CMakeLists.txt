@@ -1,4 +1,11 @@
 set(BENCHMARK_TARGETS
+    orthogonality_miniacc
+    steqr_acc
+    steqr_cta_acc
+    stedc_acc
+    syev_cta_acc
+    syev_blocked_acc
+    syevx_acc
     band_reduction_benchmark
     bandr1_dump
     geqrf_benchmark
