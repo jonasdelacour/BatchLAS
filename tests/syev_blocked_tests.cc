@@ -165,8 +165,6 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 																A_blk.view(),
 																JobType::NoEigenVectors,
 																Uplo::Lower,
-																/*sytrd_block_size=*/32,
-																/*ormqr_block_size=*/32,
 																params));
 		syev_blocked<B, Scalar>(*this->ctx,
 						A_blk.view(),
@@ -174,8 +172,6 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 						JobType::NoEigenVectors,
 						Uplo::Lower,
 						ws_blk.to_span(),
-						/*sytrd_block_size=*/32,
-						/*ormqr_block_size=*/32,
 						params).wait();
 	}
 
@@ -219,8 +215,6 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 																A_blk.view(),
 																JobType::EigenVectors,
 																Uplo::Lower,
-																/*sytrd_block_size=*/32,
-																/*ormqr_block_size=*/32,
 																params));
 		syev_blocked<B, Scalar>(*this->ctx,
 						A_blk.view(),
@@ -228,8 +222,6 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 						JobType::EigenVectors,
 						Uplo::Lower,
 						ws_blk.to_span(),
-						/*sytrd_block_size=*/32,
-						/*ormqr_block_size=*/32,
 						params).wait();
 	}
 

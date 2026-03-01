@@ -5,6 +5,7 @@
 #include <util/mempool.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -379,52 +380,53 @@ inline void validate_sytrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
 
 } // namespace
 
-template <Backend B, typename T>
-size_t sytrd_blocked_buffer_size(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
-                                 const VectorView<T>& d,
-                                 const VectorView<T>& e,
-                                 const VectorView<T>& tau,
-                                 Uplo uplo,
-                                 int32_t block_size) {
+inline int resolved_nb_sytrd(int32_t block_size, int compiled_nb) {
+    if (compiled_nb > 0) {
+        return compiled_nb;
+    }
+    return std::max<int>(1, block_size);
+}
+
+template <Backend B, typename T, int NB>
+size_t sytrd_blocked_buffer_size_impl(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& a,
+                                      const VectorView<T>& d,
+                                      const VectorView<T>& e,
+                                      const VectorView<T>& tau,
+                                      Uplo uplo,
+                                      int32_t block_size) {
     (void)uplo;
-    validate_sytrd_dims(a, d, e, tau);
+    (void)d;
+    (void)e;
+    (void)tau;
 
     const int n = a.rows();
     const int batch = a.batch_size();
-    const int nb = std::max<int>(1, block_size);
+    const int nb = resolved_nb_sytrd(block_size, NB);
 
     size_t size = 0;
-    // W workspace: n x nb per batch
     size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
     return size;
 }
 
-template <Backend B, typename T>
-Event sytrd_blocked(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& a_in,
-                    const VectorView<T>& d_out,
-                    const VectorView<T>& e_out,
-                    const VectorView<T>& tau_out,
-                    Uplo uplo,
-                    const Span<std::byte>& ws,
-                    int32_t block_size) {
-    validate_sytrd_dims(a_in, d_out, e_out, tau_out);
-
-    if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_blocked: requires an in-order Queue");
-    }
-
+template <Backend B, typename T, int NB>
+Event sytrd_blocked_impl(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& a_in,
+                         const VectorView<T>& d_out,
+                         const VectorView<T>& e_out,
+                         const VectorView<T>& tau_out,
+                         Uplo uplo,
+                         const Span<std::byte>& ws,
+                         int32_t block_size) {
     const int n = a_in.rows();
     const int batch = a_in.batch_size();
-    const int nb = std::max<int>(1, block_size);
+    const int nb = resolved_nb_sytrd(block_size, NB);
 
     if (uplo != Uplo::Lower) {
         throw std::runtime_error("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
     if (n <= 32) {
-        // For small matrices prefer the CTA (unblocked) path when subgroup size 32 is supported.
         bool has_sg32 = false;
         try {
             const auto sizes = ctx->get_device().get_info<sycl::info::device::sub_group_sizes>();
@@ -437,13 +439,6 @@ Event sytrd_blocked(Queue& ctx,
         }
     }
 
-    // Optional: local-memory unblocked kernel.
-    // Auto-enabled for float where it improves the n=33..64 crossover; other types require
-    // an explicit env override because it can regress performance.
-    //
-    // NOTE: The DPC++ CUDA plugin has been observed to abort in
-    // detail::adjustNDRangePerKernel for this kernel shape. Prefer stability
-    // and fall back to the regular blocked path on CUDA.
     if (n <= 64) {
         auto env_truthy = [](const char* v) -> bool {
             if (!v) return false;
@@ -478,7 +473,6 @@ Event sytrd_blocked(Queue& ctx,
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.local_small");
                 (void)sytrd_lower_local_small<T>(ctx, a_in, e_out, tau_out, n);
             }
-            // Final: write D from diagonal and ensure tridiagonal entries are present.
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.restore_tridiag");
                 (void)restore_tridiag_lower<T>(ctx, a_in, d_out, e_out, n);
@@ -507,7 +501,12 @@ Event sytrd_blocked(Queue& ctx,
             auto E_panel = E(Slice(j0, j0 + ib));
             auto TAU_panel = TAU(Slice(j0, j0 + ib));
             auto W_panel = Wmat({j0, SliceEnd()}, {0, ib});
-            (void)latrd_lower_panel<B, T>(ctx, A_panel, E_panel, TAU_panel, W_panel);
+            (void)latrd_lower_panel<B, T>(ctx,
+                                          A_panel,
+                                          E_panel,
+                                          TAU_panel,
+                                          W_panel,
+                                          tuning::latrd_lower_panel_wg_hint());
         }
 
         const int j2 = j0 + ib;
@@ -517,11 +516,8 @@ Event sytrd_blocked(Queue& ctx,
             auto V2 = A({j2, SliceEnd()}, {j0, j0 + ib});
             auto W2 = Wmat({j2, SliceEnd()}, {0, ib});
 
-            // A22 -= V2*W2^H + W2*V2^H
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw");
-                // For very small trailing blocks, two tiny GEMMs can be dominated by library overhead.
-                // Use a simple SYCL kernel to update the Hermitian lower triangle instead.
                 if (n2 <= 128) {
                     (void)update_vw_lower_small<T>(ctx, V2, W2, A22);
                 } else {
@@ -532,13 +528,67 @@ Event sytrd_blocked(Queue& ctx,
         }
     }
 
-    // Final: write D from diagonal and ensure tridiagonal entries are present.
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.restore_tridiag");
         (void)restore_tridiag_lower<T>(ctx, A, D, E, n);
     }
 
     return ctx.get_event();
+}
+
+template <Backend B, typename T>
+size_t sytrd_blocked_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 const VectorView<T>& d,
+                                 const VectorView<T>& e,
+                                 const VectorView<T>& tau,
+                                 Uplo uplo,
+                                 int32_t block_size) {
+    validate_sytrd_dims(a, d, e, tau);
+
+    const int nb = std::max<int>(1, block_size);
+    switch (nb) {
+        case 8:
+            return sytrd_blocked_buffer_size_impl<B, T, 8>(ctx, a, d, e, tau, uplo, block_size);
+        case 16:
+            return sytrd_blocked_buffer_size_impl<B, T, 16>(ctx, a, d, e, tau, uplo, block_size);
+        case 32:
+            return sytrd_blocked_buffer_size_impl<B, T, 32>(ctx, a, d, e, tau, uplo, block_size);
+        case 64:
+            return sytrd_blocked_buffer_size_impl<B, T, 64>(ctx, a, d, e, tau, uplo, block_size);
+        default:
+            return sytrd_blocked_buffer_size_impl<B, T, -1>(ctx, a, d, e, tau, uplo, block_size);
+    }
+}
+
+template <Backend B, typename T>
+Event sytrd_blocked(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    const VectorView<T>& d_out,
+                    const VectorView<T>& e_out,
+                    const VectorView<T>& tau_out,
+                    Uplo uplo,
+                    const Span<std::byte>& ws,
+                    int32_t block_size) {
+    validate_sytrd_dims(a_in, d_out, e_out, tau_out);
+
+    if (!ctx.in_order()) {
+        throw std::runtime_error("sytrd_blocked: requires an in-order Queue");
+    }
+
+    const int nb = std::max<int>(1, block_size);
+    switch (nb) {
+        case 8:
+            return sytrd_blocked_impl<B, T, 8>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+        case 16:
+            return sytrd_blocked_impl<B, T, 16>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+        case 32:
+            return sytrd_blocked_impl<B, T, 32>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+        case 64:
+            return sytrd_blocked_impl<B, T, 64>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+        default:
+            return sytrd_blocked_impl<B, T, -1>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+    }
 }
 
 #define SYTRD_BLOCKED_INSTANTIATE(back, fp) \

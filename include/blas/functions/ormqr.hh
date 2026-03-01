@@ -8,6 +8,7 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <batchlas/tuning_params.hh>
 
 #include <internal/ormqr_blocked.hh>
 
@@ -150,7 +151,7 @@ inline Event ormqr_dispatch(Queue& ctx,
     const DispatchPolicy policy = policy_from_env("ORMQR");
     Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
 
-    constexpr int32_t block_size = 64;
+    const int32_t block_size = batchlas::tuning::ormqr_block_size_for_n(static_cast<int32_t>(A.rows()));
 
     size_t need_ws = 0;
     if (chosen == Provider::Vendor) {
@@ -196,7 +197,7 @@ inline size_t ormqr_buffer_size_dispatch(Queue& ctx,
     const DispatchPolicy policy = policy_from_env("ORMQR");
     const Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
 
-    constexpr int32_t block_size = 64;
+    const int32_t block_size = batchlas::tuning::ormqr_block_size_for_n(static_cast<int32_t>(A.rows()));
 
     if (chosen == Provider::Vendor) {
         return backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau);

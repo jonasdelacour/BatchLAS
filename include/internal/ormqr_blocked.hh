@@ -2,6 +2,7 @@
 
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
+#include <batchlas/tuning_params.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 
@@ -27,7 +28,7 @@ Event ormqr_blocked(Queue& ctx,
                     Transpose trans,
                     Span<T> tau,
                     Span<std::byte> workspace,
-                    int32_t block_size = 32);
+                    int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
 
 template <Backend B, typename T>
 size_t ormqr_blocked_buffer_size(Queue& ctx,
@@ -36,6 +37,6 @@ size_t ormqr_blocked_buffer_size(Queue& ctx,
                                  Side side,
                                  Transpose trans,
                                  Span<T> tau,
-                                 int32_t block_size = 32);
+                                 int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
 
 } // namespace batchlas

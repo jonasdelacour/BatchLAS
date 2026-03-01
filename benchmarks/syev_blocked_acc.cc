@@ -49,15 +49,13 @@ void run_syev_blocked(miniacc::State& state) {
 
         try {
             UnifiedVector<std::byte> ws(
-                syev_blocked_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, Uplo::Lower, 32, 32));
+                syev_blocked_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, Uplo::Lower));
             syev_blocked<B, Real>(*q,
                                   A_work.view(),
                                   eigvals.to_span(),
                                   JobType::EigenVectors,
                                   Uplo::Lower,
-                                  ws.to_span(),
-                                  32,
-                                  32);
+                                  ws.to_span());
             q->wait();
         } catch (const std::exception& ex) {
             miniacc_acc::record_failed_samples(state, n, n, cur_batch, target_log10, std::string("solver_exception:") + ex.what());

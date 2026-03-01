@@ -593,17 +593,13 @@ int run_accuracy(const Options& opt) {
                         syev_blocked_buffer_size<B, Real>(*q,
                                                           A_work.view(),
                                                           JobType::EigenVectors,
-                                                          Uplo::Lower,
-                                                          opt.sytrd_block_size,
-                                                          opt.ormqr_block_size));
+                                                          Uplo::Lower));
                     syev_blocked<B, Real>(*q,
                                           A_work.view(),
                                           eigvals.to_span(),
                                           JobType::EigenVectors,
                                           Uplo::Lower,
-                                          ws.to_span(),
-                                          opt.sytrd_block_size,
-                                          opt.ormqr_block_size);
+                                          ws.to_span());
                     q->wait();
 
                     VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);

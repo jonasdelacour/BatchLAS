@@ -174,8 +174,6 @@ inline Event syev_dispatch(Queue& ctx,
                                                  descrA,
                                                  jobtype,
                                                  uplo,
-                                                 /*sytrd_block_size=*/32,
-                                                 /*ormqr_block_size=*/32,
                                                  StedcParams<typename base_type<T>::type>{});
     } else {
         chosen = Provider::Vendor;
@@ -214,8 +212,6 @@ inline Event syev_dispatch(Queue& ctx,
                                jobtype,
                                uplo,
                                workspace,
-                               /*sytrd_block_size=*/32,
-                               /*ormqr_block_size=*/32,
                                StedcParams<typename base_type<T>::type>{});
     }
 
@@ -246,8 +242,6 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
                                           descrA,
                                           jobtype,
                                           uplo,
-                                          /*sytrd_block_size=*/32,
-                                          /*ormqr_block_size=*/32,
                                           StedcParams<typename base_type<T>::type>{});
 }
 

@@ -115,8 +115,6 @@ Event syev_blocked(Queue& ctx,
                    JobType jobz,
                    Uplo uplo,
                    const Span<std::byte>& ws,
-                   int32_t sytrd_block_size,
-                   int32_t ormqr_block_size,
                    StedcParams<typename base_type<T>::type> stedc_params) {
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
 
@@ -127,6 +125,8 @@ Event syev_blocked(Queue& ctx,
     const int32_t n = static_cast<int32_t>(a_in.rows());
     const int32_t batch = static_cast<int32_t>(a_in.batch_size());
     const int32_t p = std::max<int32_t>(0, n - 1);
+    const int32_t sytrd_block_size = tuning::sytrd_block_size_for_n(n);
+    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
     // Overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -335,9 +335,9 @@ Event syev_blocked(Queue& ctx,
         const JobType internal_jobz = JobType::EigenVectors;
         VectorView<T> evals_view(eigenvalues.data(), n, batch, 1, n);
         {
-            auto stedc_ws_bytes = stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, StedcParams<T>{stedc_params.recursion_threshold});
+            auto stedc_ws_bytes = stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
             auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-            stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, StedcParams<T>{stedc_params.recursion_threshold}, z_view);
+            stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view);
         }
 
         if (jobz == JobType::EigenVectors) {
@@ -398,8 +398,6 @@ size_t syev_blocked_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& a,
                                 JobType jobz,
                                 Uplo uplo,
-                                int32_t sytrd_block_size,
-                                int32_t ormqr_block_size,
                                 StedcParams<typename base_type<T>::type> stedc_params) {
     if (a.rows() != a.cols()) {
         throw std::invalid_argument("syev_blocked_buffer_size: A must be square.");
@@ -413,6 +411,8 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
+    const int32_t sytrd_block_size = tuning::sytrd_block_size_for_n(n);
+    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
     size_t bytes = 0;
 
@@ -484,7 +484,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         VectorView<T> tau_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
         bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_dummy, e_dummy, tau_dummy, uplo, sytrd_block_size);
 
-        bytes += stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, StedcParams<T>{stedc_params.recursion_threshold});
+        bytes += stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
 
         MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
         MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
@@ -503,16 +503,12 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         JobType, \
         Uplo, \
         const Span<std::byte>&, \
-        int32_t, \
-        int32_t, \
         StedcParams<typename base_type<fp>::type>); \
     template size_t syev_blocked_buffer_size<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         JobType, \
         Uplo, \
-        int32_t, \
-        int32_t, \
         StedcParams<typename base_type<fp>::type>);
 
 #if BATCHLAS_HAS_CUDA_BACKEND

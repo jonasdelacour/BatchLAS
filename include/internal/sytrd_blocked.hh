@@ -1,6 +1,7 @@
 #pragma once
 
 #include <blas/matrix.hh>
+#include <batchlas/tuning_params.hh>
 #include <util/sycl-span.hh>
 
 #include <cstddef>

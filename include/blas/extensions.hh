@@ -2,6 +2,7 @@
 #include <complex>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
+#include <batchlas/tuning_params.hh>
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
 #include <numeric>
@@ -548,7 +549,8 @@ namespace batchlas {
                             const VectorView<T>& tau_out,
                             const MatrixView<T, MatrixFormat::Dense>& w_in,
                             int32_t j0,
-                            int32_t ib);
+                            int32_t ib,
+                            int32_t wg_hint = 0);
 
     /**
      * @brief LATRD-like panel factorization (Lower only), view-based overload.
@@ -568,7 +570,8 @@ namespace batchlas {
                             const MatrixView<T, MatrixFormat::Dense>& a_panel_in,
                             const VectorView<T>& e_panel_out,
                             const VectorView<T>& tau_panel_out,
-                            const MatrixView<T, MatrixFormat::Dense>& w_panel_in);
+                            const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
+                            int32_t wg_hint = 0);
 
     /**
      * @brief Blocked symmetric/Hermitian tridiagonal reduction for medium/large matrices.
@@ -589,7 +592,7 @@ namespace batchlas {
                         const VectorView<T>& tau_out,
                         Uplo uplo,
                         const Span<std::byte>& ws,
-                        int32_t block_size);
+                        int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
 
     template <Backend B, typename T>
     size_t sytrd_blocked_buffer_size(Queue& ctx,
@@ -598,7 +601,7 @@ namespace batchlas {
                                      const VectorView<T>& e,
                                      const VectorView<T>& tau,
                                      Uplo uplo,
-                                     int32_t block_size);
+                                     int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
 
     /**
      * @brief First stage of two-stage reduction: symmetric/Hermitian dense -> band (SY2SB).
@@ -880,8 +883,6 @@ namespace batchlas {
                        JobType jobz,
                        Uplo uplo,
                        const Span<std::byte>& ws,
-                       int32_t sytrd_block_size = 32,
-                       int32_t ormqr_block_size = 32,
                        StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     template <Backend B, typename T>
@@ -889,9 +890,95 @@ namespace batchlas {
                                     const MatrixView<T, MatrixFormat::Dense>& a,
                                     JobType jobz,
                                     Uplo uplo,
-                                    int32_t sytrd_block_size = 32,
-                                    int32_t ormqr_block_size = 32,
                                     StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+
+    /**
+     * @brief Unblocked GEBRD-like reduction to real bidiagonal form.
+     *
+     * Reduces each square matrix A to bidiagonal form in-place while returning
+     * bidiagonal coefficients (d,e) and Householder scalars (tauq,taup).
+     */
+    template <Backend B, typename T>
+    Event gebrd_unblocked(Queue& ctx,
+                          const MatrixView<T, MatrixFormat::Dense>& a,
+                          const VectorView<typename base_type<T>::type>& d,
+                          const VectorView<typename base_type<T>::type>& e,
+                          const VectorView<T>& tauq,
+                          const VectorView<T>& taup);
+
+    /**
+     * @brief BDSQR-like implicit bidiagonal QR for singular values (values-only).
+     *
+     * Computes singular values from bidiagonal coefficients (d,e) and writes them
+     * to singular_values_out in descending order.
+     */
+    template <Backend B, typename T>
+    Event bdsqr(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                bool sort_desc = true);
+
+    template <typename T>
+    size_t bdsqr_buffer_size(Queue& ctx,
+                             const VectorView<T>& d,
+                             const VectorView<T>& e,
+                             Span<T> singular_values_out);
+
+    /**
+     * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
+     *
+        * Current implementation supports `vect='Q'` (tauq, blocked ORMQR path)
+        * and `vect='P'` (taup, staged unblocked reflector application).
+     */
+    template <Backend B, typename T>
+    Event ormbr(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& a,
+                const VectorView<T>& tau,
+                const MatrixView<T, MatrixFormat::Dense>& c,
+                char vect,
+                Side side,
+                Transpose trans,
+                const Span<std::byte>& ws,
+                int32_t block_size = 32);
+
+    template <Backend B, typename T>
+    size_t ormbr_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& a,
+                             const VectorView<T>& tau,
+                             const MatrixView<T, MatrixFormat::Dense>& c,
+                             char vect,
+                             Side side,
+                             Transpose trans,
+                             int32_t block_size = 32);
+
+    /**
+     * @brief Blocked SVD orchestration entry point (initial scaffold).
+     *
+     * Intended pipeline (to be implemented incrementally):
+     *  1) GEBRD-style dense -> bidiagonal reduction
+     *  2) BDSQR/BDSDC-style bidiagonal SVD solve
+     *  3) ORMBR-style backtransforms for full U and V^H
+     */
+    template <Backend B, typename T>
+    Event gesvd_blocked(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& a_in,
+                        Span<typename base_type<T>::type> singular_values,
+                        const MatrixView<T, MatrixFormat::Dense>& u_out,
+                        const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                        SvdVectors jobu,
+                        SvdVectors jobvh,
+                        const Span<std::byte>& ws);
+
+    template <Backend B, typename T>
+    size_t gesvd_blocked_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& a,
+                                     Span<typename base_type<T>::type> singular_values,
+                                     const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                     SvdVectors jobu,
+                                     SvdVectors jobvh);
 
     /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
@@ -949,6 +1036,7 @@ namespace batchlas {
     enum class StedcMergeVariant {
         Baseline,           // Current serial-per-root path (3 separate kernels)
         Fused,              // One kernel: warp-parallel root solve + build/normalize Qprime columns
+        FusedCta,           // CTA-partitioned root solve using tunable threads per root
     };
 
     template <typename T>
@@ -962,6 +1050,8 @@ namespace batchlas {
         int merge_threads = 128;       // work-group size for fused kernel
         int max_sec_iter = 50;         // iteration cap for secular root solver
         bool enable_rescale = true;    // keep ROCm-style v rescale (disable for perf experiments)
+        int secular_threads_per_root = 32;       // partition width for CTA secular solve (4/8/16/32)
+        int secular_cta_wg_size_multiplier = 1;  // scales base WG size = lcm(threads_per_root, subgroup_size)
     };
 
     template <Backend B, typename T>
