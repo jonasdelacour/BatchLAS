@@ -5,12 +5,42 @@
 #include <util/sycl-local-accessor-helpers.hh>
 #include <internal/sort.hh>
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
 #define DEBUG_STEDC 0
 
 namespace batchlas {
+
+namespace {
+
+template <Backend B, typename T>
+inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params) {
+    const int32_t nn = static_cast<int32_t>(n);
+
+    if constexpr (B != Backend::NETLIB) {
+        if (params.recursion_threshold == 32) {
+            params.recursion_threshold = tuning::stedc_recursion_threshold_for_n(nn);
+        }
+        if (params.merge_variant == StedcMergeVariant::Baseline) {
+            params.merge_variant = static_cast<StedcMergeVariant>(tuning::stedc_merge_variant_for_n(nn));
+        }
+        if (params.secular_threads_per_root == 32) {
+            params.secular_threads_per_root = tuning::stedc_threads_per_root_for_n(nn);
+        }
+        if (params.secular_cta_wg_size_multiplier == 1) {
+            params.secular_cta_wg_size_multiplier = tuning::stedc_wg_multiplier_for_n(nn);
+        }
+    }
+
+    const int64_t safe_n = std::max<int64_t>(1, n);
+    params.recursion_threshold = std::max<int64_t>(1, std::min<int64_t>(params.recursion_threshold, safe_n));
+
+    return params;
+}
+
+} // namespace
 
 // SYCL kernel class tags for profiling and naming (templated to avoid ODR violations)
 template <Backend B, typename T> class StedcModifyDiagonal;
@@ -25,14 +55,16 @@ template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q)
 {
-    // Ensure leaf subproblems return sorted eigenvalues so higher levels can safely
-    // rely on the "children sorted" invariant.
-    auto steqr_params = params.leaf_steqr_params;
-    steqr_params.sort = true;
-    steqr_params.sort_order = SortOrder::Ascending;
     auto n = d.size();
     auto batch_size = d.batch_size();
-    if (n <= params.recursion_threshold){
+    auto effective_params = resolve_stedc_tuning<B, T>(n, params);
+
+    // Ensure leaf subproblems return sorted eigenvalues so higher levels can safely
+    // rely on the "children sorted" invariant.
+    auto steqr_params = effective_params.leaf_steqr_params;
+    steqr_params.sort = true;
+    steqr_params.sort_order = SortOrder::Ascending;
+    if (n <= effective_params.recursion_threshold){
         return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
     }
 
@@ -220,11 +252,12 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), n, n, n, n * n, batch_size);
     Qprime.fill_identity(ctx);
-    if (params.secular_solver == StedcSecularSolver::Legacy) {
+    if (effective_params.secular_solver == StedcSecularSolver::Legacy) {
         secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0));
-    } else if (params.merge_variant == StedcMergeVariant::Fused) {
-        // Fused path: warp-parallel root solve + build/normalize Qprime in one kernel
-        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+    } else if (effective_params.merge_variant == StedcMergeVariant::Fused
+            || effective_params.merge_variant == StedcMergeVariant::FusedCta) {
+        // Fused merge paths: single-kernel implementations selected by merge_variant.
+        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, effective_params);
     } else {
         // Baseline ROCm path: 3 separate kernels
         ctx -> submit([&](sycl::handler& h) {
@@ -377,22 +410,8 @@ size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType job
         return 0;
     }
 
-    size_t size = 0;
-    auto d = VectorView<T>(nullptr, params.recursion_threshold, batch_size);
-    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, batch_size);
-    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, batch_size);
-    // How many recursions do we need?
-    auto n_rec = (n + params.recursion_threshold - 1) / params.recursion_threshold;
-    auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem
-    
-    // Compute the workspace size based on the job type
-    size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
-    size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
-
-    // Additional persistent column-map buffer used in the merge step (perm_map).
-    size += BumpAllocator::allocation_size<int32_t>(ctx, n * batch_size);
-
-    return (size * n_rec) + 2 * BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
+    return stedc_internal_workspace_size<B, T>(ctx, n, batch_size, jobz, params)
+           + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size);
 }
 
 
@@ -401,6 +420,8 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     if (n <= 0 || batch_size <= 0) {
         return 0;
     }
+
+    params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params);
 
     size_t size = 0;
     auto d = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);

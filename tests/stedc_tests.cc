@@ -208,6 +208,162 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
     }
 }
 
+TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "CTA merge is GPU-only"; }
+    const int n = 64;
+    const int batch = 128;
+    using float_type = typename base_type<T>::type;
+
+    auto a_cta = Vector<float_type>::random(n, batch);
+    auto b_cta = Vector<float_type>::random(n - 1, batch);
+
+    // Build dense tridiagonal for syev reference
+    Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
+    T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
+    this->ctx->wait();
+
+    auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+    auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
+
+    StedcParams<float_type> params_cta{
+        .recursion_threshold = 16,
+        .merge_variant = StedcMergeVariant::FusedCta,
+        .enable_rescale = true,
+        .secular_threads_per_root = 32,
+    };
+
+    UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+    this->ctx->wait();
+
+    // syev reference eigenvalues
+    UnifiedVector<float_type> ref_eigvals(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    this->ctx->wait();
+    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
+
+    // CTA solver uses origin-shifted quadratic interpolation adapted from the ROC solver.
+    auto tol = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
+            if (diff > tol) {
+                FAIL() << "FusedCta eigenvalue mismatch vs syev at (" << i << ", batch " << j << ") : ref="
+                       << ref_view(i, j) << " cta=" << eigvals_cta(i, j) << " diff=" << diff
+                       << " tol=" << tol;
+            }
+        }
+    }
+}
+
+TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "CTA merge is GPU-only"; }
+    const int n = 64;
+    const int batch = 128;
+    using float_type = typename base_type<T>::type;
+
+    auto a_saved = Vector<float_type>::random(n, batch);
+    auto b_saved = Vector<float_type>::random(n - 1, batch);
+
+    // Build dense tridiagonal for syev reference
+    Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
+    T_mat.view().fill_tridiag(*this->ctx, b_saved, a_saved, b_saved).wait();
+    this->ctx->wait();
+
+    UnifiedVector<float_type> ref_eigvals(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    this->ctx->wait();
+    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
+
+    auto tol_vs_ref = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
+
+    // Run each partition width and check against syev reference
+    for (int P : {4, 8, 16, 32}) {
+        auto a_cta = a_saved;
+        auto b_cta = b_saved;
+        auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+        auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
+
+        StedcParams<float_type> params_cta{
+            .recursion_threshold = 16,
+            .merge_variant = StedcMergeVariant::FusedCta,
+            .enable_rescale = true,
+            .secular_threads_per_root = P,
+        };
+
+        UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+        stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+        this->ctx->wait();
+
+        for (int j = 0; j < batch; ++j) {
+            for (int i = 0; i < n; ++i) {
+                float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
+                if (diff > tol_vs_ref) {
+                    FAIL() << "FusedCta P=" << P << " eigenvalue mismatch vs syev at (" << i << ", batch " << j
+                           << ") : ref=" << ref_view(i, j) << " cta=" << eigvals_cta(i, j)
+                           << " diff=" << diff << " tol=" << tol_vs_ref;
+                }
+            }
+        }
+    }
+}
+
+TYPED_TEST(StedcTest, FusedCtaFallsBackToNonChunkedWhenRequestedExceedsMaxSubgroup) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "CTA merge is GPU-only"; }
+    const int n = 64;
+    const int batch = 128;
+    using float_type = typename base_type<T>::type;
+
+    constexpr int forced_threads_per_root = 1024;
+
+    auto a_cta = Vector<float_type>::random(n, batch);
+    auto b_cta = Vector<float_type>::random(n - 1, batch);
+
+    Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
+    T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
+    this->ctx->wait();
+
+    auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+    auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
+
+    StedcParams<float_type> params_cta{
+        .recursion_threshold = 16,
+        .merge_variant = StedcMergeVariant::FusedCta,
+        .enable_rescale = true,
+        .secular_threads_per_root = forced_threads_per_root,
+    };
+
+    UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+    this->ctx->wait();
+
+    UnifiedVector<float_type> ref_eigvals(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    this->ctx->wait();
+    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
+
+    auto tol = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
+            if (diff > tol) {
+                FAIL() << "FusedCta non-chunked fallback mismatch vs syev at (" << i << ", batch " << j
+                       << ") : ref=" << ref_view(i, j) << " cta=" << eigvals_cta(i, j)
+                       << " diff=" << diff << " tol=" << tol;
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

@@ -12,6 +12,8 @@ static void BM_STEDC(minibench::State& state) {
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
     const StedcMergeVariant merge_variant = static_cast<StedcMergeVariant>(state.range(3));
+    const int threads_per_root = state.range(4) > 0 ? state.range(4) : 32;
+    const int wg_multiplier = state.range(5) > 0 ? state.range(5) : 1;
     JobType jobz = JobType::EigenVectors;
 
     auto diags = Vector<T>::random(n, batch);
@@ -20,6 +22,8 @@ static void BM_STEDC(minibench::State& state) {
     StedcParams<T> params;
     params.recursion_threshold = rec_threshold;
     params.merge_variant = merge_variant;
+    params.secular_threads_per_root = threads_per_root;
+    params.secular_cta_wg_size_multiplier = wg_multiplier;
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     auto eigvals = Vector<T>::zeros(n, batch);

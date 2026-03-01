@@ -5,6 +5,32 @@
 
 namespace batchlas {
 
+template <Backend B, typename T>
+void stedc_merge_fused(Queue& ctx,
+                       const VectorView<T>& eigenvalues,
+                       const VectorView<T>& v,
+                       const Span<T>& rho,
+                       const Span<int32_t>& n_reduced,
+                       const VectorView<T>& e,
+                       int64_t m,
+                       int64_t n,
+                       const MatrixView<T, MatrixFormat::Dense>& Qprime,
+                       const VectorView<T>& temp_lambdas,
+                       const StedcParams<T>& params);
+
+template <Backend B, typename T>
+void stedc_merge_fused_cta(Queue& ctx,
+                           const VectorView<T>& eigenvalues,
+                           const VectorView<T>& v,
+                           const Span<T>& rho,
+                           const Span<int32_t>& n_reduced,
+                           const VectorView<T>& e,
+                           int64_t m,
+                           int64_t n,
+                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
+                           const VectorView<T>& temp_lambdas,
+                           const StedcParams<T>& params);
+
 // Dispatch the merge step (secular solve + eigenvector formation) according to params.merge_variant.
 // Replaces the 3-kernel sequence: StedcSecularSolve + StedcRescaleV + StedcMatrixUpdate.
 //

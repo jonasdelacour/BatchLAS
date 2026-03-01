@@ -141,6 +141,9 @@ void stedc_merge_dispatch(Queue& ctx,
     case StedcMergeVariant::Fused:
         stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
         break;
+    case StedcMergeVariant::FusedCta:
+        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        break;
     default:
         // Baseline path is handled by the caller in stedc.cc.
         break;
