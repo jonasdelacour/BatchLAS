@@ -182,6 +182,7 @@ def _tune_one_bench(
 ) -> Dict[str, Any]:
     best: Optional[Dict[str, Any]] = None
     leaderboard: List[Dict[str, Any]] = []
+    per_case_best: List[Optional[Dict[str, Any]]] = [None for _ in space.cases]
 
     # For now, we assume all cases share the same tuning keys.
     tune_keys: Dict[str, List[int]] = {}
@@ -200,7 +201,7 @@ def _tune_one_bench(
         values: List[float] = []
         per_case: List[Dict[str, Any]] = []
 
-        for case in space.cases:
+        for case_idx, case in enumerate(space.cases):
             fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
             args = _args_from_spec(space.arg_spec, fixed=fixed, params=params)
             v = _run_one_case(
@@ -216,6 +217,24 @@ def _tune_one_bench(
             )
             values.append(v)
             per_case.append({"fixed": fixed, "args": args, "value": v})
+
+            current = per_case_best[case_idx]
+            better = False
+            if current is None:
+                better = True
+            elif space.direction == "min":
+                better = v < float(current["value"])
+            else:
+                better = v > float(current["value"])
+
+            if better:
+                per_case_best[case_idx] = {
+                    "case_index": case_idx,
+                    "fixed": fixed,
+                    "args": args,
+                    "value": v,
+                    "params": dict(params),
+                }
 
         s = _score(values, space.direction)
         entry = {"params": params, "score": s, "values": values, "cases": per_case}
@@ -243,6 +262,7 @@ def _tune_one_bench(
         "arg_spec": space.arg_spec,
         "best": best,
         "top": leaderboard,
+        "per_case_best": [x for x in per_case_best if x is not None],
     }
 
 

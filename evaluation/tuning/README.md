@@ -27,3 +27,86 @@ Notes:
 The output JSON contains:
 - `meta`: environment info (backend/type/build dir)
 - `results`: per-benchmark best parameters and a small top-K leaderboard
+
+## Generating compile-time tuning constants
+
+BatchLAS now provides a generated header at build time:
+
+- `build/include/batchlas/tuning_params.hh`
+
+By default, this header is generated with safe fallback values at CMake configure time.
+
+To generate benchmark-derived constants from a profile:
+
+- One-shot from an existing profile:
+
+  `python3 evaluation/tuning/generate_tuning_header.py --profile build/tuning/profile.json --out build/include/batchlas/tuning_params.hh`
+
+- Through CMake target (when `BATCHLAS_ENABLE_TUNING=ON`):
+
+  `cmake --build build --target batchlas_tuning_header`
+
+This target depends on `batchlas_tune`, so it will run the tuning harness first and then regenerate the header.
+
+## Current model (size-aware only)
+
+The tuning header is now bucket-first (no single global ORMQR/SYTRD block-size constant in the generation flow).
+
+Generated constants:
+
+- `ORMQR_BLOCK_SIZE_TINY`, `ORMQR_BLOCK_SIZE_SMALL`, `ORMQR_BLOCK_SIZE_MEDIUM`, `ORMQR_BLOCK_SIZE_LARGE`, `ORMQR_BLOCK_SIZE_XLARGE`
+- `SYTRD_BLOCK_SIZE_TINY`, `SYTRD_BLOCK_SIZE_SMALL`, `SYTRD_BLOCK_SIZE_MEDIUM`, `SYTRD_BLOCK_SIZE_LARGE`, `SYTRD_BLOCK_SIZE_XLARGE`
+
+STEDC constants are bucketed:
+
+- `STEDC_*_{TINY,SMALL,MEDIUM,LARGE,XLARGE}`
+
+Runtime selection helpers:
+
+- `batchlas::tuning::ormqr_block_size_for_n(n)`
+- `batchlas::tuning::sytrd_block_size_for_n(n)`
+- `batchlas::tuning::stedc_recursion_threshold_for_n(n)`
+- `batchlas::tuning::stedc_merge_variant_for_n(n)`
+- `batchlas::tuning::stedc_threads_per_root_for_n(n)`
+- `batchlas::tuning::stedc_wg_multiplier_for_n(n)`
+
+Bucket boundaries are currently:
+
+- `n <= 64` -> `tiny`
+- `65..128` -> `small`
+- `129..256` -> `medium`
+- `257..512` -> `large`
+- `> 512` -> `xlarge`
+
+When tuning data includes multiple `n` cases, bucketed values are derived from each case winner (`per_case_best`) in the profile.
+
+## STEDC bottom-up cases
+
+STEDC tuning cases start at `n=64` and above. Leaf sizes `n <= 32` are intentionally not tuned separately.
+
+At runtime, recursion thresholds are clamped to local subproblem size (`threshold <= n`) at each recursion level.
+
+## Practical workflow
+
+1) Configure with benchmarks+tuning enabled:
+
+`cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON -DBATCHLAS_ENABLE_TUNING=ON`
+
+2) Run tuning + regenerate header:
+
+`cmake --build build --target batchlas_tuning_header -j`
+
+3) Inspect outputs:
+
+- Profile JSON: `build/tuning/profile.json`
+- Generated header: `build/include/batchlas/tuning_params.hh`
+
+4) Verify the selected parameters:
+
+- Check `results[].per_case_best` for per-`n` winners.
+- Check header constants and `*_for_n` selectors match your expected ranges.
+
+## Notes
+
+- `syev` does not carry independent child block-size knobs; it always uses `ormqr_block_size_for_n` and `sytrd_block_size_for_n` from child-owned tuning.
+- If your profile does not cover some size ranges, configured fallback bucket values are used for those missing ranges.

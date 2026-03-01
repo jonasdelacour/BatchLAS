@@ -5,11 +5,52 @@
       "exe": "stedc_benchmark",
       "metric": "Time (µs) / matrix",
       "direction": "min",
-      "arg_spec": ["n", "batch", "recursion_threshold", "flat"],
+      "arg_spec": ["n", "batch", "recursion_threshold", "flat", "threads_per_root", "wg_multiplier"],
       "cases": [
         {
-          "fixed": {"n": 256, "batch": 256},
-          "tune": {"recursion_threshold": [8, 16, 32, 64], "flat": [0, 1]}
+          "fixed": {"n": 64, "batch": 8192},
+          "tune": {
+            "recursion_threshold": [8, 16, 32, 64],
+            "flat": [0, 1, 2],
+            "threads_per_root": [4, 8, 16, 32],
+            "wg_multiplier": [1, 2, 4]
+          }
+        },
+        {
+          "fixed": {"n": 128, "batch": 4096},
+          "tune": {
+            "recursion_threshold": [8, 16, 32, 64],
+            "flat": [0, 1, 2],
+            "threads_per_root": [4, 8, 16, 32],
+            "wg_multiplier": [1, 2, 4]
+          }
+        },
+        {
+          "fixed": {"n": 256, "batch": 2048},
+          "tune": {
+            "recursion_threshold": [8, 16, 32, 64],
+            "flat": [0, 1, 2],
+            "threads_per_root": [4, 8, 16, 32],
+            "wg_multiplier": [1, 2, 4]
+          }
+        },
+        {
+          "fixed": {"n": 512, "batch": 1024},
+          "tune": {
+            "recursion_threshold": [8, 16, 32, 64],
+            "flat": [0, 1, 2],
+            "threads_per_root": [4, 8, 16, 32],
+            "wg_multiplier": [1, 2, 4]
+          }
+        },
+        {
+          "fixed": {"n": 1024, "batch": 512},
+          "tune": {
+            "recursion_threshold": [8, 16, 32, 64],
+            "flat": [0, 1, 2],
+            "threads_per_root": [4, 8, 16, 32],
+            "wg_multiplier": [1, 2, 4]
+          }
         }
       ]
     },
@@ -38,8 +79,24 @@
       "arg_spec": ["n", "batch", "nb", "uplo"],
       "cases": [
         {
-          "fixed": {"n": 256, "batch": 32, "uplo": 0},
-          "tune": {"nb": [8, 16, 32, 64]}
+          "fixed": {"n": 64, "batch": 8192, "uplo": 0},
+          "tune": {"nb": [8, 12, 16]}
+        },
+        {
+          "fixed": {"n": 128, "batch": 4096, "uplo": 0},
+          "tune": {"nb": [8, 12, 16, 24, 32]}
+        },
+        {
+          "fixed": {"n": 256, "batch": 2048, "uplo": 0},
+          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
+        },
+        {
+          "fixed": {"n": 512, "batch": 1024, "uplo": 0},
+          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
+        },
+        {
+          "fixed": {"n": 1024, "batch": 512, "uplo": 0},
+          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
         }
       ]
     },
@@ -51,25 +108,44 @@
       "arg_spec": ["n", "batch", "side", "trans", "block_size"],
       "cases": [
         {
-          "fixed": {"n": 256, "batch": 32, "side": 0, "trans": 0},
-          "tune": {"block_size": [16, 32, 64, 128]}
+          "fixed": {"n": 64, "batch": 8192, "side": 0, "trans": 0},
+          "tune": {"block_size": [4, 8, 12, 16]}
         },
         {
-          "fixed": {"n": 256, "batch": 32, "side": 1, "trans": 0},
-          "tune": {"block_size": [16, 32, 64, 128]}
-        }
-      ]
-    },
-    {
-      "bench": "syev_blocked",
-      "exe": "syev_blocked_benchmark",
-      "metric": "Time (µs) / matrix",
-      "direction": "min",
-      "arg_spec": ["n", "batch", "jobz", "sytrd_block_size", "ormqr_block_size"],
-      "cases": [
+          "fixed": {"n": 64, "batch": 8192, "side": 1, "trans": 0},
+          "tune": {"block_size": [4, 8, 12, 16]}
+        },
         {
-          "fixed": {"n": 256, "batch": 32, "jobz": 1},
-          "tune": {"sytrd_block_size": [8, 16, 32, 64], "ormqr_block_size": [16, 32, 64]}
+          "fixed": {"n": 128, "batch": 4096, "side": 0, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 128, "batch": 4096, "side": 1, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 256, "batch": 2048, "side": 0, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 256, "batch": 2048, "side": 1, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 512, "batch": 1024, "side": 0, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 512, "batch": 1024, "side": 1, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 1024, "batch": 512, "side": 0, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
+        },
+        {
+          "fixed": {"n": 1024, "batch": 512, "side": 1, "trans": 0},
+          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
         }
       ]
     }

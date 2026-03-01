@@ -102,6 +102,7 @@ option(BATCHLAS_NATIVE_CPU_DISABLE_VECZ "Disable vecz for native_cpu backend (wo
 # Opt-in: bottom-up tuning harness (runs benchmark grid-search and writes a JSON profile).
 # This is intentionally OFF-by-default and only meaningful when benchmarks are enabled.
 option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python and benchmarks)" OFF)
+set(BATCHLAS_TUNING_PROFILE "" CACHE FILEPATH "Optional tuning profile JSON to generate compile-time tuning constants")
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_MKL_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
@@ -956,8 +957,95 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/backend_config.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
 )
+
+# Generate compile-time tuning constants header.
+# By default this emits conservative fallback values matching current behavior.
+set(BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_TINY 16)
+set(BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_SMALL 32)
+set(BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_MEDIUM 64)
+set(BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_LARGE 128)
+set(BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_XLARGE 128)
+set(BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_TINY 8)
+set(BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_SMALL 16)
+set(BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_MEDIUM 32)
+set(BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_LARGE 64)
+set(BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_XLARGE 64)
+set(BATCHLAS_TUNE_DEFAULT_LATRD_LOWER_PANEL_WG_HINT 0)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_TINY 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_SMALL 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_MEDIUM 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_LARGE 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_XLARGE 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_TINY 2)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_SMALL 2)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_MEDIUM 2)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_LARGE 2)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_XLARGE 2)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_TINY 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_SMALL 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_MEDIUM 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_LARGE 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_XLARGE 32)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_TINY 1)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_SMALL 1)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_MEDIUM 1)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_LARGE 1)
+set(BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_XLARGE 1)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/tuning_params.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/tuning_params.hh
+)
+
+if(BATCHLAS_TUNING_PROFILE)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_custom_target(batchlas_tuning_header
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/evaluation/tuning/generate_tuning_header.py"
+            --profile "${BATCHLAS_TUNING_PROFILE}"
+            --out "${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/tuning_params.hh"
+            --fallback-ormqr-block-size-tiny "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_TINY}"
+            --fallback-ormqr-block-size-small "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_SMALL}"
+            --fallback-ormqr-block-size-medium "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_MEDIUM}"
+            --fallback-ormqr-block-size-large "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_LARGE}"
+            --fallback-ormqr-block-size-xlarge "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_XLARGE}"
+            --fallback-sytrd-block-size-tiny "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_TINY}"
+            --fallback-sytrd-block-size-small "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_SMALL}"
+            --fallback-sytrd-block-size-medium "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_MEDIUM}"
+            --fallback-sytrd-block-size-large "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_LARGE}"
+            --fallback-sytrd-block-size-xlarge "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_XLARGE}"
+            --fallback-latrd-lower-panel-wg-hint "${BATCHLAS_TUNE_DEFAULT_LATRD_LOWER_PANEL_WG_HINT}"
+            --fallback-stedc-recursion-threshold-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_TINY}"
+            --fallback-stedc-recursion-threshold-small "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_SMALL}"
+            --fallback-stedc-recursion-threshold-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_MEDIUM}"
+            --fallback-stedc-recursion-threshold-large "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_LARGE}"
+            --fallback-stedc-recursion-threshold-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_XLARGE}"
+            --fallback-stedc-merge-variant-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_TINY}"
+            --fallback-stedc-merge-variant-small "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_SMALL}"
+            --fallback-stedc-merge-variant-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_MEDIUM}"
+            --fallback-stedc-merge-variant-large "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_LARGE}"
+            --fallback-stedc-merge-variant-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_XLARGE}"
+            --fallback-stedc-threads-per-root-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_TINY}"
+            --fallback-stedc-threads-per-root-small "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_SMALL}"
+            --fallback-stedc-threads-per-root-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_MEDIUM}"
+            --fallback-stedc-threads-per-root-large "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_LARGE}"
+            --fallback-stedc-threads-per-root-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_XLARGE}"
+            --fallback-stedc-wg-multiplier-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_TINY}"
+            --fallback-stedc-wg-multiplier-small "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_SMALL}"
+            --fallback-stedc-wg-multiplier-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_MEDIUM}"
+            --fallback-stedc-wg-multiplier-large "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_LARGE}"
+            --fallback-stedc-wg-multiplier-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_XLARGE}"
+        DEPENDS "${BATCHLAS_TUNING_PROFILE}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Generating tuning constants header from ${BATCHLAS_TUNING_PROFILE}"
+        VERBATIM
+    )
+endif()
+
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/backend_config.h
+        DESTINATION include/batchlas)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/tuning_params.hh
         DESTINATION include/batchlas)
 
 # Set include directories
@@ -1020,6 +1108,50 @@ if(BATCHLAS_BUILD_BENCHMARKS)
             COMMENT "Running BatchLAS tuning harness (writes ${_BATCHLAS_TUNING_OUT})"
             VERBATIM
         )
+
+        if(NOT TARGET batchlas_tuning_header)
+            add_custom_target(batchlas_tuning_header
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/evaluation/tuning/generate_tuning_header.py"
+                    --profile "${_BATCHLAS_TUNING_OUT}"
+                    --out "${CMAKE_CURRENT_BINARY_DIR}/include/batchlas/tuning_params.hh"
+                    --fallback-ormqr-block-size-tiny "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_TINY}"
+                    --fallback-ormqr-block-size-small "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_SMALL}"
+                    --fallback-ormqr-block-size-medium "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_MEDIUM}"
+                    --fallback-ormqr-block-size-large "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_LARGE}"
+                    --fallback-ormqr-block-size-xlarge "${BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_XLARGE}"
+                    --fallback-sytrd-block-size-tiny "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_TINY}"
+                    --fallback-sytrd-block-size-small "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_SMALL}"
+                    --fallback-sytrd-block-size-medium "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_MEDIUM}"
+                    --fallback-sytrd-block-size-large "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_LARGE}"
+                    --fallback-sytrd-block-size-xlarge "${BATCHLAS_TUNE_DEFAULT_SYTRD_BLOCK_SIZE_XLARGE}"
+                    --fallback-latrd-lower-panel-wg-hint "${BATCHLAS_TUNE_DEFAULT_LATRD_LOWER_PANEL_WG_HINT}"
+                    --fallback-stedc-recursion-threshold-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_TINY}"
+                    --fallback-stedc-recursion-threshold-small "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_SMALL}"
+                    --fallback-stedc-recursion-threshold-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_MEDIUM}"
+                    --fallback-stedc-recursion-threshold-large "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_LARGE}"
+                    --fallback-stedc-recursion-threshold-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_XLARGE}"
+                    --fallback-stedc-merge-variant-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_TINY}"
+                    --fallback-stedc-merge-variant-small "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_SMALL}"
+                    --fallback-stedc-merge-variant-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_MEDIUM}"
+                    --fallback-stedc-merge-variant-large "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_LARGE}"
+                    --fallback-stedc-merge-variant-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_XLARGE}"
+                    --fallback-stedc-threads-per-root-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_TINY}"
+                    --fallback-stedc-threads-per-root-small "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_SMALL}"
+                    --fallback-stedc-threads-per-root-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_MEDIUM}"
+                    --fallback-stedc-threads-per-root-large "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_LARGE}"
+                    --fallback-stedc-threads-per-root-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_THREADS_PER_ROOT_XLARGE}"
+                    --fallback-stedc-wg-multiplier-tiny "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_TINY}"
+                    --fallback-stedc-wg-multiplier-small "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_SMALL}"
+                    --fallback-stedc-wg-multiplier-medium "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_MEDIUM}"
+                    --fallback-stedc-wg-multiplier-large "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_LARGE}"
+                    --fallback-stedc-wg-multiplier-xlarge "${BATCHLAS_TUNE_DEFAULT_STEDC_WG_MULTIPLIER_XLARGE}"
+                DEPENDS batchlas_tune
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                COMMENT "Generating tuning constants header from ${_BATCHLAS_TUNING_OUT}"
+                VERBATIM
+            )
+        endif()
     endif()
 endif()
 
