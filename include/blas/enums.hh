@@ -49,6 +49,12 @@ namespace batchlas {
         NoEigenVectors
     };
 
+    // SVD vector output policy (LAPACK-style semantics, simplified for now).
+    enum class SvdVectors {
+        None,
+        All
+    };
+
     enum class Uplo {
         Upper,
         Lower

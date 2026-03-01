@@ -5,6 +5,7 @@ set(BENCHMARK_TARGETS
     stedc_acc
     syev_cta_acc
     syev_blocked_acc
+    gesvd_blocked_acc
     syevx_acc
     band_reduction_benchmark
     bandr1_dump
@@ -21,6 +22,7 @@ set(BENCHMARK_TARGETS
     syev_benchmark
     syev_cta_benchmark
     syev_blocked_benchmark
+    gesvd_blocked_benchmark
     syevx_benchmark
     lanczos_benchmark
     ortho_benchmark

@@ -14,6 +14,7 @@
 #include <blas/functions/getrf.hh>
 #include <blas/functions/getri.hh>
 #include <blas/functions/getrs.hh>
+#include <blas/functions/gesvd.hh>
 #include <blas/functions/orgqr.hh>
 #include <blas/functions/ormqr.hh>
 #include <blas/functions/potrf.hh>

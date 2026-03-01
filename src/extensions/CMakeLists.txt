@@ -1,6 +1,7 @@
 set(EXTENSIONS_CTA_SOURCES
     ormqr_cta.cc
     steqr_cta.cc
+    stedc_merge_cta.cc
     sytrd_cta.cc
     sytrd_sb2st_cta.cc
 )
@@ -10,6 +11,10 @@ set(EXTENSIONS_SOURCES
     syevx.cc
     syev_cta.cc
     syev_blocked.cc
+    gebrd.cc
+    bdsqr.cc
+    ormbr.cc
+    gesvd_blocked.cc
     inv.cc
     tridiag_solver.cc
     lanczos.cc
