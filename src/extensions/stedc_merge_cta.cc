@@ -21,7 +21,7 @@ template <Backend B, typename T, int32_t P>
 class StedcFusedCtaMerge;
 
 template <Backend B, typename T>
-class StedcFusedCtaMergeNonChunked;
+class StedcFusedWgMerge;
 
 inline int32_t device_max_sub_group_size(const Queue& ctx) {
     const auto dev = ctx->get_device();
@@ -44,26 +44,37 @@ inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
     return false;
 }
 
-// XOR butterfly reduction on a chunked partition.
-// Uses permute_group_by_xor (maps to __shfl_xor_sync on CUDA) which is
-// proven to work correctly on non-uniform groups from chunked_partition,
-// unlike shift_group_left which has known mask-computation issues in
-// DPC++'s CUDA plugin for non-uniform groups.
-// Result is replicated in ALL lanes (no broadcast needed).
-template <typename T, typename Partition>
-inline T reduce_sum_partition(const Partition& partition, T value) {
-    const uint32_t width = static_cast<uint32_t>(partition.get_local_linear_range());
-    for (uint32_t offset = width / 2; offset > 0; offset >>= 1) {
-        value += sycl::permute_group_by_xor(partition, value, offset);
+inline int32_t choose_wg_size(const sycl::device& dev,
+                              int32_t base_wg_size,
+                              int32_t requested_mul) {
+    int32_t wg_mul = std::max<int32_t>(1, requested_mul);
+    int32_t wg_size = base_wg_size * wg_mul;
+
+    const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+    if (wg_size > max_wg_size) {
+        const int32_t max_mul = std::max<int32_t>(1, max_wg_size / base_wg_size);
+        wg_mul = std::min(wg_mul, max_mul);
+        wg_size = base_wg_size * wg_mul;
     }
-    return value;
+    return wg_size;
 }
 
-// Evaluate the shifted secular equation cooperatively across a partition.
-// Origin shifting: evaluates at x = origin + tau by computing z(i)^2 / (d(i) - origin - tau).
-// skip=-1: full evaluation (no skip, pole_index included in lower sum).
-// skip=0:  skip pole_index only.
-// skip=1:  skip pole_index and pole_index+1.
+template <typename T>
+inline void load_local_problem_vectors(const VectorView<T>& d_prob_global,
+                                       const VectorView<T>& z_prob_global,
+                                       const sycl::local_accessor<T, 1>& d_local,
+                                       const sycl::local_accessor<T, 1>& z_local,
+                                       int32_t tid,
+                                       int32_t bdim,
+                                       int32_t dd,
+                                       const sycl::group<1>& wg) {
+    for (int32_t i = tid; i < dd; i += bdim) {
+        d_local[i] = d_prob_global(i);
+        z_local[i] = z_prob_global(i);
+    }
+    sycl::group_barrier(wg);
+}
+
 template <typename T, typename Partition>
 struct ShiftedEvalResult {
     T secular_value;
@@ -516,9 +527,6 @@ inline ShiftedEvalResult<T, Partition> evaluate_shifted_partition(
             r.error_estimate};
 }
 
-// Solve interior root k (between poles d(k) and d(k+1)) using origin-shifted
-// quadratic interpolation, closely adapted from the ROC secular solver.
-// Structure: initial guess → first fixed-weight step → main loop.
 template <typename T, typename Partition>
 inline T solve_root_roc_partition(const Partition& partition,
                                   const VectorView<T>& d_prob,
@@ -531,8 +539,6 @@ inline T solve_root_roc_partition(const Partition& partition,
     return solve_root_roc_generic(adapter, d_prob, z_prob, dd, k, rho, max_iter);
 }
 
-// Solve the exterior (last) root, adapted from sec_solve_ext_roc.
-// Uses full (non-skipping) evaluation for the iteration loop.
 template <typename T, typename Partition>
 inline T solve_root_ext_partition(const Partition& partition,
                                   const VectorView<T>& d_prob,
@@ -544,9 +550,6 @@ inline T solve_root_ext_partition(const Partition& partition,
     return solve_root_ext_generic(adapter, d_prob, z_prob, dd, rho, max_iter);
 }
 
-// Work-group version of the shifted secular evaluation/root solve.
-// This mirrors the partition path numerically, but uses the full WG as the
-// cooperative group (no chunked_partition).
 template <typename T>
 inline ShiftedEvalResult<T, sycl::group<1>> evaluate_shifted_wg(
     const sycl::group<1>& wg,
@@ -599,6 +602,78 @@ inline T solve_root_ext_wg(const sycl::group<1>& wg,
     return solve_root_ext_generic(adapter, d_prob, z_prob, dd, rho, max_iter);
 }
 
+template <typename T, typename QBatch>
+inline void write_denominator_column(QBatch& Q_bid,
+                                     const VectorView<T>& d_prob,
+                                     int32_t dd,
+                                     int32_t root_ix,
+                                     T lambda,
+                                     int32_t lane,
+                                     int32_t width) {
+    for (int32_t i = lane; i < dd; i += width) {
+        T denom = d_prob(i) - lambda;
+        const T floor = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
+        if (sycl::fabs(denom) < floor) {
+            const T s = (denom == T(0)) ? T(1) : sycl::copysign(T(1), denom);
+            denom = s * floor;
+        }
+        Q_bid(i, root_ix) = denom;
+    }
+}
+
+template <typename T, typename QBatch, typename VView>
+inline void maybe_rescale_vectors(bool do_rescale,
+                                  const sycl::group<1>& wg,
+                                  int32_t lane,
+                                  int32_t width,
+                                  int32_t dd,
+                                  QBatch& Q_bid,
+                                  const VectorView<T>& d_prob,
+                                  const VView& v,
+                                  int32_t bid) {
+    if (!do_rescale) {
+        return;
+    }
+
+    for (int32_t eid = 0; eid < dd; ++eid) {
+        const T Di = d_prob(eid);
+        T partial = T(1);
+        for (int32_t j = lane; j < dd; j += width) {
+            partial *= (j == eid) ? Q_bid(eid, j) : Q_bid(eid, j) / (Di - d_prob(j));
+        }
+
+        const T valf = sycl::reduce_over_group(wg, partial, sycl::multiplies<T>());
+        if (lane == 0) {
+            const T mag = sycl::sqrt(sycl::fabs(valf));
+            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
+            v(eid, bid) = sgn * mag;
+        }
+        sycl::group_barrier(wg);
+    }
+}
+
+template <typename T, typename QBatch, typename QView, typename VView>
+inline void normalize_vectors(const sycl::group<1>& wg,
+                              int32_t lane,
+                              int32_t width,
+                              int32_t dd,
+                              QBatch& Q_bid,
+                              const QView& Qview,
+                              const VView& v,
+                              int32_t bid) {
+    for (int32_t eig = 0; eig < dd; ++eig) {
+        for (int32_t i = lane; i < dd; i += width) {
+            Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
+        }
+
+        const T nrm2 = internal::nrm2<T>(wg, Qview(Slice{0, dd}, eig));
+        for (int32_t i = lane; i < dd; i += width) {
+            Q_bid(i, eig) /= nrm2;
+        }
+        sycl::group_barrier(wg);
+    }
+}
+
 template <Backend B, typename T, int32_t P>
 void stedc_merge_fused_cta_impl(Queue& ctx,
                                 const VectorView<T>& eigenvalues,
@@ -617,16 +692,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
     const auto dev = ctx->get_device();
     const int32_t base_wg_size = std::lcm<int32_t>(P, sg_size);
-
-    int32_t wg_mul = std::max<int32_t>(1, params.secular_cta_wg_size_multiplier);
-    int32_t wg_size = base_wg_size * wg_mul;
-
-    const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
-    if (wg_size > max_wg_size) {
-        const int32_t max_mul = std::max<int32_t>(1, max_wg_size / base_wg_size);
-        wg_mul = std::min(wg_mul, max_mul);
-        wg_size = base_wg_size * wg_mul;
-    }
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
 
     const bool do_rescale = params.enable_rescale;
 
@@ -659,12 +725,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 auto Q_bid = Qview.batch_item(bid);
                 auto z_prob_global = v.batch_item(bid);
                 auto d_prob_global = eigenvalues.batch_item(bid);
-
-                for (int32_t i = tid; i < dd; i += bdim) {
-                    d_local[i] = d_prob_global(i);
-                    z_local[i] = z_prob_global(i);
-                }
-                sycl::group_barrier(wg);
+                load_local_problem_vectors(d_prob_global, z_prob_global,
+                                           d_local, z_local,
+                                           tid, bdim, dd, wg);
 
                 const auto d_ptr = util::get_raw_ptr(d_local);
                 const auto z_ptr = util::get_raw_ptr(z_local);
@@ -674,9 +737,6 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 const T sign = (e(m - 1, bid) >= T(0)) ? T(1) : T(-1);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
-                // Cooperative secular root solve using origin-shifted quadratic interpolation.
-                // Interior roots use solve_root_roc_partition (adapted from ROC solver).
-                // The exterior (last) root uses solve_root_ext_partition.
                 for (int32_t root_ix = part_id; root_ix < dd; root_ix += parts_per_wg) {
                     T lambda;
                     if (root_ix == dd - 1) {
@@ -690,83 +750,36 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                     if (lane == 0) {
                         temp_lambdas(root_ix, bid) = lambda * sign;
                     }
-
-                    for (int32_t i = lane; i < dd; i += P) {
-                        T denom = d_prob(i) - lambda;
-                        const T floor = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
-                        if (sycl::fabs(denom) < floor) {
-                            const T s = (denom == T(0)) ? T(1) : sycl::copysign(T(1), denom);
-                            denom = s * floor;
-                        }
-                        Q_bid(i, root_ix) = denom;
-                    }
+                    write_denominator_column(Q_bid, d_prob, dd, root_ix, lambda, lane, P);
                 }
 
                 sycl::group_barrier(wg);
 
-                if (do_rescale) {
-                    for (int32_t eid = 0; eid < dd; ++eid) {
-                        const T Di = d_prob(eid);
-                        T partial = T(1);
-                        for (int32_t j = tid; j < dd; j += bdim) {
-                            partial *= (j == eid) ? Q_bid(eid, j) : Q_bid(eid, j) / (Di - d_prob(j));
-                        }
-
-                        const T valf = sycl::reduce_over_group(wg, partial, sycl::multiplies<T>());
-                        if (tid == 0) {
-                            const T mag = sycl::sqrt(sycl::fabs(valf));
-                            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-                            v(eid, bid) = sgn * mag;
-                        }
-                        sycl::group_barrier(wg);
-                    }
-                }
-
-                for (int32_t eig = 0; eig < dd; ++eig) {
-                    for (int32_t i = tid; i < dd; i += bdim) {
-                        Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
-                    }
-
-                    // Use full-batch Qview (not single-batch Q_bid) because
-                    // internal::nrm2 indexes by cta.get_group_linear_id().
-                    const T nrm2 = internal::nrm2<T>(wg, Qview(Slice{0, dd}, eig));
-                    for (int32_t i = tid; i < dd; i += bdim) {
-                        Q_bid(i, eig) /= nrm2;
-                    }
-                    sycl::group_barrier(wg);
-                }
+                maybe_rescale_vectors(do_rescale, wg, tid, bdim, dd, Q_bid, d_prob, v, bid);
+                normalize_vectors<T>(wg, tid, bdim, dd, Q_bid, Qview, v, bid);
             });
     });
 }
 
 template <Backend B, typename T>
-void stedc_merge_fused_cta_non_chunked(Queue& ctx,
-                                       const VectorView<T>& eigenvalues,
-                                       const VectorView<T>& v,
-                                       const Span<T>& rho,
-                                       const Span<int32_t>& n_reduced,
-                                       const VectorView<T>& e,
-                                       int64_t m,
-                                       int64_t n,
-                                       const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                                       const VectorView<T>& temp_lambdas,
-                                       const StedcParams<T>& params) {
+void stedc_merge_fused_wg(Queue& ctx,
+                          const VectorView<T>& eigenvalues,
+                          const VectorView<T>& v,
+                          const Span<T>& rho,
+                          const Span<int32_t>& n_reduced,
+                          const VectorView<T>& e,
+                          int64_t m,
+                          int64_t n,
+                          const MatrixView<T, MatrixFormat::Dense>& Qprime,
+                          const VectorView<T>& temp_lambdas,
+                          const StedcParams<T>& params) {
     const int32_t nloc = static_cast<int32_t>(n);
     const auto batch_size = eigenvalues.batch_size();
     const auto dev = ctx->get_device();
 
     const int32_t max_sg = std::max<int32_t>(1, device_max_sub_group_size(ctx));
     const int32_t base_wg_size = max_sg;
-
-    int32_t wg_mul = std::max<int32_t>(1, params.secular_cta_wg_size_multiplier);
-    int32_t wg_size = base_wg_size * wg_mul;
-
-    const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
-    if (wg_size > max_wg_size) {
-        const int32_t max_mul = std::max<int32_t>(1, max_wg_size / base_wg_size);
-        wg_mul = std::min(wg_mul, max_mul);
-        wg_size = base_wg_size * wg_mul;
-    }
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
 
     const bool do_rescale = params.enable_rescale;
 
@@ -775,7 +788,7 @@ void stedc_merge_fused_cta_non_chunked(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedCtaMergeNonChunked<B, T>>(
+        h.parallel_for<StedcFusedWgMerge<B, T>>(
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -791,12 +804,9 @@ void stedc_merge_fused_cta_non_chunked(Queue& ctx,
                 auto Q_bid = Qview.batch_item(bid);
                 auto z_prob_global = v.batch_item(bid);
                 auto d_prob_global = eigenvalues.batch_item(bid);
-
-                for (int32_t i = tid; i < dd; i += bdim) {
-                    d_local[i] = d_prob_global(i);
-                    z_local[i] = z_prob_global(i);
-                }
-                sycl::group_barrier(wg);
+                load_local_problem_vectors(d_prob_global, z_prob_global,
+                                           d_local, z_local,
+                                           tid, bdim, dd, wg);
 
                 const auto d_ptr = util::get_raw_ptr(d_local);
                 const auto z_ptr = util::get_raw_ptr(z_local);
@@ -819,49 +829,13 @@ void stedc_merge_fused_cta_non_chunked(Queue& ctx,
                     if (tid == 0) {
                         temp_lambdas(root_ix, bid) = lambda * sign;
                     }
-
-                    for (int32_t i = tid; i < dd; i += bdim) {
-                        T denom = d_prob(i) - lambda;
-                        const T floor = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
-                        if (sycl::fabs(denom) < floor) {
-                            const T s = (denom == T(0)) ? T(1) : sycl::copysign(T(1), denom);
-                            denom = s * floor;
-                        }
-                        Q_bid(i, root_ix) = denom;
-                    }
+                    write_denominator_column(Q_bid, d_prob, dd, root_ix, lambda, tid, bdim);
                 }
 
                 sycl::group_barrier(wg);
 
-                if (do_rescale) {
-                    for (int32_t eid = 0; eid < dd; ++eid) {
-                        const T Di = d_prob(eid);
-                        T partial = T(1);
-                        for (int32_t j = tid; j < dd; j += bdim) {
-                            partial *= (j == eid) ? Q_bid(eid, j) : Q_bid(eid, j) / (Di - d_prob(j));
-                        }
-
-                        const T valf = sycl::reduce_over_group(wg, partial, sycl::multiplies<T>());
-                        if (tid == 0) {
-                            const T mag = sycl::sqrt(sycl::fabs(valf));
-                            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-                            v(eid, bid) = sgn * mag;
-                        }
-                        sycl::group_barrier(wg);
-                    }
-                }
-
-                for (int32_t eig = 0; eig < dd; ++eig) {
-                    for (int32_t i = tid; i < dd; i += bdim) {
-                        Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
-                    }
-
-                    const T nrm2 = internal::nrm2<T>(wg, Qview(Slice{0, dd}, eig));
-                    for (int32_t i = tid; i < dd; i += bdim) {
-                        Q_bid(i, eig) /= nrm2;
-                    }
-                    sycl::group_barrier(wg);
-                }
+                maybe_rescale_vectors(do_rescale, wg, tid, bdim, dd, Q_bid, d_prob, v, bid);
+                normalize_vectors<T>(wg, tid, bdim, dd, Q_bid, Qview, v, bid);
             });
     });
 }
@@ -887,10 +861,10 @@ void stedc_merge_fused_cta(Queue& ctx,
 
     const int32_t requested = std::max<int32_t>(4, params.secular_threads_per_root);
     const int32_t max_sg = device_max_sub_group_size(ctx);
-    const bool use_non_chunked = requested > max_sg;
+    const bool use_wg_path = requested > max_sg;
 
-    if (use_non_chunked) {
-        stedc_merge_fused_cta_non_chunked<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+    if (use_wg_path) {
+        stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
         return;
     }
 

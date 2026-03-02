@@ -314,7 +314,7 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
     }
 }
 
-TYPED_TEST(StedcTest, FusedCtaFallsBackToNonChunkedWhenRequestedExceedsMaxSubgroup) {
+TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "CTA merge is GPU-only"; }
