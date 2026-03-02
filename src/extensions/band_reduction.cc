@@ -20,6 +20,8 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace batchlas {
 
@@ -400,6 +402,50 @@ inline void validate_band_reduction_dims(const MatrixView<T, MatrixFormat::Dense
     if (tau.size() != std::max(0, n - 1) || tau.batch_size() != batch) {
         throw std::runtime_error("sytrd_band_reduction: tau_out must have size n-1 and matching batch");
     }
+}
+
+struct Bandr1Schedule {
+    std::vector<int32_t> d_seq;
+    std::vector<int32_t> block_size_seq;
+};
+
+inline Bandr1Schedule make_bandr1_schedule(SytrdBandReductionParams params,
+                                           const char* callsite) {
+    if (params.d_seq.empty() && params.block_size_seq.empty()) {
+        params.d_seq = {1};
+        params.block_size_seq = {1};
+    } else {
+        if (params.d_seq.empty()) {
+            params.d_seq.assign(params.block_size_seq.size(), 1);
+        }
+        if (params.block_size_seq.empty()) {
+            params.block_size_seq.assign(params.d_seq.size(), 1);
+        }
+    }
+
+    if (params.d_seq.size() != params.block_size_seq.size()) {
+        throw std::runtime_error(std::string(callsite) +
+                                 ": params.d_seq and params.block_size_seq must have the same length");
+    }
+
+    for (int32_t d : params.d_seq) {
+        if (d < 0) {
+            throw std::runtime_error(std::string(callsite) + ": params.d_seq entries must be >= 0");
+        }
+    }
+
+    return Bandr1Schedule{
+        .d_seq = std::move(params.d_seq),
+        .block_size_seq = std::move(params.block_size_seq)
+    };
+}
+
+inline int32_t max_block_size_in_schedule(const std::vector<int32_t>& block_size_seq) {
+    int32_t max_nb = 1;
+    for (int32_t nb : block_size_seq) {
+        max_nb = std::max<int32_t>(max_nb, nb);
+    }
+    return std::max<int32_t>(1, max_nb);
 }
 
 template <typename T>
@@ -881,8 +927,8 @@ inline int bandr1_run_chase_sweeps(
     int32_t kd_work,
     int32_t kd_initial,
     int32_t n,
-    int32_t nb_target,
-    int32_t d_per_sweep,
+    const std::vector<int32_t>& d_seq,
+    const std::vector<int32_t>& block_size_seq,
     int32_t max_sweeps,
     int32_t max_steps,
     const BandrBuffers<T>& buffers) {
@@ -890,8 +936,12 @@ inline int bandr1_run_chase_sweeps(
     int steps_done = 0;
 
     for (int sweep = 0; sweep < max_sweeps && b > 1 && steps_done < max_steps; ++sweep) {
+        const int seq_idx = std::min(sweep, static_cast<int>(d_seq.size()) - 1);
+        const int d_target = d_seq[seq_idx];
+        const int nb_target = std::max(1, block_size_seq[seq_idx]);
+
         int step_in_sweep = 0;
-        const int d_red = (d_per_sweep > 0) ? std::min(d_per_sweep, b - 1)
+        const int d_red = (d_target > 0) ? std::min(d_target, b - 1)
                                             : std::max(1, b - std::min(nb_target, b - 1));
         const int b_tilde = b - d_red;
         const int nb = std::min(std::max(1, nb_target), b_tilde);
@@ -1110,11 +1160,10 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
         throw std::runtime_error("sytrd_band_reduction_single_step: abw_out.rows() must equal kd_work+1");
     }
 
-    const int nb_target = std::max<int>(1, params.block_size);
-    const int d_per_sweep = params.d;
-    if (d_per_sweep < 0) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: params.d must be >= 0");
-    }
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step");
+    const int nb_target = std::max<int>(1, schedule.block_size_seq.front());
+    const std::vector<int32_t> d_seq_single{schedule.d_seq.front()};
+    const std::vector<int32_t> nb_seq_single{schedule.block_size_seq.front()};
 
     int max_steps = params.max_steps;
     if (max_steps <= 0) {
@@ -1125,7 +1174,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
     auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, abw_out, kd, kd_work, nb_target, ws, off);
     
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
-    bandr1_run_chase_sweeps<B, T>(ctx, abw_out, kd_work, kd, n, nb_target, d_per_sweep, max_sweeps, max_steps, buffers);
+    bandr1_run_chase_sweeps<B, T>(ctx, abw_out, kd_work, kd, n, d_seq_single, nb_seq_single, max_sweeps, max_steps, buffers);
 
     return ctx.get_event();
 }
@@ -1201,10 +1250,10 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                                        Uplo uplo,
                                        int32_t kd,
                                        const Span<std::byte>& ws,
-                                       int32_t nb_target,
+                                       const std::vector<int32_t>& d_seq,
+                                       const std::vector<int32_t>& block_size_seq,
                                        int32_t kd_work,
-                                       int32_t max_sweeps,
-                                       int32_t d_per_sweep) {
+                                       int32_t max_sweeps) {
     validate_band_reduction_dims(ab_in, d_out, e_out, tau_out, kd);
 
     if (!ctx.in_order()) {
@@ -1299,11 +1348,13 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> ABw(ABw_buf.data(), kd_work + 1, n, kd_work + 1,
                                            (kd_work + 1) * n, batch);
 
+    const int nb_target = max_block_size_in_schedule(block_size_seq);
+
     // Use common buffer initialization helper
     auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, ABw, kd, kd_work, nb_target, ws, off);
 
     // Run chase sweeps until full tridiagonal (b == 1)
-    bandr1_run_chase_sweeps<B, T>(ctx, ABw, kd_work, kd, n, nb_target, d_per_sweep, max_sweeps, INT_MAX, buffers);
+    bandr1_run_chase_sweeps<B, T>(ctx, ABw, kd_work, kd, n, d_seq, block_size_seq, max_sweeps, INT_MAX, buffers);
 
     // Extract output (d, e, tau)
     bandr1_extract_tridiagonal_output<T>(ctx, ABw, n, batch, d_out, e_out, tau_out);
@@ -1323,7 +1374,8 @@ size_t sytrd_band_reduction_buffer_size(Queue& ctx,
                                         int32_t kd,
                                         int32_t block_size) {
     SytrdBandReductionParams params;
-    params.block_size = block_size;
+    params.block_size_seq = {block_size};
+    params.d_seq = {0};
     return sytrd_band_reduction_buffer_size<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, params);
 }
 
@@ -1344,7 +1396,8 @@ size_t sytrd_band_reduction_buffer_size(Queue& ctx,
     if (kd_work <= 0) {
         kd_work = std::min(n - 1, 3 * kd);
     }
-    const int nb_target = std::max<int>(1, params.block_size);
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_buffer_size");
+    const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
     return sytrd_band_reduction_bandr1_buffer_size_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, kd, nb_target, kd_work);
 }
 
@@ -1359,7 +1412,8 @@ Event sytrd_band_reduction(Queue& ctx,
                            const Span<std::byte>& ws,
                            int32_t block_size) {
     SytrdBandReductionParams params;
-    params.block_size = block_size;
+    params.block_size_seq = {block_size};
+    params.d_seq = {0};
     return sytrd_band_reduction<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, params);
 }
 
@@ -1376,18 +1430,14 @@ Event sytrd_band_reduction(Queue& ctx,
     validate_band_reduction_dims(ab_in, d_out, e_out, tau_out, kd);
 
     const int n = ab_in.cols();
-    const int nb_target = std::max<int>(1, params.block_size);
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction");
     int kd_work = params.kd_work;
     if (kd_work <= 0) {
         kd_work = std::min(n - 1, 3 * kd);
     }
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
-    const int d_per_sweep = params.d;
-    if (d_per_sweep < 0) {
-        throw std::runtime_error("sytrd_band_reduction: params.d must be >= 0");
-    }
     return sytrd_band_reduction_bandr1_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws,
-                                                  nb_target, kd_work, max_sweeps, d_per_sweep);
+                                                  schedule.d_seq, schedule.block_size_seq, kd_work, max_sweeps);
 }
 
 template <Backend B, typename T>
@@ -1422,7 +1472,8 @@ size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
     if (abw_out.rows() != kd_work + 1 || abw_out.cols() != n || abw_out.batch_size() != batch) {
         throw std::runtime_error("sytrd_band_reduction_single_step_buffer_size: abw_out must be (kd_work+1) x n with matching batch");
     }
-    const int nb_target = std::max<int>(1, params.block_size);
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step_buffer_size");
+    const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
     return sytrd_band_reduction_single_step_buffer_size_core<B, T>(ctx, kd, nb_target, kd_work, n, batch);
 }
 

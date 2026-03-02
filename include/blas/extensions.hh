@@ -8,6 +8,7 @@
 #include <numeric>
 #include <limits>
 #include <cstddef>
+#include <vector>
 
 
 namespace batchlas {
@@ -695,12 +696,14 @@ namespace batchlas {
      */
 
     struct SytrdBandReductionParams {
-        // Householder/block size parameter (nb in the Python reference).
-        int32_t block_size = 32;
+        // Number of diagonals to eliminate per sweep (Algorithm 2: d^(i)).
+        // d == 0 means use the implementation default schedule for that sweep.
+        // If sweeps exceed sequence length, the last value is reused.
+        std::vector<int32_t> d_seq{0};
 
-        // Number of diagonals to eliminate per sweep (d in the Python reference / literature).
-        // d == 0 means use the implementation default schedule.
-        int32_t d = 0;
+        // Block size per sweep (Algorithm 2: nb^(i)).
+        // If sweeps exceed sequence length, the last value is reused.
+        std::vector<int32_t> block_size_seq{32};
 
         // Maximum number of sweeps. max_sweeps < 0 means use the implementation default.
         int32_t max_sweeps = -1;

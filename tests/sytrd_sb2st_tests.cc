@@ -354,8 +354,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     Vector<Real> e_out2(std::max(0, n - 1), batch);
     Vector<T> tau_out2(std::max(0, n - 1), batch);
     SytrdBandReductionParams params;
-    params.block_size = block_size;
-    params.d = 2;
+    params.block_size_seq = {block_size};
+    params.d_seq = {2};
     params.max_sweeps = std::max(1, kd - 1);
     params.kd_work = 3 * kd;
 
@@ -495,10 +495,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepBandContainment) {
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
     SytrdBandReductionParams params;
-    params.block_size = 8;
+    params.block_size_seq = {8};
     params.kd_work = kd_work;
     params.max_sweeps = 1;
-    params.d = 0;
+    params.d_seq = {0};
 
     UnifiedVector<std::byte> ws(
         sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
@@ -596,10 +596,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     // Run exactly one BANDR1 chase step and reconstruct dense A_after.
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
     SytrdBandReductionParams params;
-    params.block_size = 8;
+    params.block_size_seq = {8};
     params.kd_work = kd_work;
     params.max_sweeps = 1;
-    params.d = 0;
+    params.d_seq = {0};
 
     UnifiedVector<std::byte> ws_step(
         sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
@@ -689,10 +689,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
     constexpr int kMax = 16;
     for (int k = 1; k <= kMax; ++k) {
         SytrdBandReductionParams params;
-        params.block_size = 8;
+        params.block_size_seq = {8};
         params.kd_work = kd_work;
         params.max_sweeps = 1;
-        params.d = 0;
+        params.d_seq = {0};
         params.max_steps = k;
 
         UnifiedVector<std::byte> ws_step(
@@ -853,11 +853,11 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
     SytrdBandReductionParams params;
-    params.block_size = 8;
+    params.block_size_seq = {8};
     params.kd_work = kd_work;
     params.max_sweeps = 1;
-    params.d = 0;
-    params.max_steps = bandr1_count_steps_one_sweep(n, kd, params.block_size, params.d);
+    params.d_seq = {0};
+    params.max_steps = bandr1_count_steps_one_sweep(n, kd, params.block_size_seq.front(), params.d_seq.front());
 
     ASSERT_GT(params.max_steps, 0) << "unexpected: sweep step count is 0";
 

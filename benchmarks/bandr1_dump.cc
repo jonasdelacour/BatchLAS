@@ -119,8 +119,8 @@ int run_one(const std::string& dump_dir,
     auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
 
     SytrdBandReductionParams params;
-    params.block_size = block_size;
-    params.d = diagonals_per_sweep;
+    params.block_size_seq = {block_size};
+    params.d_seq = {diagonals_per_sweep};
     params.max_sweeps = max_sweeps;
     params.kd_work = kd_work;
 
