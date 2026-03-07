@@ -1,4 +1,6 @@
 set(BENCHMARK_TARGETS
+    iluk_convergence_stats
+    syevx_iluk_acc
     orthogonality_miniacc
     steqr_acc
     steqr_cta_acc

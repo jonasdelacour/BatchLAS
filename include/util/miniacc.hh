@@ -407,6 +407,14 @@ struct SummaryMetricColumns {
     bool show_r = false;
     bool show_o = false;
     bool show_relerr = false;
+    bool show_iterations_done = false;
+    bool show_total_time_sec = false;
+    bool show_final_best_max = false;
+    bool show_converged_fraction = false;
+    bool show_fill_ratio = false;
+    bool show_iter_ratio = false;
+    bool show_time_ratio = false;
+    bool show_residual_ratio = false;
 };
 
 inline bool has_any_metric(const Result& r,
@@ -420,6 +428,14 @@ inline SummaryMetricColumns detect_summary_columns(const std::vector<Result>& re
         cols.show_r = cols.show_r || has_any_metric(r, {"R"});
         cols.show_o = cols.show_o || has_any_metric(r, {"O", "orthogonality"});
         cols.show_relerr = cols.show_relerr || has_any_metric(r, {"max_relerr", "relerr"});
+        cols.show_iterations_done = cols.show_iterations_done || has_any_metric(r, {"iterations_done"});
+        cols.show_total_time_sec = cols.show_total_time_sec || has_any_metric(r, {"total_time_sec", "solve_time_sec"});
+        cols.show_final_best_max = cols.show_final_best_max || has_any_metric(r, {"final_best_max", "final_best_mean"});
+        cols.show_converged_fraction = cols.show_converged_fraction || has_any_metric(r, {"converged_fraction"});
+        cols.show_fill_ratio = cols.show_fill_ratio || has_any_metric(r, {"fill_ratio"});
+        cols.show_iter_ratio = cols.show_iter_ratio || has_any_metric(r, {"iter_ratio_vs_baseline"});
+        cols.show_time_ratio = cols.show_time_ratio || has_any_metric(r, {"time_ratio_vs_baseline"});
+        cols.show_residual_ratio = cols.show_residual_ratio || has_any_metric(r, {"residual_ratio_vs_baseline"});
     }
     return cols;
 }
@@ -440,6 +456,14 @@ inline void print_summary_header(size_t name_width,
     if (cols.show_r) std::cout << std::setw(28) << "||AZ - Z\\Lambda||_F / n";
     if (cols.show_o) std::cout << std::setw(24) << "||Z^T Z - I||_F / n";
     if (cols.show_relerr) std::cout << std::setw(16) << "max_relerr";
+    if (cols.show_iterations_done) std::cout << std::setw(14) << "iters";
+    if (cols.show_total_time_sec) std::cout << std::setw(14) << "time_s";
+    if (cols.show_final_best_max) std::cout << std::setw(14) << "final_res";
+    if (cols.show_converged_fraction) std::cout << std::setw(14) << "conv_frac";
+    if (cols.show_fill_ratio) std::cout << std::setw(14) << "fill_ratio";
+    if (cols.show_iter_ratio) std::cout << std::setw(14) << "iter_ratio";
+    if (cols.show_time_ratio) std::cout << std::setw(14) << "time_ratio";
+    if (cols.show_residual_ratio) std::cout << std::setw(14) << "resid_ratio";
     std::cout << kColorReset << '\n';
 }
 
@@ -455,6 +479,14 @@ inline void print_summary_row(const Result& r,
     const double mean_r = metric_mean_or_nan(r, {"R"});
     const double mean_o = metric_mean_or_nan(r, {"O", "orthogonality"});
     const double mean_relerr = metric_mean_or_nan(r, {"max_relerr", "relerr"});
+    const double mean_iterations_done = metric_mean_or_nan(r, {"iterations_done"});
+    const double mean_total_time_sec = metric_mean_or_nan(r, {"total_time_sec", "solve_time_sec"});
+    const double mean_final_best_max = metric_mean_or_nan(r, {"final_best_max", "final_best_mean"});
+    const double mean_converged_fraction = metric_mean_or_nan(r, {"converged_fraction"});
+    const double mean_fill_ratio = metric_mean_or_nan(r, {"fill_ratio"});
+    const double mean_iter_ratio = metric_mean_or_nan(r, {"iter_ratio_vs_baseline"});
+    const double mean_time_ratio = metric_mean_or_nan(r, {"time_ratio_vs_baseline"});
+    const double mean_residual_ratio = metric_mean_or_nan(r, {"residual_ratio_vs_baseline"});
     const double fail_pct = r.sample_count > 0 ? 100.0 * r.failure_rate : 0.0;
 
     std::cout << kColorName << std::left << std::setw(static_cast<int>(name_width)) << r.name << kColorReset
@@ -468,6 +500,14 @@ inline void print_summary_row(const Result& r,
     if (cols.show_r) std::cout << std::setw(28) << format_value(mean_r);
     if (cols.show_o) std::cout << std::setw(24) << format_value(mean_o);
     if (cols.show_relerr) std::cout << std::setw(16) << format_value(mean_relerr);
+    if (cols.show_iterations_done) std::cout << std::setw(14) << format_value(mean_iterations_done);
+    if (cols.show_total_time_sec) std::cout << std::setw(14) << format_value(mean_total_time_sec);
+    if (cols.show_final_best_max) std::cout << std::setw(14) << format_value(mean_final_best_max);
+    if (cols.show_converged_fraction) std::cout << std::setw(14) << format_value(mean_converged_fraction);
+    if (cols.show_fill_ratio) std::cout << std::setw(14) << format_value(mean_fill_ratio);
+    if (cols.show_iter_ratio) std::cout << std::setw(14) << format_value(mean_iter_ratio);
+    if (cols.show_time_ratio) std::cout << std::setw(14) << format_value(mean_time_ratio);
+    if (cols.show_residual_ratio) std::cout << std::setw(14) << format_value(mean_residual_ratio);
     std::cout << '\n';
 }
 

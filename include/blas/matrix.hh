@@ -309,6 +309,15 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned int seed = 42);
 
+        template <typename U = T, MatrixFormat M = MType,
+              typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
+        static Matrix<T, MType> RandomSparseHermitian(int n,
+                                  float density,
+                                  int batch_size = 1,
+                                  unsigned int seed = 42,
+                                  typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                  bool shared_pattern = true);
+
         template <typename U = T, MatrixFormat M = MType, 
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned int seed = 42) {
@@ -811,6 +820,23 @@ namespace batchlas {
                   typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
         Event fill_random(bool hermitian = false, unsigned int seed = 42) const {
             return fill_random(Queue(), hermitian, seed);
+        }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
+        Event fill_random_sparse_hermitian(const Queue& ctx,
+                                           float density,
+                                           unsigned int seed = 42,
+                                           typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                           bool shared_pattern = true) const;
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::CSR, int>::type = 0>
+        Event fill_random_sparse_hermitian(float density,
+                                           unsigned int seed = 42,
+                                           typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                           bool shared_pattern = true) const {
+            return fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern);
         }
 
         Event fill(const Queue& ctx, T value) const;

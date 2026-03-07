@@ -13,9 +13,134 @@
 #include <numeric>
 #include <stdexcept> // Include for std::runtime_error
 #include <vector>    // Include for std::vector used in scan
+#include "queue.hh"
 #include "backends/backend_handle_impl.hh"
 
 namespace batchlas {
+
+namespace {
+
+template <typename T>
+using csr_random_real_t = typename base_type<T>::type;
+
+struct CsrRandomPatternParams {
+    std::uint64_t multiplier = 0;
+    std::uint64_t offset = 0;
+};
+
+inline std::uint64_t csr_random_splitmix64(std::uint64_t x) {
+    x += 0x9e3779b97f4a7c15ull;
+    x = (x ^ (x >> 30u)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27u)) * 0x94d049bb133111ebull;
+    return x ^ (x >> 31u);
+}
+
+inline std::uint64_t csr_random_pick_coprime_stride(std::uint64_t modulus, std::uint64_t seed) {
+    if (modulus <= 1) {
+        return 0;
+    }
+
+    std::uint64_t candidate = csr_random_splitmix64(seed) % modulus;
+    if (candidate == 0) {
+        candidate = 1;
+    }
+    while (std::gcd(candidate, modulus) != 1) {
+        ++candidate;
+        if (candidate == modulus) {
+            candidate = 1;
+        }
+    }
+    return candidate;
+}
+
+inline CsrRandomPatternParams csr_random_make_pattern_params(std::uint64_t modulus, std::uint64_t seed) {
+    if (modulus <= 1) {
+        return {};
+    }
+
+    return CsrRandomPatternParams{
+        csr_random_pick_coprime_stride(modulus, seed ^ 0x6a09e667f3bcc909ull),
+        csr_random_splitmix64(seed ^ 0xbb67ae8584caa73bull) % modulus,
+    };
+}
+
+inline std::uint64_t csr_random_upper_row_start(int row, int n) {
+    return static_cast<std::uint64_t>(row) * static_cast<std::uint64_t>(2 * n - row - 1) / 2ull;
+}
+
+inline std::pair<int, int> csr_random_upper_pair_from_index(std::uint64_t edge_index, int n) {
+    int lo = 0;
+    int hi = n - 1;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) / 2;
+        if (csr_random_upper_row_start(mid, n) <= edge_index) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    const int row = lo;
+    const std::uint64_t row_start = csr_random_upper_row_start(row, n);
+    const int col = row + 1 + static_cast<int>(edge_index - row_start);
+    return {row, col};
+}
+
+template <typename T>
+inline csr_random_real_t<T> csr_random_magnitude(const T& value) {
+    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+        return sycl::fabs(value.real()) + sycl::fabs(value.imag());
+    } else {
+        return sycl::fabs(value);
+    }
+}
+
+template <typename T>
+inline T csr_random_conjugate_if_needed(const T& value) {
+    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+        return std::conj(value);
+    } else {
+        return value;
+    }
+}
+
+template <typename T>
+inline T csr_random_make_diagonal(csr_random_real_t<T> value) {
+    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+        return T(value, csr_random_real_t<T>(0));
+    } else {
+        return static_cast<T>(value);
+    }
+}
+
+template <typename T>
+inline T csr_random_scalar(std::uint64_t seed, std::uint64_t stream_id) {
+    oneapi::dpl::uniform_real_distribution<csr_random_real_t<T>> dist(csr_random_real_t<T>(-1), csr_random_real_t<T>(1));
+    oneapi::dpl::minstd_rand engine(static_cast<std::uint32_t>(seed), static_cast<std::uint32_t>(stream_id));
+    const auto r0 = dist(engine);
+    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+        return T(r0, dist(engine));
+    } else {
+        return static_cast<T>(r0);
+    }
+}
+
+inline int csr_random_nnz_per_matrix(int n, float density) {
+    density = std::clamp(density, 0.0f, 1.0f);
+    const std::uint64_t total_entries = static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n);
+    int target_nnz = static_cast<int>(std::llround(density * static_cast<double>(total_entries)));
+    target_nnz = std::max(target_nnz, n);
+
+    int offdiag_nnz = std::max(0, target_nnz - n);
+    if ((offdiag_nnz & 1) != 0) {
+        ++offdiag_nnz;
+    }
+    const int max_offdiag_nnz = n * (n - 1);
+    offdiag_nnz = std::min(offdiag_nnz, max_offdiag_nnz);
+    return n + offdiag_nnz;
+}
+
+}  // namespace
 
 //----------------------------------------------------------------------
 // Matrix class implementation - Dense format
@@ -781,6 +906,19 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
 }
 
 template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
+                                                         float density,
+                                                         int batch_size,
+                                                         unsigned int seed,
+                                                         typename base_type<T>::type diagonal_boost,
+                                                         bool shared_pattern) {
+    Matrix<T, MType> result(n, n, csr_random_nnz_per_matrix(n, density), batch_size);
+    result.view().fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern).wait();
+    return result;
+}
+
+template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) const {
     T* data_ptr = data_.data();
@@ -855,6 +993,175 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
             }
         });
     }
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
+                                                         float density,
+                                                         unsigned int seed,
+                                                         typename base_type<T>::type diagonal_boost,
+                                                         bool shared_pattern) const {
+    if (rows_ <= 0 || cols_ <= 0) {
+        throw std::invalid_argument("fill_random_sparse_hermitian: matrix dimensions must be > 0");
+    }
+    if (rows_ != cols_) {
+        throw std::invalid_argument("fill_random_sparse_hermitian: Hermitian matrices must be square");
+    }
+    if (batch_size_ <= 0) {
+        throw std::invalid_argument("fill_random_sparse_hermitian: batch_size must be > 0");
+    }
+
+    density = std::clamp(density, 0.0f, 1.0f);
+    const int n = rows_;
+    const int nnz_per_matrix = csr_random_nnz_per_matrix(n, density);
+    const int offdiag_edges = (nnz_per_matrix - n) / 2;
+
+    if (nnz_ != nnz_per_matrix || matrix_stride_ < nnz_per_matrix || offset_stride_ < (n + 1)) {
+        throw std::invalid_argument("fill_random_sparse_hermitian: CSR storage shape does not match requested density");
+    }
+
+    auto row_offsets_ptr = row_offsets_.data();
+    auto col_indices_ptr = col_indices_.data();
+    auto values_ptr = data_.data();
+
+    const std::uint64_t max_edges = static_cast<std::uint64_t>(n) * static_cast<std::uint64_t>(n - 1) / 2ull;
+    const int pattern_batches = shared_pattern ? 1 : batch_size_;
+
+    UnifiedVector<std::uint64_t> edge_indices(static_cast<std::size_t>(pattern_batches) * static_cast<std::size_t>(offdiag_edges));
+    UnifiedVector<std::uint64_t> multipliers(static_cast<std::size_t>(pattern_batches), 0);
+    UnifiedVector<std::uint64_t> offsets(static_cast<std::size_t>(pattern_batches), 0);
+
+    for (int p = 0; p < pattern_batches; ++p) {
+        const auto params = csr_random_make_pattern_params(max_edges, static_cast<std::uint64_t>(seed) + 1315423911ull * static_cast<std::uint64_t>(p + 1));
+        multipliers[static_cast<std::size_t>(p)] = params.multiplier;
+        offsets[static_cast<std::size_t>(p)] = params.offset;
+    }
+
+    auto& sycl_queue = static_cast<sycl::queue&>(*ctx);
+    auto policy = oneapi::dpl::execution::make_device_policy(sycl_queue);
+
+    if (offdiag_edges > 0) {
+        ctx->parallel_for(static_cast<std::size_t>(pattern_batches) * static_cast<std::size_t>(offdiag_edges),
+                          [edge_indices_data = edge_indices.data(),
+                           multipliers_data = multipliers.data(),
+                           offsets_data = offsets.data(),
+                           max_edges,
+                           offdiag_edges](std::size_t flat) {
+            const int pattern = static_cast<int>(flat / static_cast<std::size_t>(offdiag_edges));
+            const std::size_t local_edge = flat % static_cast<std::size_t>(offdiag_edges);
+            edge_indices_data[flat] = (offsets_data[pattern] + multipliers_data[pattern] * static_cast<std::uint64_t>(local_edge)) % max_edges;
+        });
+        ctx.wait_and_throw();
+
+        for (int p = 0; p < pattern_batches; ++p) {
+            auto* begin = edge_indices.data() + static_cast<std::size_t>(p) * static_cast<std::size_t>(offdiag_edges);
+            auto* end = begin + offdiag_edges;
+            oneapi::dpl::sort(policy, begin, end);
+        }
+        ctx.wait_and_throw();
+    }
+
+    UnifiedVector<int> row_counts(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(n), 1);
+    UnifiedVector<int> lower_counts(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(n), 0);
+    UnifiedVector<int> lower_cursors(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(n), 0);
+    UnifiedVector<int> upper_cursors(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(n), 0);
+    UnifiedVector<csr_random_real_t<T>> offdiag_sums(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(n), csr_random_real_t<T>(0));
+
+    if (offdiag_edges > 0) {
+        ctx->parallel_for(static_cast<std::size_t>(batch_size_) * static_cast<std::size_t>(offdiag_edges),
+                          [edge_indices_data = edge_indices.data(),
+                           row_counts_data = row_counts.data(),
+                           lower_counts_data = lower_counts.data(),
+                           n,
+                           offdiag_edges,
+                           shared_pattern](std::size_t flat) {
+            const int batch = static_cast<int>(flat / static_cast<std::size_t>(offdiag_edges));
+            const int local_edge = static_cast<int>(flat % static_cast<std::size_t>(offdiag_edges));
+            const int pattern = shared_pattern ? 0 : batch;
+            const std::uint64_t edge_index = edge_indices_data[static_cast<std::size_t>(pattern) * static_cast<std::size_t>(offdiag_edges) + static_cast<std::size_t>(local_edge)];
+            const auto [row, col] = csr_random_upper_pair_from_index(edge_index, n);
+            const int base = batch * n;
+
+            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device> row_count_upper(row_counts_data[base + row]);
+            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device> row_count_lower(row_counts_data[base + col]);
+            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device> lower_count(lower_counts_data[base + col]);
+            row_count_upper.fetch_add(1);
+            row_count_lower.fetch_add(1);
+            lower_count.fetch_add(1);
+        });
+        ctx.wait_and_throw();
+    }
+
+    for (int b = 0; b < batch_size_; ++b) {
+        row_offsets_ptr[static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_)] = 0;
+        oneapi::dpl::exclusive_scan(
+            policy,
+            row_counts.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(n),
+            row_counts.data() + static_cast<std::size_t>(b + 1) * static_cast<std::size_t>(n),
+            row_offsets_ptr + static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_) + 1,
+            0);
+    }
+    ctx.wait_and_throw();
+
+    ctx->parallel_for(static_cast<std::size_t>(batch_size_),
+                      [edge_indices_data = edge_indices.data(),
+                       row_offsets_ptr,
+                       col_indices_ptr,
+                       values_ptr,
+                       lower_counts_data = lower_counts.data(),
+                       lower_cursors_data = lower_cursors.data(),
+                       upper_cursors_data = upper_cursors.data(),
+                       offdiag_sums_data = offdiag_sums.data(),
+                       n,
+                       offdiag_edges,
+                       matrix_stride = matrix_stride_,
+                       offset_stride = offset_stride_,
+                       seed,
+                       diagonal_boost,
+                       shared_pattern](std::size_t batch_index) {
+        const int batch = static_cast<int>(batch_index);
+        const int row_base = batch * n;
+        const int offset_base = batch * offset_stride;
+        const int value_base = batch * matrix_stride;
+        const int pattern = shared_pattern ? 0 : batch;
+        const auto* batch_edges = edge_indices_data + static_cast<std::size_t>(pattern) * static_cast<std::size_t>(offdiag_edges);
+        const std::uint64_t batch_seed = static_cast<std::uint64_t>(seed) + 31ull * static_cast<std::uint64_t>(batch + 1);
+
+        for (int row = 0; row < n; ++row) {
+            const int row_start = row_offsets_ptr[offset_base + row];
+            lower_cursors_data[row_base + row] = row_start;
+            upper_cursors_data[row_base + row] = row_start + lower_counts_data[row_base + row] + 1;
+            offdiag_sums_data[row_base + row] = csr_random_real_t<T>(0);
+        }
+
+        for (int e = 0; e < offdiag_edges; ++e) {
+            const std::uint64_t edge_index = batch_edges[e];
+            const auto [row, col] = csr_random_upper_pair_from_index(edge_index, n);
+            const T upper_value = csr_random_scalar<T>(batch_seed, edge_index + (static_cast<std::uint64_t>(e) << 32u));
+            const T lower_value = csr_random_conjugate_if_needed(upper_value);
+            const auto magnitude = csr_random_magnitude(upper_value);
+
+            const int upper_pos = upper_cursors_data[row_base + row]++;
+            col_indices_ptr[value_base + upper_pos] = col;
+            values_ptr[value_base + upper_pos] = upper_value;
+
+            const int lower_pos = lower_cursors_data[row_base + col]++;
+            col_indices_ptr[value_base + lower_pos] = row;
+            values_ptr[value_base + lower_pos] = lower_value;
+
+            offdiag_sums_data[row_base + row] += magnitude;
+            offdiag_sums_data[row_base + col] += magnitude;
+        }
+
+        for (int row = 0; row < n; ++row) {
+            const int diag_pos = row_offsets_ptr[offset_base + row] + lower_counts_data[row_base + row];
+            col_indices_ptr[value_base + diag_pos] = row;
+            values_ptr[value_base + diag_pos] = csr_random_make_diagonal<T>(offdiag_sums_data[row_base + row] + diagonal_boost);
+        }
+    });
+
     return ctx.get_event();
 }
 
@@ -1728,6 +2035,11 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
 
+template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<float>::type, bool);
+template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<double>::type, bool);
+template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<std::complex<float>>::type, bool);
+template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<std::complex<double>>::type, bool);
+
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Zeros(int, int, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Zeros(int, int, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Zeros(int, int, int);
@@ -1789,6 +2101,11 @@ template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&,
 template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<float>::type, bool) const;
+template Event MatrixView<double, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<double>::type, bool) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<std::complex<float>>::type, bool) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<std::complex<double>>::type, bool) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, float, float) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, double, double) const;

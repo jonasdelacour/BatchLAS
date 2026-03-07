@@ -8,6 +8,7 @@ set(EXTENSIONS_CTA_SOURCES
 
 set(EXTENSIONS_SOURCES
     ortho.cc
+    iluk.cc
     syevx.cc
     syev_cta.cc
     syev_blocked.cc

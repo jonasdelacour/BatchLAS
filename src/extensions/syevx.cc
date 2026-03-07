@@ -10,6 +10,7 @@
 #include <batchlas/backend_config.h>
 #include <blas/extra.hh>
 #include <blas/functions/syev.hh>
+#include <blas/functions/iluk.hh>
 #include "../math-helpers.hh"
 #include <internal/sort.hh>
 
@@ -90,6 +91,16 @@ namespace batchlas {
         auto P_new = S_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S_new
         auto R_new = S_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S_new
         auto XP_new = S_new({0,n}, {0,2 * block_vectors});                 //First two blocks of S_new
+
+        auto R_preconditioned_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
+        auto R_preconditioned = MatrixView(
+            R_preconditioned_data.data(),
+            n,
+            block_vectors,
+            n,
+            n * block_vectors,
+            batch_size,
+            pool.allocate<T*>(ctx, batch_size).data());
 
         auto AS_new = MatrixView(Stempdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto AX_new = AS_new({0,n}, {0,block_vectors});                       //First block of AS_new
@@ -223,18 +234,20 @@ namespace batchlas {
         // After the initial XtAX solve, this is `block_vectors`. After subsequent StAS
         // solves it becomes 2*block_vectors (restart step) or 3*block_vectors.
         int64_t current_num_eigvals = block_vectors;
+        int32_t completed_iterations = 0;
 
         size_t residual_wg_size = std::min(get_kernel_max_wg_size<SyevxResidualsKernel<B,T,MFormat>>(ctx), size_t(n));
 
         //Compute R = AX - X * diag(lambdas)
         for(int it = 0; it < params.iterations; it++){
+            completed_iterations = static_cast<int32_t>(it + 1);
             int Nvecs = restart ? block_vectors * 2 : block_vectors * 3;
             //Compute R = AX - X * diag(lambdas)
             trace("syevx: residual kernel submit");
             const float_type abs_tol = static_cast<float_type>(std::abs(params.absolute_tolerance));
             const float_type rel_tol = static_cast<float_type>(std::abs(params.relative_tolerance));
             const float_type tol = std::max(abs_tol, rel_tol);
-            ctx -> submit([&](sycl::handler& h){
+            auto residual_evt = ctx -> submit([&](sycl::handler& h){
                 auto Rdata = R.data_ptr();
                 auto Xdata = X.data_ptr();
                 auto AXdata = AX.data_ptr();
@@ -308,8 +321,52 @@ namespace batchlas {
                     }
                 });
             });
+            residual_evt.wait_and_throw();
+            trace("syevx: residual kernel done");
 
-            trace_wait("syevx: residual kernel done");
+            if (params.instrumentation && params.instrumentation->max_iterations > 0 && params.instrumentation->store_every > 0 &&
+                (static_cast<size_t>(it) % params.instrumentation->store_every) == 0) {
+                const auto& instr = *params.instrumentation;
+                using real_t = typename base_type<T>::type;
+                const size_t sample_id = static_cast<size_t>(it) / instr.store_every;
+                if (sample_id < instr.max_iterations) {
+                    const size_t batch_stride = instr.batch_stride == 0 ? neigs : instr.batch_stride;
+                    const size_t iter_stride = instr.iteration_stride == 0 ? batch_size * batch_stride : instr.iteration_stride;
+                    const size_t num_eigvals = static_cast<size_t>(it < 2 ? (it + 1) * block_vectors : 3 * block_vectors);
+
+                    for (int64_t b = 0; b < batch_size; ++b) {
+                        for (size_t i = 0; i < neigs; ++i) {
+                            const size_t dst = sample_id * iter_stride + static_cast<size_t>(b) * batch_stride + i;
+                            const auto cur = residuals[static_cast<size_t>(b) * neigs + i];
+                            const auto best = best_residuals[static_cast<size_t>(b) * neigs + i];
+
+                            if (instr.best_residual_history.size() > dst) {
+                                instr.best_residual_history[dst] = best;
+                            }
+                            if (instr.store_current_residual && instr.current_residual_history.size() > dst) {
+                                instr.current_residual_history[dst] = cur;
+                            }
+                            if (instr.store_ritz_values && instr.ritz_value_history.size() > dst) {
+                                const size_t eig_idx = params.find_largest ? ((num_eigvals - 1) - i) : i;
+                                const size_t src = static_cast<size_t>(b) * num_eigvals + eig_idx;
+                                if (lambdas.size() > src) {
+                                    instr.ritz_value_history[dst] = lambdas[src];
+                                }
+                            }
+                            if (instr.store_convergence_rate && instr.convergence_rate_history.size() > dst) {
+                                real_t rate = real_t(1);
+                                if (sample_id > 0 && instr.best_residual_history.size() > (dst - iter_stride)) {
+                                    const auto prev = instr.best_residual_history[dst - iter_stride];
+                                    if (prev > real_t(0)) {
+                                        rate = best / prev;
+                                    }
+                                }
+                                instr.convergence_rate_history[dst] = rate;
+                            }
+                        }
+                    }
+                }
+            }
 
             // Early exit once all batches have converged for the requested eigenpairs.
             // This is intentionally conservative: it checks the best residual so far.
@@ -322,6 +379,14 @@ namespace batchlas {
             }
             if (all_converged) {
                 break;
+            }
+
+            if (params.preconditioner != nullptr) {
+                trace("syevx: ILU(k) apply on residuals");
+                iluk_apply<B>(ctx, *params.preconditioner, R, R_preconditioned);
+                MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
+                ctx.wait_and_throw();
+                trace("syevx: ILU(k) apply done");
             }
 
             trace("syevx: ortho R vs (X or XP)");
@@ -471,6 +536,12 @@ namespace batchlas {
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
+        }
+
+        if (params.instrumentation && params.instrumentation->iterations_done != nullptr) {
+            for (int64_t b = 0; b < batch_size; ++b) {
+                params.instrumentation->iterations_done[b] = completed_iterations;
+            }
         }
 
         // The residual kernel already populated W with the best eigenvalues seen during iterations.

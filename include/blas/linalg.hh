@@ -8,3 +8,4 @@
 #include <blas/functions.hh>
 #include <blas/extra.hh>
 #include <blas/extensions.hh>
+#include <blas/csr_generators.hh>

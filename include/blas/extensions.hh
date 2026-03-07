@@ -8,11 +8,18 @@
 #include <numeric>
 #include <limits>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 
 namespace batchlas {
     // Forward declarations for interface compatibility
+
+    template <typename T>
+    struct ILUKPreconditioner;
+
+    template <typename T>
+    struct SyevxInstrumentation;
 
     template <typename T>
     struct StedcParams;
@@ -34,6 +41,31 @@ namespace batchlas {
         bool find_largest = true;                          // Whether to find largest eigenvalues
         T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Absolute tolerance
         T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Relative tolerance
+        const ILUKPreconditioner<T>* preconditioner = nullptr;                 // Optional ILU(k) preconditioner
+        const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
+    };
+
+    template <typename T>
+    struct SyevxInstrumentation {
+        using float_type = typename base_type<T>::type;
+
+        // Histories are laid out as: [iter][batch][eig], with optional custom strides.
+        // If iteration_stride/batch_stride are zero they default to batch_size*neigs and neigs.
+        Span<float_type> best_residual_history{};
+        Span<float_type> current_residual_history{};
+        Span<float_type> convergence_rate_history{};
+        Span<float_type> ritz_value_history{};
+
+        int32_t* iterations_done = nullptr;  // Optional per-batch output
+
+        size_t max_iterations = 0;
+        size_t store_every = 1;
+        size_t iteration_stride = 0;
+        size_t batch_stride = 0;
+
+        bool store_current_residual = false;
+        bool store_convergence_rate = true;
+        bool store_ritz_values = false;
     };
 
     /**

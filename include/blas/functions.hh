@@ -19,6 +19,7 @@
 #include <blas/functions/ormqr.hh>
 #include <blas/functions/potrf.hh>
 #include <blas/functions/spmm.hh>
+#include <blas/functions/iluk.hh>
 #include <blas/functions/syev.hh>
 #include <blas/functions/trmm.hh>
 #include <blas/functions/trsm.hh>

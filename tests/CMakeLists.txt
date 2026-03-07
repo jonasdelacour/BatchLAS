@@ -36,6 +36,7 @@ set(TEST_TARGETS
     ormqr_blocked_tests
     orgqr_tests
     transpose_tests
+    iluk_tests
     syev_tests
     gesvd_tests
     steqr_tests
