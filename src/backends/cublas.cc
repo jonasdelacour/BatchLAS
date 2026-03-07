@@ -14,6 +14,9 @@
 #include <blas/dispatch/op.hh>
 #include <complex>
 
+#include "gemm_variant.hh"
+#include "../sycl/gemm_kernels.hh"
+
 // This file contains cuBLAS primitives implementation using MatrixView
 namespace batchlas {
     namespace backend {
@@ -40,6 +43,10 @@ namespace batchlas {
                    Transpose transA,
                    Transpose transB,
                    ComputePrecision precision) {
+        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
+            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
+        }
+
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 

@@ -1,7 +1,5 @@
 set(SYCL_SOURCES
-    # Add your SYCL implementation source files here
-    # We're handling the main SYCL implementations in the util directory
-    # but additional SYCL-specific files can be added here
+    gemm_kernels.cc
 )
 
 

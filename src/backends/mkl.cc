@@ -8,10 +8,15 @@
 #include <oneapi/mkl/blas.hpp>
 #include <oneapi/mkl/lapack.hpp>
 
+#include "gemm_variant.hh"
+#include "../sycl/gemm_kernels.hh"
+
 namespace batchlas {
 
+    namespace backend {
+
     template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
+    Event gemm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -20,6 +25,10 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                ComputePrecision precision) {
+        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
+            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
+        }
+
         static_cast<void>(precision);
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
@@ -48,6 +57,21 @@ namespace batchlas {
                 A.batch_size());
         }
         return ctx.get_event();
+    }
+
+    } // namespace backend
+
+    template <Backend Back, typename T>
+    Event gemm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               T beta,
+               Transpose transA,
+               Transpose transB,
+               ComputePrecision precision) {
+        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
 
     template <Backend Back, typename T>
