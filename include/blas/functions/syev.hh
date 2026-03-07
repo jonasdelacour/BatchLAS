@@ -113,6 +113,17 @@ inline bool syev_supports_blocked(const DeviceCaps& caps,
     return true;
 }
 
+template <typename T>
+inline bool syev_supports_two_stage(const DeviceCaps& caps,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    Uplo uplo) {
+    if (A.rows() != A.cols()) return false;
+    if (A.rows() < 1 || A.batch_size() < 1) return false;
+    if (!caps.is_gpu) return false;
+    if (uplo != Uplo::Lower) return false;
+    return true;
+}
+
 inline Provider normalize_vendor_like(Provider p) {
     if (p == Provider::Netlib) return Provider::Vendor;
     return p;
@@ -130,6 +141,7 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
     if (chosen != Provider::Auto) {
         if (chosen == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return chosen;
         if (chosen == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return chosen;
+        if (chosen == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) return chosen;
         if (chosen == Provider::Vendor) return Provider::Vendor;
         // Unsupported request: fall through to Auto selection.
         chosen = Provider::Auto;
@@ -139,6 +151,7 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
         p = normalize_vendor_like(p);
         if (p == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return p;
         if (p == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return p;
+        if (p == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) return p;
         if (p == Provider::Vendor) return Provider::Vendor;
     }
 
@@ -169,6 +182,12 @@ inline Event syev_dispatch(Queue& ctx,
         need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     } else if (chosen == Provider::BatchLAS_CTA) {
         need_ws = syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
+    } else if (chosen == Provider::BatchLAS_TwoStage) {
+        need_ws = syev_two_stage_buffer_size<B, T>(ctx,
+                                                   descrA,
+                                                   jobtype,
+                                                   uplo,
+                                                   StedcParams<typename base_type<T>::type>{});
     } else if (chosen == Provider::BatchLAS_Blocked) {
         need_ws = syev_blocked_buffer_size<B, T>(ctx,
                                                  descrA,
@@ -205,6 +224,14 @@ inline Event syev_dispatch(Queue& ctx,
                            workspace,
                            detail::syev_cta_steqr_params<T>(jobtype),
                            /*cta_wg_size_multiplier=*/1);
+    } else if (chosen == Provider::BatchLAS_TwoStage) {
+        e = syev_two_stage<B, T>(*run_q,
+                                 descrA,
+                                 eigenvalues,
+                                 jobtype,
+                                 uplo,
+                                 workspace,
+                                 StedcParams<typename base_type<T>::type>{});
     } else {
         e = syev_blocked<B, T>(*run_q,
                                descrA,
@@ -237,6 +264,13 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
     }
     if (chosen == Provider::BatchLAS_CTA) {
         return syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
+    }
+    if (chosen == Provider::BatchLAS_TwoStage) {
+        return syev_two_stage_buffer_size<B, T>(ctx,
+                                                descrA,
+                                                jobtype,
+                                                uplo,
+                                                StedcParams<typename base_type<T>::type>{});
     }
     return syev_blocked_buffer_size<B, T>(ctx,
                                           descrA,

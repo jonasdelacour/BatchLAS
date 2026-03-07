@@ -73,10 +73,10 @@ inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g
     return sycl::reduce_over_group(g, x, sycl::plus<R>());
 }
 
-template <typename T, int WG>
+template <typename T, int WG, bool FuseTrailingUpdate>
 class LatrdLowerPanelKernel;
 
-template <typename T, int WG>
+template <typename T, int WG, bool FuseTrailingUpdate>
 Event latrd_lower_panel_batched_wg(Queue& q,
                                   const MatrixView<T, MatrixFormat::Dense>& a,
                                   const VectorView<T>& e,
@@ -106,7 +106,7 @@ Event latrd_lower_panel_batched_wg(Queue& q,
         auto vip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 
-        h.parallel_for<LatrdLowerPanelKernel<T, WG>>(
+        h.parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
@@ -313,6 +313,35 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     // reads Wb(i,p) / Ab(i,p) computed by other lanes.
                     it.barrier(sycl::access::fence_space::global_space);
                 }
+
+                if constexpr (FuseTrailingUpdate) {
+                    const int j2 = ib;
+                    const int n2 = n - j2;
+                    for (int lin = lid; lin < n2 * n2; lin += wg) {
+                        const int r = lin % n2;
+                        const int c = lin / n2;
+                        if (r < c) continue;
+
+                        const int rr = j2 + r;
+                        const int cc = j2 + c;
+                        T acc = T(0);
+                        for (int k = 0; k < ib; ++k) {
+                            const T vrk = (rr == k + 1) ? T(1) : ((rr > k + 1) ? Ab(rr, k) : T(0));
+                            const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
+                            const T wrk = Wb(rr, k);
+                            const T wck = Wb(cc, k);
+                            acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+                        }
+
+                        T a_rc = Ab(rr, cc) - acc;
+                        if constexpr (internal::is_complex<T>::value) {
+                            if (rr == cc) {
+                                a_rc = T(a_rc.real(), typename T::value_type(0));
+                            }
+                        }
+                        Ab(rr, cc) = a_rc;
+                    }
+                }
             });
     });
 
@@ -325,25 +354,34 @@ Event latrd_lower_panel_batched(Queue& q,
                                 const VectorView<T>& e,
                                 const VectorView<T>& tau,
                                 const MatrixView<T, MatrixFormat::Dense>& w,
-                                int32_t wg_hint) {
+                                int32_t wg_hint,
+                                bool fuse_trailing_update) {
     const int n = a.rows();
+    auto call = [&](auto wg_tag) {
+        constexpr int WG = decltype(wg_tag)::value;
+        if (fuse_trailing_update) {
+            return latrd_lower_panel_batched_wg<T, WG, true>(q, a, e, tau, w);
+        }
+        return latrd_lower_panel_batched_wg<T, WG, false>(q, a, e, tau, w);
+    };
+
     if (wg_hint == 64) {
-        return latrd_lower_panel_batched_wg<T, 64>(q, a, e, tau, w);
+        return call(std::integral_constant<int, 64>{});
     }
     if (wg_hint == 128) {
-        return latrd_lower_panel_batched_wg<T, 128>(q, a, e, tau, w);
+        return call(std::integral_constant<int, 128>{});
     }
     if (wg_hint == 256) {
-        return latrd_lower_panel_batched_wg<T, 256>(q, a, e, tau, w);
+        return call(std::integral_constant<int, 256>{});
     }
     // For very small n, a smaller work-group reduces wasted lanes and barrier overhead.
     if (n <= 64) {
-        return latrd_lower_panel_batched_wg<T, 64>(q, a, e, tau, w);
+        return call(std::integral_constant<int, 64>{});
     }
     if (n <= 128) {
-        return latrd_lower_panel_batched_wg<T, 128>(q, a, e, tau, w);
+        return call(std::integral_constant<int, 128>{});
     }
-    return latrd_lower_panel_batched_wg<T, 256>(q, a, e, tau, w);
+    return call(std::integral_constant<int, 256>{});
 }
 
 template <typename T>
@@ -418,7 +456,8 @@ Event latrd_lower_panel(Queue& ctx,
                         const VectorView<T>& e_panel_out,
                         const VectorView<T>& tau_panel_out,
                         const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
-                        int32_t wg_hint) {
+                        int32_t wg_hint,
+                        bool fuse_trailing_update) {
     (void)B;
     validate_latrd_lower_panel_panel_dims(a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
 
@@ -432,7 +471,7 @@ Event latrd_lower_panel(Queue& ctx,
         return ctx.get_event();
     }
 
-    return latrd_lower_panel_batched<T>(ctx, a, e, tau, w, wg_hint);
+    return latrd_lower_panel_batched<T>(ctx, a, e, tau, w, wg_hint, fuse_trailing_update);
 }
 
 template <Backend B, typename T>
@@ -443,7 +482,8 @@ Event latrd_lower_panel(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& w_in,
                         int32_t j0,
                         int32_t ib,
-                        int32_t wg_hint) {
+                        int32_t wg_hint,
+                        bool fuse_trailing_update) {
     (void)B;
     validate_latrd_lower_panel_dims(a_in, e_out, tau_out, w_in, j0, ib);
 
@@ -457,7 +497,7 @@ Event latrd_lower_panel(Queue& ctx,
     auto e_panel = e(Slice(j0, j0 + ib));
     auto tau_panel = tau(Slice(j0, j0 + ib));
     auto w_panel = w({j0, SliceEnd()}, {0, ib});
-    return latrd_lower_panel<B, T>(ctx, a_panel, e_panel, tau_panel, w_panel, wg_hint);
+    return latrd_lower_panel<B, T>(ctx, a_panel, e_panel, tau_panel, w_panel, wg_hint, fuse_trailing_update);
 }
 
 #define LATRD_LOWER_PANEL_INSTANTIATE(back, fp) \
@@ -467,7 +507,8 @@ Event latrd_lower_panel(Queue& ctx,
         const VectorView<fp>&, \
         const VectorView<fp>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        int32_t); \
+        int32_t, \
+        bool); \
     template Event latrd_lower_panel<back, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
@@ -476,7 +517,8 @@ Event latrd_lower_panel(Queue& ctx,
         const MatrixView<fp, MatrixFormat::Dense>&, \
         int32_t, \
         int32_t, \
-        int32_t);
+        int32_t, \
+        bool);
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 LATRD_LOWER_PANEL_INSTANTIATE(Backend::CUDA, float)

@@ -551,7 +551,8 @@ namespace batchlas {
                             const MatrixView<T, MatrixFormat::Dense>& w_in,
                             int32_t j0,
                             int32_t ib,
-                            int32_t wg_hint = 0);
+                            int32_t wg_hint = 0,
+                            bool fuse_trailing_update = false);
 
     /**
      * @brief LATRD-like panel factorization (Lower only), view-based overload.
@@ -572,7 +573,8 @@ namespace batchlas {
                             const VectorView<T>& e_panel_out,
                             const VectorView<T>& tau_panel_out,
                             const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
-                            int32_t wg_hint = 0);
+                            int32_t wg_hint = 0,
+                            bool fuse_trailing_update = false);
 
     /**
      * @brief Blocked symmetric/Hermitian tridiagonal reduction for medium/large matrices.
@@ -894,6 +896,36 @@ namespace batchlas {
                                     JobType jobz,
                                     Uplo uplo,
                                     StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+
+    /**
+     * @brief Two-stage symmetric/Hermitian eigen-solver (SYEV-like), opt-in path.
+     *
+     * Pipeline (eigenvalues mode):
+     *  1) sytrd_sy2sb: dense -> band
+     *  2) sytrd_sb2st: band -> tridiagonal (d,e)
+     *  3) stedc: tridiagonal eigensolve
+     *
+     * Notes:
+    * - JobType::EigenVectors is supported via two-stage reduction with
+    *   explicit phase/sign recovery and reflector backtransform.
+    * - Eigenvector mode currently uses kd=1 for stage-2 extraction.
+     * - Currently supports only Uplo::Lower.
+     */
+    template <Backend B, typename T>
+    Event syev_two_stage(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& a_in,
+                         Span<typename base_type<T>::type> eigenvalues,
+                         JobType jobz,
+                         Uplo uplo,
+                         const Span<std::byte>& ws,
+                         StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+
+    template <Backend B, typename T>
+    size_t syev_two_stage_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& a,
+                                      JobType jobz,
+                                      Uplo uplo,
+                                      StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     /**
      * @brief Unblocked GEBRD-like reduction to real bidiagonal form.

@@ -16,12 +16,25 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <stdexcept>
 #include <type_traits>
 
 namespace batchlas {
 
 namespace {
+
+inline bool env_truthy(const char* v) {
+    if (!v) return false;
+    const std::string s(v);
+    return (s == "1" || s == "true" || s == "TRUE" || s == "on" || s == "ON");
+}
+
+inline bool env_falsy(const char* v) {
+    if (!v) return false;
+    const std::string s(v);
+    return (s == "0" || s == "false" || s == "FALSE" || s == "off" || s == "OFF");
+}
 
 template <typename U>
 inline U conj_if_needed(const U& x) {
@@ -317,6 +330,7 @@ Event sytrd_lower_local_small(Queue& q,
     return q.get_event();
 }
 
+
 template <typename T>
 class RestoreTridiagKernel;
 
@@ -440,11 +454,6 @@ Event sytrd_blocked_impl(Queue& ctx,
     }
 
     if (n <= 64) {
-        auto env_truthy = [](const char* v) -> bool {
-            if (!v) return false;
-            const std::string s(v);
-            return (s == "1" || s == "true" || s == "TRUE" || s == "on" || s == "ON");
-        };
         const bool force_local = env_truthy(std::getenv("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL"));
         const bool debug_small = env_truthy(std::getenv("BATCHLAS_DEBUG_SYTRD_SMALL"));
 
@@ -491,12 +500,22 @@ Event sytrd_blocked_impl(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> Wmat(Wbuf.data(), n, nb, n, n * nb, batch);
 
     const int k = n - 1;
+    const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
+    const bool fuse_override_on = env_truthy(fuse_env);
+    const bool fuse_override_off = env_falsy(fuse_env);
+    const bool fuse_default = (B == Backend::CUDA) && (n == 256);
+    const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
 
     for (int j0 = 0; j0 < k; j0 += nb) {
         const int ib = std::min(nb, k - j0);
 
+        const int j2 = j0 + ib;
+        const int n2 = n - j2;
+        const bool fuse_this_panel = enable_fused_panel_update && n2 > 0 && n2 <= 128;
+
         {
-            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.latrd_lower_panel");
+            BATCHLAS_KERNEL_TRACE_SCOPE(fuse_this_panel ? "sytrd_blocked.panel_fused"
+                                                        : "sytrd_blocked.panel_only");
             auto A_panel = A({j0, SliceEnd()}, {j0, SliceEnd()});
             auto E_panel = E(Slice(j0, j0 + ib));
             auto TAU_panel = TAU(Slice(j0, j0 + ib));
@@ -506,22 +525,25 @@ Event sytrd_blocked_impl(Queue& ctx,
                                           E_panel,
                                           TAU_panel,
                                           W_panel,
-                                          tuning::latrd_lower_panel_wg_hint());
+                                          tuning::latrd_lower_panel_wg_hint(),
+                                          fuse_this_panel);
         }
 
-        const int j2 = j0 + ib;
-        const int n2 = n - j2;
-        if (n2 > 0) {
+        if (n2 > 0 && !fuse_this_panel) {
             auto A22 = A({j2, SliceEnd()}, {j2, SliceEnd()});
             auto V2 = A({j2, SliceEnd()}, {j0, j0 + ib});
             auto W2 = Wmat({j2, SliceEnd()}, {0, ib});
 
-            {
-                BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw");
-                if (n2 <= 128) {
-                    (void)update_vw_lower_small<T>(ctx, V2, W2, A22);
-                } else {
+            if (n2 <= 128) {
+                BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_small");
+                (void)update_vw_lower_small<T>(ctx, V2, W2, A22);
+            } else {
+                {
+                    BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
                     gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                }
+                {
+                    BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
                     gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
                 }
             }

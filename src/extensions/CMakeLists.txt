@@ -11,6 +11,7 @@ set(EXTENSIONS_SOURCES
     syevx.cc
     syev_cta.cc
     syev_blocked.cc
+    syev_two_stage.cc
     gebrd.cc
     bdsqr.cc
     ormbr.cc

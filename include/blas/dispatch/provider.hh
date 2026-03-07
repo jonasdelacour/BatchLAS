@@ -9,14 +9,16 @@ enum class Provider {
     Vendor,
     BatchLAS_CTA,
     BatchLAS_Blocked,
+    BatchLAS_TwoStage,
     Netlib,
 };
 
 struct DispatchPolicy {
     Provider forced = Provider::Auto;
-    std::array<Provider, 4> order = {
+    std::array<Provider, 5> order = {
         Provider::BatchLAS_CTA,
         Provider::BatchLAS_Blocked,
+        Provider::BatchLAS_TwoStage,
         Provider::Vendor,
         Provider::Netlib,
     };

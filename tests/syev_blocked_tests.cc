@@ -14,7 +14,9 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
+#include <string>
 #include <type_traits>
 
 using namespace batchlas;
@@ -232,6 +234,98 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 
 	check_orthonormal_columns(A_blk.view(), W_blk, tol_ortho_for<Real>());
 	check_eigen_residual(A0.view(), A_blk.view(), W_blk, tol_resid_for<Real>());
+}
+
+TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+
+	const int n = 128;
+	const int batch = 8;
+
+	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 9876);
+	Matrix<Scalar, MatrixFormat::Dense> A_two_stage = A0;
+	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+
+	const char* old_provider = std::getenv("BATCHLAS_SYEV_PROVIDER");
+	const std::string old_provider_value = old_provider ? std::string(old_provider) : std::string();
+	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
+
+	{
+		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size<TestFixture::BackendType>(*this->ctx,
+																								  A_two_stage.view(),
+																								  W_two_stage.to_span(),
+																								  JobType::NoEigenVectors,
+																								  Uplo::Lower));
+		syev<TestFixture::BackendType>(*this->ctx,
+									   A_two_stage.view(),
+									   W_two_stage.to_span(),
+									   JobType::NoEigenVectors,
+									   Uplo::Lower,
+									   ws_two_stage.to_span()).wait();
+	}
+
+	if (old_provider) {
+		setenv("BATCHLAS_SYEV_PROVIDER", old_provider_value.c_str(), 1);
+	} else {
+		unsetenv("BATCHLAS_SYEV_PROVIDER");
+	}
+
+	for (int j = 0; j < batch; ++j) {
+		for (int i = 0; i < n; ++i) {
+			const Real wi = W_two_stage[i + j * n];
+			EXPECT_TRUE(std::isfinite(wi)) << "non-finite eigenvalue at (i,b)= (" << i << "," << j << ")";
+			if (i > 0) {
+				EXPECT_LE(W_two_stage[(i - 1) + j * n], wi)
+					<< "eigenvalues not sorted at (i,b)= (" << i << "," << j << ")";
+			}
+		}
+	}
+}
+
+TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+
+	const int n = 64;
+	const int batch = 1;
+
+	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 2468);
+	Matrix<Scalar, MatrixFormat::Dense> A_two_stage = A0;
+	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+
+	const char* old_provider = std::getenv("BATCHLAS_SYEV_PROVIDER");
+	const std::string old_provider_value = old_provider ? std::string(old_provider) : std::string();
+	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
+
+	{
+		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size<TestFixture::BackendType>(*this->ctx,
+															  A_two_stage.view(),
+															  W_two_stage.to_span(),
+															  JobType::EigenVectors,
+															  Uplo::Lower));
+		syev<TestFixture::BackendType>(*this->ctx,
+								   A_two_stage.view(),
+								   W_two_stage.to_span(),
+								   JobType::EigenVectors,
+								   Uplo::Lower,
+								   ws_two_stage.to_span()).wait();
+	}
+
+	if (old_provider) {
+		setenv("BATCHLAS_SYEV_PROVIDER", old_provider_value.c_str(), 1);
+	} else {
+		unsetenv("BATCHLAS_SYEV_PROVIDER");
+	}
+
+	for (int i = 0; i < n; ++i) {
+		EXPECT_TRUE(std::isfinite(W_two_stage[i])) << "non-finite eigenvalue at i=" << i;
+	}
+
+	const Real ortho_tol = std::max(tol_ortho_for<Real>(), Real(1e-7));
+	const Real resid_tol = std::max(tol_resid_for<Real>(), Real(1e-7));
+	check_orthonormal_columns(A_two_stage.view(), W_two_stage, ortho_tol);
+	check_eigen_residual(A0.view(), A_two_stage.view(), W_two_stage, resid_tol);
 }
 #endif
 

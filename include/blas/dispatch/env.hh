@@ -33,6 +33,9 @@ inline Provider parse_provider_value(const char* v) {
 
     if (s == "cta" || s == "batchlas_cta" || s == "batchlas-cta") return Provider::BatchLAS_CTA;
     if (s == "blocked" || s == "batchlas_blocked" || s == "batchlas-blocked") return Provider::BatchLAS_Blocked;
+    if (s == "two_stage" || s == "two-stage" || s == "batchlas_two_stage" || s == "batchlas-two-stage") {
+        return Provider::BatchLAS_TwoStage;
+    }
 
     if (s == "netlib") return Provider::Netlib;
 
@@ -47,14 +50,15 @@ inline Provider parse_provider_env(const char* opname) {
     return parse_provider_value(std::getenv(key.c_str()));
 }
 
-inline constexpr std::array<Provider, 4> default_order_cta_blocked_vendor_netlib = {
+inline constexpr std::array<Provider, 5> default_order_cta_blocked_vendor_netlib = {
     Provider::BatchLAS_CTA,
     Provider::BatchLAS_Blocked,
+    Provider::BatchLAS_TwoStage,
     Provider::Vendor,
     Provider::Netlib,
 };
 
-inline constexpr std::array<Provider, 4> default_order_for_op(const char* /*opname*/) {
+inline constexpr std::array<Provider, 5> default_order_for_op(const char* /*opname*/) {
     // Phase 0: keep a single default order. Extend per-op later.
     return default_order_cta_blocked_vendor_netlib;
 }
