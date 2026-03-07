@@ -858,6 +858,18 @@ inline void CubeBatchSizes(Benchmark* b) {
     }
 }
 
+template <typename Benchmark>
+inline void GemmSquareSizesFixedBatch128(Benchmark* b) {
+    for (int s : {32, 64, 128, 256, 512}) {
+        b->Args({s, s, s, 128});
+    }
+}
+
+template <typename Benchmark>
+inline void GemmSquareSizesFixedBatch128Netlib(Benchmark* b) {
+    GemmSquareSizesFixedBatch128(b);
+}
+
 // Reduced 3D sizes for CPU/NETLIB benchmarks
 template <typename Benchmark>
 inline void CubeBatchSizesNetlib(Benchmark* b) {

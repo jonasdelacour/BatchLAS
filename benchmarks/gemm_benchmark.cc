@@ -5,9 +5,8 @@
 
 using namespace batchlas;
 
-// Batched GEMM benchmark
 template <typename T, Backend B>
-static void BM_GEMM(minibench::State& state) {
+static void BM_GEMM_IMPL(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);
@@ -33,10 +32,22 @@ static void BM_GEMM(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
+// Batched GEMM benchmark
+template <typename T, Backend B>
+static void BM_GEMM(minibench::State& state) {
+    BM_GEMM_IMPL<T, B>(state);
+}
+
+template <typename T, Backend B>
+static void BM_GEMM_FIXED128(minibench::State& state) {
+    BM_GEMM_IMPL<T, B>(state);
+}
+
 
 
 // Register size/batch combinations at static‑init time using macro
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM, CubeBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_FIXED128, GemmSquareSizesFixedBatch128);
 
 MINI_BENCHMARK_MAIN();
