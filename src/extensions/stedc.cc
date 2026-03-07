@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 #include "../math-helpers.hh"
+#include "steqr_internal.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
 #define DEBUG_STEDC 0
@@ -32,6 +33,12 @@ inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params) {
         if (params.secular_cta_wg_size_multiplier == 1) {
             params.secular_cta_wg_size_multiplier = tuning::stedc_wg_multiplier_for_n(nn);
         }
+    } else {
+        // The host/native CPU backend cannot safely invoke the ROCm-style
+        // secular root routines from inside SYCL kernels. Keep NETLIB on the
+        // legacy merge path even if callers request the newer GPU-oriented variants.
+        params.secular_solver = StedcSecularSolver::Legacy;
+        params.merge_variant = StedcMergeVariant::Baseline;
     }
 
     const int64_t safe_n = std::max<int64_t>(1, n);
@@ -394,6 +401,15 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
             throw std::runtime_error("The dimensions of eigvects must match the size of d and its batch size.");
         }
     }
+
+    if constexpr (B == Backend::NETLIB) {
+        auto steqr_params = params.leaf_steqr_params;
+        steqr_params.sort = true;
+        steqr_params.sort_order = SortOrder::Ascending;
+        steqr_params.back_transform = false;
+        return steqr_legacy<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+    }
+
     //Clean the output matrix before we begin.
     eigvects.fill_zeros(ctx);
     auto pool = BumpAllocator(ws);
@@ -410,6 +426,17 @@ size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType job
         return 0;
     }
 
+    if constexpr (B == Backend::NETLIB) {
+        auto evals = VectorView<T>(nullptr, n, batch_size, 1, 0);
+        auto diag = VectorView<T>(nullptr, n, batch_size, 1, 0);
+        auto offdiag = VectorView<T>(nullptr, n - 1, batch_size, 1, 0);
+        auto steqr_params = params.leaf_steqr_params;
+        steqr_params.sort = true;
+        steqr_params.sort_order = SortOrder::Ascending;
+        steqr_params.back_transform = false;
+        return steqr_legacy_buffer_size<T>(ctx, diag, offdiag, evals, jobz, steqr_params);
+    }
+
     return stedc_internal_workspace_size<B, T>(ctx, n, batch_size, jobz, params)
            + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size);
 }
@@ -423,22 +450,37 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
 
     params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params);
 
-    size_t size = 0;
-    auto d = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
-    auto e = VectorView<T>(nullptr, params.recursion_threshold - 1, batch_size, 1, 0);
-    auto eigenvalues = VectorView<T>(nullptr, params.recursion_threshold, batch_size, 1, 0);
-    // How many recursions do we need?
-    auto n_rec = (n + params.recursion_threshold - 1) / params.recursion_threshold;
-    auto m = (n + n_rec - 1) / n_rec; // Size of each subproblem
-    
-    // Compute the workspace size based on the job type
-    size = params.recursion_threshold <= 32 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz) : steqr_buffer_size<T>(ctx, d, e, eigenvalues, jobz);
-    size += 2 * BumpAllocator::allocation_size<int32_t>(ctx, 2 * (m + 1) * batch_size) + BumpAllocator::allocation_size<T>(ctx, batch_size); // For permutation array and rho storage
+    const auto add_int32 = [&](size_t count) {
+        return BumpAllocator::allocation_size<int32_t>(ctx, count);
+    };
+    const auto add_t = [&](size_t count) {
+        return BumpAllocator::allocation_size<T>(ctx, count);
+    };
 
-    // Additional persistent column-map buffer used in the merge step (perm_map).
-    size += BumpAllocator::allocation_size<int32_t>(ctx, n * batch_size);
+    if (n <= static_cast<size_t>(params.recursion_threshold)) {
+        auto d_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n), batch_size, 1, 0);
+        auto e_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n - 1), batch_size, 1, 0);
+        auto eigenvalues_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n), batch_size, 1, 0);
+        return params.recursion_threshold <= 32
+                   ? steqr_cta_buffer_size<T>(ctx, d_leaf, e_leaf, eigenvalues_leaf, jobz)
+                   : steqr_buffer_size<T>(ctx, d_leaf, e_leaf, eigenvalues_leaf, jobz);
+    }
 
-    return (size * n_rec) + BumpAllocator::allocation_size<T>(ctx, n * n * batch_size); // Multiply by number of recursions needed
+    const size_t m = n / 2;
+    const size_t child_bytes = add_t(batch_size)
+                             + stedc_internal_workspace_size<B, T>(ctx, m, batch_size, jobz, params)
+                             + stedc_internal_workspace_size<B, T>(ctx, n - m, batch_size, jobz, params);
+
+    const size_t merge_bytes = add_t(batch_size)
+                             + add_int32(n * batch_size)
+                             + add_int32(n * batch_size)
+                             + add_t(n * batch_size)
+                             + add_int32(n * batch_size)
+                             + add_int32(batch_size)
+                             + add_t(n * batch_size)
+                             + add_t(n * n * batch_size);
+
+    return std::max(child_bytes, merge_bytes);
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND

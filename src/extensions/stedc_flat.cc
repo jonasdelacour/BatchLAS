@@ -386,6 +386,10 @@ Event stedc_flat(Queue& ctx,
                  StedcParams<T> params,
                  const MatrixView<T, MatrixFormat::Dense>& eigvects)
 {
+    if constexpr (B == Backend::NETLIB) {
+        return stedc<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects);
+    }
+
     if (d.size() != e.size() + 1) {
         throw std::runtime_error("The size of e must be one less than the size of d.");
     }
