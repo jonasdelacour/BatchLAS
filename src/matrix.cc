@@ -345,14 +345,15 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             }
             );
         }).wait();
-        int max_nnz = oneapi::dpl::reduce(oneapi::dpl::execution::par_unseq, batch_nnz_counts.begin(), batch_nnz_counts.end(), 0, sycl::maximum<int>());
+        int max_nnz = 0;
+        if (batch_nnz_counts.size() > 0) {
+            max_nnz = *std::max_element(batch_nnz_counts.begin(), batch_nnz_counts.end());
+        }
         // 2. Create row offsets using exclusive scan within each batch
         Matrix<T, MatrixFormat::CSR> result(rows, cols, max_nnz, batch_size);
 
         // Initialize batch offset counters
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
-
-        oneapi::dpl::exclusive_scan(oneapi::dpl::execution::par_unseq, batch_offsets.begin(), batch_offsets.end(), batch_offsets.begin(), 0);
         
         // Second kernel: Compute row offsets using work-group scan
         q -> submit ([&](sycl::handler& cgh) {
@@ -1039,9 +1040,6 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
         offsets[static_cast<std::size_t>(p)] = params.offset;
     }
 
-    auto& sycl_queue = static_cast<sycl::queue&>(*ctx);
-    auto policy = oneapi::dpl::execution::make_device_policy(sycl_queue);
-
     if (offdiag_edges > 0) {
         ctx->parallel_for(static_cast<std::size_t>(pattern_batches) * static_cast<std::size_t>(offdiag_edges),
                           [edge_indices_data = edge_indices.data(),
@@ -1058,7 +1056,7 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
         for (int p = 0; p < pattern_batches; ++p) {
             auto* begin = edge_indices.data() + static_cast<std::size_t>(p) * static_cast<std::size_t>(offdiag_edges);
             auto* end = begin + offdiag_edges;
-            oneapi::dpl::sort(policy, begin, end);
+            std::sort(begin, end);
         }
         ctx.wait_and_throw();
     }
@@ -1096,8 +1094,7 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
 
     for (int b = 0; b < batch_size_; ++b) {
         row_offsets_ptr[static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_)] = 0;
-        oneapi::dpl::exclusive_scan(
-            policy,
+        std::exclusive_scan(
             row_counts.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(n),
             row_counts.data() + static_cast<std::size_t>(b + 1) * static_cast<std::size_t>(n),
             row_offsets_ptr + static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_) + 1,
@@ -1765,6 +1762,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
 
     ctx -> submit([&](sycl::handler& cgh) {
         auto results = batch_results.data();
+        auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(a.size()), cgh);
         cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(a.batch_size() * a.size()), sycl::range<1>(a.size())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto lid = item.get_local_id(0);
@@ -1783,8 +1781,19 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
             } else {
                 is_close = compare(a(lid, bid), b(lid, bid));   
             }
-            
-            results[bid] = sycl::all_of_group(item.get_group(), is_close);
+
+            group_matches[lid] = is_close ? 1 : 0;
+            sycl::group_barrier(item.get_group());
+            if (lid == 0) {
+                bool group_all_close = true;
+                for (int64_t idx = 0; idx < a.size(); ++idx) {
+                    if (group_matches[idx] == 0) {
+                        group_all_close = false;
+                        break;
+                    }
+                }
+                results[bid] = group_all_close;
+            }
         });
     }).wait();
 
@@ -1815,6 +1824,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
             auto results = batch_results.data();
             auto Aview = A.kernel_view();
             auto Bview = B.kernel_view();
+            auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(A.rows()), cgh);
 
             cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(A.batch_size() *  A.rows()), sycl::range<1>(A.rows())), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group(0);
@@ -1841,7 +1851,19 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                     } else {
                         is_close = is_close && a_element == b_element;
                     }
-                    results[bid] &= sycl::all_of_group(item.get_group(), is_close);
+                    group_matches[lid] = is_close ? 1 : 0;
+                    sycl::group_barrier(item.get_group());
+                    if (lid == 0) {
+                        bool group_all_close = true;
+                        for (int64_t row = 0; row < Aview.rows(); ++row) {
+                            if (group_matches[row] == 0) {
+                                group_all_close = false;
+                                break;
+                            }
+                        }
+                        results[bid] = results[bid] && group_all_close;
+                    }
+                    sycl::group_barrier(item.get_group());
                     if (!results[bid]) {
                         break; // Early exit if already false
                     }

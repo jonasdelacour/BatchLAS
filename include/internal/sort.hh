@@ -149,60 +149,68 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
 
 template <typename T, typename K>
 Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder order, bool fill_indices){
-    // Implement the argsort functionality here
     auto n = data.size();
     auto batch_size = data.batch_size();
-    // Since we use sycl::ext::oneapi::experimental::joint_sort, we need to ensure data and indices use unit increments.
     if(data.inc() != 1 || indices.inc() != 1){
         throw std::runtime_error("argsort: data and indices must have unit increment (inc=1)");
     }
 
     ctx -> submit([&](sycl::handler& h) {
-        // Calculate memory required for joint_sort operation
-        // We need more memory for larger arrays
-        size_t sort_mem_size = sycl::ext::oneapi::experimental::default_sorters::joint_sorter<std::less<>>::memory_required<T>(
-                sycl::memory_scope::work_group,  n);
-        
-        sycl::local_accessor<std::byte, 1> scratch(sycl::range<1>(sort_mem_size), h);
+        auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
+        auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         
         h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
-            
-            // Set up pointers to the batch-specific data
             K* batch_indices = indices.batch_item(bid).data_ptr();
 
-            // Create group helper with scratch memory
-            auto group_helper = sycl::ext::oneapi::experimental::group_with_scratchpad(
-                cta, sycl::span<std::byte>(scratch.get_multi_ptr<sycl::access::decorated::no>().get(), scratch.size()));
-            
-            // Initialize indices - each thread handles a portion
             if (fill_indices) {
                 for (int i = tid; i < n; i += bdim) {
-                    batch_indices[i] = i;
+                    local_indices[i] = static_cast<K>(i);
+                    local_values[i] = data(i, bid);
+                }
+            } else {
+                for (int i = tid; i < n; i += bdim) {
+                    local_indices[i] = batch_indices[i];
+                    local_values[i] = data(local_indices[i], bid);
                 }
             }
-            
             sycl::group_barrier(cta);
-            
-            // Use joint_sort with a custom comparator that also swaps indices
-            // Only one thread needs to start the sort
-            
-            sycl::ext::oneapi::experimental::joint_sort(
-                group_helper, 
-                batch_indices, 
-                batch_indices + n,
-                [data, order, bid](auto idx_a, auto idx_b) {
-                    // Sort by value in ascending order
-                    if (order == SortOrder::Descending) {
-                        return data(idx_a, bid) > data(idx_b, bid);
-                    } else {
-                        return data(idx_a, bid) < data(idx_b, bid);
+
+            auto should_swap = [&](int lhs, int rhs) {
+                const auto left = local_values[lhs];
+                const auto right = local_values[rhs];
+                if (order == SortOrder::Descending) {
+                    if (left < right) return true;
+                    if (right < left) return false;
+                } else {
+                    if (right < left) return true;
+                    if (left < right) return false;
+                }
+                return local_indices[rhs] < local_indices[lhs];
+            };
+
+            for (int pass = 0; pass < n; ++pass) {
+                const int start = pass & 1;
+                for (int i = start + 2 * tid; i + 1 < n; i += 2 * bdim) {
+                    if (should_swap(i, i + 1)) {
+                        auto tmp_index = local_indices[i];
+                        local_indices[i] = local_indices[i + 1];
+                        local_indices[i + 1] = tmp_index;
+
+                        auto tmp_value = local_values[i];
+                        local_values[i] = local_values[i + 1];
+                        local_values[i + 1] = tmp_value;
                     }
                 }
-            );
+                sycl::group_barrier(cta);
+            }
+
+            for (int i = tid; i < n; i += bdim) {
+                batch_indices[i] = local_indices[i];
+            }
         });
     });
     return ctx.get_event();
