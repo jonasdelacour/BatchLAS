@@ -43,6 +43,8 @@ set(BENCHMARK_TARGETS
     sytrd_blocked_benchmark
     sytrd_sy2sb_benchmark
     sytrd_sb2st_benchmark
+    cusolverdx_heev_benchmark
+    cusolverdx_htev_benchmark
 )
 
 foreach(test ${BENCHMARK_TARGETS})

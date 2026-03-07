@@ -19,6 +19,8 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
         cublas.cc
         cusparse.cc
         cusolver.cc
+        cusolverdx.cc
+        cusolverdx_kernels.cu
     )
 endif()
 
