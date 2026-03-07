@@ -1,6 +1,7 @@
 # Partition the library into small, independent chunks (OBJECT libs)
 # to speed up incremental compilation.
 add_library(batchlas_core_obj OBJECT
+    csr_generators.cc
     linalg-impl.hh
     matrix.cc
     #util/sycl-util-impl.cc
@@ -84,9 +85,9 @@ if(BATCHLAS_ENABLE_SYCL)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}")
         foreach(_lib ${BATCHLAS_OBJECT_LIBS})
             if(_lib STREQUAL "batchlas_extensions_cta_obj" AND BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
-                target_compile_options(${_lib} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING})
+                target_compile_options(${_lib} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}>)
             else()
-                target_compile_options(${_lib} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
+                target_compile_options(${_lib} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}>)
             endif()
         endforeach()
         target_link_options(batchlas PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
