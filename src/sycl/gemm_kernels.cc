@@ -1,7 +1,9 @@
 #include "gemm_kernels.hh"
 
 #include "gemm/accessors.hh"
+#include "gemm/persistent.hh"
 #include "gemm/register_launchers.hh"
+#include "gemm/split_k.hh"
 #include "gemm/tiled_general.hh"
 
 #include "../linalg-impl.hh"
@@ -32,6 +34,8 @@ inline bool experimental_kernel_variants_enabled() {
 
 inline bool is_experimental_kernel_variant(KernelVariant variant) {
     switch (variant) {
+    case KernelVariant::Tiled128x32RegisterK32Persistent:
+    case KernelVariant::Tiled128x32RegisterK32SplitK4:
     case KernelVariant::Tiled128x32RegisterK32S1U4:
         return true;
     default:
@@ -41,6 +45,16 @@ inline bool is_experimental_kernel_variant(KernelVariant variant) {
 
 inline bool has_forced_kernel_variant();
 
+inline bool is_squareish_shape(int m, int n, int k) {
+    const int max_dim = std::max({m, n, k});
+    const int min_dim = std::min({m, n, k});
+    return min_dim * 2 >= max_dim;
+}
+
+inline bool is_large_square_bucket(int m, int n, int k) {
+    return is_squareish_shape(m, n, k) && std::min({m, n, k}) >= 512;
+}
+
 template <typename T>
 KernelVariant choose_runtime_kernel_variant(const Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -48,34 +62,10 @@ KernelVariant choose_runtime_kernel_variant(const Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& C,
                                            Transpose transA,
                                            Transpose transB) {
+    static_cast<void>(ctx);
     const KernelVariant selected = select_kernel_variant(A, B, C, transA, transB);
     if (has_forced_kernel_variant()) {
         return selected;
-    }
-
-    if constexpr (std::is_same_v<T, float>) {
-        if (ctx.device().type == DeviceType::GPU && ctx.device().get_vendor() == Vendor::NVIDIA) {
-            const auto [m, k] = get_effective_dims(A, transA);
-            const auto [k_b, n] = get_effective_dims(B, transB);
-            static_cast<void>(k_b);
-
-            if (transA == Transpose::NoTrans && transB == Transpose::NoTrans && m >= 512 && n >= 512 && k >= 512) {
-                return KernelVariant::Tiled128x64RegisterK32Large;
-            }
-
-            switch (selected) {
-            case KernelVariant::Tiled128x32RegisterK32:
-                return KernelVariant::Tiled128x32RegisterK16;
-            case KernelVariant::Tiled128x32RegisterK32TN:
-                return KernelVariant::Tiled128x32RegisterK16TN;
-            case KernelVariant::Tiled128x32RegisterK32NT:
-                return KernelVariant::Tiled128x32RegisterK16NT;
-            case KernelVariant::Tiled128x32RegisterK32TT:
-                return KernelVariant::Tiled128x32RegisterK16TT;
-            default:
-                break;
-            }
-        }
     }
 
     return selected;
@@ -135,10 +125,24 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_128x64_k16_tt";
     case KernelVariant::Tiled128x32RegisterK32:
         return "gemm_sycl_register_128x32_k32";
+    case KernelVariant::Tiled128x32RegisterK32S1U1:
+        return "gemm_sycl_register_128x32_k32_s1_u1";
     case KernelVariant::Tiled128x32RegisterK32S2U1:
         return "gemm_sycl_register_128x32_k32_s2_u1";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
+        return "gemm_sycl_register_128x32_k32_s2_u1_aligned";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
+        return "gemm_sycl_register_128x32_k32_s2_u1_generic";
     case KernelVariant::Tiled128x32RegisterK32S2U2:
         return "gemm_sycl_register_128x32_k32_s2_u2";
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
+        return "gemm_sycl_register_128x32_k32_s2_u2_tt8x4";
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
+        return "gemm_sycl_register_128x32_k32_s2_u2_tt4x8";
+    case KernelVariant::Tiled128x32RegisterK32Persistent:
+        return "gemm_sycl_register_128x32_k32_persistent";
+    case KernelVariant::Tiled128x32RegisterK32SplitK4:
+        return "gemm_sycl_register_128x32_k32_splitk4";
     case KernelVariant::Tiled128x32RegisterK32S1U4:
         return "gemm_sycl_register_128x32_k32_s1_u4";
     case KernelVariant::Tiled128x64RegisterK32Large:
@@ -181,11 +185,14 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
     case KernelVariant::Tiled128x32RegisterK16TT:
         return name == "register128x32k16tt" || name == "reg128x32k16tt" || name == "128x32x16tt";
     case KernelVariant::Tiled128x32RegisterK32TN:
-        return name == "register128x32k32tn" || name == "reg128x32k32tn" || name == "128x32x32tn";
+        return name == "register128x32k32tn" || name == "reg128x32k32tn" || name == "128x32x32tn" ||
+            name == "128x32x32_s2_u1_tn";
     case KernelVariant::Tiled128x32RegisterK32NT:
-        return name == "register128x32k32nt" || name == "reg128x32k32nt" || name == "128x32x32nt";
+        return name == "register128x32k32nt" || name == "reg128x32k32nt" || name == "128x32x32nt" ||
+            name == "128x32x32_s2_u1_nt";
     case KernelVariant::Tiled128x32RegisterK32TT:
-        return name == "register128x32k32tt" || name == "reg128x32k32tt" || name == "128x32x32tt";
+        return name == "register128x32k32tt" || name == "reg128x32k32tt" || name == "128x32x32tt" ||
+            name == "128x32x32_s2_u1_tt";
     case KernelVariant::Tiled128x64RegisterK16TN:
         return name == "register128x64k16tn" || name == "reg128x64k16tn" || name == "128x64x16tn";
     case KernelVariant::Tiled128x64RegisterK16NT:
@@ -193,11 +200,32 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
     case KernelVariant::Tiled128x64RegisterK16TT:
         return name == "register128x64k16tt" || name == "reg128x64k16tt" || name == "128x64x16tt";
     case KernelVariant::Tiled128x32RegisterK32:
-        return name == "register128x32k32" || name == "reg128x32k32" || name == "128x32x32";
+        return false;
+    case KernelVariant::Tiled128x32RegisterK32S1U1:
+        return name == "register128x32k32s1u1" || name == "reg128x32k32s1u1" || name == "128x32x32_s1_u1";
     case KernelVariant::Tiled128x32RegisterK32S2U1:
-        return name == "register128x32k32s2u1" || name == "reg128x32k32s2u1" || name == "128x32x32_s2_u1";
+        return name == "register128x32k32" || name == "reg128x32k32" || name == "128x32x32" ||
+            name == "register128x32k32s2u1" || name == "reg128x32k32s2u1" || name == "128x32x32_s2_u1";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
+        return name == "register128x32k32s2u1aligned" || name == "reg128x32k32s2u1aligned" ||
+            name == "128x32x32_s2_u1_aligned";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
+        return name == "register128x32k32s2u1generic" || name == "reg128x32k32s2u1generic" ||
+            name == "128x32x32_s2_u1_generic";
     case KernelVariant::Tiled128x32RegisterK32S2U2:
         return name == "register128x32k32s2u2" || name == "reg128x32k32s2u2" || name == "128x32x32_s2_u2";
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
+        return name == "register128x32k32s2u2tt8x4" || name == "reg128x32k32s2u2tt8x4" ||
+            name == "128x32x32_s2_u2_tt8x4";
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
+        return name == "register128x32k32s2u2tt4x8" || name == "reg128x32k32s2u2tt4x8" ||
+            name == "128x32x32_s2_u2_tt4x8";
+    case KernelVariant::Tiled128x32RegisterK32Persistent:
+        return name == "register128x32k32persistent" || name == "reg128x32k32persistent" ||
+            name == "128x32x32_persistent";
+    case KernelVariant::Tiled128x32RegisterK32SplitK4:
+        return name == "register128x32k32splitk4" || name == "reg128x32k32splitk4" ||
+            name == "128x32x32_splitk4";
     case KernelVariant::Tiled128x32RegisterK32S1U4:
         return name == "register128x32k32s1u4" || name == "reg128x32k32s1u4" || name == "reg128x32k32u4" ||
             name == "128x32x32_s1_u4";
@@ -244,8 +272,15 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled128x64RegisterK16NT,
                                   KernelVariant::Tiled128x64RegisterK16TT,
                                   KernelVariant::Tiled128x32RegisterK32,
+                                  KernelVariant::Tiled128x32RegisterK32S1U1,
                                   KernelVariant::Tiled128x32RegisterK32S2U1,
+                                  KernelVariant::Tiled128x32RegisterK32S2U1Aligned,
+                                  KernelVariant::Tiled128x32RegisterK32S2U1Generic,
                                   KernelVariant::Tiled128x32RegisterK32S2U2,
+                                  KernelVariant::Tiled128x32RegisterK32S2U2TT8x4,
+                                  KernelVariant::Tiled128x32RegisterK32S2U2TT4x8,
+                                  KernelVariant::Tiled128x32RegisterK32Persistent,
+                                  KernelVariant::Tiled128x32RegisterK32SplitK4,
                                   KernelVariant::Tiled128x32RegisterK32S1U4,
                                   KernelVariant::Tiled128x64RegisterK32Large,
                                   KernelVariant::Tiled32x128RegisterK16,
@@ -401,8 +436,16 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
     if constexpr (std::is_same_v<T, float>) {
+        if (m >= 128 && n >= 128 && k >= 128 && is_squareish_shape(m, n, k)) {
+            if (can_use_aligned_nn_fast_path<T, 128, 32, 32, 4, 4>(A, B, C)) {
+                return is_large_square_bucket(m, n, k)
+                    ? KernelVariant::Tiled128x32RegisterK32S2U2
+                    : KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
+            }
+            return KernelVariant::Tiled128x32RegisterK32S2U1Generic;
+        }
         if (m >= 128 && n >= 32 && k >= 128) {
-            return KernelVariant::Tiled128x32RegisterK32;
+            return KernelVariant::Tiled128x32RegisterK16;
         }
         if (n >= 128 && m >= 32 && k >= 128) {
             return KernelVariant::Tiled32x128RegisterK16;
@@ -501,10 +544,24 @@ Event gemm_custom(Queue& ctx,
         return launch_register_128x64_k16_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK32:
         return launch_register_128x32_k32(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32S1U1:
+        return launch_register_128x32_k32_s1_u1(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK32S2U1:
         return launch_register_128x32_k32_s2_u1(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
+        return launch_register_128x32_k32_s2_u1_aligned(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
+        return launch_register_128x32_k32_s2_u1_generic(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK32S2U2:
         return launch_register_128x32_k32_s2_u2(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
+        return launch_register_128x32_k32_s2_u2_tt8x4(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
+        return launch_register_128x32_k32_s2_u2_tt4x8(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32Persistent:
+        return launch_register_128x32_k32_persistent(ctx, A, B, C, alpha, beta, transA, transB, kernel_trace_name);
+    case KernelVariant::Tiled128x32RegisterK32SplitK4:
+        return launch_register_128x32_k32_split_k4(ctx, A, B, C, alpha, beta, transA, transB, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK32S1U4:
         return launch_register_128x32_k32_s1_u4(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x64RegisterK32Large:

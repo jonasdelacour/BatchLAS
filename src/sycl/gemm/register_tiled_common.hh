@@ -22,6 +22,7 @@ template <typename T,
           int VecB,
           int UnrollK,
           int Stages,
+          bool AlignedFastPath,
           Transpose OpA,
           Transpose OpB>
 class GemmRegisterTiledKernel;
@@ -59,6 +60,32 @@ struct RegisterTilePolicy {
     static constexpr int StageBSize = TileBStride * TileN;
 };
 
+template <typename T>
+inline bool is_contiguous_dense_matrix(const MatrixView<T, MatrixFormat::Dense>& M) {
+    return M.ld() == M.rows() && M.stride() == M.ld() * M.cols();
+}
+
+template <typename T, int TileM, int TileN, int TileK, int VecA, int VecB>
+inline bool can_use_aligned_nn_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
+                                         const MatrixView<T, MatrixFormat::Dense>& B,
+                                         const MatrixView<T, MatrixFormat::Dense>& C) {
+    if constexpr (!supports_packet_v<T, VecA> || !supports_packet_v<T, VecB>) {
+        static_cast<void>(A);
+        static_cast<void>(B);
+        static_cast<void>(C);
+        return false;
+    } else {
+        return (A.rows() % TileM) == 0 &&
+            (B.cols() % TileN) == 0 &&
+            (A.cols() % TileK) == 0 &&
+            is_contiguous_dense_matrix(A) &&
+            is_contiguous_dense_matrix(B) &&
+            is_contiguous_dense_matrix(C) &&
+            supports_aligned_packet_loads<T, VecA>(A.data_ptr(), A.ld(), A.stride()) &&
+            supports_aligned_packet_loads<T, VecB>(B.data_ptr(), B.ld(), B.stride());
+    }
+}
+
 template <int TileM,
           int TileN,
           int TileK,
@@ -68,6 +95,7 @@ template <int TileM,
           int VecB,
           int UnrollK,
           int Stages,
+          bool AlignedFastPath,
           Transpose OpA,
           Transpose OpB>
 constexpr KernelVariant register_kernel_variant() {
@@ -75,11 +103,23 @@ constexpr KernelVariant register_kernel_variant() {
         return KernelVariant::Tiled128x64RegisterK32Large;
     }
     if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
-        if constexpr (Stages == 2 && UnrollK == 1) {
-            return KernelVariant::Tiled128x32RegisterK32S2U1;
+        if constexpr (Stages == 1 && UnrollK == 1 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
+            return KernelVariant::Tiled128x32RegisterK32S1U1;
         }
-        if constexpr (Stages == 2 && UnrollK == 2) {
+        if constexpr (Stages == 2 && UnrollK == 1 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
+            if constexpr (AlignedFastPath) {
+                return KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
+            }
+            return KernelVariant::Tiled128x32RegisterK32S2U1Generic;
+        }
+        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
             return KernelVariant::Tiled128x32RegisterK32S2U2;
+        }
+        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 8 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
+            return KernelVariant::Tiled128x32RegisterK32S2U2TT8x4;
+        }
+        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 4 && ThreadTileCols == 8 && VecA == 4 && VecB == 4) {
+            return KernelVariant::Tiled128x32RegisterK32S2U2TT4x8;
         }
         if constexpr (Stages == 1 && UnrollK == 4) {
             return KernelVariant::Tiled128x32RegisterK32S1U4;
@@ -159,6 +199,7 @@ template <typename T,
           int VecB = 4,
           int UnrollK = 1,
           int Stages = 1,
+          bool AlignedFastPath = false,
           Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans>
 Event launch_register_tiled(Queue& ctx,
@@ -171,7 +212,7 @@ Event launch_register_tiled(Queue& ctx,
     using Policy = RegisterTilePolicy<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages>;
 
     BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(
-        register_kernel_variant<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, OpA, OpB>()));
+        register_kernel_variant<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>()));
 
     static_assert(TileM % ThreadTileRows == 0, "TileM must divide evenly by ThreadTileRows");
     static_assert(TileN % ThreadTileCols == 0, "TileN must divide evenly by ThreadTileCols");
@@ -181,17 +222,22 @@ Event launch_register_tiled(Queue& ctx,
     static_assert(TileN % VecB == 0 && TileK % VecB == 0, "VecB must divide TileN and TileK");
     static_assert(UnrollK >= 1, "UnrollK must be positive");
     static_assert(Stages >= 1, "Stages must be positive");
+    static_assert(Stages <= 2, "Register-tiled GEMM only supports one-stage and two-stage pipelines");
+    static_assert(!AlignedFastPath || (OpA == Transpose::NoTrans && OpB == Transpose::NoTrans),
+                  "Aligned fast path is only supported for NN kernels");
 
     const auto [m, k] = get_effective_dims(A, OpA);
     const auto [_, n] = get_effective_dims(B, OpB);
     static_cast<void>(_);
-    const bool use_packet_a = supports_aligned_packet_loads<T, VecA>(A.data_ptr(), A.ld(), A.stride());
-    const bool use_packet_b = supports_aligned_packet_loads<T, VecB>(B.data_ptr(), B.ld(), B.stride());
+    const bool use_packet_a = AlignedFastPath ? true : supports_aligned_packet_loads<T, VecA>(A.data_ptr(), A.ld(), A.stride());
+    const bool use_packet_b = AlignedFastPath ? true : supports_aligned_packet_loads<T, VecB>(B.data_ptr(), B.ld(), B.stride());
 
     const sycl::range<3> local(1, Policy::LocalRows, Policy::LocalCols);
+    const int group_rows = AlignedFastPath ? (m / TileM) : register_ceil_div<T>(m, TileM);
+    const int group_cols = AlignedFastPath ? (n / TileN) : register_ceil_div<T>(n, TileN);
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()),
-                                static_cast<size_t>(register_ceil_div<T>(m, TileM) * Policy::LocalRows),
-                                static_cast<size_t>(register_ceil_div<T>(n, TileN) * Policy::LocalCols));
+                                static_cast<size_t>(group_rows * Policy::LocalRows),
+                                static_cast<size_t>(group_cols * Policy::LocalCols));
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Policy::Stages * Policy::StageASize), h);
@@ -211,7 +257,7 @@ Event launch_register_tiled(Queue& ctx,
         const bool packet_b = use_packet_b;
 
         h.parallel_for<
-            GemmRegisterTiledKernel<T, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, OpA, OpB>>(
+            GemmRegisterTiledKernel<T, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>>(
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 const int local_row = static_cast<int>(item.get_local_id(1));
@@ -237,6 +283,37 @@ Event launch_register_tiled(Queue& ctx,
                 auto load_stage = [&](int kk0, int stage) {
                     T* tile_a_stage = &tile_a[stage * Policy::StageASize];
                     T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
+
+                    if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
+                        constexpr int APacketsPerCol = TileM / VecA;
+                        constexpr int APacketCount = APacketsPerCol * TileK;
+                        for (int packet = linear_tid; packet < APacketCount; packet += Policy::ThreadsPerGroup) {
+                            const int a_row = (packet % APacketsPerCol) * VecA;
+                            const int a_col = packet / APacketsPerCol;
+                            const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
+                            const int logical_a_col = kk0 + a_col;
+                            const int base = batch_a + logical_a_col * lda + logical_a_row;
+                            const auto packet_values = packet_load_aligned<T, VecA>(a_ptr, base);
+                            for (int lane = 0; lane < VecA; ++lane) {
+                                tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = packet_values[lane];
+                            }
+                        }
+
+                        constexpr int BPacketsPerCol = TileK / VecB;
+                        constexpr int BPacketCount = TileN * BPacketsPerCol;
+                        for (int packet = linear_tid; packet < BPacketCount; packet += Policy::ThreadsPerGroup) {
+                            const int b_row = (packet % BPacketsPerCol) * VecB;
+                            const int b_col = packet / BPacketsPerCol;
+                            const int logical_b_row = kk0 + b_row;
+                            const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
+                            const int base = batch_b + logical_b_col * ldb + logical_b_row;
+                            const auto packet_values = packet_load_aligned<T, VecB>(b_ptr, base);
+                            for (int lane = 0; lane < VecB; ++lane) {
+                                tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = packet_values[lane];
+                            }
+                        }
+                        return;
+                    }
 
                     if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
                         if (packet_a) {
@@ -381,56 +458,98 @@ Event launch_register_tiled(Queue& ctx,
                     }
                 };
 
-                const int tile_count = register_ceil_div<T>(k, TileK);
-                load_stage(0, 0);
-                item.barrier(sycl::access::fence_space::local_space);
-
-                for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
-                    const int kk0 = tile_idx * TileK;
-                    const int current_stage = tile_idx % Policy::Stages;
-                    const int next_tile_idx = tile_idx + 1;
-
-                    if constexpr (Policy::Stages > 1) {
-                        if (next_tile_idx < tile_count) {
-                            load_stage(next_tile_idx * TileK, next_tile_idx % Policy::Stages);
-                        }
-                    }
-
-                    T* tile_a_stage = &tile_a[current_stage * Policy::StageASize];
-                    T* tile_b_stage = &tile_b[current_stage * Policy::StageBSize];
-
-                    for (int t0 = 0; t0 < TileK && kk0 + t0 < k; t0 += UnrollK) {
-                        for (int unroll = 0; unroll < UnrollK && t0 + unroll < TileK && kk0 + t0 + unroll < k; ++unroll) {
-                            const int t = t0 + unroll;
-                            T a_frag[ThreadTileRows];
-                            T b_frag[ThreadTileCols];
-                            for (int i = 0; i < ThreadTileRows; ++i) {
-                                a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
-                            }
-                            for (int j = 0; j < ThreadTileCols; ++j) {
-                                b_frag[j] = tile_b_stage[(local_col * ThreadTileCols + j) * Policy::TileBStride + t];
-                            }
-                            for (int i = 0; i < ThreadTileRows; ++i) {
+                auto accumulate_stage = [&](const T* tile_a_stage, const T* tile_b_stage, int kk0) {
+                    if constexpr (AlignedFastPath) {
+                        for (int t0 = 0; t0 < TileK; t0 += UnrollK) {
+                            for (int unroll = 0; unroll < UnrollK; ++unroll) {
+                                const int t = t0 + unroll;
+                                T a_frag[ThreadTileRows];
+                                T b_frag[ThreadTileCols];
+                                for (int i = 0; i < ThreadTileRows; ++i) {
+                                    a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
+                                }
                                 for (int j = 0; j < ThreadTileCols; ++j) {
-                                    accum[i][j] += a_frag[i] * b_frag[j];
+                                    b_frag[j] = tile_b_stage[(local_col * ThreadTileCols + j) * Policy::TileBStride + t];
+                                }
+                                for (int i = 0; i < ThreadTileRows; ++i) {
+                                    for (int j = 0; j < ThreadTileCols; ++j) {
+                                        accum[i][j] += a_frag[i] * b_frag[j];
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        for (int t0 = 0; t0 < TileK && kk0 + t0 < k; t0 += UnrollK) {
+                            for (int unroll = 0; unroll < UnrollK && t0 + unroll < TileK && kk0 + t0 + unroll < k; ++unroll) {
+                                const int t = t0 + unroll;
+                                T a_frag[ThreadTileRows];
+                                T b_frag[ThreadTileCols];
+                                for (int i = 0; i < ThreadTileRows; ++i) {
+                                    a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
+                                }
+                                for (int j = 0; j < ThreadTileCols; ++j) {
+                                    b_frag[j] = tile_b_stage[(local_col * ThreadTileCols + j) * Policy::TileBStride + t];
+                                }
+                                for (int i = 0; i < ThreadTileRows; ++i) {
+                                    for (int j = 0; j < ThreadTileCols; ++j) {
+                                        accum[i][j] += a_frag[i] * b_frag[j];
+                                    }
                                 }
                             }
                         }
                     }
+                };
 
+                const int tile_count = AlignedFastPath ? (k / TileK) : register_ceil_div<T>(k, TileK);
+                if constexpr (Policy::Stages == 1) {
+                    for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
+                        const int kk0 = tile_idx * TileK;
+                        load_stage(kk0, 0);
+                        item.barrier(sycl::access::fence_space::local_space);
+                        accumulate_stage(&tile_a[0], &tile_b[0], kk0);
+                        item.barrier(sycl::access::fence_space::local_space);
+                    }
+                } else {
+                    load_stage(0, 0);
                     item.barrier(sycl::access::fence_space::local_space);
+
+                    for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
+                        const int kk0 = tile_idx * TileK;
+                        const int current_stage = tile_idx & 1;
+                        const int next_tile_idx = tile_idx + 1;
+
+                        if (next_tile_idx < tile_count) {
+                            load_stage(next_tile_idx * TileK, current_stage ^ 1);
+                        }
+
+                        accumulate_stage(&tile_a[current_stage * Policy::StageASize],
+                                         &tile_b[current_stage * Policy::StageBSize],
+                                         kk0);
+                        item.barrier(sycl::access::fence_space::local_space);
+                    }
                 }
 
-                for (int i = 0; i < ThreadTileRows; ++i) {
-                    const int row = row_base + i;
-                    if (row >= m) {
-                        continue;
-                    }
-                    for (int j = 0; j < ThreadTileCols; ++j) {
-                        const int col = col_base + j;
-                        if (col < n) {
+                if constexpr (AlignedFastPath) {
+                    for (int i = 0; i < ThreadTileRows; ++i) {
+                        const int row = row_base + i;
+                        for (int j = 0; j < ThreadTileCols; ++j) {
+                            const int col = col_base + j;
                             const T prior = c_ptr[batch_c + col * ldc + row];
                             c_ptr[batch_c + col * ldc + row] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < ThreadTileRows; ++i) {
+                        const int row = row_base + i;
+                        if (row >= m) {
+                            continue;
+                        }
+                        for (int j = 0; j < ThreadTileCols; ++j) {
+                            const int col = col_base + j;
+                            if (col < n) {
+                                const T prior = c_ptr[batch_c + col * ldc + row];
+                                c_ptr[batch_c + col * ldc + row] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                            }
                         }
                     }
                 }

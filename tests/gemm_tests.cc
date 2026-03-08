@@ -9,14 +9,7 @@
 #include <cstdlib>
 #include <string>
 
-#include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
-#include <sycl/sycl.hpp>
-#include <iostream>
-#include <vector>
-#include <cmath>
-#include <type_traits>
+#include "../src/sycl/gemm_kernels.hh"
 #include "test_utils.hh"
 
 using namespace batchlas;
@@ -115,6 +108,65 @@ template <typename T>
     return ::testing::AssertionSuccess();
 }
 
+template <typename ScalarType, Backend BackendType>
+void RunForcedSyclGemmKernelCompare(Queue& ctx,
+                                    const char* kernel_name,
+                                    int m,
+                                    int n,
+                                    int k,
+                                    int batch_size,
+                                    Transpose transA,
+                                    Transpose transB,
+                                    typename batchlas::base_type<ScalarType>::type tol_scale = 75) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+
+    auto A = Matrix<ScalarType>::Random(a_rows, a_cols, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(b_rows, b_cols, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
+        gemm<BackendType>(ctx, A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          transA, transB, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(ctx, A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          transA, transB, ComputePrecision::Default);
+    }
+
+    ctx.wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * tol_scale;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTest(int m,
+                                                                  int n,
+                                                                  int k,
+                                                                  Transpose transA,
+                                                                  Transpose transB,
+                                                                  int a_ld = 0,
+                                                                  int b_ld = 0,
+                                                                  int c_ld = 0) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+
+    Matrix<float> A(a_rows, a_cols, 1, a_ld);
+    Matrix<float> B(b_rows, b_cols, 1, b_ld);
+    Matrix<float> C(m, n, 1, c_ld);
+
+    return batchlas::sycl_gemm::select_kernel_variant<float>(A.view(), B.view(), C.view(), transA, transB);
+}
+
 } // namespace
 
 template <typename T, Backend B>
@@ -179,6 +231,36 @@ protected:
 };
 
 TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
+
+TEST(GemmDispatchPolicyTest, SelectsAlignedS2U1ForSmallSquareFloatNN) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(128, 128, 128, Transpose::NoTrans, Transpose::NoTrans),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Aligned);
+}
+
+TEST(GemmDispatchPolicyTest, SelectsAlignedS2U1ForMediumSquareFloatNN) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Aligned);
+}
+
+TEST(GemmDispatchPolicyTest, SelectsS2U2ForLargeSquareFloatNN) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(512, 512, 512, Transpose::NoTrans, Transpose::NoTrans),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U2);
+}
+
+TEST(GemmDispatchPolicyTest, SelectsGenericS2U1ForMisalignedSquareFloatNN) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 272),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Generic);
+}
+
+TEST(GemmDispatchPolicyTest, KeepsTransposeHeavyCasesOnK32TransposeAlias) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 128, 256, Transpose::Trans, Transpose::NoTrans),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32TN);
+}
+
+TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(512, 64, 512, Transpose::NoTrans, Transpose::NoTrans),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
+}
 
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
@@ -476,6 +558,120 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2Kernel) {
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
 }
 
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S1U1Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s1_u1 SYCL register kernel is only selected for float in this slice";
+    }
+
+    if constexpr (BackendType == Backend::CUDA) {
+        GTEST_SKIP() << "128x32x32_s1_u1 is experimental-only until the single-stage K32 path is correct on CUDA";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s1_u1",
+                                                            128, 128, 128, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1AlignedKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u1_aligned SYCL register kernel is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_aligned",
+                                                            128, 128, 128, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1GenericKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u1_generic SYCL register kernel is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_generic",
+                                                            130, 96, 130, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans,
+                                                            100);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1LegacyAliasGenericFallback) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u1 legacy alias is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1",
+                                                            130, 96, 130, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans,
+                                                            100);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2TT8x4Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u2_tt8x4 SYCL register kernel is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u2_tt8x4",
+                                                            128, 128, 128, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2TT4x8Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u2_tt4x8 SYCL register kernel is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u2_tt4x8",
+                                                            128, 128, 128, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32PersistentKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_persistent SYCL register kernel is only selected for float in this slice";
+    }
+
+    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_persistent",
+                                                            256, 256, 256, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans,
+                                                            100);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32SplitK4Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_splitk4 SYCL register kernel is only selected for float in this slice";
+    }
+
+    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_splitk4",
+                                                            256, 256, 256, 2,
+                                                            Transpose::NoTrans, Transpose::NoTrans,
+                                                            100);
+}
+
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16Kernel) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
@@ -721,6 +917,19 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TNKernel) {
 
     auto tol = test_utils::tolerance<ScalarType>() * 75;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1TNCanonicalAlias) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u1_tn SYCL register kernel is only selected for float in this slice";
+    }
+
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_tn",
+                                                            128, 128, 128, 2,
+                                                            Transpose::Trans, Transpose::NoTrans);
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32NTKernel) {

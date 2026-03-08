@@ -25,9 +25,18 @@ enum class KernelVariant {
     Tiled128x64RegisterK16TN,
     Tiled128x64RegisterK16NT,
     Tiled128x64RegisterK16TT,
+    // Legacy alias kept for compatibility. The canonical 128x32x32 family
+    // names below carry the actual compile-time stage/unroll parameters.
     Tiled128x32RegisterK32,
+    Tiled128x32RegisterK32S1U1,
     Tiled128x32RegisterK32S2U1,
+    Tiled128x32RegisterK32S2U1Aligned,
+    Tiled128x32RegisterK32S2U1Generic,
     Tiled128x32RegisterK32S2U2,
+    Tiled128x32RegisterK32S2U2TT8x4,
+    Tiled128x32RegisterK32S2U2TT4x8,
+    Tiled128x32RegisterK32Persistent,
+    Tiled128x32RegisterK32SplitK4,
     Tiled128x32RegisterK32S1U4,
     Tiled128x64RegisterK32Large,
     Tiled32x128RegisterK16,
