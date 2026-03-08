@@ -80,7 +80,7 @@ inline bool gemm_use_sycl_custom(const Queue& ctx,
         return true;
     }
 
-    if (ctx.device().type != DeviceType::GPU || transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+    if (ctx.device().type != DeviceType::GPU) {
         return false;
     }
 
@@ -97,6 +97,12 @@ inline bool gemm_use_sycl_custom(const Queue& ctx,
     }
 
     if constexpr (std::is_same_v<T, float>) {
+        if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+            if (transA == Transpose::ConjTrans || transB == Transpose::ConjTrans) {
+                return false;
+            }
+            return A.batch_size() >= 128 && max_dim >= 128 && max_dim <= 512;
+        }
         if (max_dim <= 32) {
             return true;
         }

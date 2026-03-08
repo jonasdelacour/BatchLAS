@@ -48,6 +48,73 @@ private:
     std::string old_value_;
 };
 
+template <typename T>
+::testing::AssertionResult AssertBatchedBufferNear(const UnifiedVector<T>& actual,
+                                                   const UnifiedVector<T>& expected,
+                                                   size_t rows,
+                                                   size_t cols,
+                                                   size_t batch_size,
+                                                   typename batchlas::base_type<T>::type tol) {
+    for (size_t b = 0; b < batch_size; ++b) {
+        for (size_t row = 0; row < rows; ++row) {
+            for (size_t col = 0; col < cols; ++col) {
+                const size_t index = b * rows * cols + row * cols + col;
+                const auto actual_value = actual[index];
+                const auto expected_value = expected[index];
+                if constexpr (test_utils::is_complex<T>::value) {
+                    if (std::abs(actual_value.real() - expected_value.real()) > tol ||
+                        std::abs(actual_value.imag() - expected_value.imag()) > tol) {
+                        return ::testing::AssertionFailure()
+                               << "mismatch at batch=" << b << ", row=" << row << ", col=" << col
+                               << ": actual=" << actual_value << ", expected=" << expected_value << ", tol=" << tol;
+                    }
+                } else {
+                    if (std::abs(actual_value - expected_value) > tol) {
+                        return ::testing::AssertionFailure()
+                               << "mismatch at batch=" << b << ", row=" << row << ", col=" << col
+                               << ": actual=" << actual_value << ", expected=" << expected_value << ", tol=" << tol;
+                    }
+                }
+            }
+        }
+    }
+
+    return ::testing::AssertionSuccess();
+}
+
+template <typename T>
+::testing::AssertionResult AssertBatchedMatrixNear(const Matrix<T>& actual,
+                                                   const Matrix<T>& expected,
+                                                   int rows,
+                                                   int cols,
+                                                   int batch_size,
+                                                   typename batchlas::base_type<T>::type tol) {
+    for (int b = 0; b < batch_size; ++b) {
+        for (int col = 0; col < cols; ++col) {
+            for (int row = 0; row < rows; ++row) {
+                const auto actual_value = actual(row, col, b);
+                const auto expected_value = expected(row, col, b);
+                if constexpr (test_utils::is_complex<T>::value) {
+                    if (std::abs(actual_value.real() - expected_value.real()) > tol ||
+                        std::abs(actual_value.imag() - expected_value.imag()) > tol) {
+                        return ::testing::AssertionFailure()
+                               << "mismatch at batch=" << b << ", row=" << row << ", col=" << col
+                               << ": actual=" << actual_value << ", expected=" << expected_value << ", tol=" << tol;
+                    }
+                } else {
+                    if (std::abs(actual_value - expected_value) > tol) {
+                        return ::testing::AssertionFailure()
+                               << "mismatch at batch=" << b << ", row=" << row << ", col=" << col
+                               << ": actual=" << actual_value << ", expected=" << expected_value << ", tol=" << tol;
+                    }
+                }
+            }
+        }
+    }
+
+    return ::testing::AssertionSuccess();
+}
+
 } // namespace
 
 template <typename T, Backend B>
@@ -125,14 +192,11 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     // Perform C = A * B (which should equal A since B is identity)
     gemm<BackendType>(*(this->ctx), A_view, B_view, C_view, ScalarType(1.0), ScalarType(0.0),
                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
-    
+
     this->ctx->wait();
-    
-    // Verify result (C should be equal to A)
+
     auto tol = test_utils::tolerance<ScalarType>();
-    for (size_t i = 0; i < this->rows*this->cols; ++i) {
-        EXPECT_NEAR(std::real(this->C_data[i]), std::real(this->A_data[i]), tol) << "Mismatch at index " << i;
-    }
+    ASSERT_TRUE(AssertBatchedBufferNear(this->C_data, this->A_data, this->rows, this->cols, 1, tol));
 }
 
 // Test batched GEMM operation
@@ -151,14 +215,7 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>();
-    for (size_t b = 0; b < this->batch_size; ++b) {
-        for (size_t i = 0; i < this->rows; ++i) {
-            for (size_t j = 0; j < this->cols; ++j) {
-                test_utils::assert_near(this->C_data[b * this->rows * this->cols + i * this->cols + j],
-                            this->A_data[b * this->rows * this->cols + i * this->cols + j], tol);
-            }
-        }
-    }
+    ASSERT_TRUE(AssertBatchedBufferNear(this->C_data, this->A_data, this->rows, this->cols, this->batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
@@ -184,13 +241,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>() * 50;
-    for (int b = 0; b < batch_size; ++b) {
-        for (int col = 0; col < size; ++col) {
-            for (int row = 0; row < size; ++row) {
-                test_utils::assert_near(C(row, col, b), C_ref(row, col, b), tol);
-            }
-        }
-    }
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
@@ -219,13 +270,244 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>() * 75;
-    for (int b = 0; b < batch_size; ++b) {
-        for (int col = 0; col < size; ++col) {
-            for (int row = 0; row < size; ++row) {
-                test_utils::assert_near(C(row, col, b), C_ref(row, col, b), tol);
-            }
-        }
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "64x64 SYCL register kernel is only selected for float in this first slice";
     }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64K16Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "64x64x16 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64k16");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x16 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u1 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32s2u1");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32_s2_u2 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32s2u2");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16Kernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "32x128x16 SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 128;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
@@ -257,13 +539,444 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>() * 50;
-    for (int b = 0; b < batch_size; ++b) {
-        for (int col = 0; col < n; ++col) {
-            for (int row = 0; row < m; ++row) {
-                test_utils::assert_near(C(row, col, b), C_ref(row, col, b), tol);
-            }
-        }
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclTiledVariantLargeTransposed) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    constexpr int m = 96;
+    constexpr int n = 80;
+    constexpr int k = 64;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
     }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x16 TT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16tt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x16 TN SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16tn");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16NTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x16 NT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16nt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32 TN SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32tn");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32NTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32 NT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32nt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "32x128x16 TN SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16tn");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "32x128x16 TT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16tt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16TTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "64x64x16 TT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64k16tt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K16TTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x64x16 TT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k16tt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x32x32 TT SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int m = 128;
+    constexpr int n = 128;
+    constexpr int k = 128;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(n, k, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32tt");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 75;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x64x32 large SYCL register kernel is only selected for float in this slice";
+    }
+
+    constexpr int size = 256;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k32large");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
@@ -295,13 +1008,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>() * 50;
-    for (int b = 0; b < batch_size; ++b) {
-        for (int col = 0; col < n; ++col) {
-            for (int row = 0; row < m; ++row) {
-                test_utils::assert_near(C(row, col, b), C_ref(row, col, b), tol);
-            }
-        }
-    }
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
 int main(int argc, char **argv) {
