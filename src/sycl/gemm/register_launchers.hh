@@ -316,7 +316,56 @@ Event launch_register_128x64_k32_large(Queue& ctx,
                                        T alpha,
                                        T beta,
                                        const char* (*kernel_trace_name)(KernelVariant)) {
+    if (can_use_aligned_nn_fast_path<T, 128, 64, 32, 4, 4>(A, B, C)) {
+        return launch_register_tiled<T, 128, 64, 32, 8, 4, 4, 4, 4, 2, true>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name);
+    }
     return launch_register_tiled<T, 128, 64, 32, 8, 4, 4, 4, 4, 2>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+}
+
+template <typename T>
+Event launch_register_128x64_k32_large_u2(Queue& ctx,
+                                          const MatrixView<T, MatrixFormat::Dense>& A,
+                                          const MatrixView<T, MatrixFormat::Dense>& B,
+                                          const MatrixView<T, MatrixFormat::Dense>& C,
+                                          T alpha,
+                                          T beta,
+                                          const char* (*kernel_trace_name)(KernelVariant)) {
+    if (can_use_aligned_nn_fast_path<T, 128, 64, 32, 4, 4>(A, B, C)) {
+        return launch_register_tiled<T, 128, 64, 32, 8, 4, 4, 4, 2, 2, true>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name);
+    }
+    return launch_register_tiled<T, 128, 64, 32, 8, 4, 4, 4, 2, 2>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+}
+
+template <typename T>
+Event launch_register_128x64_k32_large_tt4x8(Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& B,
+                                             const MatrixView<T, MatrixFormat::Dense>& C,
+                                             T alpha,
+                                             T beta,
+                                             const char* (*kernel_trace_name)(KernelVariant)) {
+    if (can_use_aligned_nn_fast_path<T, 128, 64, 32, 4, 4>(A, B, C)) {
+        return launch_register_tiled<T, 128, 64, 32, 4, 8, 4, 4, 4, 2, true>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name);
+    }
+    return launch_register_tiled<T, 128, 64, 32, 4, 8, 4, 4, 4, 2>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+}
+
+template <typename T>
+Event launch_register_128x64_k32_large_tt4x8_u2(Queue& ctx,
+                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                                T alpha,
+                                                T beta,
+                                                const char* (*kernel_trace_name)(KernelVariant)) {
+    if (can_use_aligned_nn_fast_path<T, 128, 64, 32, 4, 4>(A, B, C)) {
+        return launch_register_tiled<T, 128, 64, 32, 4, 8, 4, 4, 2, 2, true>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name);
+    }
+    return launch_register_tiled<T, 128, 64, 32, 4, 8, 4, 4, 2, 2>(ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
 template <typename T>

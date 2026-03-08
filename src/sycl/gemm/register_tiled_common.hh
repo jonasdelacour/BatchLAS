@@ -100,7 +100,16 @@ template <int TileM,
           Transpose OpB>
 constexpr KernelVariant register_kernel_variant() {
     if constexpr (TileM == 128 && TileN == 64 && TileK == 32 && ThreadTileRows == 8 && ThreadTileCols == 4) {
+        if constexpr (UnrollK == 2 && Stages == 2) {
+            return KernelVariant::Tiled128x64RegisterK32LargeU2;
+        }
         return KernelVariant::Tiled128x64RegisterK32Large;
+    }
+    if constexpr (TileM == 128 && TileN == 64 && TileK == 32 && ThreadTileRows == 4 && ThreadTileCols == 8) {
+        if constexpr (UnrollK == 2 && Stages == 2) {
+            return KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2;
+        }
+        return KernelVariant::Tiled128x64RegisterK32LargeTT4x8;
     }
     if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
         if constexpr (Stages == 1 && UnrollK == 1 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {

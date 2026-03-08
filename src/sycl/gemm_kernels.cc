@@ -37,6 +37,8 @@ inline bool is_experimental_kernel_variant(KernelVariant variant) {
     case KernelVariant::Tiled128x32RegisterK32Persistent:
     case KernelVariant::Tiled128x32RegisterK32SplitK4:
     case KernelVariant::Tiled128x32RegisterK32S1U4:
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
         return true;
     default:
         return false;
@@ -52,7 +54,11 @@ inline bool is_squareish_shape(int m, int n, int k) {
 }
 
 inline bool is_large_square_bucket(int m, int n, int k) {
-    return is_squareish_shape(m, n, k) && std::min({m, n, k}) >= 512;
+    return is_squareish_shape(m, n, k) && std::max({m, n, k}) >= 512 && std::min({m, n, k}) >= 256;
+}
+
+inline bool is_full_512_square_bucket(int m, int n, int k) {
+    return std::min({m, n, k}) >= 512;
 }
 
 template <typename T>
@@ -147,6 +153,12 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_128x32_k32_s1_u4";
     case KernelVariant::Tiled128x64RegisterK32Large:
         return "gemm_sycl_register_128x64_k32_large";
+    case KernelVariant::Tiled128x64RegisterK32LargeU2:
+        return "gemm_sycl_register_128x64_k32_large_u2";
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
+        return "gemm_sycl_register_128x64_k32_large_tt4x8";
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
+        return "gemm_sycl_register_128x64_k32_large_tt4x8_u2";
     case KernelVariant::Tiled32x128RegisterK16:
         return "gemm_sycl_register_32x128_k16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -231,6 +243,14 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
             name == "128x32x32_s1_u4";
     case KernelVariant::Tiled128x64RegisterK32Large:
         return name == "register128x64k32large" || name == "reg128x64k32large" || name == "128x64x32large";
+    case KernelVariant::Tiled128x64RegisterK32LargeU2:
+        return name == "register128x64k32largeu2" || name == "reg128x64k32largeu2" || name == "128x64x32large_u2";
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
+        return name == "register128x64k32largett4x8" || name == "reg128x64k32largett4x8" ||
+            name == "128x64x32large_tt4x8";
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
+        return name == "register128x64k32largett4x8u2" || name == "reg128x64k32largett4x8u2" ||
+            name == "128x64x32large_tt4x8_u2";
     case KernelVariant::Tiled32x128RegisterK16:
         return name == "register32x128k16" || name == "reg32x128k16" || name == "32x128x16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -283,6 +303,9 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled128x32RegisterK32SplitK4,
                                   KernelVariant::Tiled128x32RegisterK32S1U4,
                                   KernelVariant::Tiled128x64RegisterK32Large,
+                                  KernelVariant::Tiled128x64RegisterK32LargeU2,
+                                  KernelVariant::Tiled128x64RegisterK32LargeTT4x8,
+                                  KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2,
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
                                   KernelVariant::Tiled32x128RegisterK16TT}) {
@@ -438,9 +461,12 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     if constexpr (std::is_same_v<T, float>) {
         if (m >= 128 && n >= 128 && k >= 128 && is_squareish_shape(m, n, k)) {
             if (can_use_aligned_nn_fast_path<T, 128, 32, 32, 4, 4>(A, B, C)) {
-                return is_large_square_bucket(m, n, k)
-                    ? KernelVariant::Tiled128x32RegisterK32S2U2
-                    : KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
+                if (is_large_square_bucket(m, n, k)) {
+                    return is_full_512_square_bucket(m, n, k)
+                        ? KernelVariant::Tiled128x64RegisterK32Large
+                        : KernelVariant::Tiled128x64RegisterK32LargeU2;
+                }
+                return KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
             }
             return KernelVariant::Tiled128x32RegisterK32S2U1Generic;
         }
@@ -566,6 +592,12 @@ Event gemm_custom(Queue& ctx,
         return launch_register_128x32_k32_s1_u4(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x64RegisterK32Large:
         return launch_register_128x64_k32_large(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x64RegisterK32LargeU2:
+        return launch_register_128x64_k32_large_u2(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
+        return launch_register_128x64_k32_large_tt4x8(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
+        return launch_register_128x64_k32_large_tt4x8_u2(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled32x128RegisterK16:
         return launch_register_32x128_k16(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled32x128RegisterK16TN:
