@@ -589,7 +589,18 @@ inline void write_csv(const std::string& path, const std::vector<Result>& result
 
 inline bool match_filter(const Benchmark& b,
                          const std::vector<std::string>& backends,
-                         const std::vector<std::string>& types) {
+                         const std::vector<std::string>& types,
+                         const std::vector<std::string>& names) {
+    if (!names.empty()) {
+        bool ok = false;
+        for (const auto& name : names) {
+            if (b.name.find(name) != std::string::npos) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return false;
+    }
     if (!backends.empty()) {
         bool ok = false;
         for (const auto& be : backends) {
@@ -630,7 +641,8 @@ inline bool match_filter(const Benchmark& b,
 inline int RunRegisteredBenchmarks(const Config& cfg = {},
                                    const std::string& csv_path = "",
                                    const std::vector<std::string>& backends = {},
-                                   const std::vector<std::string>& types = {}) {
+                                   const std::vector<std::string>& types = {},
+                                   const std::vector<std::string>& names = {}) {
     std::vector<Result> results;
     std::vector<std::string> metric_names;
     std::unordered_map<std::string, bool> metric_seen;
@@ -655,7 +667,7 @@ inline int RunRegisteredBenchmarks(const Config& cfg = {},
     };
 
     for (const auto& b : registry()) {
-        if (!match_filter(b, backends, types))
+        if (!match_filter(b, backends, types, names))
             continue;
         if (b.args_list.empty()) {
             auto r = run_benchmark(b, {}, cfg);
@@ -682,6 +694,7 @@ struct CliOptions {
     std::string csv_file;
     std::vector<std::string> backends;
     std::vector<std::string> types;
+    std::vector<std::string> names;
 };
 
 inline CliOptions ParseCommandLine(int argc, char** argv) {
@@ -707,6 +720,8 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             opt.backends = parse_list(s.substr(10));
         } else if (s.rfind("--type=", 0) == 0) {
             opt.types = parse_list(s.substr(7));
+        } else if (s.rfind("--name=", 0) == 0) {
+            opt.names = parse_list(s.substr(7));
         } else if (s == "--help" || s == "-h") {
             std::cout << "Usage: benchmark [options] [ARGS...]\n";
             std::cout << "Options:\n";
@@ -719,6 +734,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             std::cout << "  --csv=FILE           write results to CSV file\n";
             std::cout << "  --backend=LIST       comma separated backends to run\n";
             std::cout << "  --type=LIST          comma separated floating point types\n";
+            std::cout << "  --name=LIST          comma separated benchmark-name substrings to run\n";
             std::cout << "  ARGS can be integers, comma lists or start:end:num ranges\n";
             exit(0);
         } else {
@@ -753,7 +769,7 @@ inline int MiniBenchMain(int argc, char** argv) {
         }
     }
     return RunRegisteredBenchmarks(opts.cfg, opts.csv_file,
-                                   opts.backends, opts.types);
+                                   opts.backends, opts.types, opts.names);
 }
 
 #define MINI_BENCHMARK_MAIN()                          \
