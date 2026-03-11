@@ -9,8 +9,19 @@
 #include "../../linalg-impl.hh"
 
 #include <sycl/sycl.hpp>
+#include <utility>
 
 namespace batchlas::sycl_gemm {
+
+template <int Count, typename Fn, std::size_t... I>
+inline void static_for_impl(Fn&& fn, std::index_sequence<I...>) {
+    (fn(std::integral_constant<int, static_cast<int>(I)>{}), ...);
+}
+
+template <int Count, typename Fn>
+inline void static_for(Fn&& fn) {
+    static_for_impl<Count>(std::forward<Fn>(fn), std::make_index_sequence<Count>{});
+}
 
 template <typename T,
           int TileM,
@@ -282,6 +293,8 @@ Event launch_register_tiled(Queue& ctx,
                 const int batch_a = bid * stride_a;
                 const int batch_b = bid * stride_b;
                 const int batch_c = bid * stride_c;
+                const int group_row = static_cast<int>(item.get_group(1));
+                const int group_col = static_cast<int>(item.get_group(2));
                 T accum[ThreadTileRows][ThreadTileCols];
                 for (int i = 0; i < ThreadTileRows; ++i) {
                     for (int j = 0; j < ThreadTileCols; ++j) {
@@ -296,31 +309,41 @@ Event launch_register_tiled(Queue& ctx,
                     if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
                         constexpr int APacketsPerCol = TileM / VecA;
                         constexpr int APacketCount = APacketsPerCol * TileK;
-                        for (int packet = linear_tid; packet < APacketCount; packet += Policy::ThreadsPerGroup) {
-                            const int a_row = (packet % APacketsPerCol) * VecA;
-                            const int a_col = packet / APacketsPerCol;
-                            const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
-                            const int logical_a_col = kk0 + a_col;
-                            const int base = batch_a + logical_a_col * lda + logical_a_row;
-                            const auto packet_values = packet_load_aligned<T, VecA>(a_ptr, base);
-                            for (int lane = 0; lane < VecA; ++lane) {
-                                tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = packet_values[lane];
+                        constexpr int APacketIterations = (APacketCount + Policy::ThreadsPerGroup - 1) / Policy::ThreadsPerGroup;
+                        static_for<APacketIterations>([&](auto iter) {
+                            constexpr int iteration = iter;
+                            const int packet = linear_tid + iteration * Policy::ThreadsPerGroup;
+                            if (packet < APacketCount) {
+                                const int a_row = (packet % APacketsPerCol) * VecA;
+                                const int a_col = packet / APacketsPerCol;
+                                const int logical_a_row = group_row * TileM + a_row;
+                                const int logical_a_col = kk0 + a_col;
+                                const int base = batch_a + logical_a_col * lda + logical_a_row;
+                                const auto packet_values = packet_load_aligned<T, VecA>(a_ptr, base);
+                                for (int lane = 0; lane < VecA; ++lane) {
+                                    tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = packet_values[lane];
+                                }
                             }
-                        }
+                        });
 
                         constexpr int BPacketsPerCol = TileK / VecB;
                         constexpr int BPacketCount = TileN * BPacketsPerCol;
-                        for (int packet = linear_tid; packet < BPacketCount; packet += Policy::ThreadsPerGroup) {
-                            const int b_row = (packet % BPacketsPerCol) * VecB;
-                            const int b_col = packet / BPacketsPerCol;
-                            const int logical_b_row = kk0 + b_row;
-                            const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
-                            const int base = batch_b + logical_b_col * ldb + logical_b_row;
-                            const auto packet_values = packet_load_aligned<T, VecB>(b_ptr, base);
-                            for (int lane = 0; lane < VecB; ++lane) {
-                                tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = packet_values[lane];
+                        constexpr int BPacketIterations = (BPacketCount + Policy::ThreadsPerGroup - 1) / Policy::ThreadsPerGroup;
+                        static_for<BPacketIterations>([&](auto iter) {
+                            constexpr int iteration = iter;
+                            const int packet = linear_tid + iteration * Policy::ThreadsPerGroup;
+                            if (packet < BPacketCount) {
+                                const int b_row = (packet % BPacketsPerCol) * VecB;
+                                const int b_col = packet / BPacketsPerCol;
+                                const int logical_b_row = kk0 + b_row;
+                                const int logical_b_col = group_col * TileN + b_col;
+                                const int base = batch_b + logical_b_col * ldb + logical_b_row;
+                                const auto packet_values = packet_load_aligned<T, VecB>(b_ptr, base);
+                                for (int lane = 0; lane < VecB; ++lane) {
+                                    tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = packet_values[lane];
+                                }
                             }
-                        }
+                        });
                         return;
                     }
 
@@ -329,10 +352,11 @@ Event launch_register_tiled(Queue& ctx,
                             if constexpr (OpA == Transpose::NoTrans) {
                                 constexpr int PacketsPerCol = TileM / VecA;
                                 constexpr int PacketCount = PacketsPerCol * TileK;
+                                #pragma unroll 4
                                 for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
                                     const int a_row = (packet % PacketsPerCol) * VecA;
                                     const int a_col = packet / PacketsPerCol;
-                                    const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
+                                    const int logical_a_row = group_row * TileM + a_row;
                                     const int logical_a_col = kk0 + a_col;
                                     if (logical_a_row + (VecA - 1) < m && logical_a_col < k) {
                                         const int base = batch_a + logical_a_col * lda + logical_a_row;
@@ -352,10 +376,11 @@ Event launch_register_tiled(Queue& ctx,
                             } else {
                                 constexpr int PacketsPerRow = TileK / VecA;
                                 constexpr int PacketCount = TileM * PacketsPerRow;
+                                #pragma unroll 4
                                 for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
                                     const int a_row = packet / PacketsPerRow;
                                     const int a_col = (packet % PacketsPerRow) * VecA;
-                                    const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
+                                    const int logical_a_row = group_row * TileM + a_row;
                                     const int logical_a_col = kk0 + a_col;
                                     if (logical_a_row < m && logical_a_col + (VecA - 1) < k) {
                                         const int base = batch_a + logical_a_row * lda + logical_a_col;
@@ -377,7 +402,7 @@ Event launch_register_tiled(Queue& ctx,
                             for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
                                 const int a_row = index % TileM;
                                 const int a_col = index / TileM;
-                                const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
+                                const int logical_a_row = group_row * TileM + a_row;
                                 const int logical_a_col = kk0 + a_col;
                                 tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
                                     ? OperandAccessor<T, OpA>::load(a_ptr, lda, batch_a, logical_a_row, logical_a_col)
@@ -389,11 +414,12 @@ Event launch_register_tiled(Queue& ctx,
                             if constexpr (OpB == Transpose::NoTrans) {
                                 constexpr int PacketsPerCol = TileK / VecB;
                                 constexpr int PacketCount = TileN * PacketsPerCol;
+                                #pragma unroll 4
                                 for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
                                     const int b_row = (packet % PacketsPerCol) * VecB;
                                     const int b_col = packet / PacketsPerCol;
                                     const int logical_b_row = kk0 + b_row;
-                                    const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
+                                    const int logical_b_col = group_col * TileN + b_col;
                                     if (logical_b_row + (VecB - 1) < k && logical_b_col < n) {
                                         const int base = batch_b + logical_b_col * ldb + logical_b_row;
                                         const auto packet_values = packet_load_aligned<T, VecB>(b_ptr, base);
@@ -412,11 +438,12 @@ Event launch_register_tiled(Queue& ctx,
                             } else {
                                 constexpr int PacketsPerRow = TileN / VecB;
                                 constexpr int PacketCount = TileK * PacketsPerRow;
+                                #pragma unroll 4
                                 for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
                                     const int b_row = packet / PacketsPerRow;
                                     const int b_col = (packet % PacketsPerRow) * VecB;
                                     const int logical_b_row = kk0 + b_row;
-                                    const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
+                                    const int logical_b_col = group_col * TileN + b_col;
                                     if (logical_b_row < k && logical_b_col + (VecB - 1) < n) {
                                         const int base = batch_b + logical_b_row * ldb + logical_b_col;
                                         const auto packet_values = packet_load_aligned<T, VecB>(b_ptr, base);
@@ -438,7 +465,7 @@ Event launch_register_tiled(Queue& ctx,
                                 const int b_row = index % TileK;
                                 const int b_col = index / TileK;
                                 const int logical_b_row = kk0 + b_row;
-                                const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
+                                const int logical_b_col = group_col * TileN + b_col;
                                 tile_b_stage[b_col * Policy::TileBStride + b_row] = (logical_b_row < k && logical_b_col < n)
                                     ? OperandAccessor<T, OpB>::load(b_ptr, ldb, batch_b, logical_b_row, logical_b_col)
                                     : T(0);
@@ -448,7 +475,7 @@ Event launch_register_tiled(Queue& ctx,
                         for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
                             const int a_row = index % TileM;
                             const int a_col = index / TileM;
-                            const int logical_a_row = static_cast<int>(item.get_group(1)) * TileM + a_row;
+                            const int logical_a_row = group_row * TileM + a_row;
                             const int logical_a_col = kk0 + a_col;
                             tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
                                 ? OperandAccessor<T, OpA>::load(a_ptr, lda, batch_a, logical_a_row, logical_a_col)
@@ -459,7 +486,7 @@ Event launch_register_tiled(Queue& ctx,
                             const int b_row = index % TileK;
                             const int b_col = index / TileK;
                             const int logical_b_row = kk0 + b_row;
-                            const int logical_b_col = static_cast<int>(item.get_group(2)) * TileN + b_col;
+                            const int logical_b_col = group_col * TileN + b_col;
                             tile_b_stage[b_col * Policy::TileBStride + b_row] = (logical_b_row < k && logical_b_col < n)
                                 ? OperandAccessor<T, OpB>::load(b_ptr, ldb, batch_b, logical_b_row, logical_b_col)
                                 : T(0);
@@ -519,22 +546,45 @@ Event launch_register_tiled(Queue& ctx,
                         item.barrier(sycl::access::fence_space::local_space);
                     }
                 } else {
-                    load_stage(0, 0);
-                    item.barrier(sycl::access::fence_space::local_space);
+                    if constexpr (AlignedFastPath) {
+                        if (tile_count > 0) {
+                            load_stage(0, 0);
+                            item.barrier(sycl::access::fence_space::local_space);
 
-                    for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
-                        const int kk0 = tile_idx * TileK;
-                        const int current_stage = tile_idx & 1;
-                        const int next_tile_idx = tile_idx + 1;
+                            for (int tile_idx = 0; tile_idx + 1 < tile_count; ++tile_idx) {
+                                const int current_stage = tile_idx & 1;
+                                const int next_stage = current_stage ^ 1;
+                                load_stage((tile_idx + 1) * TileK, next_stage);
+                                accumulate_stage(&tile_a[current_stage * Policy::StageASize],
+                                                 &tile_b[current_stage * Policy::StageBSize],
+                                                 tile_idx * TileK);
+                                item.barrier(sycl::access::fence_space::local_space);
+                            }
 
-                        if (next_tile_idx < tile_count) {
-                            load_stage(next_tile_idx * TileK, current_stage ^ 1);
+                            const int final_stage = (tile_count - 1) & 1;
+                            accumulate_stage(&tile_a[final_stage * Policy::StageASize],
+                                             &tile_b[final_stage * Policy::StageBSize],
+                                             (tile_count - 1) * TileK);
+                            item.barrier(sycl::access::fence_space::local_space);
                         }
-
-                        accumulate_stage(&tile_a[current_stage * Policy::StageASize],
-                                         &tile_b[current_stage * Policy::StageBSize],
-                                         kk0);
+                    } else {
+                        load_stage(0, 0);
                         item.barrier(sycl::access::fence_space::local_space);
+
+                        for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
+                            const int kk0 = tile_idx * TileK;
+                            const int current_stage = tile_idx & 1;
+                            const int next_tile_idx = tile_idx + 1;
+
+                            if (next_tile_idx < tile_count) {
+                                load_stage(next_tile_idx * TileK, current_stage ^ 1);
+                            }
+
+                            accumulate_stage(&tile_a[current_stage * Policy::StageASize],
+                                             &tile_b[current_stage * Policy::StageBSize],
+                                             kk0);
+                            item.barrier(sycl::access::fence_space::local_space);
+                        }
                     }
                 }
 
@@ -543,8 +593,9 @@ Event launch_register_tiled(Queue& ctx,
                         const int row = row_base + i;
                         for (int j = 0; j < ThreadTileCols; ++j) {
                             const int col = col_base + j;
-                            const T prior = c_ptr[batch_c + col * ldc + row];
-                            c_ptr[batch_c + col * ldc + row] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                            const int index = batch_c + col * ldc + row;
+                            const T prior = c_ptr[index];
+                            c_ptr[index] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
                         }
                     }
                 } else {
@@ -556,8 +607,9 @@ Event launch_register_tiled(Queue& ctx,
                         for (int j = 0; j < ThreadTileCols; ++j) {
                             const int col = col_base + j;
                             if (col < n) {
-                                const T prior = c_ptr[batch_c + col * ldc + row];
-                                c_ptr[batch_c + col * ldc + row] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                                const int index = batch_c + col * ldc + row;
+                                const T prior = c_ptr[index];
+                                c_ptr[index] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
                             }
                         }
                     }
