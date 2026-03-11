@@ -338,6 +338,83 @@ Typical changes worth testing:
 - Consider `--cache-control none` only when you need to study warmed-cache behavior inside a larger workflow; otherwise keep the default for reproducibility.
 - If a new kernel is still unclear, add or improve NVTX ranges around the phase that launches it so later profiling can isolate the right region faster.
 
+## Profiling SYCL-Generated CUDA Kernels
+
+BatchLAS compiles SYCL device code through DPC++ targeting CUDA (`dpcpp-cuda`). The SYCL runtime translates `sycl::queue::submit` into CUDA driver API calls at runtime. This creates several profiling challenges.
+
+### ncu Cannot Profile Binaries Linked Against Debug SYCL Runtimes
+
+If the SYCL runtime (`libsycl.so`) is a debug build (common when building DPC++ from source), it contains assertion call sites. ncu's kernel replay mechanism interferes with the SYCL runtime's internal state, causing assertions like `NDR.LocalSize[0] == 0` at `commands.cpp` to fire and abort the process. Attempted workarounds that **do not work**:
+
+- `--replay-mode application` — still triggers assertions
+- Collecting only a single section (`--section SpeedOfLight`) — still triggers
+- `LD_PRELOAD` with an assert-suppression library — bypasses assertions but then `std::system_error: Unknown error 265` is thrown from the runtime
+
+**The only reliable workaround** is to profile a standalone CUDA-only driver that links directly against the CUDA kernel code you want to study, bypassing the SYCL runtime entirely. See the next section.
+
+### Standalone CUDA Profiling Driver Approach
+
+If the kernel under study is implemented in a CUDA translation unit, create a minimal standalone `.cu` driver for that kernel instead of profiling the full SYCL-linked binary:
+
+1. Include only the current CUDA kernel declarations used by the implementation under test.
+2. Set up CUDA allocations and any launch descriptor or configuration object required by that implementation.
+3. Call the CUDA launch entry point directly.
+4. Build with nvcc only, without linking DPC++ or the SYCL runtime.
+
+The exact sources and headers depend on the current implementation you are profiling. Prefer keeping the driver local to the profiling task so it stays aligned with the code under test.
+
+### Profiling SYCL Kernels With nsys
+
+nsys **can** capture SYCL kernel GPU activity, but requires `--cuda-event-trace=true` to get CUPTI kernel data. Without this flag, nsys only captures CUDA API calls (launch timestamps, sync calls) but misses the GPU-side kernel execution details.
+
+```bash
+nsys profile \
+  --trace=cuda \
+  --cuda-event-trace=true \
+  --sample=none \
+  --cpuctxsw=none \
+  --stats=true \
+  --force-overwrite=true \
+  --export=sqlite \
+  -o output/profiling/sycl_kernel_nsys \
+  build/benchmarks/<benchmark> --backend=CUDA --warmup=5 ...
+```
+
+**Important**: BatchLAS SYCL GEMM benchmarks use `--backend=CUDA`, not `--backend=SYCL`. The SYCL codepath is triggered via the DPC++ CUDA backend, which shows up as CUDA API calls in the profiler.
+
+### Extracting SYCL Kernel Metrics From nsys SQLite
+
+After exporting to SQLite, query the `CUPTI_ACTIVITY_KIND_KERNEL` table for SYCL kernel launch parameters:
+
+```bash
+nsys export --type=sqlite -o output/profiling/sycl_kernel.sqlite output/profiling/sycl_kernel_nsys.nsys-rep
+```
+
+```sql
+SELECT
+  s.value AS kernelName,
+  k.registersPerThread,
+  k.gridX, k.gridY, k.gridZ,
+  k.blockX, k.blockY, k.blockZ,
+  k.staticSharedMemory,
+  k.dynamicSharedMemory,
+  k.localMemoryPerThread,
+  (k.end - k.start) AS duration_ns
+FROM CUPTI_ACTIVITY_KIND_KERNEL AS k
+JOIN StringIds AS s ON k.demangledName = s.id
+WHERE s.value LIKE '%GemmRegisterTiled%'
+ORDER BY duration_ns DESC
+LIMIT 5;
+```
+
+This provides: registers per thread, grid/block dimensions, shared memory, local memory (spills), and wall-clock duration. It does **not** provide throughput, IPC, bank conflicts, or warp stall reasons — those require ncu.
+
+### Known Limitations
+
+- **No ncu for SYCL binaries** with debug `libsycl.so`. The only path is the standalone driver workaround above.
+- **SYCL fatbins are LLVM bitcode**, not CUDA fatbins. The `.fatbin` artifacts in the build directory are tiny stubs; real device code is JIT-compiled from `.cc-sycl-nvptx64-nvidia-cuda-sm_89.o` bitcode at runtime. You cannot load SYCL device code into a CUDA driver API wrapper for ncu profiling.
+- **nsys CUPTI data is limited** compared to ncu: you get launch parameters and duration but no throughput, occupancy, IPC, stall reasons, or access pattern analysis.
+
 ## BatchLAS Notes
 
 - Benchmarks accept positional integer args after options.
