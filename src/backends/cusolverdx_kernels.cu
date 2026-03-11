@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#if __has_include(<cusolverdx.hpp>)
+#if defined(BATCHLAS_ENABLE_CUSOLVERDX_WRAPPER) && __has_include(<cusolverdx.hpp>)
     #include <cusolverdx.hpp>
     #define BATCHLAS_HAS_CUSOLVERDX_HEADER 1
 #else
@@ -14,65 +14,85 @@ namespace batchlas::backend::cusolverdx::cuda_kernels {
 #if BATCHLAS_HAS_CUSOLVERDX_HEADER
 namespace {
 
-template <int N, typename T, bool ComputeVectors, bool Lower>
+constexpr int kSupportedSM = 890;
+
+template <int Sm, int N, typename T, bool ComputeVectors, bool Lower>
 struct HeevSolverFactory;
 
-template <int N, bool ComputeVectors, bool Lower>
-struct HeevSolverFactory<N, float, ComputeVectors, Lower> {
+template <int Sm, int N, bool ComputeVectors, bool Lower>
+struct HeevSolverFactory<Sm, N, float, ComputeVectors, Lower> {
     using type = decltype(
-        cusolverdx::Size<N>() +
-        cusolverdx::Precision<float>() +
-        cusolverdx::Type<cusolverdx::type::real>() +
-        cusolverdx::Function<cusolverdx::heev>() +
-        cusolverdx::FillMode<Lower ? cusolverdx::fill_mode::lower : cusolverdx::fill_mode::upper>() +
-        cusolverdx::Arrangement<cusolverdx::arrangement::col_major>() +
-        cusolverdx::Job<ComputeVectors ? cusolverdx::job::overwrite_vectors : cusolverdx::job::no_vectors>() +
-        cusolverdx::Block() +
-        cusolverdx::BatchesPerBlock<1>());
+    ::cusolverdx::Size<N>() +
+    ::cusolverdx::Precision<float>() +
+    ::cusolverdx::Type<::cusolverdx::type::real>() +
+    ::cusolverdx::Function<::cusolverdx::heev>() +
+    ::cusolverdx::FillMode<Lower ? ::cusolverdx::fill_mode::lower : ::cusolverdx::fill_mode::upper>() +
+    ::cusolverdx::Arrangement<::cusolverdx::arrangement::col_major>() +
+    ::cusolverdx::Job<ComputeVectors ? ::cusolverdx::job::overwrite_vectors : ::cusolverdx::job::no_vectors>() +
+    ::cusolverdx::SM<Sm>() +
+    ::cusolverdx::Block() +
+    ::cusolverdx::BatchesPerBlock<1>());
 };
 
-template <int N, bool ComputeVectors, bool Lower>
-struct HeevSolverFactory<N, double, ComputeVectors, Lower> {
+template <int Sm, int N, bool ComputeVectors, bool Lower>
+struct HeevSolverFactory<Sm, N, double, ComputeVectors, Lower> {
     using type = decltype(
-        cusolverdx::Size<N>() +
-        cusolverdx::Precision<double>() +
-        cusolverdx::Type<cusolverdx::type::real>() +
-        cusolverdx::Function<cusolverdx::heev>() +
-        cusolverdx::FillMode<Lower ? cusolverdx::fill_mode::lower : cusolverdx::fill_mode::upper>() +
-        cusolverdx::Arrangement<cusolverdx::arrangement::col_major>() +
-        cusolverdx::Job<ComputeVectors ? cusolverdx::job::overwrite_vectors : cusolverdx::job::no_vectors>() +
-        cusolverdx::Block() +
-        cusolverdx::BatchesPerBlock<1>());
+    ::cusolverdx::Size<N>() +
+    ::cusolverdx::Precision<double>() +
+    ::cusolverdx::Type<::cusolverdx::type::real>() +
+    ::cusolverdx::Function<::cusolverdx::heev>() +
+    ::cusolverdx::FillMode<Lower ? ::cusolverdx::fill_mode::lower : ::cusolverdx::fill_mode::upper>() +
+    ::cusolverdx::Arrangement<::cusolverdx::arrangement::col_major>() +
+    ::cusolverdx::Job<ComputeVectors ? ::cusolverdx::job::overwrite_vectors : ::cusolverdx::job::no_vectors>() +
+    ::cusolverdx::SM<Sm>() +
+    ::cusolverdx::Block() +
+    ::cusolverdx::BatchesPerBlock<1>());
 };
 
-template <int N, typename T, bool ComputeVectors>
+template <int Sm, int N, typename T, bool ComputeVectors>
 struct HtevSolverFactory;
 
-template <int N, bool ComputeVectors>
-struct HtevSolverFactory<N, float, ComputeVectors> {
+template <int Sm, int N, bool ComputeVectors>
+struct HtevSolverFactory<Sm, N, float, ComputeVectors> {
     using type = decltype(
-        cusolverdx::Size<N>() +
-        cusolverdx::Precision<float>() +
-        cusolverdx::Type<cusolverdx::type::real>() +
-        cusolverdx::Function<cusolverdx::htev>() +
-        cusolverdx::Arrangement<cusolverdx::arrangement::col_major>() +
-        cusolverdx::Job<ComputeVectors ? cusolverdx::job::all_vectors : cusolverdx::job::no_vectors>() +
-        cusolverdx::Block() +
-        cusolverdx::BatchesPerBlock<1>());
+    ::cusolverdx::Size<N>() +
+    ::cusolverdx::Precision<float>() +
+    ::cusolverdx::Type<::cusolverdx::type::real>() +
+    ::cusolverdx::Function<::cusolverdx::htev>() +
+    ::cusolverdx::Arrangement<::cusolverdx::arrangement::col_major>() +
+    ::cusolverdx::Job<ComputeVectors ? ::cusolverdx::job::all_vectors : ::cusolverdx::job::no_vectors>() +
+    ::cusolverdx::SM<Sm>() +
+    ::cusolverdx::Block() +
+    ::cusolverdx::BatchesPerBlock<1>());
 };
 
-template <int N, bool ComputeVectors>
-struct HtevSolverFactory<N, double, ComputeVectors> {
+template <int Sm, int N, bool ComputeVectors>
+struct HtevSolverFactory<Sm, N, double, ComputeVectors> {
     using type = decltype(
-        cusolverdx::Size<N>() +
-        cusolverdx::Precision<double>() +
-        cusolverdx::Type<cusolverdx::type::real>() +
-        cusolverdx::Function<cusolverdx::htev>() +
-        cusolverdx::Arrangement<cusolverdx::arrangement::col_major>() +
-        cusolverdx::Job<ComputeVectors ? cusolverdx::job::all_vectors : cusolverdx::job::no_vectors>() +
-        cusolverdx::Block() +
-        cusolverdx::BatchesPerBlock<1>());
+    ::cusolverdx::Size<N>() +
+    ::cusolverdx::Precision<double>() +
+    ::cusolverdx::Type<::cusolverdx::type::real>() +
+    ::cusolverdx::Function<::cusolverdx::htev>() +
+    ::cusolverdx::Arrangement<::cusolverdx::arrangement::col_major>() +
+    ::cusolverdx::Job<ComputeVectors ? ::cusolverdx::job::all_vectors : ::cusolverdx::job::no_vectors>() +
+    ::cusolverdx::SM<Sm>() +
+    ::cusolverdx::Block() +
+    ::cusolverdx::BatchesPerBlock<1>());
 };
+
+inline int current_device_sm() {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return 0;
+    }
+
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
+        return 0;
+    }
+
+    return prop.major * 100 + prop.minor * 10;
+}
 
 template <class Solver>
 __global__ __launch_bounds__(Solver::max_threads_per_block)
@@ -115,7 +135,7 @@ void heev_kernel(typename Solver::a_data_type* A,
         lambda_b[i] = lambda_s[i];
     }
 
-    if constexpr (Solver::job == cusolverdx::job::overwrite_vectors) {
+    if constexpr (Solver::job == ::cusolverdx::job::overwrite_vectors) {
         for (int idx = tid; idx < m * m; idx += static_cast<int>(blockDim.x)) {
             const int r = idx % m;
             const int c = idx / m;
@@ -150,7 +170,7 @@ void htev_kernel(typename Solver::a_data_type* d,
     for (int i = tid; i < m; i += static_cast<int>(blockDim.x)) d_s[i] = d_b[i];
     for (int i = tid; i < m - 1; i += static_cast<int>(blockDim.x)) e_s[i] = e_b[i];
 
-    if constexpr (Solver::job == cusolverdx::job::all_vectors) {
+    if constexpr (Solver::job == ::cusolverdx::job::all_vectors) {
         Data* V_b = V + static_cast<std::size_t>(b) * static_cast<std::size_t>(ldv) * static_cast<std::size_t>(m);
         for (int idx = tid; idx < m * m; idx += static_cast<int>(blockDim.x)) {
             const int r = idx % m;
@@ -161,7 +181,7 @@ void htev_kernel(typename Solver::a_data_type* d,
 
     __syncthreads();
 
-    if constexpr (Solver::job == cusolverdx::job::no_vectors) {
+    if constexpr (Solver::job == ::cusolverdx::job::no_vectors) {
         Solver().execute(d_s, e_s, &info[b]);
     } else {
         Solver().execute(d_s, e_s, V_s, Solver::lda, &info[b]);
@@ -172,7 +192,7 @@ void htev_kernel(typename Solver::a_data_type* d,
     for (int i = tid; i < m; i += static_cast<int>(blockDim.x)) d_b[i] = d_s[i];
     for (int i = tid; i < m - 1; i += static_cast<int>(blockDim.x)) e_b[i] = e_s[i];
 
-    if constexpr (Solver::job == cusolverdx::job::all_vectors) {
+    if constexpr (Solver::job == ::cusolverdx::job::all_vectors) {
         Data* V_b = V + static_cast<std::size_t>(b) * static_cast<std::size_t>(ldv) * static_cast<std::size_t>(m);
         for (int idx = tid; idx < m * m; idx += static_cast<int>(blockDim.x)) {
             const int r = idx % m;
@@ -182,21 +202,21 @@ void htev_kernel(typename Solver::a_data_type* d,
     }
 }
 
-template <int N, typename T, bool ComputeVectors, bool Lower>
+template <int Sm, int N, typename T, bool ComputeVectors, bool Lower>
 cudaError_t heev_launch_n(T* A,
                           int lda,
                           T* lambda,
                           int* info,
                           int batches,
                           cudaStream_t stream) {
-    using Solver = typename HeevSolverFactory<N, T, ComputeVectors, Lower>::type;
+    using Solver = typename HeevSolverFactory<Sm, N, T, ComputeVectors, Lower>::type;
     constexpr int shmem = Solver::shared_memory_size;
     cudaFuncSetAttribute(heev_kernel<Solver>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem);
     heev_kernel<Solver><<<batches, Solver::block_dim, shmem, stream>>>(A, lda, lambda, info, batches);
     return cudaGetLastError();
 }
 
-template <int N, typename T, bool ComputeVectors>
+template <int Sm, int N, typename T, bool ComputeVectors>
 cudaError_t htev_launch_n(T* d,
                           T* e,
                           T* V,
@@ -204,30 +224,28 @@ cudaError_t htev_launch_n(T* d,
                           int* info,
                           int batches,
                           cudaStream_t stream) {
-    using Solver = typename HtevSolverFactory<N, T, ComputeVectors>::type;
+    using Solver = typename HtevSolverFactory<Sm, N, T, ComputeVectors>::type;
     constexpr int shmem = Solver::shared_memory_size;
     cudaFuncSetAttribute(htev_kernel<Solver>, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem);
     htev_kernel<Solver><<<batches, Solver::block_dim, shmem, stream>>>(d, e, V, ldv, info, batches);
     return cudaGetLastError();
 }
 
-template <typename T>
-cudaError_t heev_dispatch(T* A,
-                          int n,
-                          int lda,
-                          T* lambda,
-                          int* info,
-                          int batches,
-                          bool compute_vectors,
-                          bool lower,
-                          cudaStream_t stream) {
-    if (n <= 0 || lda < n || batches <= 0) return cudaErrorInvalidValue;
-
+template <int Sm, typename T>
+cudaError_t heev_dispatch_for_sm(T* A,
+                                 int n,
+                                 int lda,
+                                 T* lambda,
+                                 int* info,
+                                 int batches,
+                                 bool compute_vectors,
+                                 bool lower,
+                                 cudaStream_t stream) {
     auto launch = [&](auto n_const, auto vec_const, auto low_const) {
         constexpr int N = decltype(n_const)::value;
         constexpr bool V = decltype(vec_const)::value;
         constexpr bool L = decltype(low_const)::value;
-        return heev_launch_n<N, T, V, L>(A, lda, lambda, info, batches, stream);
+        return heev_launch_n<Sm, N, T, V, L>(A, lda, lambda, info, batches, stream);
     };
 
     switch (n) {
@@ -254,22 +272,20 @@ cudaError_t heev_dispatch(T* A,
     }
 }
 
-template <typename T>
-cudaError_t htev_dispatch(T* d,
-                          int n,
-                          T* e,
-                          T* V,
-                          int ldv,
-                          int* info,
-                          int batches,
-                          bool compute_vectors,
-                          cudaStream_t stream) {
-    if (n <= 1 || ldv < n || batches <= 0) return cudaErrorInvalidValue;
-
+template <int Sm, typename T>
+cudaError_t htev_dispatch_for_sm(T* d,
+                                 int n,
+                                 T* e,
+                                 T* V,
+                                 int ldv,
+                                 int* info,
+                                 int batches,
+                                 bool compute_vectors,
+                                 cudaStream_t stream) {
     auto launch = [&](auto n_const, auto vec_const) {
         constexpr int N = decltype(n_const)::value;
         constexpr bool Vectors = decltype(vec_const)::value;
-        return htev_launch_n<N, T, Vectors>(d, e, V, ldv, info, batches, stream);
+        return htev_launch_n<Sm, N, T, Vectors>(d, e, V, ldv, info, batches, stream);
     };
 
     switch (n) {
@@ -290,12 +306,52 @@ cudaError_t htev_dispatch(T* d,
     }
 }
 
+template <typename T>
+cudaError_t heev_dispatch(T* A,
+                          int n,
+                          int lda,
+                          T* lambda,
+                          int* info,
+                          int batches,
+                          bool compute_vectors,
+                          bool lower,
+                          cudaStream_t stream) {
+    if (n <= 0 || lda < n || batches <= 0) return cudaErrorInvalidValue;
+
+    switch (current_device_sm()) {
+        case kSupportedSM:
+            return heev_dispatch_for_sm<kSupportedSM>(A, n, lda, lambda, info, batches, compute_vectors, lower, stream);
+        default:
+            return cudaErrorNotSupported;
+    }
+}
+
+template <typename T>
+cudaError_t htev_dispatch(T* d,
+                          int n,
+                          T* e,
+                          T* V,
+                          int ldv,
+                          int* info,
+                          int batches,
+                          bool compute_vectors,
+                          cudaStream_t stream) {
+    if (n <= 1 || ldv < n || batches <= 0) return cudaErrorInvalidValue;
+
+    switch (current_device_sm()) {
+        case kSupportedSM:
+            return htev_dispatch_for_sm<kSupportedSM>(d, n, e, V, ldv, info, batches, compute_vectors, stream);
+        default:
+            return cudaErrorNotSupported;
+    }
+}
+
 } // namespace
 #endif
 
 bool available() {
 #if BATCHLAS_HAS_CUSOLVERDX_HEADER
-    return true;
+    return current_device_sm() == kSupportedSM;
 #else
     return false;
 #endif

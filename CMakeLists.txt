@@ -89,6 +89,8 @@ option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
 option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
 option(BATCHLAS_ENABLE_CPU_TESTS "Enable tests/benchmarks requiring CPU SYCL kernel compilation" ON)
+option(BATCHLAS_KEEP_CUDA_INTERMEDIATES "Preserve CUDA and SYCL CUDA device compilation intermediates for PTX/SASS analysis" OFF)
+set(BATCHLAS_MATHDX_ROOT "" CACHE PATH "Path to an unpacked NVIDIA MathDx package root")
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 # The native_cpu backend is still experimental and we have observed compiler
 # crashes in vecz (whole-function vectorization) on some Intel LLVM builds.
@@ -458,6 +460,14 @@ if(BATCHLAS_ENABLE_CUDA)
         # dedicated clang/DPC++ forwarding flag so clang doesn't try to parse
         # nvcc-style long options.
         add_link_options(-Xcuda-ptxas -w)
+    endif()
+    if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
+        message(STATUS "Preserving CUDA/SYCL CUDA intermediates for device-code inspection")
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/cuda-intermediates")
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:--keep>
+                            $<$<COMPILE_LANGUAGE:CUDA>:--keep-dir=${CMAKE_BINARY_DIR}/cuda-intermediates>)
+        add_link_options(-Xsycl-target-backend=nvptx64-nvidia-cuda "--save-temps"
+                         -Xcuda-ptxas -v)
     endif()
 endif()
 

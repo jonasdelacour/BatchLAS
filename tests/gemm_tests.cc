@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "../src/backends/gemm_cublasdx_dispatch.hh"
 #include "../src/sycl/gemm_kernels.hh"
 #include "test_utils.hh"
 
@@ -147,6 +148,53 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
+template <typename ScalarType, Backend BackendType>
+void RunForcedCuBLASDxGemmKernelCompare(Queue& ctx,
+                                        const char* kernel_name,
+                                        int m,
+                                        int n,
+                                        int k,
+                                        int batch_size,
+                                        Transpose transA,
+                                        Transpose transB,
+                                        typename batchlas::base_type<ScalarType>::type tol_scale = 75) {
+    if constexpr (BackendType != Backend::CUDA) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only available on the CUDA backend";
+    }
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this first slice";
+    }
+
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+
+    auto A = Matrix<ScalarType>::Random(a_rows, a_cols, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(b_rows, b_cols, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", kernel_name);
+        gemm<BackendType>(ctx, A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          transA, transB, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(ctx, A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          transA, transB, ComputePrecision::Default);
+    }
+
+    ctx.wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * tol_scale;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
 batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTest(int m,
                                                                   int n,
                                                                   int k,
@@ -265,6 +313,14 @@ TEST(GemmDispatchPolicyTest, KeepsTransposeHeavyCasesOnK32TransposeAlias) {
 TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(512, 64, 512, Transpose::NoTrans, Transpose::NoTrans),
               batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
+}
+
+TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
+    Matrix<float> A(128, 128, 1);
+    Matrix<float> B(128, 128, 1);
+    Matrix<float> C(128, 128, 1);
+    EXPECT_EQ(batchlas::backend::cublasdx_gemm_select_variant(A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans),
+              batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN);
 }
 
 // Test GEMM operation using identity matrix (C = A * I = A)
@@ -591,6 +647,140 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1AlignedKernel) {
     RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_aligned",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxNNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_nn",
+                                                                128, 128, 128, 2,
+                                                                Transpose::NoTrans, Transpose::NoTrans,
+                                                                150);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxTNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TN)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_tn",
+                                                                128, 128, 128, 2,
+                                                                Transpose::Trans, Transpose::NoTrans,
+                                                                150);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxNTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NT)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_nt",
+                                                                128, 128, 128, 2,
+                                                                Transpose::NoTrans, Transpose::Trans,
+                                                                150);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxTTKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TT)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_tt",
+                                                                128, 128, 128, 2,
+                                                                Transpose::Trans, Transpose::Trans,
+                                                                150);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDx64NNKernel) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx64x64x32NN)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx64_nn",
+                                                                256, 256, 256, 2,
+                                                                Transpose::NoTrans, Transpose::NoTrans,
+                                                                200);
+}
+
+TYPED_TEST(GemmTest, BatchedGemmCuBLASDxLargeSquareDoesNotThrow) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (BackendType != Backend::CUDA) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only available on the CUDA backend";
+    }
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
+    }
+
+    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN)) {
+        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
+    }
+
+    constexpr int m = 512;
+    constexpr int n = 512;
+    constexpr int k = 512;
+    constexpr int batch_size = 2;
+
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    ASSERT_NO_THROW({
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    });
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 200;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1GenericKernel) {

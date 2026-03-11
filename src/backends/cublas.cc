@@ -14,6 +14,7 @@
 #include <blas/dispatch/op.hh>
 #include <complex>
 
+#include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "../sycl/gemm_kernels.hh"
 
@@ -34,19 +35,15 @@ namespace batchlas {
                                         Span<T> tau);
 
     template <Backend Back, typename T>
-    Event gemm_vendor(Queue& ctx,
-                   const MatrixView<T,MatrixFormat::Dense>& A,
-                   const MatrixView<T,MatrixFormat::Dense>& B,
-                   const MatrixView<T,MatrixFormat::Dense>& C,
-                   T alpha,
-                   T beta,
-                   Transpose transA,
-                   Transpose transB,
-                   ComputePrecision precision) {
-        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
-            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
-        }
-
+    Event gemm_vendor_impl(Queue& ctx,
+                           const MatrixView<T,MatrixFormat::Dense>& A,
+                           const MatrixView<T,MatrixFormat::Dense>& B,
+                           const MatrixView<T,MatrixFormat::Dense>& C,
+                           T alpha,
+                           T beta,
+                           Transpose transA,
+                           Transpose transB,
+                           ComputePrecision precision) {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
@@ -84,6 +81,43 @@ namespace batchlas {
                 CUBLAS_GEMM_DFALT);
         }
         return ctx.create_event_after_external_work();
+    }
+
+    template <Backend Back, typename T>
+    Event gemm_vendor(Queue& ctx,
+                      const MatrixView<T,MatrixFormat::Dense>& A,
+                      const MatrixView<T,MatrixFormat::Dense>& B,
+                      const MatrixView<T,MatrixFormat::Dense>& C,
+                      T alpha,
+                      T beta,
+                      Transpose transA,
+                      Transpose transB,
+                      ComputePrecision precision) {
+        if constexpr (Back == Backend::CUDA) {
+            if constexpr (std::is_same_v<T, float>) {
+                if (gemm_use_cublasdx_custom(ctx, A, B, C, transA, transB, precision)) {
+                    return gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, precision);
+                }
+            }
+        }
+
+        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
+            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
+        }
+
+        return gemm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+    }
+
+    Event gemm_vendor_cuda_raw(Queue& ctx,
+                               const MatrixView<float, MatrixFormat::Dense>& A,
+                               const MatrixView<float, MatrixFormat::Dense>& B,
+                               const MatrixView<float, MatrixFormat::Dense>& C,
+                               float alpha,
+                               float beta,
+                               Transpose transA,
+                               Transpose transB,
+                               ComputePrecision precision) {
+        return gemm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
 
     template <Backend B, typename T>

@@ -12,6 +12,8 @@ namespace batchlas::backend {
 enum class GemmVariantRequest {
     Vendor,
     Sycl,
+    Native,
+    CuBLASDx,
     Auto,
 };
 
@@ -29,6 +31,12 @@ inline GemmVariantRequest gemm_variant_request() {
     if (value == "sycl" || value == "custom") {
         return GemmVariantRequest::Sycl;
     }
+    if (value == "native" || value == "cuda-native" || value == "direct-cuda") {
+        return GemmVariantRequest::Native;
+    }
+    if (value == "cublasdx" || value == "dx") {
+        return GemmVariantRequest::CuBLASDx;
+    }
     if (value == "auto") {
         return GemmVariantRequest::Auto;
     }
@@ -36,12 +44,12 @@ inline GemmVariantRequest gemm_variant_request() {
 }
 
 template <typename T>
-inline bool gemm_sycl_supported(const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& B,
-                                const MatrixView<T, MatrixFormat::Dense>& C,
-                                Transpose transA,
-                                Transpose transB,
-                                ComputePrecision precision) {
+inline bool gemm_custom_problem_supported(const MatrixView<T, MatrixFormat::Dense>& A,
+                                          const MatrixView<T, MatrixFormat::Dense>& B,
+                                          const MatrixView<T, MatrixFormat::Dense>& C,
+                                          Transpose transA,
+                                          Transpose transB,
+                                          ComputePrecision precision) {
     if (precision != ComputePrecision::Default) {
         return false;
     }
@@ -60,6 +68,36 @@ inline bool gemm_sycl_supported(const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 template <typename T>
+inline bool gemm_sycl_supported(const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                Transpose transA,
+                                Transpose transB,
+                                ComputePrecision precision) {
+    return gemm_custom_problem_supported(A, B, C, transA, transB, precision);
+}
+
+template <typename T>
+inline bool gemm_use_cublasdx_custom(const Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& A,
+                                     const MatrixView<T, MatrixFormat::Dense>& B,
+                                     const MatrixView<T, MatrixFormat::Dense>& C,
+                                     Transpose transA,
+                                     Transpose transB,
+                                     ComputePrecision precision) {
+    const auto request = gemm_variant_request();
+    if (request != GemmVariantRequest::CuBLASDx) {
+        return false;
+    }
+
+    if (ctx.device().type != DeviceType::GPU) {
+        return false;
+    }
+
+    return gemm_custom_problem_supported(A, B, C, transA, transB, precision);
+}
+
+template <typename T>
 inline bool gemm_use_sycl_custom(const Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -68,11 +106,12 @@ inline bool gemm_use_sycl_custom(const Queue& ctx,
                                  Transpose transB,
                                  ComputePrecision precision) {
     const auto request = gemm_variant_request();
-    if (request == GemmVariantRequest::Vendor) {
+    if (request == GemmVariantRequest::Vendor || request == GemmVariantRequest::Native ||
+        request == GemmVariantRequest::CuBLASDx) {
         return false;
     }
 
-    if (!gemm_sycl_supported(A, B, C, transA, transB, precision)) {
+    if (!gemm_custom_problem_supported(A, B, C, transA, transB, precision)) {
         return false;
     }
 

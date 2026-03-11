@@ -17,6 +17,8 @@ endif()
 if(BATCHLAS_HAS_CUDA_BACKEND)
     list(APPEND BACKEND_SOURCES
         cublas.cc
+        gemm_cublasdx.cu
+        gemm_cublasdx_dispatch.cc
         cusparse.cc
         cusolver.cc
         cusolverdx.cc
