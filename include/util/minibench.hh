@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -867,11 +868,21 @@ inline void CubeSizes(Benchmark* b) {
 
 template <typename Benchmark>
 inline void CubeBatchSizes(Benchmark* b) {
-    for (int s : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
+    const auto add_batches = [b](int s, std::initializer_list<int> batches) {
+        for (int bs : batches) {
             b->Args({s, s, s, bs});
         }
-    }
+    };
+
+    add_batches(16, {4096, 8192, 16384});
+    add_batches(32, {2048, 4096, 8192});
+    add_batches(64, {1024, 2048, 4096});
+    add_batches(128, {512, 1024, 2048});
+    add_batches(256, {128, 256, 512, 1024});
+    add_batches(512, {32, 64, 128, 256});
+    add_batches(1024, {8, 16, 32, 64});
+    add_batches(2048, {2, 4, 8, 16});
+    add_batches(4096, {1, 2, 4, 8});
 }
 
 template <typename Benchmark>
