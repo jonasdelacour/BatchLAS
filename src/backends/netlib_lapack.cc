@@ -306,6 +306,276 @@ namespace batchlas{
         });
     }
 
+    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event symm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& Bmat,
+               const MatrixView<T, MatrixFormat::Dense>& Cmat,
+               T alpha,
+               T beta,
+               Side side,
+               Uplo uplo) {
+        auto A_view = A;
+        auto B_view = Bmat;
+        auto C_view = Cmat;
+        return detail::submit_host_task(ctx, "netlib.symm", [=] {
+            if (A_view.rows() != A_view.cols()) {
+                throw std::runtime_error("SYMM: A must be square");
+            }
+            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
+                throw std::runtime_error("SYMM: batch size mismatch");
+            }
+
+            const int m = C_view.rows();
+            const int n = C_view.cols();
+            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
+            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
+                throw std::runtime_error("SYMM: incompatible matrix dimensions");
+            }
+
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                if constexpr (std::is_same_v<T, float>) {
+                    cblas_ssymm(CblasColMajor,
+                                enum_convert<BackendLibrary::CBLAS>(side),
+                                enum_convert<BackendLibrary::CBLAS>(uplo),
+                                m,
+                                n,
+                                alpha,
+                                A_i.data_ptr(),
+                                A_i.ld(),
+                                B_i.data_ptr(),
+                                B_i.ld(),
+                                beta,
+                                C_i.data_ptr(),
+                                C_i.ld());
+                } else if constexpr (std::is_same_v<T, double>) {
+                    cblas_dsymm(CblasColMajor,
+                                enum_convert<BackendLibrary::CBLAS>(side),
+                                enum_convert<BackendLibrary::CBLAS>(uplo),
+                                m,
+                                n,
+                                alpha,
+                                A_i.data_ptr(),
+                                A_i.ld(),
+                                B_i.data_ptr(),
+                                B_i.ld(),
+                                beta,
+                                C_i.data_ptr(),
+                                C_i.ld());
+                }
+            };
+
+            for (int batch = 0; batch < A_view.batch_size(); ++batch) {
+                launch_single(A_view[batch], B_view[batch], C_view[batch]);
+            }
+        });
+    }
+
+    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event syrk(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& Cmat,
+               T alpha,
+               T beta,
+               Uplo uplo,
+               Transpose transA) {
+        auto A_view = A;
+        auto C_view = Cmat;
+        return detail::submit_host_task(ctx, "netlib.syrk", [=] {
+            if (C_view.rows() != C_view.cols()) {
+                throw std::runtime_error("SYRK: C must be square");
+            }
+            if (A_view.batch_size() != C_view.batch_size()) {
+                throw std::runtime_error("SYRK: batch size mismatch");
+            }
+
+            const int n = C_view.rows();
+            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
+            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
+            if (expected_n != n || k <= 0) {
+                throw std::runtime_error("SYRK: incompatible matrix dimensions");
+            }
+
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                if constexpr (std::is_same_v<T, float>) {
+                    cblas_ssyrk(CblasColMajor,
+                                enum_convert<BackendLibrary::CBLAS>(uplo),
+                                enum_convert<BackendLibrary::CBLAS>(transA),
+                                n,
+                                k,
+                                alpha,
+                                A_i.data_ptr(),
+                                A_i.ld(),
+                                beta,
+                                C_i.data_ptr(),
+                                C_i.ld());
+                } else if constexpr (std::is_same_v<T, double>) {
+                    cblas_dsyrk(CblasColMajor,
+                                enum_convert<BackendLibrary::CBLAS>(uplo),
+                                enum_convert<BackendLibrary::CBLAS>(transA),
+                                n,
+                                k,
+                                alpha,
+                                A_i.data_ptr(),
+                                A_i.ld(),
+                                beta,
+                                C_i.data_ptr(),
+                                C_i.ld());
+                }
+            };
+
+            for (int batch = 0; batch < A_view.batch_size(); ++batch) {
+                launch_single(A_view[batch], C_view[batch]);
+            }
+        });
+    }
+
+    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event syr2k(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& Bmat,
+                const MatrixView<T, MatrixFormat::Dense>& Cmat,
+                T alpha,
+                T beta,
+                Uplo uplo,
+                Transpose transA) {
+        auto A_view = A;
+        auto B_view = Bmat;
+        auto C_view = Cmat;
+        return detail::submit_host_task(ctx, "netlib.syr2k", [=] {
+            if (C_view.rows() != C_view.cols()) {
+                throw std::runtime_error("SYR2K: C must be square");
+            }
+            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
+                throw std::runtime_error("SYR2K: batch size mismatch");
+            }
+
+            const int n = C_view.rows();
+            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
+            const int expected_b_n = transA == Transpose::NoTrans ? B_view.rows() : B_view.cols();
+            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
+            const int b_k = transA == Transpose::NoTrans ? B_view.cols() : B_view.rows();
+            if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
+                throw std::runtime_error("SYR2K: incompatible matrix dimensions");
+            }
+
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                if constexpr (std::is_same_v<T, float>) {
+                    cblas_ssyr2k(CblasColMajor,
+                                 enum_convert<BackendLibrary::CBLAS>(uplo),
+                                 enum_convert<BackendLibrary::CBLAS>(transA),
+                                 n,
+                                 k,
+                                 alpha,
+                                 A_i.data_ptr(),
+                                 A_i.ld(),
+                                 B_i.data_ptr(),
+                                 B_i.ld(),
+                                 beta,
+                                 C_i.data_ptr(),
+                                 C_i.ld());
+                } else if constexpr (std::is_same_v<T, double>) {
+                    cblas_dsyr2k(CblasColMajor,
+                                 enum_convert<BackendLibrary::CBLAS>(uplo),
+                                 enum_convert<BackendLibrary::CBLAS>(transA),
+                                 n,
+                                 k,
+                                 alpha,
+                                 A_i.data_ptr(),
+                                 A_i.ld(),
+                                 B_i.data_ptr(),
+                                 B_i.ld(),
+                                 beta,
+                                 C_i.data_ptr(),
+                                 C_i.ld());
+                }
+            };
+
+            for (int batch = 0; batch < A_view.batch_size(); ++batch) {
+                launch_single(A_view[batch], B_view[batch], C_view[batch]);
+            }
+        });
+    }
+
+    template <Backend B, typename T>
+    Event trmm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& Bmat,
+               const MatrixView<T, MatrixFormat::Dense>& Cmat,
+               T alpha,
+               Side side,
+               Uplo uplo,
+               Transpose transA,
+               Diag diag) {
+        auto A_view = A;
+        auto B_view = Bmat;
+        auto C_view = Cmat;
+        return detail::submit_host_task(ctx, "netlib.trmm", [=] {
+            if (A_view.rows() != A_view.cols()) {
+                throw std::runtime_error("TRMM: A must be square");
+            }
+            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
+                throw std::runtime_error("TRMM: batch size mismatch");
+            }
+
+            const int m = C_view.rows();
+            const int n = C_view.cols();
+            const int expected_dim = side == Side::Left ? m : n;
+            if (A_view.rows() != expected_dim || B_view.rows() != m || B_view.cols() != n) {
+                throw std::runtime_error("TRMM: incompatible matrix dimensions");
+            }
+
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                if (side == Side::Left) {
+                    call_backend_nh<T, BackendLibrary::CBLAS>(
+                        cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
+                        Layout::ColMajor,
+                        transA,
+                        Transpose::NoTrans,
+                        m,
+                        n,
+                        A_i.cols(),
+                        alpha,
+                        A_i.data_ptr(),
+                        A_i.ld(),
+                        B_i.data_ptr(),
+                        B_i.ld(),
+                        T(0),
+                        C_i.data_ptr(),
+                        C_i.ld());
+                } else {
+                    call_backend_nh<T, BackendLibrary::CBLAS>(
+                        cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
+                        Layout::ColMajor,
+                        Transpose::NoTrans,
+                        transA,
+                        m,
+                        n,
+                        A_i.rows(),
+                        alpha,
+                        B_i.data_ptr(),
+                        B_i.ld(),
+                        A_i.data_ptr(),
+                        A_i.ld(),
+                        T(0),
+                        C_i.data_ptr(),
+                        C_i.ld());
+                }
+            };
+
+            for (int batch = 0; batch < A_view.batch_size(); ++batch) {
+                launch_single(A_view[batch], B_view[batch], C_view[batch]);
+            }
+        });
+    }
+
     template <Backend B, typename T>
     Event potrf(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -697,6 +967,37 @@ namespace batchlas{
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Side, Uplo, Transpose, Diag, fp);
 
+    #define SYMM_INSTANTIATE(fp) \
+    template Event symm<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Side, Uplo);
+
+    #define SYRK_INSTANTIATE(fp) \
+    template Event syrk<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Uplo, Transpose);
+
+    #define SYR2K_INSTANTIATE(fp) \
+    template Event syr2k<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Uplo, Transpose);
+
+    #define TRMM_INSTANTIATE(fp) \
+    template Event trmm<Backend::NETLIB, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, Side, Uplo, Transpose, Diag);
+
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::NETLIB, fp>( \
         Queue&, \
@@ -872,12 +1173,26 @@ namespace batchlas{
     BLAS_LEVEL3_INSTANTIATE(double)
     BLAS_LEVEL3_INSTANTIATE(std::complex<float>)
     BLAS_LEVEL3_INSTANTIATE(std::complex<double>)
+    TRMM_INSTANTIATE(float)
+    TRMM_INSTANTIATE(double)
+    TRMM_INSTANTIATE(std::complex<float>)
+    TRMM_INSTANTIATE(std::complex<double>)
+    SYMM_INSTANTIATE(float)
+    SYMM_INSTANTIATE(double)
+    SYRK_INSTANTIATE(float)
+    SYRK_INSTANTIATE(double)
+    SYR2K_INSTANTIATE(float)
+    SYR2K_INSTANTIATE(double)
 
     #undef SPMM_INSTANTIATE
     #undef SPMM_BUFFER_SIZE_INSTANTIATE
     #undef GEMM_INSTANTIATE
     #undef GEMV_INSTANTIATE
+    #undef SYMM_INSTANTIATE
+    #undef SYRK_INSTANTIATE
+    #undef SYR2K_INSTANTIATE
     #undef TRSM_INSTANTIATE
+    #undef TRMM_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRS_INSTANTIATE

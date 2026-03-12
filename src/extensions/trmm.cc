@@ -107,14 +107,8 @@ Event trmm(Queue& ctx,
     TRMM_INSTANTIATE(back, std::complex<float>)\
     TRMM_INSTANTIATE(back, std::complex<double>)
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-        INSTANTIATE_TRMM_FOR_BACKEND(Backend::CUDA)
-    #endif
-    #if BATCHLAS_HAS_ROCM_BACKEND 
-        INSTANTIATE_TRMM_FOR_BACKEND(Backend::ROCM)
-    #endif
-    #if BATCHLAS_HAS_HOST_BACKEND 
-        INSTANTIATE_TRMM_FOR_BACKEND(Backend::NETLIB)
+#if BATCHLAS_HAS_MKL_BACKEND
+        INSTANTIATE_TRMM_FOR_BACKEND(Backend::MKL)
     #endif
 
 #undef TRMM_INSTANTIATE

@@ -828,15 +828,15 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
         if (uplo == Uplo::Upper) {
             // Upper triangular part
             if (i < j) {
-                size_t idx1 = b * stride + i * ld + j;
-                size_t idx2 = b * stride + j * ld + i;
+                size_t idx1 = b * stride + j * ld + i;
+                size_t idx2 = b * stride + i * ld + j;
                 data_ptr[idx2] = data_ptr[idx1];
             }
         } else {
             // Lower triangular part
             if (i > j) {
-                size_t idx1 = b * stride + i * ld + j;
-                size_t idx2 = b * stride + j * ld + i;
+                size_t idx1 = b * stride + j * ld + i;
+                size_t idx2 = b * stride + i * ld + j;
                 data_ptr[idx2] = data_ptr[idx1];
             }
         }
@@ -873,15 +873,15 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
         if (uplo == Uplo::Upper) {
             // Upper triangular part
             if (i < j) {
-                size_t idx1 = b * stride + i * ld + j;
-                size_t idx2 = b * stride + j * ld + i;
+                size_t idx1 = b * stride + j * ld + i;
+                size_t idx2 = b * stride + i * ld + j;
                 data_ptr[idx2] = std::conj(data_ptr[idx1]);
             }
         } else {
             // Lower triangular part
             if (i > j) {
-                size_t idx1 = b * stride + i * ld + j;
-                size_t idx2 = b * stride + j * ld + i;
+                size_t idx1 = b * stride + j * ld + i;
+                size_t idx2 = b * stride + i * ld + j;
                 data_ptr[idx2] = std::conj(data_ptr[idx1]);
             }
         }

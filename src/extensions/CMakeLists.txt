@@ -20,6 +20,9 @@ set(EXTENSIONS_SOURCES
     inv.cc
     tridiag_solver.cc
     lanczos.cc
+    symm.cc
+    syrk.cc
+    syr2k.cc
     trmm.cc
     ormqr_blocked.cc
     steqr.cc

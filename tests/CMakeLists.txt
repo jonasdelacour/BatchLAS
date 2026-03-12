@@ -37,6 +37,9 @@ set(TEST_TARGETS
     orgqr_tests
     transpose_tests
     iluk_tests
+    symm_tests
+    syrk_tests
+    syr2k_tests
     syev_tests
     gesvd_tests
     steqr_tests

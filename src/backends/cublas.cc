@@ -16,6 +16,10 @@
 
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
+#include "symm_custom_dispatch.hh"
+#include "syr2k_custom_dispatch.hh"
+#include "syrk_custom_dispatch.hh"
+#include "trmm_custom_dispatch.hh"
 #include "../sycl/gemm_kernels.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -108,6 +112,416 @@ namespace batchlas {
         return gemm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
 
+    template <Backend Back, typename T>
+    Event symm_vendor_impl(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           T alpha,
+                           T beta,
+                           Side side,
+                           Uplo uplo) {
+        static LinalgHandle<Back> handle;
+        handle.setStream(ctx);
+
+        if (A.rows() != A.cols()) {
+            throw std::runtime_error("SYMM: A must be square");
+        }
+        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "SYMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", B=" + std::to_string(B.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
+        const int m = C.rows();
+        const int n = C.cols();
+        const int expected_a = side == Side::Left ? B.rows() : B.cols();
+        if (A.rows() != expected_a || B.rows() != m || B.cols() != n) {
+            throw std::runtime_error("SYMM: incompatible matrix dimensions");
+        }
+
+        const auto side_cublas = enum_convert<BackendLibrary::CUBLAS>(side);
+        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
+
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            if constexpr (std::is_same_v<T, float>) {
+                cublasSsymm(handle,
+                            side_cublas,
+                            uplo_cublas,
+                            m,
+                            n,
+                            &alpha,
+                            A_i.data_ptr(),
+                            A_i.ld(),
+                            B_i.data_ptr(),
+                            B_i.ld(),
+                            &beta,
+                            C_i.data_ptr(),
+                            C_i.ld());
+            } else if constexpr (std::is_same_v<T, double>) {
+                cublasDsymm(handle,
+                            side_cublas,
+                            uplo_cublas,
+                            m,
+                            n,
+                            &alpha,
+                            A_i.data_ptr(),
+                            A_i.ld(),
+                            B_i.data_ptr(),
+                            B_i.ld(),
+                            &beta,
+                            C_i.data_ptr(),
+                            C_i.ld());
+            }
+        };
+
+        if (A.batch_size() <= 1) {
+            launch_single(A, B, C);
+        } else {
+            for (int batch = 0; batch < A.batch_size(); ++batch) {
+                launch_single(A[batch], B[batch], C[batch]);
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
+    template <Backend Back, typename T>
+    Event symm_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& B,
+                      const MatrixView<T, MatrixFormat::Dense>& C,
+                      T alpha,
+                      T beta,
+                      Side side,
+                      Uplo uplo) {
+        if constexpr (Back == Backend::CUDA) {
+            if constexpr (std::is_same_v<T, float>) {
+                if (symm_use_cuda_custom(ctx, A, B, C, side, uplo)) {
+                    return symm_cuda_custom(ctx, A, B, C, alpha, beta, side, uplo);
+                }
+            }
+        }
+
+        return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
+
+    template <Backend Back, typename T>
+    Event syrk_vendor_impl(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           T alpha,
+                           T beta,
+                           Uplo uplo,
+                           Transpose transA) {
+        static LinalgHandle<Back> handle;
+        handle.setStream(ctx);
+
+        if (C.rows() != C.cols()) {
+            throw std::runtime_error("SYRK: C must be square");
+        }
+        if (A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "SYRK: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
+        const int n = C.rows();
+        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
+        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
+        if (expected_n != n || k <= 0) {
+            throw std::runtime_error("SYRK: incompatible matrix dimensions");
+        }
+
+        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
+        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
+
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            if constexpr (std::is_same_v<T, float>) {
+                cublasSsyrk(handle,
+                            uplo_cublas,
+                            trans_cublas,
+                            n,
+                            k,
+                            &alpha,
+                            A_i.data_ptr(),
+                            A_i.ld(),
+                            &beta,
+                            C_i.data_ptr(),
+                            C_i.ld());
+            } else if constexpr (std::is_same_v<T, double>) {
+                cublasDsyrk(handle,
+                            uplo_cublas,
+                            trans_cublas,
+                            n,
+                            k,
+                            &alpha,
+                            A_i.data_ptr(),
+                            A_i.ld(),
+                            &beta,
+                            C_i.data_ptr(),
+                            C_i.ld());
+            }
+        };
+
+        if (A.batch_size() <= 1) {
+            launch_single(A, C);
+        } else {
+            for (int batch = 0; batch < A.batch_size(); ++batch) {
+                launch_single(A[batch], C[batch]);
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
+    template <Backend Back, typename T>
+    Event syrk_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& C,
+                      T alpha,
+                      T beta,
+                      Uplo uplo,
+                      Transpose transA) {
+        if constexpr (Back == Backend::CUDA) {
+            if constexpr (std::is_same_v<T, float>) {
+                if (syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
+                    return syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
+                }
+            }
+        }
+
+        return syrk_vendor_impl<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    }
+
+    template <Backend Back, typename T>
+    Event syr2k_vendor_impl(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& A,
+                            const MatrixView<T, MatrixFormat::Dense>& B,
+                            const MatrixView<T, MatrixFormat::Dense>& C,
+                            T alpha,
+                            T beta,
+                            Uplo uplo,
+                            Transpose transA) {
+        static LinalgHandle<Back> handle;
+        handle.setStream(ctx);
+
+        if (C.rows() != C.cols()) {
+            throw std::runtime_error("SYR2K: C must be square");
+        }
+        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "SYR2K: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", B=" + std::to_string(B.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
+        const int n = C.rows();
+        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
+        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
+        const int expected_b_n = transA == Transpose::NoTrans ? B.rows() : B.cols();
+        const int b_k = transA == Transpose::NoTrans ? B.cols() : B.rows();
+        if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
+            throw std::runtime_error("SYR2K: incompatible matrix dimensions");
+        }
+
+        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
+        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
+
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            if constexpr (std::is_same_v<T, float>) {
+                cublasSsyr2k(handle,
+                             uplo_cublas,
+                             trans_cublas,
+                             n,
+                             k,
+                             &alpha,
+                             A_i.data_ptr(),
+                             A_i.ld(),
+                             B_i.data_ptr(),
+                             B_i.ld(),
+                             &beta,
+                             C_i.data_ptr(),
+                             C_i.ld());
+            } else if constexpr (std::is_same_v<T, double>) {
+                cublasDsyr2k(handle,
+                             uplo_cublas,
+                             trans_cublas,
+                             n,
+                             k,
+                             &alpha,
+                             A_i.data_ptr(),
+                             A_i.ld(),
+                             B_i.data_ptr(),
+                             B_i.ld(),
+                             &beta,
+                             C_i.data_ptr(),
+                             C_i.ld());
+            }
+        };
+
+        if (A.batch_size() <= 1) {
+            launch_single(A, B, C);
+        } else {
+            for (int batch = 0; batch < A.batch_size(); ++batch) {
+                launch_single(A[batch], B[batch], C[batch]);
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
+    template <Backend Back, typename T>
+    Event syr2k_vendor(Queue& ctx,
+                       const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& B,
+                       const MatrixView<T, MatrixFormat::Dense>& C,
+                       T alpha,
+                       T beta,
+                       Uplo uplo,
+                       Transpose transA) {
+        if constexpr (Back == Backend::CUDA) {
+            if (syr2k_cuda_custom_forced()) {
+                if constexpr (std::is_same_v<T, float>) {
+                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
+                } else {
+                    throw std::runtime_error("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
+                }
+            }
+            if constexpr (std::is_same_v<T, float>) {
+                if (syr2k_use_cuda_custom(ctx, A, B, C, uplo, transA)) {
+                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
+                }
+            }
+        }
+
+        return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
+
+    template <Backend Back, typename T>
+    Event trmm_vendor_impl(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           T alpha,
+                           Side side,
+                           Uplo uplo,
+                           Transpose transA,
+                           Diag diag) {
+        static LinalgHandle<Back> handle;
+        handle.setStream(ctx);
+
+        if (A.rows() != A.cols()) {
+            throw std::runtime_error("TRMM: A must be square");
+        }
+        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "TRMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", B=" + std::to_string(B.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
+        const int m = C.rows();
+        const int n = C.cols();
+        const int expected_dim = side == Side::Left ? m : n;
+        if (A.rows() != expected_dim || B.rows() != m || B.cols() != n) {
+            throw std::runtime_error("TRMM: incompatible matrix dimensions");
+        }
+
+        const auto side_cublas = enum_convert<BackendLibrary::CUBLAS>(side);
+        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
+        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
+        const auto diag_cublas = enum_convert<BackendLibrary::CUBLAS>(diag);
+
+        if constexpr (!std::is_same_v<T, float>) {
+            if (side == Side::Left) {
+                return gemm_vendor_impl<Back, T>(ctx,
+                                                 A,
+                                                 B,
+                                                 C,
+                                                 alpha,
+                                                 T(0),
+                                                 transA,
+                                                 Transpose::NoTrans,
+                                                 ComputePrecision::Default);
+            }
+            return gemm_vendor_impl<Back, T>(ctx,
+                                             B,
+                                             A,
+                                             C,
+                                             alpha,
+                                             T(0),
+                                             Transpose::NoTrans,
+                                             transA,
+                                             ComputePrecision::Default);
+        }
+
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            if constexpr (std::is_same_v<T, float>) {
+                cublasStrmm(handle,
+                            side_cublas,
+                            uplo_cublas,
+                            trans_cublas,
+                            diag_cublas,
+                            m,
+                            n,
+                            &alpha,
+                            A_i.data_ptr(),
+                            A_i.ld(),
+                            B_i.data_ptr(),
+                            B_i.ld(),
+                            C_i.data_ptr(),
+                            C_i.ld());
+            }
+        };
+
+        if (A.batch_size() <= 1) {
+            launch_single(A, B, C);
+        } else {
+            for (int batch = 0; batch < A.batch_size(); ++batch) {
+                launch_single(A[batch], B[batch], C[batch]);
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
+    template <Backend Back, typename T>
+    Event trmm_vendor(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& B,
+                      const MatrixView<T, MatrixFormat::Dense>& C,
+                      T alpha,
+                      Side side,
+                      Uplo uplo,
+                      Transpose transA,
+                      Diag diag) {
+        if constexpr (Back == Backend::CUDA) {
+            if (trmm_cuda_custom_forced()) {
+                if constexpr (std::is_same_v<T, float>) {
+                    return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
+                } else {
+                    throw std::runtime_error("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
+                }
+            }
+            if constexpr (std::is_same_v<T, float>) {
+                if (trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
+                    return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
+                }
+            }
+        }
+
+        return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    }
+
     Event gemm_vendor_cuda_raw(Queue& ctx,
                                const MatrixView<float, MatrixFormat::Dense>& A,
                                const MatrixView<float, MatrixFormat::Dense>& B,
@@ -118,6 +532,50 @@ namespace batchlas {
                                Transpose transB,
                                ComputePrecision precision) {
         return gemm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+    }
+
+    Event symm_vendor_cuda_raw(Queue& ctx,
+                               const MatrixView<float, MatrixFormat::Dense>& A,
+                               const MatrixView<float, MatrixFormat::Dense>& B,
+                               const MatrixView<float, MatrixFormat::Dense>& C,
+                               float alpha,
+                               float beta,
+                               Side side,
+                               Uplo uplo) {
+        return symm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
+
+    Event syrk_vendor_cuda_raw(Queue& ctx,
+                               const MatrixView<float, MatrixFormat::Dense>& A,
+                               const MatrixView<float, MatrixFormat::Dense>& C,
+                               float alpha,
+                               float beta,
+                               Uplo uplo,
+                               Transpose transA) {
+        return syrk_vendor_impl<Backend::CUDA, float>(ctx, A, C, alpha, beta, uplo, transA);
+    }
+
+    Event syr2k_vendor_cuda_raw(Queue& ctx,
+                                const MatrixView<float, MatrixFormat::Dense>& A,
+                                const MatrixView<float, MatrixFormat::Dense>& B,
+                                const MatrixView<float, MatrixFormat::Dense>& C,
+                                float alpha,
+                                float beta,
+                                Uplo uplo,
+                                Transpose transA) {
+        return syr2k_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
+
+    Event trmm_vendor_cuda_raw(Queue& ctx,
+                               const MatrixView<float, MatrixFormat::Dense>& A,
+                               const MatrixView<float, MatrixFormat::Dense>& B,
+                               const MatrixView<float, MatrixFormat::Dense>& C,
+                               float alpha,
+                               Side side,
+                               Uplo uplo,
+                               Transpose transA,
+                               Diag diag) {
+        return trmm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
     template <Backend B, typename T>
@@ -638,6 +1096,54 @@ namespace batchlas {
         return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
     }
 
+    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event symm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               T beta,
+               Side side,
+               Uplo uplo) {
+        return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
+
+    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event syrk(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               T beta,
+               Uplo uplo,
+               Transpose transA) {
+        return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    }
+
+    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    Event syr2k(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& B,
+                const MatrixView<T, MatrixFormat::Dense>& C,
+                T alpha,
+                T beta,
+                Uplo uplo,
+                Transpose transA) {
+        return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
+
+    template <Backend Back, typename T>
+    Event trmm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               Side side,
+               Uplo uplo,
+               Transpose transA,
+               Diag diag) {
+        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    }
+
     template <Backend B, typename T>
     Event geqrf(Queue& ctx,
                 const MatrixView<T,MatrixFormat::Dense>& A,
@@ -739,13 +1245,44 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Side, Uplo, Transpose, Diag, fp);
 
+    #define TRMM_INSTANTIATE(fp) \
+    template Event trmm<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, Side, Uplo, Transpose, Diag);
+
+    #define SYMM_INSTANTIATE(fp) \
+    template Event symm<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Side, Uplo);
+
+    #define SYRK_INSTANTIATE(fp) \
+    template Event syrk<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Uplo, Transpose);
+
+    #define SYR2K_INSTANTIATE(fp) \
+    template Event syr2k<Backend::CUDA, fp>( \
+        Queue&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<fp, MatrixFormat::Dense>&, \
+        fp, fp, Uplo, Transpose);
+
     #define GEQRF_INSTANTIATE(fp) \
     template Event geqrf<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Span<fp>, \
         Span<std::byte>);
-    
+
     #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t geqrf_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
@@ -860,10 +1397,24 @@ namespace batchlas {
     BLAS_LEVEL3_INSTANTIATE(double)
     BLAS_LEVEL3_INSTANTIATE(std::complex<float>)
     BLAS_LEVEL3_INSTANTIATE(std::complex<double>)
+    TRMM_INSTANTIATE(float)
+    TRMM_INSTANTIATE(double)
+    TRMM_INSTANTIATE(std::complex<float>)
+    TRMM_INSTANTIATE(std::complex<double>)
+    SYMM_INSTANTIATE(float)
+    SYMM_INSTANTIATE(double)
+    SYRK_INSTANTIATE(float)
+    SYRK_INSTANTIATE(double)
+    SYR2K_INSTANTIATE(float)
+    SYR2K_INSTANTIATE(double)
 
     #undef GEMM_INSTANTIATE
     #undef GEMV_INSTANTIATE
+    #undef SYMM_INSTANTIATE
+    #undef SYRK_INSTANTIATE
+    #undef SYR2K_INSTANTIATE
     #undef TRSM_INSTANTIATE
+    #undef TRMM_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRS_INSTANTIATE

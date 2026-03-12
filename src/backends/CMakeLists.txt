@@ -19,6 +19,14 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
         cublas.cc
         gemm_cublasdx.cu
         gemm_cublasdx_dispatch.cc
+        symm_cublasdx_fused.cu
+        symm_custom_dispatch.cc
+        syrk_cublasdx_fused.cu
+        syrk_custom_dispatch.cc
+        syr2k_cublasdx_fused.cu
+        syr2k_custom_dispatch.cc
+        trmm_cublasdx_fused.cu
+        trmm_custom_dispatch.cc
         cusparse.cc
         cusolver.cc
         cusolverdx.cc
