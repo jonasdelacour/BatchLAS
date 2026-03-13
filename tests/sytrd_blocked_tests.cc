@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -44,6 +45,30 @@ template <typename T, Backend B>
 struct SytrdBlockedConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
+};
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* name, const char* value) : name_(name) {
+        if (const char* old = std::getenv(name_)) {
+            old_value_ = old;
+            had_old_value_ = true;
+        }
+        setenv(name_, value, 1);
+    }
+
+    ~ScopedEnvVar() {
+        if (had_old_value_) {
+            setenv(name_, old_value_.c_str(), 1);
+        } else {
+            unsetenv(name_);
+        }
+    }
+
+private:
+    const char* name_;
+    std::string old_value_;
+    bool had_old_value_ = false;
 };
 
 } // namespace
@@ -147,6 +172,59 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
             }
             EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;
+        }
+    }
+}
+
+TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
+    using Real = float;
+    constexpr Backend B = Backend::CUDA;
+
+    const double eig_tol = 10000.0 * test_utils::tolerance<double>();
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "SYTRD SYR2K trailing-update test requires a GPU device";
+    }
+
+    for (const int n : {192, 256}) {
+        const int batch = 32;
+        const int nb = 32;
+
+        auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+
+        Matrix<Real, MatrixFormat::Dense> A0 =
+            Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/1000 + n);
+        Matrix<Real, MatrixFormat::Dense> A = A0;
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        Vector<Real> tau(n - 1, batch);
+
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+
+        {
+            ScopedEnvVar trailing_update("BATCHLAS_SYTRD_TRAILING_UPDATE", "syr2k");
+            sytrd_blocked<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        }
+
+        std::vector<int> batch_items{0};
+        if (batch > 1) batch_items.push_back(batch / 2);
+        if (batch > 2) batch_items.push_back(batch - 1);
+
+        Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
+        Tmat.view().fill_tridiag(*ctx, e, d, e).wait();
+
+        const auto eig_ref = netlib_ref_eigs_dense(A0.view());
+        const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
+
+        for (int b : batch_items) {
+            const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+            for (int i = 0; i < n; ++i) {
+                const double ref = eig_ref[base + static_cast<std::size_t>(i)];
+                const double err_tol = std::max(eig_tol * std::max(1.0, std::abs(ref)), 2e-6);
+                EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
+                    << "eigenvalue mismatch at n=" << n << ", i=" << i << ", batch=" << b;
+            }
         }
     }
 }

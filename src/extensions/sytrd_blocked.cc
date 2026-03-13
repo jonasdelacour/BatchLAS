@@ -36,6 +36,22 @@ inline bool env_falsy(const char* v) {
     return (s == "0" || s == "false" || s == "FALSE" || s == "off" || s == "OFF");
 }
 
+enum class SytrdTrailingUpdateMode {
+    Gemm,
+    Syr2k,
+};
+
+inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
+    const char* v = std::getenv("BATCHLAS_SYTRD_TRAILING_UPDATE");
+    if (!v) return SytrdTrailingUpdateMode::Gemm;
+
+    const std::string s(v);
+    if (s == "syr2k" || s == "SYR2K") {
+        return SytrdTrailingUpdateMode::Syr2k;
+    }
+    return SytrdTrailingUpdateMode::Gemm;
+}
+
 template <typename U>
 inline U conj_if_needed(const U& x) {
     if constexpr (internal::is_complex<U>::value) {
@@ -505,6 +521,9 @@ Event sytrd_blocked_impl(Queue& ctx,
     const bool fuse_override_off = env_falsy(fuse_env);
     const bool fuse_default = (B == Backend::CUDA) && (n == 256);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
+    constexpr bool allow_syr2k_experiment = (B == Backend::CUDA) && std::is_same_v<T, float>;
+    const bool use_syr2k_trailing_update = allow_syr2k_experiment &&
+                                           (sytrd_trailing_update_mode() == SytrdTrailingUpdateMode::Syr2k);
 
     for (int j0 = 0; j0 < k; j0 += nb) {
         const int ib = std::min(nb, k - j0);
@@ -538,13 +557,29 @@ Event sytrd_blocked_impl(Queue& ctx,
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_small");
                 (void)update_vw_lower_small<T>(ctx, V2, W2, A22);
             } else {
-                {
-                    BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                    gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
-                }
-                {
-                    BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                    gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                if constexpr (allow_syr2k_experiment) {
+                    if (use_syr2k_trailing_update) {
+                        BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
+                        syr2k<B>(ctx, V2, W2, A22, T(-1), T(1), Uplo::Lower, Transpose::NoTrans);
+                    } else {
+                        {
+                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
+                            gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        }
+                        {
+                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
+                            gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        }
+                    }
+                } else {
+                    {
+                        BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
+                        gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                    }
+                    {
+                        BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
+                        gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                    }
                 }
             }
         }
