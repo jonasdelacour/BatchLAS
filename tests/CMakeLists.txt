@@ -67,24 +67,15 @@ else()
     message(STATUS "Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): ${CPU_SYCL_DEPENDENT_TESTS}")
 endif()
 
-# Create test executables
-foreach(test ${TEST_TARGETS})
-    # Add executable
-    add_executable(${test} ${test}.cc)
-    
-    # Link dependencies
-    target_link_libraries(${test} PRIVATE 
-        batchlas
-        GTest::gtest 
+function(batchlas_add_test_target test_name)
+    add_executable(${test_name} ${test_name}.cc)
+    batchlas_configure_binary_target(${test_name}
+        GTest::gtest
         GTest::gtest_main
     )
+    add_test(NAME ${test_name} COMMAND ${test_name})
+endfunction()
 
-    if(BATCHLAS_SYCL_TARGETS_STRING)
-        target_compile_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
-        target_link_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
-    endif()
-    
-    # Add to CTest
-    add_test(NAME ${test} COMMAND ${test})
+foreach(test ${TEST_TARGETS})
+    batchlas_add_test_target(${test})
 endforeach()
-

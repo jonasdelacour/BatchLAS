@@ -55,13 +55,11 @@ set(BENCHMARK_TARGETS
     cusolverdx_htev_benchmark
 )
 
-foreach(test ${BENCHMARK_TARGETS})
-    add_executable(${test} ${test}.cc)
-    target_link_libraries(${test} PRIVATE batchlas)
-    if(BATCHLAS_SYCL_TARGETS_STRING)
-        target_compile_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
-        target_link_options(${test} PRIVATE -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING})
-    endif()
-    #add_test(NAME ${test} COMMAND ${test})
-endforeach()
+function(batchlas_add_benchmark_target target_name)
+    add_executable(${target_name} ${target_name}.cc)
+    batchlas_configure_binary_target(${target_name})
+endfunction()
 
+foreach(test ${BENCHMARK_TARGETS})
+    batchlas_add_benchmark_target(${test})
+endforeach()
