@@ -1,0 +1,74 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 14,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Dev",
+      "description": "Default RelWithDebInfo SYCL build.",
+      "binaryDir": "${sourceDir}/build/presets/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BATCHLAS_BUILD_TESTS": "OFF",
+        "BATCHLAS_BUILD_BENCHMARKS": "OFF",
+        "BATCHLAS_BUILD_PYTHON": "OFF"
+      }
+    },
+    {
+      "name": "dev-tests",
+      "displayName": "Dev Tests",
+      "description": "RelWithDebInfo build with tests enabled.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/dev-tests",
+      "cacheVariables": {
+        "BATCHLAS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "benchmarks",
+      "displayName": "Benchmarks",
+      "description": "Build benchmarks and tuning support.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/benchmarks",
+      "cacheVariables": {
+        "BATCHLAS_BUILD_BENCHMARKS": "ON",
+        "BATCHLAS_ENABLE_TUNING": "ON"
+      }
+    },
+    {
+      "name": "cuda",
+      "displayName": "CUDA",
+      "description": "Optional CUDA-enabled build when the environment supports it.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/cuda",
+      "cacheVariables": {
+        "BATCHLAS_ENABLE_CUDA": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "targets": [
+        "batchlas"
+      ]
+    },
+    {
+      "name": "dev-tests",
+      "configurePreset": "dev-tests"
+    },
+    {
+      "name": "benchmarks",
+      "configurePreset": "benchmarks"
+    },
+    {
+      "name": "cuda",
+      "configurePreset": "cuda"
+    }
+  ]
+}
