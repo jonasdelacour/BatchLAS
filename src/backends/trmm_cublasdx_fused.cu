@@ -1,38 +1,13 @@
 #include "trmm_cublasdx_fused.hh"
-
-#include <algorithm>
-#include <cstdint>
-#include <cuda_runtime.h>
-
-#if defined(BATCHLAS_ENABLE_CUBLASDX_WRAPPER) && __has_include(<cublasdx.hpp>)
-    #define CUBLASDX_OVERLOAD_DEVICE_PIPELINE_CREATION
-    #define CUBLASDX_MAKE_TMA_ATOM cute::make_tma_atom
-    #define CUBLASDX_PIPELINE_EXECUTION __device__ __forceinline__
-    #define CUBLASDX_DEVICE_PIPELINE_EXECUTION __host__ __device__ __forceinline__
-    #include <cublasdx.hpp>
-    #undef CUBLASDX_DEVICE_PIPELINE_EXECUTION
-    #undef CUBLASDX_PIPELINE_EXECUTION
-    #undef CUBLASDX_MAKE_TMA_ATOM
-    #undef CUBLASDX_OVERLOAD_DEVICE_PIPELINE_CREATION
-    #define BATCHLAS_HAS_CUBLASDX_HEADER 1
-#else
-    #define BATCHLAS_HAS_CUBLASDX_HEADER 0
-#endif
+#include "cublasdx_fused_common.hh"
 
 namespace batchlas::backend::trmm_cublasdx {
 
 namespace {
 
-constexpr int kBlockSize = 256;
-constexpr int kSupportedSM = 890;
-
-constexpr unsigned int round_up_unsigned(unsigned int value, unsigned int alignment) {
-    return ((value + alignment - 1u) / alignment) * alignment;
-}
-
 template <int TileM, int TileN>
 constexpr unsigned int diagonal_shared_memory_size() {
-    return round_up_unsigned(static_cast<unsigned int>((TileM * TileM + TileM * TileN) * sizeof(float)), 16u);
+    return detail::round_up_unsigned(static_cast<unsigned int>((TileM * TileM + TileM * TileN) * sizeof(float)), 16u);
 }
 
 #if BATCHLAS_HAS_CUBLASDX_HEADER
@@ -45,7 +20,7 @@ using GemmBlock = decltype(
     cublasdx::Arrangement<cublasdx::col_major, cublasdx::col_major, cublasdx::col_major>() +
     cublasdx::Function<cublasdx::function::MM>() +
     cublasdx::Block() +
-    cublasdx::BlockDim<kBlockSize>() +
+    cublasdx::BlockDim<detail::kCublasDxBlockSize>() +
     cublasdx::SM<Sm>());
 
 template <int Sm, int TileM, int TileN, int TileK>
@@ -54,80 +29,12 @@ using PipelinedGemmBlock = decltype(
     cublasdx::WithPipeline());
 #endif
 
-inline bool is_16b_aligned(const void* ptr) {
-    return (reinterpret_cast<std::uintptr_t>(ptr) % 16u) == 0u;
-}
-
 inline bool has_max_alignment(const TrmmLaunchDescriptor& desc) {
-    return is_16b_aligned(desc.a_ptr) && is_16b_aligned(desc.b_ptr) && is_16b_aligned(desc.c_ptr) &&
-        (desc.lda % 4) == 0 && (desc.ldb % 4) == 0 && (desc.ldc % 4) == 0 &&
-        (desc.stride_a % 4) == 0 && (desc.stride_b % 4) == 0 && (desc.stride_c % 4) == 0;
-}
-
-inline bool current_device_sm_supported() {
-    int device = 0;
-    if (cudaGetDevice(&device) != cudaSuccess) {
-        return false;
-    }
-
-    cudaDeviceProp prop{};
-    if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
-        return false;
-    }
-
-    return prop.major * 100 + prop.minor * 10 == kSupportedSM;
+    return detail::pointers_16b_aligned({desc.a_ptr, desc.b_ptr, desc.c_ptr}) &&
+        detail::multiples_of_four({desc.lda, desc.ldb, desc.ldc, desc.stride_a, desc.stride_b, desc.stride_c});
 }
 
 #if BATCHLAS_HAS_CUBLASDX_HEADER
-template <class Kernel>
-cudaError_t validate_launch_resources(Kernel kernel, unsigned int shared_memory_size) {
-    cudaFuncAttributes attr{};
-    const cudaError_t attr_status = cudaFuncGetAttributes(&attr, kernel);
-    if (attr_status != cudaSuccess) {
-        return attr_status;
-    }
-
-    int device = 0;
-    if (cudaGetDevice(&device) != cudaSuccess) {
-        return cudaErrorNotSupported;
-    }
-
-    int optin_limit = 0;
-    const cudaError_t optin_status = cudaDeviceGetAttribute(&optin_limit,
-                                                            cudaDevAttrMaxSharedMemoryPerBlockOptin,
-                                                            device);
-    if (optin_status != cudaSuccess) {
-        return optin_status;
-    }
-
-    int default_limit = 0;
-    const cudaError_t default_status = cudaDeviceGetAttribute(&default_limit,
-                                                              cudaDevAttrMaxSharedMemoryPerBlock,
-                                                              device);
-    if (default_status != cudaSuccess) {
-        return default_status;
-    }
-
-    int kernel_limit = attr.maxDynamicSharedSizeBytes;
-    if (kernel_limit <= 0) {
-        kernel_limit = optin_limit > 0 ? optin_limit : default_limit;
-    }
-
-    int supported_limit = kernel_limit;
-    if (optin_limit > 0) {
-        supported_limit = std::min(supported_limit, optin_limit);
-    }
-    if (supported_limit <= 0) {
-        supported_limit = default_limit;
-    }
-
-    if (shared_memory_size > static_cast<unsigned int>(supported_limit)) {
-        return cudaErrorNotSupported;
-    }
-
-    return cudaSuccess;
-}
-
 template <typename Tensor>
 __device__ void load_dense_tile(Tensor tensor,
                                 const float* ptr,
@@ -161,12 +68,12 @@ constexpr unsigned int pipelined_shared_memory_size() {
     using cute_layout_b = decltype(cublasdx::detail::get_cute_layout(BLAS::suggest_layout_smem_b()));
 
     constexpr unsigned int shared_bytes_ab =
-        round_up_unsigned(depth * cute::cosize(cute_layout_a {}) * sizeof(typename BLAS::a_value_type),
-                          cublasdx::alignment_of_v_b<BLAS>) +
+        detail::round_up_unsigned(depth * cute::cosize(cute_layout_a {}) * sizeof(typename BLAS::a_value_type),
+                                  cublasdx::alignment_of_v_b<BLAS>) +
         depth * cute::cosize(cute_layout_b {}) * sizeof(typename BLAS::b_value_type);
     constexpr unsigned int barrier_bytes = depth * 2u * sizeof(cublasdx::detail::barrier_storage_t);
 
-    return round_up_unsigned(shared_bytes_ab, cublasdx::detail::barrier_buffer_alignment_bytes) + barrier_bytes;
+    return detail::round_up_unsigned(shared_bytes_ab, cublasdx::detail::barrier_buffer_alignment_bytes) + barrier_bytes;
 }
 
 template <class BLAS, int TileM, int TileN, int TileK, Diag DiagMode>
@@ -370,7 +277,7 @@ cudaError_t launch_for_sm(const TrmmLaunchDescriptor& desc, cudaStream_t stream)
     auto kernel = trmm_cublasdx_kernel<BLAS, TileM, TileN, TileK, DiagMode>;
     const unsigned int shared_memory_size = cublasdx::get_shared_storage_size<BLAS>();
 
-    const cudaError_t resource_status = validate_launch_resources(kernel, shared_memory_size);
+    const cudaError_t resource_status = detail::validate_launch_resources(kernel, shared_memory_size);
     if (resource_status != cudaSuccess) {
         return resource_status;
     }
@@ -403,7 +310,7 @@ cudaError_t launch_pipelined_for_sm(const TrmmLaunchDescriptor& desc, cudaStream
         ? mm_shared_memory_size
         : diagonal_shared_memory_size<TileM, TileN>();
 
-    const cudaError_t resource_status = validate_launch_resources(kernel, shared_memory_size);
+    const cudaError_t resource_status = detail::validate_launch_resources(kernel, shared_memory_size);
     if (resource_status != cudaSuccess) {
         return resource_status;
     }
@@ -435,8 +342,8 @@ cudaError_t dispatch_family_for_current_sm(const TrmmLaunchDescriptor& desc, cud
     }
 
     switch (prop.major * 100 + prop.minor * 10) {
-    case kSupportedSM:
-        return launch_for_sm<kSupportedSM, TileM, TileN, TileK, DiagMode>(desc, stream);
+    case detail::kCublasDxSupportedSM:
+        return launch_for_sm<detail::kCublasDxSupportedSM, TileM, TileN, TileK, DiagMode>(desc, stream);
     default:
         return cudaErrorNotSupported;
     }
@@ -455,8 +362,8 @@ cudaError_t dispatch_pipelined_family_for_current_sm(const TrmmLaunchDescriptor&
     }
 
     switch (prop.major * 100 + prop.minor * 10) {
-    case kSupportedSM:
-        return launch_pipelined_for_sm<kSupportedSM, TileM, TileN, TileK, DiagMode>(desc, stream);
+    case detail::kCublasDxSupportedSM:
+        return launch_pipelined_for_sm<detail::kCublasDxSupportedSM, TileM, TileN, TileK, DiagMode>(desc, stream);
     default:
         return cudaErrorNotSupported;
     }
@@ -481,6 +388,7 @@ cudaError_t dispatch_for_variant(cublasdx_gemm::CuBLASDxGemmVariant variant,
         return cudaErrorNotSupported;
     }
 }
+
 #endif
 
 } // namespace
@@ -497,7 +405,7 @@ cudaError_t launch_float(cublasdx_gemm::CuBLASDxGemmVariant variant,
                          const TrmmLaunchDescriptor& desc,
                          Diag diag,
                          cudaStream_t stream) {
-    if (!available() || !current_device_sm_supported()) {
+    if (!available() || !detail::current_device_sm_supported()) {
         return cudaErrorNotSupported;
     }
 

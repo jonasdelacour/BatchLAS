@@ -3,25 +3,18 @@
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "symm_cublasdx_fused.hh"
+#include "cublasdx_dispatch_common.hh"
 
 #include "../util/kernel-trace.hh"
 
 #include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <stdexcept>
-#include <string>
-#include <sycl/sycl.hpp>
 
 namespace batchlas::backend {
 
 namespace {
 
 constexpr int kSymmCublasDxTile = 32;
-
-int ceil_div(int value, int divisor) {
-    return (value + divisor - 1) / divisor;
-}
 
 enum class SymmVariantRequest {
     Vendor,
@@ -30,27 +23,10 @@ enum class SymmVariantRequest {
 };
 
 SymmVariantRequest symm_variant_request() {
-    const char* raw = std::getenv("BATCHLAS_SYMM_VARIANT");
-    if (!raw) {
-        return SymmVariantRequest::Auto;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return SymmVariantRequest::Vendor;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return SymmVariantRequest::CuBLASDx;
-    }
-    if (value == "auto") {
-        return SymmVariantRequest::Auto;
-    }
-
-    return SymmVariantRequest::Auto;
+    return detail::parse_cublasdx_variant_request("BATCHLAS_SYMM_VARIANT",
+                                                  SymmVariantRequest::Vendor,
+                                                  SymmVariantRequest::CuBLASDx,
+                                                  SymmVariantRequest::Auto);
 }
 
 bool symm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -86,15 +62,11 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
         return false;
     }
 
-    const int output_tile_rows = ceil_div(m, kSymmCublasDxTile);
-    const int output_tile_cols = ceil_div(n, kSymmCublasDxTile);
-    const int reduction_tiles = ceil_div(k, kSymmCublasDxTile);
+    const int output_tile_rows = detail::ceil_div(m, kSymmCublasDxTile);
+    const int output_tile_cols = detail::ceil_div(n, kSymmCublasDxTile);
+    const int reduction_tiles = detail::ceil_div(k, kSymmCublasDxTile);
     const int tiled_work = A.batch_size() * output_tile_rows * output_tile_cols * reduction_tiles;
     return tiled_work >= 8;
-}
-
-inline cudaStream_t cuda_stream_from_queue(const Queue& ctx) {
-    return sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
 }
 
 Event symm_cublasdx_fallback_gemm(Queue& ctx,
@@ -143,24 +115,14 @@ bool symm_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& C,
                           Side side,
                           Uplo) {
-    if (ctx.device().type != DeviceType::GPU) {
-        return false;
-    }
-
-    if (!symm_problem_supported(A, B, C, side)) {
-        return false;
-    }
-
     const auto request = symm_variant_request();
-    if (request == SymmVariantRequest::Vendor) {
-        return false;
-    }
-
-    if (request == SymmVariantRequest::Auto) {
-        return symm_prefer_cuda_custom_heuristic(A, B, C, side);
-    }
-
-    return request == SymmVariantRequest::CuBLASDx;
+    const bool problem_supported = symm_problem_supported(A, B, C, side);
+    return detail::should_use_cublasdx(ctx,
+                                       request,
+                                       SymmVariantRequest::Vendor,
+                                       SymmVariantRequest::CuBLASDx,
+                                       problem_supported,
+                                       problem_supported && symm_prefer_cuda_custom_heuristic(A, B, C, side));
 }
 
 Event symm_cuda_custom(Queue& ctx,
@@ -180,8 +142,7 @@ Event symm_cuda_custom(Queue& ctx,
                                                       C,
                                                       Transpose::NoTrans,
                                                       Transpose::NoTrans);
-    if (variant == cublasdx_gemm::CuBLASDxGemmVariant::VendorFallback ||
-        !cublasdx_gemm_variant_available(variant) || !symm_cublasdx::available()) {
+    if (detail::cublasdx_variant_needs_fallback(variant, symm_cublasdx::available())) {
         return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
@@ -207,7 +168,7 @@ Event symm_cuda_custom(Queue& ctx,
                                                             desc,
                                                             side,
                                                             uplo,
-                                                            cuda_stream_from_queue(ctx));
+                                                            detail::cuda_stream_from_queue(ctx));
     if (status == cudaErrorNotSupported) {
         return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
     }

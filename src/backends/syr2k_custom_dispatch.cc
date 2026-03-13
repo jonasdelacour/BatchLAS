@@ -3,25 +3,18 @@
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "syr2k_cublasdx_fused.hh"
+#include "cublasdx_dispatch_common.hh"
 
 #include "../util/kernel-trace.hh"
 
 #include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <stdexcept>
-#include <string>
-#include <sycl/sycl.hpp>
 
 namespace batchlas::backend {
 
 namespace {
 
 constexpr int kSyr2kCublasDxTile = 32;
-
-int ceil_div(int value, int divisor) {
-    return (value + divisor - 1) / divisor;
-}
 
 enum class Syr2kVariantRequest {
     Vendor,
@@ -30,23 +23,10 @@ enum class Syr2kVariantRequest {
 };
 
 Syr2kVariantRequest syr2k_variant_request() {
-    const char* raw = std::getenv("BATCHLAS_SYR2K_VARIANT");
-    if (!raw) {
-        return Syr2kVariantRequest::Auto;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return Syr2kVariantRequest::Vendor;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return Syr2kVariantRequest::CuBLASDx;
-    }
-    return Syr2kVariantRequest::Auto;
+    return detail::parse_cublasdx_variant_request("BATCHLAS_SYR2K_VARIANT",
+                                                  Syr2kVariantRequest::Vendor,
+                                                  Syr2kVariantRequest::CuBLASDx,
+                                                  Syr2kVariantRequest::Auto);
 }
 
 bool syr2k_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -82,14 +62,10 @@ bool syr2k_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::De
         return false;
     }
 
-    const int output_tile_rows = ceil_div(n, kSyr2kCublasDxTile);
-    const int reduction_tiles = ceil_div(k, kSyr2kCublasDxTile);
+    const int output_tile_rows = detail::ceil_div(n, kSyr2kCublasDxTile);
+    const int reduction_tiles = detail::ceil_div(k, kSyr2kCublasDxTile);
     const int tiled_work = A.batch_size() * output_tile_rows * output_tile_rows * reduction_tiles;
     return min_dim * 2 >= max_dim && tiled_work >= 8;
-}
-
-inline cudaStream_t cuda_stream_from_queue(const Queue& ctx) {
-    return sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
 }
 
 Event syr2k_cublasdx_fallback(Queue& ctx,
@@ -106,7 +82,7 @@ Event syr2k_cublasdx_fallback(Queue& ctx,
 }
 
 [[noreturn]] void throw_forced_syr2k_unavailable(const std::string& reason) {
-    throw std::runtime_error("BATCHLAS_SYR2K_VARIANT=cublasdx requested, but fused cuBLASDx SYR2K is unavailable: " + reason);
+    detail::throw_forced_cublasdx_unavailable("BATCHLAS_SYR2K_VARIANT", "SYR2K", reason);
 }
 
 } // namespace
@@ -122,20 +98,13 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
                            Uplo,
                            Transpose transA) {
     const auto request = syr2k_variant_request();
-    if (request == Syr2kVariantRequest::CuBLASDx) {
-        return true;
-    }
-    if (ctx.device().type != DeviceType::GPU) {
-        return false;
-    }
-    if (!syr2k_problem_supported(A, B, C, transA)) {
-        return false;
-    }
-
-    if (request == Syr2kVariantRequest::Vendor) {
-        return false;
-    }
-    return syr2k_prefer_cuda_custom_heuristic(A, C, transA);
+    const bool problem_supported = syr2k_problem_supported(A, B, C, transA);
+    return detail::should_use_cublasdx(ctx,
+                                       request,
+                                       Syr2kVariantRequest::Vendor,
+                                       Syr2kVariantRequest::CuBLASDx,
+                                       problem_supported,
+                                       problem_supported && syr2k_prefer_cuda_custom_heuristic(A, C, transA));
 }
 
 Event syr2k_cuda_custom(Queue& ctx,
@@ -147,7 +116,7 @@ Event syr2k_cuda_custom(Queue& ctx,
                         Uplo uplo,
                         Transpose transA) {
     const bool forced = syr2k_cuda_custom_forced();
-    if (ctx.device().type != DeviceType::GPU) {
+    if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
         }
@@ -162,8 +131,7 @@ Event syr2k_cuda_custom(Queue& ctx,
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     const auto variant = cublasdx_gemm_select_variant(A, B, C, transA, transB);
-    if (variant == cublasdx_gemm::CuBLASDxGemmVariant::VendorFallback ||
-        !cublasdx_gemm_variant_available(variant) || !syr2k_cublasdx::available()) {
+    if (detail::cublasdx_variant_needs_fallback(variant, syr2k_cublasdx::available())) {
         if (forced) {
             throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
         }
@@ -191,7 +159,7 @@ Event syr2k_cuda_custom(Queue& ctx,
                                                             desc,
                                                             uplo,
                                                             transA,
-                                                            cuda_stream_from_queue(ctx));
+                                                            detail::cuda_stream_from_queue(ctx));
     if (status == cudaErrorNotSupported) {
         if (forced) {
             throw_forced_syr2k_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");

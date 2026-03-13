@@ -3,25 +3,18 @@
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "trmm_cublasdx_fused.hh"
+#include "cublasdx_dispatch_common.hh"
 
 #include "../util/kernel-trace.hh"
 
 #include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <stdexcept>
-#include <string>
-#include <sycl/sycl.hpp>
 
 namespace batchlas::backend {
 
 namespace {
 
 constexpr int kTrmmCublasDxTile = 32;
-
-int ceil_div(int value, int divisor) {
-    return (value + divisor - 1) / divisor;
-}
 
 enum class TrmmVariantRequest {
     Vendor,
@@ -30,23 +23,10 @@ enum class TrmmVariantRequest {
 };
 
 TrmmVariantRequest trmm_variant_request() {
-    const char* raw = std::getenv("BATCHLAS_TRMM_VARIANT");
-    if (!raw) {
-        return TrmmVariantRequest::Auto;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return TrmmVariantRequest::Vendor;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return TrmmVariantRequest::CuBLASDx;
-    }
-    return TrmmVariantRequest::Auto;
+    return detail::parse_cublasdx_variant_request("BATCHLAS_TRMM_VARIANT",
+                                                  TrmmVariantRequest::Vendor,
+                                                  TrmmVariantRequest::CuBLASDx,
+                                                  TrmmVariantRequest::Auto);
 }
 
 bool trmm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -73,18 +53,14 @@ bool trmm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
         return false;
     }
 
-    const int output_tile_rows = ceil_div(A.rows(), kTrmmCublasDxTile);
-    const int output_tile_cols = ceil_div(B.cols(), kTrmmCublasDxTile);
+    const int output_tile_rows = detail::ceil_div(A.rows(), kTrmmCublasDxTile);
+    const int output_tile_cols = detail::ceil_div(B.cols(), kTrmmCublasDxTile);
     const int tiled_work = A.batch_size() * output_tile_rows * output_tile_cols;
     return tiled_work >= 8;
 }
 
-inline cudaStream_t cuda_stream_from_queue(const Queue& ctx) {
-    return sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
-}
-
 [[noreturn]] void throw_forced_trmm_unavailable(const std::string& reason) {
-    throw std::runtime_error("BATCHLAS_TRMM_VARIANT=cublasdx requested, but fused cuBLASDx TRMM is unavailable: " + reason);
+    detail::throw_forced_cublasdx_unavailable("BATCHLAS_TRMM_VARIANT", "TRMM", reason);
 }
 
 } // namespace
@@ -102,20 +78,13 @@ bool trmm_use_cuda_custom(const Queue& ctx,
                           Transpose transA,
                           Diag) {
     const auto request = trmm_variant_request();
-    if (request == TrmmVariantRequest::CuBLASDx) {
-        return true;
-    }
-    if (ctx.device().type != DeviceType::GPU) {
-        return false;
-    }
-    if (!trmm_problem_supported(A, B, C, side, uplo, transA)) {
-        return false;
-    }
-
-    if (request == TrmmVariantRequest::Vendor) {
-        return false;
-    }
-    return trmm_prefer_cuda_custom_heuristic(A, B);
+    const bool problem_supported = trmm_problem_supported(A, B, C, side, uplo, transA);
+    return detail::should_use_cublasdx(ctx,
+                                       request,
+                                       TrmmVariantRequest::Vendor,
+                                       TrmmVariantRequest::CuBLASDx,
+                                       problem_supported,
+                                       problem_supported && trmm_prefer_cuda_custom_heuristic(A, B));
 }
 
 Event trmm_cuda_custom(Queue& ctx,
@@ -128,7 +97,7 @@ Event trmm_cuda_custom(Queue& ctx,
                        Transpose transA,
                        Diag diag) {
     const bool forced = trmm_cuda_custom_forced();
-    if (ctx.device().type != DeviceType::GPU) {
+    if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_trmm_unavailable("the active queue is not a GPU queue");
         }
@@ -146,8 +115,7 @@ Event trmm_cuda_custom(Queue& ctx,
                                                       C,
                                                       Transpose::NoTrans,
                                                       Transpose::NoTrans);
-    if (variant == cublasdx_gemm::CuBLASDxGemmVariant::VendorFallback ||
-        !cublasdx_gemm_variant_available(variant) || !trmm_cublasdx::available()) {
+    if (detail::cublasdx_variant_needs_fallback(variant, trmm_cublasdx::available())) {
         if (forced) {
             throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
         }
@@ -173,7 +141,7 @@ Event trmm_cuda_custom(Queue& ctx,
     const cudaError_t status = trmm_cublasdx::launch_float(variant,
                                                            desc,
                                                            diag,
-                                                           cuda_stream_from_queue(ctx));
+                                                           detail::cuda_stream_from_queue(ctx));
     if (status == cudaErrorNotSupported) {
         if (forced) {
             throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
