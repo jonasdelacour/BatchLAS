@@ -33,11 +33,13 @@ option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python a
 
 set(BATCHLAS_MATHDX_ROOT "" CACHE PATH "Path to an unpacked NVIDIA MathDx package root")
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
+set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
 set(BATCHLAS_TUNING_PROFILE "" CACHE FILEPATH "Optional tuning profile JSON to generate compile-time tuning constants")
 set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
 set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA")
 
 set_property(CACHE BATCHLAS_CPU_TARGET PROPERTY STRINGS auto native_cpu spir64_x86_64 none)
+set_property(CACHE BATCHLAS_TEST_TARGET_SET PROPERTY STRINGS all smoke)
 
 set(_BATCHLAS_DEFAULT_NATIVE_CPU_DISABLE_VECZ OFF)
 if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda")

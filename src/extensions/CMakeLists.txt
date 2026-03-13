@@ -6,25 +6,36 @@ set(EXTENSIONS_CTA_SOURCES
     sytrd_sb2st_cta.cc
 )
 
-set(EXTENSIONS_SOURCES
+set(EXTENSIONS_EIGEN_SOURCES
     ortho.cc
     iluk.cc
     syevx.cc
     syev_cta.cc
     syev_blocked.cc
     syev_two_stage.cc
+    lanczos.cc
+    ritz_values.cc
+)
+
+set(EXTENSIONS_FACTORIZATION_SOURCES
     gebrd.cc
     bdsqr.cc
     ormbr.cc
     gesvd_blocked.cc
     inv.cc
-    tridiag_solver.cc
-    lanczos.cc
+    ormqr_blocked.cc
+    lascl.cc
+)
+
+set(EXTENSIONS_SYMMETRIC_SOURCES
     symm.cc
     syrk.cc
     syr2k.cc
     trmm.cc
-    ormqr_blocked.cc
+)
+
+set(EXTENSIONS_TRIDIAG_SOURCES
+    tridiag_solver.cc
     steqr.cc
     steqr_wg.cc
     steqr_legacy.cc
@@ -37,10 +48,11 @@ set(EXTENSIONS_SOURCES
     stedc_secular.cc
     stedc_merge_kernels.cc
     stedc_flat.cc
-    ritz_values.cc
-    lascl.cc
 )
 
-target_sources(batchlas_extensions_obj PRIVATE ${EXTENSIONS_SOURCES})
+target_sources(batchlas_extensions_eigen_obj PRIVATE ${EXTENSIONS_EIGEN_SOURCES})
+target_sources(batchlas_extensions_factorization_obj PRIVATE ${EXTENSIONS_FACTORIZATION_SOURCES})
+target_sources(batchlas_extensions_symmetric_obj PRIVATE ${EXTENSIONS_SYMMETRIC_SOURCES})
+target_sources(batchlas_extensions_tridiag_obj PRIVATE ${EXTENSIONS_TRIDIAG_SOURCES})
 target_sources(batchlas_extensions_cta_obj PRIVATE ${EXTENSIONS_CTA_SOURCES})
 

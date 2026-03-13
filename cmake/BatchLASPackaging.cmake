@@ -4,9 +4,31 @@ include(CMakePackageConfigHelpers)
 set(BATCHLAS_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/BatchLAS")
 
 function(batchlas_install_package)
-    install(TARGETS
+    set(_batchlas_install_targets
         batchlas
         batchlas_sycl_options
+        batchlas_core
+        batchlas_backends
+        batchlas_blas
+        batchlas_extensions_eigen
+        batchlas_extensions_factorization
+        batchlas_extensions_symmetric
+        batchlas_extensions_tridiag
+        batchlas_extensions_cta
+        batchlas_util
+        batchlas_extra
+        batchlas_sycl
+    )
+
+    if(TARGET batchlas_backends_cuda)
+        list(APPEND _batchlas_install_targets batchlas_backends_cuda)
+    endif()
+
+    if(TARGET batchlas_backends_rocm)
+        list(APPEND _batchlas_install_targets batchlas_backends_rocm)
+    endif()
+
+    install(TARGETS ${_batchlas_install_targets}
         EXPORT BatchLASTargets
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"

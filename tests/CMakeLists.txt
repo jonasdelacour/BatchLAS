@@ -54,6 +54,12 @@ set(TEST_TARGETS
     syev_blocked_tests
 )
 
+set(BATCHLAS_SMOKE_TEST_TARGETS
+    util_span_tests
+    util_vector_tests
+    matrix_tests
+)
+
 # Tests that require CPU SYCL kernel compilation (not just NETLIB)
 set(CPU_SYCL_DEPENDENT_TESTS
     minibench_cli_tests
@@ -67,15 +73,51 @@ else()
     message(STATUS "Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): ${CPU_SYCL_DEPENDENT_TESTS}")
 endif()
 
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "smoke")
+    set(TEST_TARGETS ${BATCHLAS_SMOKE_TEST_TARGETS})
+    message(STATUS "Configuring smoke-test subset: ${TEST_TARGETS}")
+elseif(NOT BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    message(FATAL_ERROR "Unsupported BATCHLAS_TEST_TARGET_SET='${BATCHLAS_TEST_TARGET_SET}'. Expected one of: all, smoke")
+endif()
+
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
-    batchlas_configure_binary_target(${test_name}
-        GTest::gtest
-        GTest::gtest_main
-    )
+    if(test_name STREQUAL "util_span_tests")
+        batchlas_configure_binary_target(${test_name}
+            NO_FACADE
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+                batchlas_util
+        )
+    elseif(test_name STREQUAL "util_vector_tests")
+        batchlas_configure_binary_target(${test_name}
+            NO_FACADE
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+                batchlas_util
+        )
+    elseif(test_name STREQUAL "matrix_tests")
+        batchlas_configure_binary_target(${test_name}
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+        )
+    else()
+        batchlas_configure_binary_target(${test_name}
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+        )
+    endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endfunction()
 
 foreach(test ${TEST_TARGETS})
     batchlas_add_test_target(${test})
 endforeach()
+
+if(BATCHLAS_SMOKE_TEST_TARGETS)
+    add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
+endif()

@@ -1,9 +1,13 @@
-set(BACKEND_SOURCES
+set(BACKEND_COMMON_SOURCES
     backend_handle_instantiations.cc
 )
 
+set(BACKEND_HOST_SOURCES)
+set(BACKEND_CUDA_SOURCES)
+set(BACKEND_ROCM_SOURCES)
+
 if(BATCHLAS_HAS_HOST_BACKEND)
-    list(APPEND BACKEND_SOURCES
+    list(APPEND BACKEND_HOST_SOURCES
         netlib_lapack.cc
     )
 endif()
@@ -15,7 +19,7 @@ if(BATCHLAS_HAS_MKL_BACKEND)
 endif()
 
 if(BATCHLAS_HAS_CUDA_BACKEND)
-    list(APPEND BACKEND_SOURCES
+    list(APPEND BACKEND_CUDA_SOURCES
         cublas.cc
         gemm_cublasdx.cu
         gemm_cublasdx_dispatch.cc
@@ -35,11 +39,19 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
 endif()
 
 if(BATCHLAS_HAS_ROCM_BACKEND)
-    list(APPEND BACKEND_SOURCES
+    list(APPEND BACKEND_ROCM_SOURCES
         rocblas.cc
         rocsparse.cc
         rocsolver.cc
     )
 endif()
 
-target_sources(batchlas_backends_obj PRIVATE ${BACKEND_SOURCES})
+target_sources(batchlas_backends_obj PRIVATE ${BACKEND_COMMON_SOURCES} ${BACKEND_HOST_SOURCES})
+
+if(TARGET batchlas_backends_cuda_obj)
+    target_sources(batchlas_backends_cuda_obj PRIVATE ${BACKEND_CUDA_SOURCES})
+endif()
+
+if(TARGET batchlas_backends_rocm_obj)
+    target_sources(batchlas_backends_rocm_obj PRIVATE ${BACKEND_ROCM_SOURCES})
+endif()

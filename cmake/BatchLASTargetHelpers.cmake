@@ -17,5 +17,22 @@ function(batchlas_apply_object_options target)
 endfunction()
 
 function(batchlas_configure_binary_target target)
-    target_link_libraries(${target} PRIVATE batchlas ${ARGN})
+    set(options NO_FACADE)
+    set(multiValueArgs LIBRARIES)
+    cmake_parse_arguments(BATCHLAS_BIN "${options}" "" "${multiValueArgs}" ${ARGN})
+
+    set(_batchlas_binary_links ${BATCHLAS_BIN_LIBRARIES})
+    if(NOT BATCHLAS_BIN_NO_FACADE)
+        list(APPEND _batchlas_binary_links batchlas)
+    else()
+        list(APPEND _batchlas_binary_links
+            batchlas_build_options
+            batchlas_dep_options
+            batchlas_sycl_options
+        )
+    endif()
+
+    if(_batchlas_binary_links)
+        target_link_libraries(${target} PRIVATE ${_batchlas_binary_links})
+    endif()
 endfunction()

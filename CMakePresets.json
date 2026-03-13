@@ -29,6 +29,17 @@
       }
     },
     {
+      "name": "fast-dev",
+      "displayName": "Fast Dev",
+      "description": "RelWithDebInfo build for iteration: batchlas plus a smoke-test subset.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/fast-dev",
+      "cacheVariables": {
+        "BATCHLAS_BUILD_TESTS": "ON",
+        "BATCHLAS_TEST_TARGET_SET": "smoke"
+      }
+    },
+    {
       "name": "benchmarks",
       "displayName": "Benchmarks",
       "description": "Build benchmarks and tuning support.",
@@ -55,12 +66,20 @@
       "name": "dev",
       "configurePreset": "dev",
       "targets": [
-        "batchlas"
+        "batchlas_components"
       ]
     },
     {
       "name": "dev-tests",
       "configurePreset": "dev-tests"
+    },
+    {
+      "name": "fast-dev",
+      "configurePreset": "fast-dev",
+      "targets": [
+        "batchlas_components",
+        "batchlas_smoke_tests"
+      ]
     },
     {
       "name": "benchmarks",
