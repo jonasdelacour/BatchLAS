@@ -15,6 +15,8 @@
 #include <blas/functions/syev.hh>
 #include <blas/dispatch/op.hh>
 
+#include "gemm_variant.hh"
+
 namespace batchlas{
 
     namespace detail {
@@ -117,11 +119,14 @@ namespace batchlas{
         auto B_view = descrB;
         auto C_view = descrC;
         return detail::submit_host_task(ctx, "netlib.gemm", [=] {
-            auto [m, k] = get_effective_dims(A_view, transA);
-            auto [kB, n] = get_effective_dims(B_view, transB);
-            static_cast<void>(kB);
+            if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
+                throw std::runtime_error("GEMM: incompatible matrix dimensions");
+            }
 
             if (A_view.batch_size() == 1) {
+                auto [m, k] = get_effective_dims(A_view, transA);
+                auto [kB, n] = get_effective_dims(B_view, transB);
+                static_cast<void>(kB);
                 call_backend_nh<T, BackendLibrary::CBLAS>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     Layout::ColMajor, transA, transB,
@@ -133,15 +138,32 @@ namespace batchlas{
                     C_view.data_ptr(), C_view.ld());
             } else {
                 for (int i = 0; i < A_view.batch_size(); ++i) {
+                    auto A_i = A_view[i];
+                    auto B_i = B_view[i];
+                    auto C_i = C_view[i];
+                    auto [m, k] = get_effective_dims(A_i, transA);
+                    auto [kB, n] = get_effective_dims(B_i, transB);
+                    static_cast<void>(kB);
+                    if (m == 0 || n == 0) {
+                        continue;
+                    }
+                    if (k == 0) {
+                        for (int col = 0; col < n; ++col) {
+                            for (int row = 0; row < m; ++row) {
+                                C_i.at(row, col) *= beta;
+                            }
+                        }
+                        continue;
+                    }
                     call_backend_nh<T, BackendLibrary::CBLAS>(
                         cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                         Layout::ColMajor, transA, transB,
                         m, n, k,
                         alpha,
-                        A_view[i].data_ptr(), A_view[i].ld(),
-                        B_view[i].data_ptr(), B_view[i].ld(),
+                        A_i.data_ptr(), A_i.ld(),
+                        B_i.data_ptr(), B_i.ld(),
                         beta,
-                        C_view[i].data_ptr(), C_view[i].ld());
+                        C_i.data_ptr(), C_i.ld());
                 }
             }
         });

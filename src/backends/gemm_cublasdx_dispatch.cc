@@ -15,6 +15,39 @@ namespace batchlas::backend {
 
 namespace {
 
+inline int max_batch_dimension(const MatrixView<float, MatrixFormat::Dense>& mat,
+                               Transpose trans,
+                               bool use_rows) {
+    int max_dim = 0;
+    for (int batch_index = 0; batch_index < mat.batch_size(); ++batch_index) {
+        const auto [rows, cols] = get_effective_dims(mat, trans, batch_index);
+        max_dim = std::max(max_dim, use_rows ? rows : cols);
+    }
+    return max_dim;
+}
+
+inline const int* effective_rows_ptr(const MatrixView<float, MatrixFormat::Dense>& mat,
+                                     Transpose trans) {
+    if (!mat.is_heterogeneous()) {
+        return nullptr;
+    }
+    auto dims = trans == Transpose::NoTrans ? mat.active_rows() : mat.active_cols();
+    return dims.empty() ? nullptr : dims.data();
+}
+
+inline const int* effective_cols_ptr(const MatrixView<float, MatrixFormat::Dense>& mat,
+                                     Transpose trans) {
+    if (!mat.is_heterogeneous()) {
+        return nullptr;
+    }
+    auto dims = trans == Transpose::NoTrans ? mat.active_cols() : mat.active_rows();
+    return dims.empty() ? nullptr : dims.data();
+}
+
+inline int batch_dim(const int* batch_dims, int fallback, int batch_index) {
+    return batch_dims ? batch_dims[batch_index] : fallback;
+}
+
 inline bool is_squareish_shape(int m, int n, int k) {
     const int max_dim = std::max({m, n, k});
     const int min_dim = std::min({m, n, k});
@@ -166,12 +199,28 @@ cublasdx_gemm::CuBLASDxGemmVariant cublasdx_gemm_select_variant(
         return forced_cublasdx_gemm_variant();
     }
 
-    const auto [m, k] = get_effective_dims(A, transA);
-    const auto [k_b, n] = get_effective_dims(B, transB);
-    static_cast<void>(k_b);
+    const bool heterogeneous = gemm_has_heterogeneous_batch(A, B, C);
+    const int m = heterogeneous ? max_batch_dimension(A, transA, true) : get_effective_dims(A, transA).first;
+    const int k = heterogeneous ? max_batch_dimension(A, transA, false) : get_effective_dims(A, transA).second;
+    const int n = heterogeneous ? max_batch_dimension(B, transB, false) : get_effective_dims(B, transB).second;
 
     if (transA == Transpose::ConjTrans || transB == Transpose::ConjTrans) {
         return cublasdx_gemm::CuBLASDxGemmVariant::VendorFallback;
+    }
+
+    if (heterogeneous) {
+        if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
+            return cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN;
+        }
+        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
+            return cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TN;
+        }
+        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
+            return cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NT;
+        }
+        if (transA == Transpose::Trans && transB == Transpose::Trans) {
+            return cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TT;
+        }
     }
 
     const bool prefer_large_family = is_squareish_shape(m, n, k) && m >= 256 && n >= 256 && k >= 256;
@@ -212,10 +261,39 @@ Event gemm_cublasdx(Queue& ctx,
         throw std::runtime_error("cuBLASDx GEMM path requires matching batch sizes");
     }
 
-    const auto [m, k] = get_effective_dims(A, transA);
-    const auto [k_b, n] = get_effective_dims(B, transB);
-    if (k != k_b || C.rows() != m || C.cols() != n) {
+    if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
         throw std::runtime_error("cuBLASDx GEMM path received incompatible matrix dimensions");
+    }
+
+    Event last_event;
+    bool launched_host_work = false;
+    int max_m = 0;
+    int max_n = 0;
+    int max_k = 0;
+    bool has_positive_work = false;
+    for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
+        const auto [m, k] = get_effective_dims(A, transA, batch_index);
+        const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
+        static_cast<void>(k_b);
+        if (m == 0 || n == 0) {
+            continue;
+        }
+        if (k == 0) {
+            last_event = scale(ctx, beta, C.batch_item(batch_index));
+            launched_host_work = true;
+            continue;
+        }
+        max_m = std::max(max_m, m);
+        max_n = std::max(max_n, n);
+        max_k = std::max(max_k, k);
+        has_positive_work = true;
+    }
+
+    if (!has_positive_work) {
+        if (launched_host_work) {
+            return std::move(last_event);
+        }
+        return ctx.create_event_after_external_work();
     }
 
     const auto variant = cublasdx_gemm_select_variant(A, B, C, transA, transB);
@@ -241,12 +319,25 @@ Event gemm_cublasdx(Queue& ctx,
     desc.stride_a = A.stride();
     desc.stride_b = B.stride();
     desc.stride_c = C.stride();
-    desc.m = m;
-    desc.n = n;
-    desc.k = k;
+    desc.m_batch = effective_rows_ptr(A, transA);
+    if (!desc.m_batch) {
+        desc.m_batch = C.is_heterogeneous() ? C.active_rows().data() : nullptr;
+    }
+    desc.n_batch = effective_cols_ptr(B, transB);
+    if (!desc.n_batch) {
+        desc.n_batch = C.is_heterogeneous() ? C.active_cols().data() : nullptr;
+    }
+    desc.k_batch = effective_cols_ptr(A, transA);
+    if (!desc.k_batch) {
+        desc.k_batch = effective_rows_ptr(B, transB);
+    }
+    desc.m = max_m;
+    desc.n = max_n;
+    desc.k = max_k;
     desc.batch = A.batch_size();
     desc.alpha = alpha;
     desc.beta = beta;
+    desc.heterogeneous = gemm_has_heterogeneous_batch(A, B, C);
     desc.packet_a = supports_aligned_packet_loads(A.data_ptr(), A.ld(), A.stride());
     desc.packet_b = supports_aligned_packet_loads(B.data_ptr(), B.ld(), B.stride());
     desc.aligned_fast_path = false;

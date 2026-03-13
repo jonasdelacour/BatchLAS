@@ -25,6 +25,42 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                ComputePrecision precision) {
+        if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
+            throw std::runtime_error("GEMM: incompatible matrix dimensions");
+        }
+
+        if (gemm_has_heterogeneous_batch(A, B, C)) {
+            Event last_event;
+            bool launched = false;
+            for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
+                const auto [m, k] = get_effective_dims(A, transA, batch_index);
+                const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
+                static_cast<void>(k_b);
+                if (m == 0 || n == 0) {
+                    continue;
+                }
+                if (k == 0) {
+                    last_event = scale(ctx, beta, C.batch_item(batch_index));
+                    launched = true;
+                    continue;
+                }
+                last_event = gemm_vendor<Back, T>(ctx,
+                                                  A.batch_item(batch_index),
+                                                  B.batch_item(batch_index),
+                                                  C.batch_item(batch_index),
+                                                  alpha,
+                                                  beta,
+                                                  transA,
+                                                  transB,
+                                                  precision);
+                launched = true;
+            }
+            if (launched) {
+                return std::move(last_event);
+            }
+            return ctx.get_event();
+        }
+
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
             return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }

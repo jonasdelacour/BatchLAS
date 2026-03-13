@@ -361,6 +361,284 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     ASSERT_TRUE(AssertBatchedBufferNear(this->C_data, this->A_data, this->rows, this->cols, this->batch_size, tol));
 }
 
+TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    constexpr int batch_size = 3;
+    constexpr int max_m = 4;
+    constexpr int max_n = 5;
+    constexpr int max_k = 3;
+
+    Matrix<ScalarType> A(max_m, max_k, batch_size);
+    Matrix<ScalarType> B(max_k, max_n, batch_size);
+    Matrix<ScalarType> C(max_m, max_n, batch_size);
+    Matrix<ScalarType> C_ref(max_m, max_n, batch_size);
+
+    A.fill(ScalarType(0));
+    B.fill(ScalarType(0));
+    C.fill(ScalarType(0));
+    C_ref.fill(ScalarType(0));
+
+    UnifiedVector<int> a_rows(batch_size);
+    UnifiedVector<int> a_cols(batch_size);
+    UnifiedVector<int> b_rows(batch_size);
+    UnifiedVector<int> b_cols(batch_size);
+    UnifiedVector<int> c_rows(batch_size);
+    UnifiedVector<int> c_cols(batch_size);
+
+    a_rows[0] = 4; a_cols[0] = 3;
+    b_rows[0] = 3; b_cols[0] = 5;
+    c_rows[0] = 4; c_cols[0] = 5;
+
+    a_rows[1] = 2; a_cols[1] = 3;
+    b_rows[1] = 3; b_cols[1] = 2;
+    c_rows[1] = 2; c_cols[1] = 2;
+
+    a_rows[2] = 0; a_cols[2] = 3;
+    b_rows[2] = 3; b_cols[2] = 4;
+    c_rows[2] = 0; c_cols[2] = 4;
+
+    A.set_active_dims(a_rows.to_span(), a_cols.to_span());
+    B.set_active_dims(b_rows.to_span(), b_cols.to_span());
+    C.set_active_dims(c_rows.to_span(), c_cols.to_span());
+    C_ref.set_active_dims(c_rows.to_span(), c_cols.to_span());
+
+    for (int b = 0; b < batch_size; ++b) {
+        for (int col = 0; col < A.cols(b); ++col) {
+            for (int row = 0; row < A.rows(b); ++row) {
+                A(row, col, b) = static_cast<ScalarType>(1 + row + 2 * col + 10 * b);
+            }
+        }
+        for (int col = 0; col < B.cols(b); ++col) {
+            for (int row = 0; row < B.rows(b); ++row) {
+                B(row, col, b) = static_cast<ScalarType>(1 + row + col + 7 * b);
+            }
+        }
+    }
+
+    for (int b = 0; b < batch_size; ++b) {
+        auto Ab = A.view().batch_item(b);
+        auto Bb = B.view().batch_item(b);
+        auto Cb = C_ref.view().batch_item(b);
+        if (Cb.rows() == 0 || Cb.cols() == 0) {
+            continue;
+        }
+
+        gemm<BackendType>(*(this->ctx), Ab, Bb, Cb, ScalarType(1), ScalarType(0),
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
+                                    Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+
+    this->ctx->wait();
+
+    for (int b = 0; b < batch_size; ++b) {
+        ASSERT_EQ(C.rows(b), C_ref.rows(b));
+        ASSERT_EQ(C.cols(b), C_ref.cols(b));
+        for (int col = 0; col < C.cols(b); ++col) {
+            for (int row = 0; row < C.rows(b); ++row) {
+                const auto actual = C(row, col, b);
+                const auto expected = C_ref(row, col, b);
+                auto tol = test_utils::tolerance<ScalarType>() * 50;
+                if constexpr (test_utils::is_complex<ScalarType>::value) {
+                    ASSERT_NEAR(actual.real(), expected.real(), tol);
+                    ASSERT_NEAR(actual.imag(), expected.imag(), tol);
+                } else {
+                    ASSERT_NEAR(actual, expected, tol);
+                }
+            }
+        }
+    }
+}
+
+TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    constexpr int batch_size = 3;
+    constexpr int max_m = 64;
+    constexpr int max_n = 32;
+    constexpr int max_k = 32;
+
+    Matrix<ScalarType> A(max_m, max_k, batch_size);
+    Matrix<ScalarType> B(max_k, max_n, batch_size);
+    Matrix<ScalarType> C(max_m, max_n, batch_size);
+    Matrix<ScalarType> C_ref(max_m, max_n, batch_size);
+
+    A.fill(ScalarType(0));
+    B.fill(ScalarType(0));
+    C.fill(ScalarType(1));
+    C_ref.fill(ScalarType(1));
+
+    UnifiedVector<int> a_rows(batch_size);
+    UnifiedVector<int> a_cols(batch_size);
+    UnifiedVector<int> b_rows(batch_size);
+    UnifiedVector<int> b_cols(batch_size);
+    UnifiedVector<int> c_rows(batch_size);
+    UnifiedVector<int> c_cols(batch_size);
+
+    a_rows[0] = 32; a_cols[0] = 32;
+    b_rows[0] = 32; b_cols[0] = 32;
+    c_rows[0] = 32; c_cols[0] = 32;
+
+    a_rows[1] = 32; a_cols[1] = 0;
+    b_rows[1] = 0;  b_cols[1] = 32;
+    c_rows[1] = 32; c_cols[1] = 32;
+
+    a_rows[2] = 0;  a_cols[2] = 32;
+    b_rows[2] = 32; b_cols[2] = 32;
+    c_rows[2] = 0;  c_cols[2] = 32;
+
+    A.set_active_dims(a_rows.to_span(), a_cols.to_span());
+    B.set_active_dims(b_rows.to_span(), b_cols.to_span());
+    C.set_active_dims(c_rows.to_span(), c_cols.to_span());
+    C_ref.set_active_dims(c_rows.to_span(), c_cols.to_span());
+
+    for (int col = 0; col < A.cols(0); ++col) {
+        for (int row = 0; row < A.rows(0); ++row) {
+            A(row, col, 0) = static_cast<ScalarType>(1 + row + col);
+        }
+    }
+    for (int col = 0; col < B.cols(0); ++col) {
+        for (int row = 0; row < B.rows(0); ++row) {
+            B(row, col, 0) = static_cast<ScalarType>(1 + row + 2 * col);
+        }
+    }
+
+    const ScalarType alpha = static_cast<ScalarType>(2);
+    const ScalarType beta = static_cast<ScalarType>(3);
+
+    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+        auto Ab = A.view().batch_item(batch_index);
+        auto Bb = B.view().batch_item(batch_index);
+        auto Cb = C_ref.view().batch_item(batch_index);
+        if (Cb.rows() == 0 || Cb.cols() == 0) {
+            continue;
+        }
+
+        if (Ab.cols() == 0) {
+            for (int col = 0; col < Cb.cols(); ++col) {
+                for (int row = 0; row < Cb.rows(); ++row) {
+                    C_ref(row, col, batch_index) *= beta;
+                }
+            }
+            continue;
+        }
+
+        gemm<BackendType>(*(this->ctx), Ab, Bb, Cb, alpha, beta,
+                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
+                                    Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+
+    this->ctx->wait();
+
+    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+        for (int col = 0; col < C.cols(batch_index); ++col) {
+            for (int row = 0; row < C.rows(batch_index); ++row) {
+                const auto actual = C(row, col, batch_index);
+                const auto expected = C_ref(row, col, batch_index);
+                auto tol = test_utils::tolerance<ScalarType>() * 100;
+                if constexpr (test_utils::is_complex<ScalarType>::value) {
+                    ASSERT_NEAR(actual.real(), expected.real(), tol);
+                    ASSERT_NEAR(actual.imag(), expected.imag(), tol);
+                } else {
+                    ASSERT_NEAR(actual, expected, tol);
+                }
+            }
+        }
+    }
+}
+
+TYPED_TEST(GemmTest, HeterogeneousBatchedGemmForcedCuBLASDxVariant) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (BackendType != Backend::CUDA) {
+        GTEST_SKIP() << "heterogeneous cuBLASDx GEMM is only available on the CUDA backend";
+    }
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "heterogeneous cuBLASDx GEMM is only implemented for float in this slice";
+    }
+
+    constexpr int batch_size = 2;
+    constexpr int max_m = 64;
+    constexpr int max_n = 64;
+    constexpr int max_k = 32;
+
+    auto A = Matrix<ScalarType>::Zeros(max_m, max_k, batch_size);
+    auto B = Matrix<ScalarType>::Zeros(max_k, max_n, batch_size);
+    auto C = Matrix<ScalarType>::Random(max_m, max_n, false, batch_size);
+    auto C_ref = C.clone();
+
+    UnifiedVector<int> a_rows(batch_size);
+    UnifiedVector<int> a_cols(batch_size);
+    UnifiedVector<int> b_rows(batch_size);
+    UnifiedVector<int> b_cols(batch_size);
+    UnifiedVector<int> c_rows(batch_size);
+    UnifiedVector<int> c_cols(batch_size);
+
+    a_rows[0] = 32; a_cols[0] = 32;
+    b_rows[0] = 32; b_cols[0] = 32;
+    c_rows[0] = 32; c_cols[0] = 32;
+
+    a_rows[1] = 64; a_cols[1] = 32;
+    b_rows[1] = 32; b_cols[1] = 64;
+    c_rows[1] = 64; c_cols[1] = 64;
+
+    A.set_active_dims(a_rows.to_span(), a_cols.to_span());
+    B.set_active_dims(b_rows.to_span(), b_cols.to_span());
+    C.set_active_dims(c_rows.to_span(), c_cols.to_span());
+    C_ref.set_active_dims(c_rows.to_span(), c_cols.to_span());
+
+    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+        for (int col = 0; col < A.cols(batch_index); ++col) {
+            for (int row = 0; row < A.rows(batch_index); ++row) {
+                A(row, col, batch_index) = static_cast<ScalarType>(1 + row + col + 3 * batch_index);
+            }
+        }
+        for (int col = 0; col < B.cols(batch_index); ++col) {
+            for (int row = 0; row < B.rows(batch_index); ++row) {
+                B(row, col, batch_index) = static_cast<ScalarType>(1 + row + 2 * col + 5 * batch_index);
+            }
+        }
+    }
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn");
+        gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+                                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+                                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    }
+
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+        for (int col = 0; col < C.cols(batch_index); ++col) {
+            for (int row = 0; row < C.rows(batch_index); ++row) {
+                const auto actual = C(row, col, batch_index);
+                const auto expected = C_ref(row, col, batch_index);
+                if constexpr (test_utils::is_complex<ScalarType>::value) {
+                    ASSERT_NEAR(actual.real(), expected.real(), tol);
+                    ASSERT_NEAR(actual.imag(), expected.imag(), tol);
+                } else {
+                    ASSERT_NEAR(actual, expected, tol);
+                }
+            }
+        }
+    }
+}
+
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;

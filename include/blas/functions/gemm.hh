@@ -31,4 +31,38 @@ inline Event gemm(Queue& ctx,
         return gemm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, precision);
 }
 
+template <Backend Back, typename T>
+inline Event gemm_heterogeneous(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                T alpha,
+                                T beta,
+                                Transpose transA,
+                                Transpose transB,
+                                ComputePrecision precision = ComputePrecision::Default) {
+        return gemm<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+}
+
+template <Backend Back, typename T>
+inline Event gemm_heterogeneous(Queue& ctx,
+                                const Matrix<T, MatrixFormat::Dense>& A,
+                                const Matrix<T, MatrixFormat::Dense>& B,
+                                const Matrix<T, MatrixFormat::Dense>& C,
+                                T alpha,
+                                T beta,
+                                Transpose transA,
+                                Transpose transB,
+                                ComputePrecision precision = ComputePrecision::Default) {
+        return gemm_heterogeneous<Back, T>(ctx,
+                                           MatrixView<T, MatrixFormat::Dense>(A),
+                                           MatrixView<T, MatrixFormat::Dense>(B),
+                                           MatrixView<T, MatrixFormat::Dense>(C),
+                                           alpha,
+                                           beta,
+                                           transA,
+                                           transB,
+                                           precision);
+}
+
 }  // namespace batchlas

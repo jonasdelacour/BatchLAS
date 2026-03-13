@@ -9,6 +9,40 @@
 
 namespace batchlas::backend {
 
+template <typename T>
+inline bool gemm_has_heterogeneous_batch(const MatrixView<T, MatrixFormat::Dense>& A,
+                                         const MatrixView<T, MatrixFormat::Dense>& B,
+                                         const MatrixView<T, MatrixFormat::Dense>& C) {
+    return A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous();
+}
+
+template <typename T>
+inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& B,
+                                             const MatrixView<T, MatrixFormat::Dense>& C,
+                                             Transpose transA,
+                                             Transpose transB) {
+    if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+        return false;
+    }
+
+    for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
+        const auto [m, k] = get_effective_dims(A, transA, batch_index);
+        const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
+        if (k != k_b) {
+            return false;
+        }
+        if (C.rows(batch_index) != m || C.cols(batch_index) != n) {
+            return false;
+        }
+        if (m < 0 || n < 0 || k < 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 enum class GemmVariantRequest {
     Vendor,
     Sycl,
@@ -58,6 +92,10 @@ inline bool gemm_custom_problem_supported(const MatrixView<T, MatrixFormat::Dens
         return false;
     }
 
+    if (gemm_has_heterogeneous_batch(A, B, C)) {
+        return false;
+    }
+
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     if (k != k_b) {
@@ -94,7 +132,11 @@ inline bool gemm_use_cublasdx_custom(const Queue& ctx,
         return false;
     }
 
-    return gemm_custom_problem_supported(A, B, C, transA, transB, precision);
+    if (precision != ComputePrecision::Default) {
+        return false;
+    }
+
+    return gemm_batch_dimensions_compatible(A, B, C, transA, transB);
 }
 
 template <typename T>

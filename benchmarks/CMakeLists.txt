@@ -13,6 +13,7 @@ set(BENCHMARK_TARGETS
     bandr1_dump
     geqrf_benchmark
     gemm_benchmark
+    gemm_heterogeneous_benchmark
     gemm_steady_benchmark
     gemm_128x32x32_family_benchmark
     gemm_128x64x32_family_benchmark

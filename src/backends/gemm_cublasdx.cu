@@ -26,6 +26,14 @@ namespace {
 constexpr int kBlockSize = 256;
 constexpr int kSupportedSM = 890;
 
+constexpr int ceil_div(int value, int divisor) {
+    return (value + divisor - 1) / divisor;
+}
+
+inline int batch_dim(const int* batch_dims, int fallback, int batch_idx) {
+    return batch_dims ? batch_dims[batch_idx] : fallback;
+}
+
 template <Transpose Op>
 struct ArrangementTag;
 
@@ -216,14 +224,21 @@ __global__ void gemm_cublasdx_kernel(GemmLaunchDescriptor desc) {
     extern __shared__ __align__(16) char smem[];
 
     const int batch_idx = static_cast<int>(blockIdx.z);
+    const int actual_m = batch_dim(desc.m_batch, desc.m, batch_idx);
+    const int actual_n = batch_dim(desc.n_batch, desc.n, batch_idx);
+    const int actual_k = batch_dim(desc.k_batch, desc.k, batch_idx);
+
+    if (blockIdx.x * TileM >= actual_m || blockIdx.y * TileN >= actual_n || actual_m == 0 || actual_n == 0 || actual_k == 0) {
+        return;
+    }
 
     const float* a_batch = desc.a_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_a);
     const float* b_batch = desc.b_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_b);
     float* c_batch = desc.c_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_c);
 
-    auto global_a = cublasdx::make_gmem_tensor<ArrangementTag<OpA>::value>(a_batch, desc.m, desc.k, desc.lda);
-    auto global_b = cublasdx::make_gmem_tensor<ArrangementTag<OpB>::value>(b_batch, desc.k, desc.n, desc.ldb);
-    auto global_c = cublasdx::make_gmem_tensor<cublasdx::col_major>(c_batch, desc.m, desc.n, desc.ldc);
+    auto global_a = cublasdx::make_gmem_tensor<ArrangementTag<OpA>::value>(a_batch, actual_m, actual_k, desc.lda);
+    auto global_b = cublasdx::make_gmem_tensor<ArrangementTag<OpB>::value>(b_batch, actual_k, actual_n, desc.ldb);
+    auto global_c = cublasdx::make_gmem_tensor<cublasdx::col_major>(c_batch, actual_m, actual_n, desc.ldc);
 
     auto tile_slice_a_gmem = cublasdx::get_tile_row(global_a, BLAS::a_shape, blockIdx.x);
     auto tile_slice_b_gmem = cublasdx::get_tile_col(global_b, BLAS::b_shape, blockIdx.y);
@@ -262,14 +277,21 @@ __global__ void gemm_cublasdx_pipelined_kernel(GemmLaunchDescriptor desc) {
     extern __shared__ __align__(16) char smem[];
 
     const int batch_idx = static_cast<int>(blockIdx.z);
+    const int actual_m = batch_dim(desc.m_batch, desc.m, batch_idx);
+    const int actual_n = batch_dim(desc.n_batch, desc.n, batch_idx);
+    const int actual_k = batch_dim(desc.k_batch, desc.k, batch_idx);
+
+    if (blockIdx.x * TileM >= actual_m || blockIdx.y * TileN >= actual_n || actual_m == 0 || actual_n == 0 || actual_k == 0) {
+        return;
+    }
 
     const float* a_batch = desc.a_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_a);
     const float* b_batch = desc.b_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_b);
     float* c_batch = desc.c_ptr + static_cast<std::size_t>(batch_idx) * static_cast<std::size_t>(desc.stride_c);
 
-    auto global_a = cublasdx::make_gmem_tensor<ArrangementTag<OpA>::value>(a_batch, desc.m, desc.k, desc.lda);
-    auto global_b = cublasdx::make_gmem_tensor<ArrangementTag<OpB>::value>(b_batch, desc.k, desc.n, desc.ldb);
-    auto global_c = cublasdx::make_gmem_tensor<cublasdx::col_major>(c_batch, desc.m, desc.n, desc.ldc);
+    auto global_a = cublasdx::make_gmem_tensor<ArrangementTag<OpA>::value>(a_batch, actual_m, actual_k, desc.lda);
+    auto global_b = cublasdx::make_gmem_tensor<ArrangementTag<OpB>::value>(b_batch, actual_k, actual_n, desc.ldb);
+    auto global_c = cublasdx::make_gmem_tensor<cublasdx::col_major>(c_batch, actual_m, actual_n, desc.ldc);
 
     auto tile_c_gmem = cublasdx::get_tile(global_c, BLAS::c_shape, blockIdx.x, blockIdx.y);
 
@@ -313,8 +335,8 @@ cudaError_t launch_for_sm(const GemmLaunchDescriptor& desc, cudaStream_t stream)
         return attr_status;
     }
 
-    const dim3 grid(static_cast<unsigned int>(desc.m / TileM),
-                    static_cast<unsigned int>(desc.n / TileN),
+    const dim3 grid(static_cast<unsigned int>(ceil_div(desc.m, TileM)),
+                    static_cast<unsigned int>(ceil_div(desc.n, TileN)),
                     static_cast<unsigned int>(desc.batch));
     kernel<<<grid, BLAS::block_dim, shared_memory_size, stream>>>(desc);
     return cudaGetLastError();
@@ -347,8 +369,8 @@ cudaError_t launch_pipelined_for_sm(const GemmLaunchDescriptor& desc, cudaStream
         return attr_status;
     }
 
-    const dim3 grid(static_cast<unsigned int>(desc.m / TileM),
-                    static_cast<unsigned int>(desc.n / TileN),
+    const dim3 grid(static_cast<unsigned int>(ceil_div(desc.m, TileM)),
+                    static_cast<unsigned int>(ceil_div(desc.n, TileN)),
                     static_cast<unsigned int>(desc.batch));
     kernel<<<grid, BLAS::block_dim, shared_memory_size, stream>>>(desc);
     return cudaGetLastError();
@@ -431,12 +453,38 @@ bool variant_supported(CuBLASDxGemmVariant variant,
         return false;
     }
 
-    if (desc.batch <= 0 || desc.m <= 0 || desc.n <= 0 || desc.k <= 0) {
+    if (desc.batch <= 0 || desc.m <= 0 || desc.n <= 0 || desc.k < 0) {
         return false;
     }
 
-    if ((desc.m % tile.tile_m) != 0 || (desc.n % tile.tile_n) != 0 || (desc.k % tile.tile_k) != 0) {
+    if (desc.heterogeneous && tile.tile_m != 32) {
         return false;
+    }
+
+    for (int batch_idx = 0; batch_idx < desc.batch; ++batch_idx) {
+        const int batch_m = batch_dim(desc.m_batch, desc.m, batch_idx);
+        const int batch_n = batch_dim(desc.n_batch, desc.n, batch_idx);
+        const int batch_k = batch_dim(desc.k_batch, desc.k, batch_idx);
+
+        if (batch_m < 0 || batch_n < 0 || batch_k < 0) {
+            return false;
+        }
+
+        if (batch_m == 0 || batch_n == 0) {
+            continue;
+        }
+
+        if ((batch_m % tile.tile_m) != 0 || (batch_n % tile.tile_n) != 0) {
+            return false;
+        }
+
+        if (batch_k == 0) {
+            continue;
+        }
+
+        if ((batch_k % tile.tile_k) != 0) {
+            return false;
+        }
     }
 
     if (!has_max_alignment(desc)) {

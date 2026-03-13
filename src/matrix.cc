@@ -1541,6 +1541,8 @@ MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
     if constexpr (MType == MatrixFormat::Dense) {
         ld_ = matrix.template ld<MType>();
         stride_ = matrix.template stride<MType>();
+        active_rows_ = matrix.active_rows();
+        active_cols_ = matrix.active_cols();
         
         // Try to reuse the backend handle
         backend_handle_ = matrix.backend_handle();
@@ -1570,7 +1572,19 @@ MatrixView<T, MType>::MatrixView(
                         ld > 0 ? ld : matrix.ld_, 
                         stride > 0 ? stride : matrix.stride_,
                         batch_size > 0 ? batch_size : matrix.batch_size_,
-                        matrix.data_ptrs_.data()) {}
+                        matrix.data_ptrs_.data()) {
+    if constexpr (MType == MatrixFormat::Dense) {
+        const bool preserves_shape = (rows <= 0 || rows == matrix.rows_) &&
+                                     (cols <= 0 || cols == matrix.cols_) &&
+                                     (ld <= 0 || ld == matrix.ld_) &&
+                                     (stride <= 0 || stride == matrix.stride_) &&
+                                     (batch_size <= 0 || batch_size == matrix.batch_size_);
+        if (preserves_shape) {
+            active_rows_ = matrix.active_rows_;
+            active_cols_ = matrix.active_cols_;
+        }
+    }
+}
 
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
@@ -1582,7 +1596,12 @@ MatrixView<T, MType>::MatrixView(
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 T& MatrixView<T, MType>::at(int row, int col, int batch) {
-    if (row < 0 || row >= rows_ || col < 0 || col >= cols_ || batch < 0 || batch >= batch_size_) {
+    if (batch < 0 || batch >= batch_size_) {
+        throw std::out_of_range("Matrix indices out of range");
+    }
+    const int batch_rows = rows(batch);
+    const int batch_cols = cols(batch);
+    if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
         throw std::out_of_range("Matrix indices out of range");
     }
     return data_[batch * stride_ + col * ld_ + row];
@@ -1591,7 +1610,12 @@ T& MatrixView<T, MType>::at(int row, int col, int batch) {
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
 const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
-    if (row < 0 || row >= rows_ || col < 0 || col >= cols_ || batch < 0 || batch >= batch_size_) {
+    if (batch < 0 || batch >= batch_size_) {
+        throw std::out_of_range("Matrix indices out of range");
+    }
+    const int batch_rows = rows(batch);
+    const int batch_cols = cols(batch);
+    if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
         throw std::out_of_range("Matrix indices out of range");
     }
     return data_[batch * stride_ + col * ld_ + row];
@@ -1600,7 +1624,7 @@ const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
 // Create a view of a single batch item
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
-    if (batch_index >= batch_size_) {
+    if (batch_index < 0 || batch_index >= batch_size_) {
         throw std::out_of_range("Batch index out of range");
     }
     
@@ -1611,7 +1635,7 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
         // Create a new view with batch_size = 1
         return MatrixView<T, MType>(
             data_.data() + offset,
-            rows_, cols_, ld_);
+            rows(batch_index), cols(batch_index), ld_);
     } else if constexpr (MType == MatrixFormat::CSR) {
         // Calculate offsets to the start of the batch
         size_t val_offset = batch_index * matrix_stride_;

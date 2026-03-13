@@ -22,6 +22,9 @@ struct GemmLaunchDescriptor {
     const float* a_ptr;
     const float* b_ptr;
     float* c_ptr;
+    const int* m_batch;
+    const int* n_batch;
+    const int* k_batch;
     int lda;
     int ldb;
     int ldc;
@@ -34,6 +37,7 @@ struct GemmLaunchDescriptor {
     int batch;
     float alpha;
     float beta;
+    bool heterogeneous;
     bool packet_a;
     bool packet_b;
     bool aligned_fast_path;

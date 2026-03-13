@@ -1,4 +1,3 @@
-// filepath: /home/jonaslacour/BatchLAS/tests/matrix_view_tests.cc
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-vector.hh>
@@ -44,6 +43,55 @@ TEST(MatrixViewTest, BatchItemView) {
             for (int i = 0; i < rows; ++i)
                 EXPECT_EQ(item.at<MatrixFormat::Dense>(i, j), float(10 * b + j * rows + i));
     }
+}
+
+TEST(MatrixViewTest, DenseHeterogeneousActiveDimensionsPropagateToViews) {
+    constexpr int rows = 4, cols = 5, batch = 3;
+    Matrix<float, MatrixFormat::Dense> mat(rows, cols, batch);
+
+    UnifiedVector<int> active_rows(batch);
+    UnifiedVector<int> active_cols(batch);
+    active_rows[0] = 4;
+    active_rows[1] = 2;
+    active_rows[2] = 0;
+    active_cols[0] = 5;
+    active_cols[1] = 3;
+    active_cols[2] = 0;
+
+    mat.set_active_dims(active_rows.to_span(), active_cols.to_span());
+
+    auto view = mat.view();
+    EXPECT_TRUE(view.is_heterogeneous());
+    EXPECT_EQ(view.rows_capacity(), rows);
+    EXPECT_EQ(view.cols_capacity(), cols);
+    EXPECT_EQ(view.rows(0), 4);
+    EXPECT_EQ(view.cols(0), 5);
+    EXPECT_EQ(view.rows(1), 2);
+    EXPECT_EQ(view.cols(1), 3);
+    EXPECT_EQ(view.rows(2), 0);
+    EXPECT_EQ(view.cols(2), 0);
+
+    auto item = view.batch_item(1);
+    EXPECT_FALSE(item.is_heterogeneous());
+    EXPECT_EQ(item.rows(), 2);
+    EXPECT_EQ(item.cols(), 3);
+
+    auto kernel_view = view.kernel_view();
+    EXPECT_TRUE(kernel_view.is_heterogeneous());
+    EXPECT_EQ(kernel_view.rows(1), 2);
+    EXPECT_EQ(kernel_view.cols(1), 3);
+}
+
+TEST(MatrixViewTest, DenseHeterogeneousMetadataRejectsOutOfCapacityDimensions) {
+    Matrix<float, MatrixFormat::Dense> mat(3, 3, 2);
+    UnifiedVector<int> active_rows(2);
+    UnifiedVector<int> active_cols(2);
+    active_rows[0] = 3;
+    active_rows[1] = 4;
+    active_cols[0] = 3;
+    active_cols[1] = 3;
+
+    EXPECT_THROW(mat.set_active_dims(active_rows.to_span(), active_cols.to_span()), std::invalid_argument);
 }
 
 TEST(MatrixViewTest, ElementAccessAndModify) {

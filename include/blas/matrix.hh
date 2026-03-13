@@ -59,6 +59,8 @@ namespace batchlas {
         // Dense specific
         int  ld_ = 0;      // leading dimension
         int  stride_ = 0;  // batch stride (elements)
+        int* active_rows_ = nullptr;
+        int* active_cols_ = nullptr;
 
         // CSR specific (only meaningful if MType == MatrixFormat::CSR)
         int* row_offsets_ = nullptr;  // length rows+1 per batch
@@ -95,6 +97,10 @@ namespace batchlas {
             if (b < 0 || b >= batch_size_) { out.rows_ = out.cols_ = 0; return out; }
             if constexpr (MType == MatrixFormat::Dense) {
                 out.data_ += b * stride_;
+                out.rows_ = active_rows_ ? active_rows_[b] : rows_;
+                out.cols_ = active_cols_ ? active_cols_[b] : cols_;
+                out.active_rows_ = nullptr;
+                out.active_cols_ = nullptr;
             } else if constexpr (MType == MatrixFormat::CSR) {
                 out.data_        += b * matrix_stride_;
                 out.row_offsets_ += b * offset_stride_;
@@ -106,11 +112,14 @@ namespace batchlas {
 
         inline auto data() const { return data_; }
         inline auto rows() const { return rows_; }
+        inline auto rows(int batch_index) const { return active_rows_ ? active_rows_[batch_index] : rows_; }
         inline auto cols() const { return cols_; }
+        inline auto cols(int batch_index) const { return active_cols_ ? active_cols_[batch_index] : cols_; }
         inline auto batch_size() const { return batch_size_; }
         inline auto ld() const { return ld_; }
         inline auto stride() const { return stride_; }
         inline auto nnz() const { return nnz_; }
+        inline bool is_heterogeneous() const { return active_rows_ || active_cols_; }
         
         // Dense slicing operators (host-side; mirror MatrixView logic)
         template <MatrixFormat MF = MType, typename std::enable_if<MF == MatrixFormat::Dense, int>::type = 0>
@@ -145,6 +154,40 @@ namespace batchlas {
             else if (s.end == std::numeric_limits<int64_t>::max()) { s.start = s.start < 0 ? dim + s.start : s.start; len = dim - s.start; }
             else { if (s.start < 0) s.start = dim + s.start; if (s.end < 0) s.end = dim + s.end; len = s.end - s.start; }
             return {s.start, len};
+        }
+
+        inline void validate_dense_active_dims(int rows_capacity,
+                                              int cols_capacity,
+                                              int batch_size,
+                                              Span<int> active_rows,
+                                              Span<int> active_cols) {
+            if (active_rows.empty() && active_cols.empty()) {
+                return;
+            }
+
+            if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
+                active_cols.size() != static_cast<std::size_t>(batch_size)) {
+                throw std::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
+            }
+
+            for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+                const int rows = active_rows[batch_index];
+                const int cols = active_cols[batch_index];
+                if (rows < 0 || cols < 0) {
+                    throw std::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
+                }
+                if (rows > rows_capacity || cols > cols_capacity) {
+                    throw std::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
+                }
+            }
+        }
+
+        inline int dense_active_rows(int rows_capacity, Span<int> active_rows, int batch_index) {
+            return active_rows.empty() ? rows_capacity : active_rows[batch_index];
+        }
+
+        inline int dense_active_cols(int cols_capacity, Span<int> active_cols, int batch_index) {
+            return active_cols.empty() ? cols_capacity : active_cols[batch_index];
         }
 
         template <typename T>
@@ -391,6 +434,11 @@ namespace batchlas {
             // Copy dense format specific data
             result.ld_ = ld_;
             result.stride_ = stride_;
+            if constexpr (MType == MatrixFormat::Dense) {
+                if (active_rows_.size() != 0 || active_cols_.size() != 0) {
+                    result.set_active_dims(active_rows_.to_span(), active_cols_.to_span());
+                }
+            }
             
             return result;
         }
@@ -475,8 +523,42 @@ namespace batchlas {
         }
 
         int rows() const { return rows_; }
+        int rows(int batch_index) const {
+            return detail::dense_active_rows(rows_, active_rows_.to_span(), batch_index);
+        }
         int cols() const { return cols_; }
+        int cols(int batch_index) const {
+            return detail::dense_active_cols(cols_, active_cols_.to_span(), batch_index);
+        }
         int batch_size() const { return batch_size_; }
+        int rows_capacity() const { return rows_; }
+        int cols_capacity() const { return cols_; }
+        bool is_heterogeneous() const { return active_rows_.size() != 0 || active_cols_.size() != 0; }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Span<int> active_rows() const { return active_rows_.to_span(); }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Span<int> active_cols() const { return active_cols_.to_span(); }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Matrix<T, MType>& set_active_dims(Span<int> active_rows, Span<int> active_cols) {
+            detail::validate_dense_active_dims(rows_, cols_, batch_size_, active_rows, active_cols);
+            if (active_rows.empty() && active_cols.empty()) {
+                active_rows_.clear();
+                active_cols_.clear();
+                return *this;
+            }
+
+            active_rows_.resize(active_rows.size());
+            active_cols_.resize(active_cols.size());
+            std::copy(active_rows.begin(), active_rows.end(), active_rows_.begin());
+            std::copy(active_cols.begin(), active_cols.end(), active_cols_.begin());
+            return *this;
+        }
 
         // Build a KernelMatrixView (device POD) for this owning Matrix
         KernelMatrixView<T, MType> kernel_view() const noexcept {
@@ -486,6 +568,8 @@ namespace batchlas {
             kv.cols_       = cols_;
             kv.ld_         = ld_;
             kv.stride_     = stride_;
+            kv.active_rows_ = active_rows_.size() == 0 ? nullptr : const_cast<int*>(active_rows_.data());
+            kv.active_cols_ = active_cols_.size() == 0 ? nullptr : const_cast<int*>(active_cols_.data());
             kv.batch_size_ = batch_size_;
             if constexpr (MType == MatrixFormat::CSR) {
                 kv.row_offsets_   = const_cast<int*>(row_offsets_.data());
@@ -544,6 +628,8 @@ namespace batchlas {
         
         // For batched operations - array of pointers to the start of each matrix
         UnifiedVector<T*> data_ptrs_;
+        UnifiedVector<int> active_rows_;
+        UnifiedVector<int> active_cols_;
 
         // CSR specific data
         UnifiedVector<int> row_offsets_;  // Row offsets for CSR format 
@@ -660,7 +746,24 @@ namespace batchlas {
 
         int batch_size() const { return batch_size_; }
         int rows() const { return rows_; }
+        int rows(int batch_index) const {
+            return detail::dense_active_rows(rows_, active_rows_, batch_index);
+        }
         int cols() const { return cols_; }
+        int cols(int batch_index) const {
+            return detail::dense_active_cols(cols_, active_cols_, batch_index);
+        }
+        int rows_capacity() const { return rows_; }
+        int cols_capacity() const { return cols_; }
+        bool is_heterogeneous() const { return !active_rows_.empty() || !active_cols_.empty(); }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Span<int> active_rows() const { return active_rows_; }
+
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        Span<int> active_cols() const { return active_cols_; }
 
         // Convert to a different scalar type (dense only)
         template <typename U>
@@ -940,6 +1043,16 @@ namespace batchlas {
         // Create a new view into a single batch item
         MatrixView<T, MType> batch_item(int batch_index) const;
 
+        template <MatrixFormat M = MType,
+                  typename std::enable_if<M == MatrixFormat::Dense, int>::type = 0>
+        MatrixView<T, MType> with_active_dims(Span<int> active_rows, Span<int> active_cols) const {
+            detail::validate_dense_active_dims(rows_, cols_, batch_size_, active_rows, active_cols);
+            MatrixView<T, MType> out = *this;
+            out.active_rows_ = active_rows;
+            out.active_cols_ = active_cols;
+            return out;
+        }
+
         static bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const MatrixView<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon());
         static inline bool all_close(Queue& ctx, const Matrix<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a.view(), b.view(), tol);}
         static inline bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a, b.view(), tol);}
@@ -1021,6 +1134,8 @@ namespace batchlas {
             kv.cols_       = cols_;
             kv.ld_         = ld_;
             kv.stride_     = stride_;
+            kv.active_rows_ = active_rows_.empty() ? nullptr : active_rows_.data();
+            kv.active_cols_ = active_cols_.empty() ? nullptr : active_cols_.data();
             kv.batch_size_ = batch_size_;
             if constexpr (MType == MatrixFormat::CSR) {
                 kv.row_offsets_   = const_cast<int*>(row_offsets_.data());
@@ -1041,6 +1156,8 @@ namespace batchlas {
         // Dense specific data
         int ld_ = 0;          // Leading dimension
         int stride_ = 0;      // Stride between matrices in a batch
+        Span<int> active_rows_;
+        Span<int> active_cols_;
         
         // For batched operations
         Span<T*> data_ptrs_;  // View into array of matrix pointers for batched operations
@@ -1393,6 +1510,15 @@ namespace batchlas {
         return (trans == Transpose::NoTrans) 
                ? std::make_pair(mat.rows_, mat.cols_) 
                : std::make_pair(mat.cols_, mat.rows_);
+    }
+
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans, int batch_index) {
+        const int rows = mat.rows(batch_index);
+        const int cols = mat.cols(batch_index);
+        return (trans == Transpose::NoTrans)
+               ? std::make_pair(rows, cols)
+               : std::make_pair(cols, rows);
     }
 
     // Ostream operators for Matrix and MatrixView
