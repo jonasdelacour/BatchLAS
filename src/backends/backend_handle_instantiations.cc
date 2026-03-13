@@ -1,23 +1,38 @@
 #include "backend_handle_impl.hh"
 
+#include "../util/template-instantiations.hh"
+
 namespace batchlas {
 
-template struct BackendMatrixHandle<float, MatrixFormat::Dense>;
-template struct BackendMatrixHandle<float, MatrixFormat::CSR>;
-template struct BackendMatrixHandle<double, MatrixFormat::Dense>;
-template struct BackendMatrixHandle<double, MatrixFormat::CSR>;
-template struct BackendMatrixHandle<std::complex<float>, MatrixFormat::Dense>;
-template struct BackendMatrixHandle<std::complex<float>, MatrixFormat::CSR>;
-template struct BackendMatrixHandle<std::complex<double>, MatrixFormat::Dense>;
-template struct BackendMatrixHandle<std::complex<double>, MatrixFormat::CSR>;
+#define BACKEND_MATRIX_HANDLE_INSTANTIATE(fp, fmt) \
+template struct BackendMatrixHandle<BATCHLAS_UNPAREN fp, fmt>;
 
-template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::Dense>> createBackendHandle<float, MatrixFormat::Dense>(const Matrix<float, MatrixFormat::Dense>& matrix);
-template std::shared_ptr<BackendMatrixHandle<float, MatrixFormat::CSR>> createBackendHandle<float, MatrixFormat::CSR>(const Matrix<float, MatrixFormat::CSR>& matrix);
-template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::Dense>> createBackendHandle<double, MatrixFormat::Dense>(const Matrix<double, MatrixFormat::Dense>& matrix);
-template std::shared_ptr<BackendMatrixHandle<double, MatrixFormat::CSR>> createBackendHandle<double, MatrixFormat::CSR>(const Matrix<double, MatrixFormat::CSR>& matrix);
-template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::Dense>> createBackendHandle<std::complex<float>, MatrixFormat::Dense>(const Matrix<std::complex<float>, MatrixFormat::Dense>& matrix);
-template std::shared_ptr<BackendMatrixHandle<std::complex<float>, MatrixFormat::CSR>> createBackendHandle<std::complex<float>, MatrixFormat::CSR>(const Matrix<std::complex<float>, MatrixFormat::CSR>& matrix);
-template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::Dense>> createBackendHandle<std::complex<double>, MatrixFormat::Dense>(const Matrix<std::complex<double>, MatrixFormat::Dense>& matrix);
-template std::shared_ptr<BackendMatrixHandle<std::complex<double>, MatrixFormat::CSR>> createBackendHandle<std::complex<double>, MatrixFormat::CSR>(const Matrix<std::complex<double>, MatrixFormat::CSR>& matrix);
+#define BACKEND_MATRIX_HANDLE_INSTANTIATE_DENSE(fp) \
+	BACKEND_MATRIX_HANDLE_INSTANTIATE(fp, MatrixFormat::Dense)
+
+#define BACKEND_MATRIX_HANDLE_INSTANTIATE_CSR(fp) \
+	BACKEND_MATRIX_HANDLE_INSTANTIATE(fp, MatrixFormat::CSR)
+
+BATCHLAS_FOR_EACH_SCALAR_TYPE(BACKEND_MATRIX_HANDLE_INSTANTIATE_DENSE)
+BATCHLAS_FOR_EACH_SCALAR_TYPE(BACKEND_MATRIX_HANDLE_INSTANTIATE_CSR)
+
+#define CREATE_BACKEND_HANDLE_INSTANTIATE(fp, fmt) \
+template std::shared_ptr<BackendMatrixHandle<BATCHLAS_UNPAREN fp, fmt>> createBackendHandle<BATCHLAS_UNPAREN fp, fmt>(const Matrix<BATCHLAS_UNPAREN fp, fmt>& matrix);
+
+#define CREATE_BACKEND_HANDLE_INSTANTIATE_DENSE(fp) \
+	CREATE_BACKEND_HANDLE_INSTANTIATE(fp, MatrixFormat::Dense)
+
+#define CREATE_BACKEND_HANDLE_INSTANTIATE_CSR(fp) \
+	CREATE_BACKEND_HANDLE_INSTANTIATE(fp, MatrixFormat::CSR)
+
+BATCHLAS_FOR_EACH_SCALAR_TYPE(CREATE_BACKEND_HANDLE_INSTANTIATE_DENSE)
+BATCHLAS_FOR_EACH_SCALAR_TYPE(CREATE_BACKEND_HANDLE_INSTANTIATE_CSR)
+
+#undef CREATE_BACKEND_HANDLE_INSTANTIATE_CSR
+#undef CREATE_BACKEND_HANDLE_INSTANTIATE_DENSE
+#undef CREATE_BACKEND_HANDLE_INSTANTIATE
+#undef BACKEND_MATRIX_HANDLE_INSTANTIATE_CSR
+#undef BACKEND_MATRIX_HANDLE_INSTANTIATE_DENSE
+#undef BACKEND_MATRIX_HANDLE_INSTANTIATE
 
 } // namespace batchlas

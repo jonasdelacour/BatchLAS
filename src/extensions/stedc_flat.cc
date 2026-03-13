@@ -9,6 +9,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../util/kernel-trace.hh"
+#include "../util/template-instantiations.hh"
 
 namespace batchlas {
 
@@ -502,14 +503,21 @@ Event stedc_flat(Queue& ctx,
 }
 
 // Explicit instantiations for the flattened path.
+#define STEDC_FLAT_INSTANTIATE(back, fp) \
+template Event stedc_flat<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, StedcParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
+
+#define STEDC_FLAT_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEDC_FLAT_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_HOST_BACKEND
-template Event stedc_flat<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, StedcParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
-template Event stedc_flat<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, StedcParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+STEDC_FLAT_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-template Event stedc_flat<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, StedcParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
-template Event stedc_flat<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, StedcParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+STEDC_FLAT_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
+
+#undef STEDC_FLAT_INSTANTIATE_FOR_BACKEND
+#undef STEDC_FLAT_INSTANTIATE
 
 } // namespace batchlas

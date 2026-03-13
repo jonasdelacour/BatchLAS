@@ -9,6 +9,8 @@
 #include <oneapi/dpl/algorithm>
 #include <blas/linalg.hh>
 
+#include "../util/template-instantiations.hh"
+
 namespace batchlas {
 
 template <typename T>
@@ -260,12 +262,11 @@ size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
 }
 
 #define TRIDAG_INSTANTIATE(back, fp) \
-    template Event tridiagonal_solver<back, fp>(Queue&, Span<fp>, Span<fp>, Span<typename base_type<fp>::type>, Span<std::byte>, JobType, const MatrixView<fp, MatrixFormat::Dense>&, size_t, size_t); \
-    template size_t tridiagonal_solver_buffer_size<back, fp>(Queue&, size_t, size_t, JobType);
+    template Event tridiagonal_solver<back, BATCHLAS_UNPAREN fp>(Queue&, Span<BATCHLAS_UNPAREN fp>, Span<BATCHLAS_UNPAREN fp>, Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, Span<std::byte>, JobType, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, size_t, size_t); \
+    template size_t tridiagonal_solver_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, size_t, size_t, JobType);
 
 #define TRIDIAG_INSTANTIATE_FOR_BACKEND(back) \
-    TRIDAG_INSTANTIATE(back, float) \
-    TRIDAG_INSTANTIATE(back, double) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(TRIDAG_INSTANTIATE, back) \
     //TRIDAG_INSTANTIATE(back, std::complex<float>) \
     //TRIDAG_INSTANTIATE(back, std::complex<double>)
 
@@ -282,6 +283,7 @@ size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
 //TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<float>)
 //TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<double>)
 
+#undef TRIDIAG_INSTANTIATE_FOR_BACKEND
 #undef TRIDAG_INSTANTIATE
 
 } // namespace batchlas

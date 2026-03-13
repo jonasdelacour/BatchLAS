@@ -6,6 +6,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <complex>
@@ -455,43 +456,38 @@ Event ormqr_blocked(Queue& ctx,
 }
 
 #define ORMQR_BLOCKED_INSTANTIATE(back, fp) \
-    template Event ormqr_blocked<back, fp>( \
+    template Event ormqr_blocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Side, Transpose, \
-        Span<fp>, \
+        Span<BATCHLAS_UNPAREN fp>, \
         Span<std::byte>, \
         int32_t); \
-    template size_t ormqr_blocked_buffer_size<back, fp>( \
+    template size_t ormqr_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Side, Transpose, \
-        Span<fp>, \
+        Span<BATCHLAS_UNPAREN fp>, \
         int32_t);
 
+#define ORMQR_BLOCKED_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ORMQR_BLOCKED_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-ORMQR_BLOCKED_INSTANTIATE(Backend::CUDA, float)
-ORMQR_BLOCKED_INSTANTIATE(Backend::CUDA, double)
-ORMQR_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<float>)
-ORMQR_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<double>)
+ORMQR_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-ORMQR_BLOCKED_INSTANTIATE(Backend::ROCM, float)
-ORMQR_BLOCKED_INSTANTIATE(Backend::ROCM, double)
-ORMQR_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<float>)
-ORMQR_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<double>)
+ORMQR_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-ORMQR_BLOCKED_INSTANTIATE(Backend::NETLIB, float)
-ORMQR_BLOCKED_INSTANTIATE(Backend::NETLIB, double)
-ORMQR_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-ORMQR_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+ORMQR_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
+#undef ORMQR_BLOCKED_INSTANTIATE_FOR_BACKEND
 #undef ORMQR_BLOCKED_INSTANTIATE
 
 } // namespace batchlas

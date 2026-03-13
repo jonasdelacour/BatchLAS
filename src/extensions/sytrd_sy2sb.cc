@@ -9,6 +9,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <complex>
@@ -423,42 +424,39 @@ Event sytrd_sy2sb(Queue& ctx,
 }
 
 #define SYTRD_SY2SB_INSTANTIATE(back, fp) \
-    template Event sytrd_sy2sb<back, fp>( \
+    template Event sytrd_sy2sb<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
         Uplo, \
         int32_t, \
         const Span<std::byte>&); \
-    template size_t sytrd_sy2sb_buffer_size<back, fp>( \
+    template size_t sytrd_sy2sb_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
         Uplo, \
         int32_t);
 
+#define SYTRD_SY2SB_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYTRD_SY2SB_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-SYTRD_SY2SB_INSTANTIATE(Backend::CUDA, float)
-SYTRD_SY2SB_INSTANTIATE(Backend::CUDA, double)
-SYTRD_SY2SB_INSTANTIATE(Backend::CUDA, std::complex<float>)
-SYTRD_SY2SB_INSTANTIATE(Backend::CUDA, std::complex<double>)
+SYTRD_SY2SB_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-SYTRD_SY2SB_INSTANTIATE(Backend::ROCM, float)
-SYTRD_SY2SB_INSTANTIATE(Backend::ROCM, double)
-SYTRD_SY2SB_INSTANTIATE(Backend::ROCM, std::complex<float>)
-SYTRD_SY2SB_INSTANTIATE(Backend::ROCM, std::complex<double>)
+SYTRD_SY2SB_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-SYTRD_SY2SB_INSTANTIATE(Backend::NETLIB, float)
-SYTRD_SY2SB_INSTANTIATE(Backend::NETLIB, double)
-SYTRD_SY2SB_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-SYTRD_SY2SB_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+SYTRD_SY2SB_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
+
+#undef SYTRD_SY2SB_INSTANTIATE_FOR_BACKEND
+#undef SYTRD_SY2SB_INSTANTIATE
 
 #undef SYTRD_SY2SB_INSTANTIATE
 

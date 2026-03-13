@@ -12,6 +12,7 @@
 #include <blas/functions/syev.hh>
 #include <blas/functions/iluk.hh>
 #include "../math-helpers.hh"
+#include "../util/template-instantiations.hh"
 #include <internal/sort.hh>
 
 namespace batchlas {
@@ -614,34 +615,30 @@ namespace batchlas {
     }
 
     #define SYEVX_INSTANTIATE(back, fp, fmt) \
-    template Event syevx<back, fp, fmt>(\
+    template Event syevx<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
-        const MatrixView<fp, fmt>&,\
-        Span<typename base_type<fp>::type>,\
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         size_t,\
         Span<std::byte>,\
         JobType,\
-        const MatrixView<fp, MatrixFormat::Dense>&,\
-        const SyevxParams<fp>&);\
-    template size_t syevx_buffer_size<back, fp, fmt>(\
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+    template size_t syevx_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
-        const MatrixView<fp, fmt>&,\
-        Span<typename base_type<fp>::type>,\
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         size_t,\
         JobType,\
-        const MatrixView<fp, MatrixFormat::Dense>&,\
-        const SyevxParams<fp>&);
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&);
     
 
     #define SYEVX_INSTANTIATE_FOR_BACKEND(back)\
-        SYEVX_INSTANTIATE(back, float, MatrixFormat::Dense)\
-        SYEVX_INSTANTIATE(back, double, MatrixFormat::Dense)\
-        SYEVX_INSTANTIATE(back, std::complex<float>, MatrixFormat::Dense)\
-        SYEVX_INSTANTIATE(back, std::complex<double>, MatrixFormat::Dense)\
-        SYEVX_INSTANTIATE(back, float, MatrixFormat::CSR)\
-        SYEVX_INSTANTIATE(back, double, MatrixFormat::CSR)\
-        SYEVX_INSTANTIATE(back, std::complex<float>, MatrixFormat::CSR)\
-        SYEVX_INSTANTIATE(back, std::complex<double>, MatrixFormat::CSR)
+        BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYEVX_INSTANTIATE_FOR_BACKEND_TYPE, back)
+
+    #define SYEVX_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
+        BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(SYEVX_INSTANTIATE, back, fp)
 
     #if BATCHLAS_HAS_CUDA_BACKEND
         SYEVX_INSTANTIATE_FOR_BACKEND(Backend::CUDA);
@@ -653,5 +650,7 @@ namespace batchlas {
         SYEVX_INSTANTIATE_FOR_BACKEND(Backend::NETLIB);
     #endif
 
+    #undef SYEVX_INSTANTIATE_FOR_BACKEND_TYPE
+    #undef SYEVX_INSTANTIATE_FOR_BACKEND
     #undef SYEVX_INSTANTIATE
 }

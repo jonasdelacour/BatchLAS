@@ -11,6 +11,8 @@
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
+#include "../util/template-instantiations.hh"
+
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
@@ -391,30 +393,30 @@ namespace batchlas {
     }  
 
     #define ORTHO_INSTANTIATE(back, fp) \
-    template Event ortho<back, fp>( \
+    template Event ortho<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Transpose, \
         Span<std::byte>, \
         OrthoAlgorithm); \
-    template Event ortho<back, fp>( \
+    template Event ortho<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Transpose, \
         Transpose, \
         Span<std::byte>, \
         OrthoAlgorithm, \
         size_t); \
-    template size_t ortho_buffer_size<back, fp>( \
+    template size_t ortho_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Transpose, \
         OrthoAlgorithm); \
-    template size_t ortho_buffer_size<back, fp>( \
+    template size_t ortho_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         Transpose, \
         Transpose, \
         OrthoAlgorithm, \
@@ -422,10 +424,7 @@ namespace batchlas {
 
     // Instantiate for the floating-point types of interest
     #define INSTANTIATE_ORTHO_FOR_BACKEND(back)\
-        ORTHO_INSTANTIATE(back, float) \
-        ORTHO_INSTANTIATE(back, double)\
-        ORTHO_INSTANTIATE(back, std::complex<float>)\
-        ORTHO_INSTANTIATE(back, std::complex<double>)
+        BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ORTHO_INSTANTIATE, back)
 
     #if BATCHLAS_HAS_CUDA_BACKEND
         INSTANTIATE_ORTHO_FOR_BACKEND(Backend::CUDA)
@@ -437,5 +436,6 @@ namespace batchlas {
         INSTANTIATE_ORTHO_FOR_BACKEND(Backend::NETLIB)
     #endif
 
+    #undef INSTANTIATE_ORTHO_FOR_BACKEND
     #undef ORTHO_INSTANTIATE
 }

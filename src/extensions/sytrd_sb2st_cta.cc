@@ -5,6 +5,7 @@
 // live in sytrd_sb2st.cc.
 
 #include "sytrd_sb2st_cta.hh"
+#include "sytrd_sb2st_cta_instantiations.hh"
 
 #include <util/group-invoke.hh>
 
@@ -701,43 +702,19 @@ Event btrd_lower_inplace_subgroup_dispatch(Queue& q,
 }
 
 // ---- Explicit template instantiations (needed because sytrd_sb2st.cc only sees the declaration) ----
-template Event btrd_lower_inplace_subgroup_dispatch<float>(Queue&,
-                                                           KernelMatrixView<float, MatrixFormat::Dense>,
-                                                           int,
-                                                           int,
-                                                           VectorView<float>,
-                                                           VectorView<float>,
-                                                           VectorView<float>,
-                                                           VectorView<float>,
-                                                           VectorView<float>);
-template Event btrd_lower_inplace_subgroup_dispatch<double>(Queue&,
-                                                            KernelMatrixView<double, MatrixFormat::Dense>,
-                                                            int,
-                                                            int,
-                                                            VectorView<double>,
-                                                            VectorView<double>,
-                                                            VectorView<double>,
-                                                            VectorView<double>,
-                                                            VectorView<double>);
-template Event btrd_lower_inplace_subgroup_dispatch<std::complex<float>>(
-    Queue&,
-    KernelMatrixView<std::complex<float>, MatrixFormat::Dense>,
-    int,
-    int,
-    VectorView<float>,
-    VectorView<std::complex<float>>,
-    VectorView<float>,
-    VectorView<float>,
-    VectorView<std::complex<float>>);
-template Event btrd_lower_inplace_subgroup_dispatch<std::complex<double>>(
-    Queue&,
-    KernelMatrixView<std::complex<double>, MatrixFormat::Dense>,
-    int,
-    int,
-    VectorView<double>,
-    VectorView<std::complex<double>>,
-    VectorView<double>,
-    VectorView<double>,
-    VectorView<std::complex<double>>);
+#define BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE(fp, real_fp) \
+template Event btrd_lower_inplace_subgroup_dispatch<BATCHLAS_UNPAREN fp>(Queue&, \
+                                                                          KernelMatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>, \
+                                                                          int, \
+                                                                          int, \
+                                                                          VectorView<BATCHLAS_UNPAREN real_fp>, \
+                                                                          VectorView<BATCHLAS_UNPAREN fp>, \
+                                                                          VectorView<BATCHLAS_UNPAREN real_fp>, \
+                                                                          VectorView<BATCHLAS_UNPAREN real_fp>, \
+                                                                          VectorView<BATCHLAS_UNPAREN fp>);
+
+BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE)
+
+#undef BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE
 
 } // namespace batchlas::internal

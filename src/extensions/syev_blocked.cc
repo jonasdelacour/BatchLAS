@@ -8,6 +8,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <complex>
@@ -496,42 +497,37 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 }
 
 #define SYEV_BLOCKED_INSTANTIATE(back, fp) \
-    template Event syev_blocked<back, fp>( \
+    template Event syev_blocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
         JobType, \
         Uplo, \
         const Span<std::byte>&, \
-        StedcParams<typename base_type<fp>::type>); \
-    template size_t syev_blocked_buffer_size<back, fp>( \
+        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>); \
+    template size_t syev_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         JobType, \
         Uplo, \
-        StedcParams<typename base_type<fp>::type>);
+        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>);
+
+#define SYEV_BLOCKED_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYEV_BLOCKED_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-SYEV_BLOCKED_INSTANTIATE(Backend::CUDA, float)
-SYEV_BLOCKED_INSTANTIATE(Backend::CUDA, double)
-SYEV_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<float>)
-SYEV_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<double>)
+SYEV_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-SYEV_BLOCKED_INSTANTIATE(Backend::ROCM, float)
-SYEV_BLOCKED_INSTANTIATE(Backend::ROCM, double)
-SYEV_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<float>)
-SYEV_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<double>)
+SYEV_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-SYEV_BLOCKED_INSTANTIATE(Backend::NETLIB, float)
-SYEV_BLOCKED_INSTANTIATE(Backend::NETLIB, double)
-SYEV_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-SYEV_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+SYEV_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
+#undef SYEV_BLOCKED_INSTANTIATE_FOR_BACKEND
 #undef SYEV_BLOCKED_INSTANTIATE
 
 } // namespace batchlas

@@ -5,6 +5,7 @@
 #include <batchlas/backend_config.h>
 
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <complex>
@@ -674,56 +675,25 @@ size_t syev_cta_buffer_size(Queue& ctx,
     return bytes;
 }
 
+#define SYEV_CTA_INSTANTIATE(back, fp) \
+    template Event syev_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+                                                       Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, JobType, Uplo, \
+                                                       const Span<std::byte>&, SteqrParams<BATCHLAS_UNPAREN fp>, size_t); \
+    template size_t syev_cta_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+                                                                    JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
+
+#define SYEV_CTA_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYEV_CTA_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-    template Event syev_cta<Backend::CUDA, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-                                                  Span<typename base_type<float>::type>, JobType, Uplo,
-                                                  const Span<std::byte>&, SteqrParams<float>, size_t);
-    template Event syev_cta<Backend::CUDA, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-                                                   Span<typename base_type<double>::type>, JobType, Uplo,
-                                                   const Span<std::byte>&, SteqrParams<double>, size_t);
-
-    template Event syev_cta<Backend::CUDA, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                Span<typename base_type<std::complex<float>>::type>, JobType, Uplo,
-                                                                const Span<std::byte>&, SteqrParams<std::complex<float>>, size_t);
-    template Event syev_cta<Backend::CUDA, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                 Span<typename base_type<std::complex<double>>::type>, JobType, Uplo,
-                                                                 const Span<std::byte>&, SteqrParams<std::complex<double>>, size_t);
-
-    template size_t syev_cta_buffer_size<Backend::CUDA, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-                                                               JobType, SteqrParams<float>);
-    template size_t syev_cta_buffer_size<Backend::CUDA, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-                                                                JobType, SteqrParams<double>);
-
-    template size_t syev_cta_buffer_size<Backend::CUDA, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                              JobType, SteqrParams<std::complex<float>>);
-    template size_t syev_cta_buffer_size<Backend::CUDA, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                               JobType, SteqrParams<std::complex<double>>);
+    SYEV_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-    template Event syev_cta<Backend::NETLIB, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-                                                    Span<typename base_type<float>::type>, JobType, Uplo,
-                                                    const Span<std::byte>&, SteqrParams<float>, size_t);
-    template Event syev_cta<Backend::NETLIB, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-                                                     Span<typename base_type<double>::type>, JobType, Uplo,
-                                                     const Span<std::byte>&, SteqrParams<double>, size_t);
-
-    template Event syev_cta<Backend::NETLIB, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                  Span<typename base_type<std::complex<float>>::type>, JobType, Uplo,
-                                                                  const Span<std::byte>&, SteqrParams<std::complex<float>>, size_t);
-    template Event syev_cta<Backend::NETLIB, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                   Span<typename base_type<std::complex<double>>::type>, JobType, Uplo,
-                                                                   const Span<std::byte>&, SteqrParams<std::complex<double>>, size_t);
-
-    template size_t syev_cta_buffer_size<Backend::NETLIB, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-                                                                 JobType, SteqrParams<float>);
-    template size_t syev_cta_buffer_size<Backend::NETLIB, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-                                                                  JobType, SteqrParams<double>);
-
-    template size_t syev_cta_buffer_size<Backend::NETLIB, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                                JobType, SteqrParams<std::complex<float>>);
-    template size_t syev_cta_buffer_size<Backend::NETLIB, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                                 JobType, SteqrParams<std::complex<double>>);
+    SYEV_CTA_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
+
+#undef SYEV_CTA_INSTANTIATE_FOR_BACKEND
+#undef SYEV_CTA_INSTANTIATE
 
 } // namespace batchlas

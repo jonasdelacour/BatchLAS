@@ -4,6 +4,8 @@
 #include "../queue.hh"
 #include <util/mempool.hh>
 
+#include "../util/template-instantiations.hh"
+
 namespace batchlas {
 
     template <Backend B, typename T>
@@ -45,15 +47,12 @@ namespace batchlas {
     }
 
 #define INV_INSTANTIATE(back, fp) \
-    template Event inv<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<std::byte>); \
-    template size_t inv_buffer_size<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&); \
-    template Matrix<fp, MatrixFormat::Dense> inv<back, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
+    template Event inv<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<std::byte>); \
+    template size_t inv_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&); \
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> inv<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
 
 #define INV_INSTANTIATE_FOR_BACK(back)\
-    INV_INSTANTIATE(back, float) \
-    INV_INSTANTIATE(back, double) \
-    INV_INSTANTIATE(back, std::complex<float>) \
-    INV_INSTANTIATE(back, std::complex<double>) 
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(INV_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     INV_INSTANTIATE_FOR_BACK(Backend::CUDA)
@@ -65,6 +64,7 @@ namespace batchlas {
     INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
 #endif
 
+#undef INV_INSTANTIATE_FOR_BACK
 #undef INV_INSTANTIATE
 
 }

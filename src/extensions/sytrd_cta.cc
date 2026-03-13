@@ -8,6 +8,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 #include <internal/sort.hh>
 #include <complex>
 #include <numeric>
@@ -637,19 +638,22 @@ namespace batchlas {
         return ctx.get_event();
     }
 
+#define SYTRD_CTA_INSTANTIATE(back, fp) \
+    template Event sytrd_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, Uplo, const Span<std::byte>&, size_t);
+
+#define SYTRD_CTA_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYTRD_CTA_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-    template Event sytrd_cta<Backend::CUDA, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::CUDA, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::CUDA, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::CUDA, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, Uplo, const Span<std::byte>&, size_t);
+    SYTRD_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-    template Event sytrd_cta<Backend::NETLIB, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::NETLIB, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::NETLIB, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, Uplo, const Span<std::byte>&, size_t);
-    template Event sytrd_cta<Backend::NETLIB, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, Uplo, const Span<std::byte>&, size_t);
+    SYTRD_CTA_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
+
+#undef SYTRD_CTA_INSTANTIATE_FOR_BACKEND
+#undef SYTRD_CTA_INSTANTIATE
 
 }
 

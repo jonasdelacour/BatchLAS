@@ -5,6 +5,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -236,38 +237,41 @@ size_t bdsqr_buffer_size(Queue& ctx,
 }
 
 #define BDSQR_INSTANTIATE(back, fp) \
-    template Event bdsqr<back, fp>( \
+    template Event bdsqr<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&, \
-        Span<fp>, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        Span<BATCHLAS_UNPAREN fp>, \
         const Span<std::byte>&, \
         bool);
 
 #define BDSQR_BUFFER_INSTANTIATE(fp) \
-    template size_t bdsqr_buffer_size<fp>( \
+    template size_t bdsqr_buffer_size<BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&, \
-        Span<fp>);
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        Span<BATCHLAS_UNPAREN fp>);
+
+#define BDSQR_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(BDSQR_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-BDSQR_INSTANTIATE(Backend::CUDA, float)
-BDSQR_INSTANTIATE(Backend::CUDA, double)
+BDSQR_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-BDSQR_INSTANTIATE(Backend::ROCM, float)
-BDSQR_INSTANTIATE(Backend::ROCM, double)
+BDSQR_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-BDSQR_INSTANTIATE(Backend::NETLIB, float)
-BDSQR_INSTANTIATE(Backend::NETLIB, double)
+BDSQR_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
-BDSQR_BUFFER_INSTANTIATE(float)
-BDSQR_BUFFER_INSTANTIATE(double)
+BATCHLAS_FOR_EACH_REAL_TYPE(BDSQR_BUFFER_INSTANTIATE)
+
+#undef BDSQR_INSTANTIATE_FOR_BACKEND
+#undef BDSQR_BUFFER_INSTANTIATE
+#undef BDSQR_INSTANTIATE
 
 #undef BDSQR_INSTANTIATE
 #undef BDSQR_BUFFER_INSTANTIATE

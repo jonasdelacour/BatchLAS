@@ -1,6 +1,7 @@
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
+#include "../util/template-instantiations.hh"
 #include <complex>
 #include <vector>
 #include <iostream>
@@ -89,12 +90,12 @@ Event trmm(Queue& ctx,
 
 
 #define TRMM_INSTANTIATE(back, fp) \
-    template Event trmm<back, fp>( \
+    template Event trmm<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        BATCHLAS_UNPAREN fp, \
         Side, \
         Uplo, \
         Transpose, \
@@ -102,15 +103,13 @@ Event trmm(Queue& ctx,
 
 
 #define INSTANTIATE_TRMM_FOR_BACKEND(back)\
-    TRMM_INSTANTIATE(back, float) \
-    TRMM_INSTANTIATE(back, double)\
-    TRMM_INSTANTIATE(back, std::complex<float>)\
-    TRMM_INSTANTIATE(back, std::complex<double>)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(TRMM_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_MKL_BACKEND
         INSTANTIATE_TRMM_FOR_BACKEND(Backend::MKL)
     #endif
 
+#undef INSTANTIATE_TRMM_FOR_BACKEND
 #undef TRMM_INSTANTIATE
 
 } // namespace batchlas

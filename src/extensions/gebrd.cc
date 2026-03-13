@@ -3,6 +3,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <stdexcept>
 
@@ -149,35 +150,30 @@ Event gebrd_unblocked(Queue& ctx,
 }
 
 #define GEBRD_INSTANTIATE(back, fp) \
-    template Event gebrd_unblocked<back, fp>( \
+    template Event gebrd_unblocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&);
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&);
+
+#define GEBRD_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(GEBRD_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-GEBRD_INSTANTIATE(Backend::CUDA, float)
-GEBRD_INSTANTIATE(Backend::CUDA, double)
-GEBRD_INSTANTIATE(Backend::CUDA, std::complex<float>)
-GEBRD_INSTANTIATE(Backend::CUDA, std::complex<double>)
+GEBRD_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-GEBRD_INSTANTIATE(Backend::ROCM, float)
-GEBRD_INSTANTIATE(Backend::ROCM, double)
-GEBRD_INSTANTIATE(Backend::ROCM, std::complex<float>)
-GEBRD_INSTANTIATE(Backend::ROCM, std::complex<double>)
+GEBRD_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-GEBRD_INSTANTIATE(Backend::NETLIB, float)
-GEBRD_INSTANTIATE(Backend::NETLIB, double)
-GEBRD_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-GEBRD_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+GEBRD_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
+#undef GEBRD_INSTANTIATE_FOR_BACKEND
 #undef GEBRD_INSTANTIATE
 
 } // namespace batchlas

@@ -9,6 +9,8 @@
 #include <batchlas/backend_config.h>
 #include <util/kernel-heuristics.hh>
 
+#include "../util/template-instantiations.hh"
+
 namespace batchlas {
     
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -182,18 +184,14 @@ namespace batchlas {
 
     // Explicit template instantiations for common types
     #define RITZ_VALUES_INSTANTIATE(back, fp, fmt) \
-        template Event ritz_values<back, fp, fmt>(Queue&, const MatrixView<fp, fmt>&, const MatrixView<fp, MatrixFormat::Dense>&, const VectorView<typename base_type<fp>::type>&, Span<std::byte>); \
-        template size_t ritz_values_workspace<back, fp, fmt>(Queue&, const MatrixView<fp, fmt>&, const MatrixView<fp, MatrixFormat::Dense>&, const VectorView<typename base_type<fp>::type>&);
+        template Event ritz_values<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, Span<std::byte>); \
+        template size_t ritz_values_workspace<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&);
 
     #define RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
-        RITZ_VALUES_INSTANTIATE(back, fp, MatrixFormat::Dense) \
-        RITZ_VALUES_INSTANTIATE(back, fp, MatrixFormat::CSR)
+        BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(RITZ_VALUES_INSTANTIATE, back, fp)
 
     #define RITZ_VALUES_INSTANTIATE_FOR_BACKEND(back) \
-        RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, float) \
-        RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, double) \
-        RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, std::complex<float>) \
-        RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, std::complex<double>)
+        BATCHLAS_FOR_EACH_SCALAR_TYPE_1(RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE, back)
 
     #if BATCHLAS_HAS_HOST_BACKEND
         RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
@@ -210,4 +208,8 @@ namespace batchlas {
     #if BATCHLAS_HAS_MKL_BACKEND
         RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::MKL)
     #endif
+
+    #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND
+    #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE
+    #undef RITZ_VALUES_INSTANTIATE
 }

@@ -2,6 +2,7 @@
 #include <blas/extensions.hh>
 #include "steqr_internal.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 namespace batchlas {
 
@@ -54,17 +55,27 @@ size_t steqr_buffer_size(Queue& ctx,
     return steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
 }
 
+#define STEQR_INSTANTIATE(back, fp) \
+template Event steqr<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
+
+#define STEQR_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEQR_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-template Event steqr<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, SteqrParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
-template Event steqr<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, SteqrParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+STEQR_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-template Event steqr<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, const Span<std::byte>&, JobType, SteqrParams<float>, const MatrixView<float, MatrixFormat::Dense>&);
-template Event steqr<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, const Span<std::byte>&, JobType, SteqrParams<double>, const MatrixView<double, MatrixFormat::Dense>&);
+STEQR_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
-template size_t steqr_buffer_size<float>(Queue&, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, JobType, SteqrParams<float>);
-template size_t steqr_buffer_size<double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, JobType, SteqrParams<double>);
+#define STEQR_BUFFER_SIZE_INSTANTIATE(fp) \
+template size_t steqr_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
+
+BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_BUFFER_SIZE_INSTANTIATE)
+
+#undef STEQR_BUFFER_SIZE_INSTANTIATE
+#undef STEQR_INSTANTIATE_FOR_BACKEND
+#undef STEQR_INSTANTIATE
 
 } // namespace batchlas

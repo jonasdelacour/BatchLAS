@@ -5,6 +5,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/template-instantiations.hh"
 
 #include <cctype>
 #include <complex>
@@ -210,46 +211,43 @@ size_t ormbr_buffer_size(Queue& ctx,
 }
 
 #define ORMBR_INSTANTIATE(back, fp) \
-    template Event ormbr<back, fp>( \
+    template Event ormbr<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         char, \
         Side, \
         Transpose, \
         const Span<std::byte>&, \
         int32_t); \
-    template size_t ormbr_buffer_size<back, fp>( \
+    template size_t ormbr_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         char, \
         Side, \
         Transpose, \
         int32_t);
 
+#define ORMBR_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ORMBR_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-ORMBR_INSTANTIATE(Backend::CUDA, float)
-ORMBR_INSTANTIATE(Backend::CUDA, double)
-ORMBR_INSTANTIATE(Backend::CUDA, std::complex<float>)
-ORMBR_INSTANTIATE(Backend::CUDA, std::complex<double>)
+ORMBR_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-ORMBR_INSTANTIATE(Backend::ROCM, float)
-ORMBR_INSTANTIATE(Backend::ROCM, double)
-ORMBR_INSTANTIATE(Backend::ROCM, std::complex<float>)
-ORMBR_INSTANTIATE(Backend::ROCM, std::complex<double>)
+ORMBR_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-ORMBR_INSTANTIATE(Backend::NETLIB, float)
-ORMBR_INSTANTIATE(Backend::NETLIB, double)
-ORMBR_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-ORMBR_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+ORMBR_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
+
+#undef ORMBR_INSTANTIATE_FOR_BACKEND
+#undef ORMBR_INSTANTIATE
 
 #undef ORMBR_INSTANTIATE
 

@@ -3,6 +3,7 @@
 #include <util/mempool.hh>
 
 #include "../math-helpers.hh"
+#include "../util/template-instantiations.hh"
 
 #include <algorithm>
 #include <stdexcept>
@@ -209,45 +210,40 @@ size_t gesvd_blocked_buffer_size(Queue& ctx,
 }
 
 #define GESVD_BLOCKED_INSTANTIATE(back, fp) \
-    template Event gesvd_blocked<back, fp>( \
+    template Event gesvd_blocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
         SvdVectors, \
         const Span<std::byte>&); \
-    template size_t gesvd_blocked_buffer_size<back, fp>( \
+    template size_t gesvd_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
         SvdVectors);
 
+#define GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(GESVD_BLOCKED_INSTANTIATE, back)
+
 #if BATCHLAS_HAS_CUDA_BACKEND
-GESVD_BLOCKED_INSTANTIATE(Backend::CUDA, float)
-GESVD_BLOCKED_INSTANTIATE(Backend::CUDA, double)
-GESVD_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<float>)
-GESVD_BLOCKED_INSTANTIATE(Backend::CUDA, std::complex<double>)
+GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-GESVD_BLOCKED_INSTANTIATE(Backend::ROCM, float)
-GESVD_BLOCKED_INSTANTIATE(Backend::ROCM, double)
-GESVD_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<float>)
-GESVD_BLOCKED_INSTANTIATE(Backend::ROCM, std::complex<double>)
+GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-GESVD_BLOCKED_INSTANTIATE(Backend::NETLIB, float)
-GESVD_BLOCKED_INSTANTIATE(Backend::NETLIB, double)
-GESVD_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-GESVD_BLOCKED_INSTANTIATE(Backend::NETLIB, std::complex<double>)
+GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
+#undef GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND
 #undef GESVD_BLOCKED_INSTANTIATE
 
 } // namespace batchlas

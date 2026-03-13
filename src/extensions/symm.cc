@@ -1,5 +1,6 @@
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
+#include "../util/template-instantiations.hh"
 #include <stdexcept>
 #include <type_traits>
 
@@ -72,19 +73,18 @@ Event symm(Queue& ctx,
 }
 
 #define SYMM_INSTANTIATE(back, fp) \
-    template Event symm<back, fp>( \
+    template Event symm<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, \
-        fp, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        BATCHLAS_UNPAREN fp, \
+        BATCHLAS_UNPAREN fp, \
         Side, \
         Uplo);
 
 #define INSTANTIATE_SYMM_FOR_BACKEND(back) \
-    SYMM_INSTANTIATE(back, float) \
-    SYMM_INSTANTIATE(back, double)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, back)
 
 #if BATCHLAS_HAS_ROCM_BACKEND
 INSTANTIATE_SYMM_FOR_BACKEND(Backend::ROCM)

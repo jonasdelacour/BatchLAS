@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 #include "../math-helpers.hh"
+#include "../util/template-instantiations.hh"
 #include "steqr_internal.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
@@ -483,21 +484,24 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
     return std::max(child_bytes, merge_bytes);
 }
 
-#if BATCHLAS_HAS_HOST_BACKEND
-template Event stedc<Backend::NETLIB, float>(Queue& ctx, const VectorView<float>& d, const VectorView<float>& e, const VectorView<float>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<float> params, const MatrixView<float, MatrixFormat::Dense>& eigvects);
-template Event stedc<Backend::NETLIB, double>(Queue& ctx, const VectorView<double>& d, const VectorView<double>& e, const VectorView<double>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<double> params, const MatrixView<double, MatrixFormat::Dense>& eigvects);
+#define STEDC_INSTANTIATE(back, fp) \
+template Event stedc<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects); \
+template size_t stedc_workspace_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params);
 
-template size_t stedc_workspace_size<Backend::NETLIB, float>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<float> params);
-template size_t stedc_workspace_size<Backend::NETLIB, double>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<double> params);
+#define STEDC_INSTANTIATE_FOR_BACKEND(back) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEDC_INSTANTIATE, back)
+
+#if BATCHLAS_HAS_HOST_BACKEND
+STEDC_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-template Event stedc<Backend::CUDA, float>(Queue& ctx, const VectorView<float>& d, const VectorView<float>& e, const VectorView<float>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<float> params, const MatrixView<float, MatrixFormat::Dense>& eigvects);
-template Event stedc<Backend::CUDA, double>(Queue& ctx, const VectorView<double>& d, const VectorView<double>& e, const VectorView<double>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<double> params, const MatrixView<double, MatrixFormat::Dense>& eigvects);
-
-template size_t stedc_workspace_size<Backend::CUDA, float>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<float> params);
-template size_t stedc_workspace_size<Backend::CUDA, double>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<double> params);
+STEDC_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
 #endif
+
+
+#undef STEDC_INSTANTIATE_FOR_BACKEND
+#undef STEDC_INSTANTIATE
 
 
 }

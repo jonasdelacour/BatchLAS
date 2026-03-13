@@ -1,6 +1,8 @@
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
+#include "../util/template-instantiations.hh"
+
 #include <stdexcept>
 #include <type_traits>
 
@@ -51,19 +53,18 @@ Event syr2k(Queue& ctx,
 }
 
 #define SYR2K_INSTANTIATE(back, fp) \
-    template Event syr2k<back, fp>( \
+    template Event syr2k<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, \
-        fp, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        BATCHLAS_UNPAREN fp, \
+        BATCHLAS_UNPAREN fp, \
         Uplo, \
         Transpose);
 
 #if BATCHLAS_HAS_MKL_BACKEND
-SYR2K_INSTANTIATE(Backend::MKL, float)
-SYR2K_INSTANTIATE(Backend::MKL, double)
+BATCHLAS_FOR_EACH_REAL_TYPE_1(SYR2K_INSTANTIATE, Backend::MKL)
 #endif
 
 #undef SYR2K_INSTANTIATE
