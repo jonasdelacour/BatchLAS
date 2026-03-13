@@ -1,8 +1,6 @@
 # Build directories
-build-cuda/
-build-rocm/
-build-netlib/
 build/
+build-*/
 output/
 cmake-build*/
 out/
