@@ -11,6 +11,17 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
+if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda")
+    if(CMAKE_CXX_FLAGS_RELWITHDEBINFO MATCHES "(^| )-g($| )")
+        string(REGEX REPLACE "(^| )-g($| )" " " _batchlas_relwithdebinfo_flags "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+        string(REGEX REPLACE " +" " " _batchlas_relwithdebinfo_flags "${_batchlas_relwithdebinfo_flags}")
+        string(STRIP "${_batchlas_relwithdebinfo_flags}" _batchlas_relwithdebinfo_flags)
+        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${_batchlas_relwithdebinfo_flags}" CACHE STRING
+            "Flags used by the CXX compiler during RelWithDebInfo builds." FORCE)
+        message(STATUS "dpcpp-cuda: removed '-g' from RelWithDebInfo flags to avoid CUDA JIT build failures")
+    endif()
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

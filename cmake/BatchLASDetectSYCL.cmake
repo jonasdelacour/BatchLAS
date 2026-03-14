@@ -322,7 +322,13 @@ if(BATCHLAS_NATIVE_CPU_DISABLE_VECZ)
 endif()
 
 if(BATCHLAS_ENABLE_CUDA)
-    if(BATCHLAS_DISABLE_CUDA_FTZ)
+    set(_batchlas_apply_cuda_ftz_flag ${BATCHLAS_DISABLE_CUDA_FTZ})
+    if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda" AND BATCHLAS_DISABLE_CUDA_FTZ)
+        message(WARNING "dpcpp-cuda: ignoring BATCHLAS_DISABLE_CUDA_FTZ because --ftz=false can fail CUDA JIT program builds")
+        set(_batchlas_apply_cuda_ftz_flag OFF)
+    endif()
+
+    if(_batchlas_apply_cuda_ftz_flag)
         message(STATUS "Disabling FTZ for CUDA device code (link-time device compilation)")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
             -Xsycl-target-backend=nvptx64-nvidia-cuda
@@ -332,13 +338,17 @@ if(BATCHLAS_ENABLE_CUDA)
         )
     endif()
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-        message(STATUS "Enabling line info for CUDA device code")
-        list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-            -Xsycl-target-backend=nvptx64-nvidia-cuda
-            --generate-line-info
-            -Xcuda-ptxas
-            -w
-        )
+        if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda")
+            message(WARNING "dpcpp-cuda: skipping --generate-line-info because it can fail CUDA JIT program builds")
+        else()
+            message(STATUS "Enabling line info for CUDA device code")
+            list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
+                -Xsycl-target-backend=nvptx64-nvidia-cuda
+                --generate-line-info
+                -Xcuda-ptxas
+                -w
+            )
+        endif()
     endif()
     if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
         message(STATUS "Preserving CUDA/SYCL CUDA intermediates for device-code inspection")

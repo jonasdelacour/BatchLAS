@@ -60,7 +60,11 @@ UnifiedVector<T>::~UnifiedVector() {
     if (!data_) return;
     Device dev = Device::default_device();
     const auto& ctx = QueueImpl::shared_context(dev);
-    sycl::free(data_, ctx);
+    try {
+        sycl::free(data_, ctx);
+    } catch (...) {
+        // Destructors must not throw; runtime may report prior async device failures here.
+    }
 }
 
 template <typename T>
