@@ -34,7 +34,7 @@ inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 2;
 
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 32;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 8;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 32;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 32;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 32;

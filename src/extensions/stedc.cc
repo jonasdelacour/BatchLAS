@@ -22,16 +22,16 @@ inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params) {
     const int32_t nn = static_cast<int32_t>(n);
 
     if constexpr (B != Backend::NETLIB) {
-        if (params.recursion_threshold == 32) {
+        if (params.recursion_threshold <= 0) {
             params.recursion_threshold = tuning::stedc_recursion_threshold_for_n(nn);
         }
-        if (params.merge_variant == StedcMergeVariant::Baseline) {
+        if (params.merge_variant == StedcMergeVariant::Auto) {
             params.merge_variant = static_cast<StedcMergeVariant>(tuning::stedc_merge_variant_for_n(nn));
         }
-        if (params.secular_threads_per_root == 32) {
+        if (params.secular_threads_per_root <= 0) {
             params.secular_threads_per_root = tuning::stedc_threads_per_root_for_n(nn);
         }
-        if (params.secular_cta_wg_size_multiplier == 1) {
+        if (params.secular_cta_wg_size_multiplier <= 0) {
             params.secular_cta_wg_size_multiplier = tuning::stedc_wg_multiplier_for_n(nn);
         }
     } else {
@@ -265,7 +265,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     } else if (effective_params.merge_variant == StedcMergeVariant::Fused
             || effective_params.merge_variant == StedcMergeVariant::FusedCta) {
         // Fused merge paths: single-kernel implementations selected by merge_variant.
-        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, effective_params);
+        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, effective_params);
     } else {
         // Baseline ROCm path: 3 separate kernels
         ctx -> submit([&](sycl::handler& h) {

@@ -1101,6 +1101,7 @@ namespace batchlas {
 
     // Controls how the merge step (secular solve + eigenvector formation) is dispatched.
     enum class StedcMergeVariant {
+        Auto = -1,          // Use BatchLAS tuning tables for the current problem size
         Baseline,           // Current serial-per-root path (3 separate kernels)
         Fused,              // One kernel: warp-parallel root solve + build/normalize Qprime columns
         FusedCta,           // CTA-partitioned root solve using tunable threads per root
@@ -1108,17 +1109,17 @@ namespace batchlas {
 
     template <typename T>
     struct StedcParams {
-        int64_t recursion_threshold = 32; //Threshold below which the algorithm switches to a non-recursive method such as STEQR
+        int64_t recursion_threshold = 0; // <=0 uses BatchLAS tuning; otherwise this exact threshold is used
         StedcSecularSolver secular_solver = StedcSecularSolver::Rocm;
         SteqrParams<T> leaf_steqr_params = SteqrParams<T>();
 
         // --- Merge-step tuning knobs ---
-        StedcMergeVariant merge_variant = StedcMergeVariant::Baseline;
+        StedcMergeVariant merge_variant = StedcMergeVariant::Auto;
         int merge_threads = 128;       // work-group size for fused kernel
         int max_sec_iter = 50;         // iteration cap for secular root solver
         bool enable_rescale = true;    // keep ROCm-style v rescale (disable for perf experiments)
-        int secular_threads_per_root = 32;       // partition width for CTA secular solve (4/8/16/32)
-        int secular_cta_wg_size_multiplier = 1;  // scales base WG size = lcm(threads_per_root, subgroup_size)
+        int secular_threads_per_root = 0;       // <=0 uses BatchLAS tuning; otherwise this exact partition width is used
+        int secular_cta_wg_size_multiplier = 0;  // <=0 uses BatchLAS tuning; otherwise this exact multiplier is used
     };
 
     template <Backend B, typename T>
@@ -1144,6 +1145,9 @@ namespace batchlas {
     
     template <Backend B, typename T>
     size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
+
+    template <Backend B, typename T>
+    size_t stedc_flat_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
 
 
     /**

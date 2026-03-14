@@ -19,13 +19,9 @@ void stedc_merge_fused(Queue& ctx,
                        const VectorView<T>& v,
                        const Span<T>& rho,
                        const Span<int32_t>& n_reduced,
-                       const VectorView<T>& e,
-                       int64_t m,
-                       int64_t n,
                        const MatrixView<T, MatrixFormat::Dense>& Qprime,
                        const VectorView<T>& temp_lambdas,
                        const StedcParams<T>& params) {
-    (void)n;
     const auto batch_size = eigenvalues.batch_size();
     const int wg_size = params.merge_threads;
     const bool do_rescale = params.enable_rescale;
@@ -41,7 +37,7 @@ void stedc_merge_fused(Queue& ctx,
                 const auto tid = item.get_local_linear_id();
                 const auto cta = item.get_group();
                 auto Q_bid = Qview.batch_item(bid);
-                const auto sign = (e(m - 1, bid) >= T(0)) ? T(1) : T(-1);
+                const auto sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const int dd = n_reduced[bid];
 
                 if (dd <= 0) {
@@ -131,18 +127,15 @@ void stedc_merge_dispatch(Queue& ctx,
                           const VectorView<T>& v,
                           const Span<T>& rho,
                           const Span<int32_t>& n_reduced,
-                          const VectorView<T>& e,
-                          int64_t m,
-                          int64_t n,
                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
                           const VectorView<T>& temp_lambdas,
                           const StedcParams<T>& params) {
     switch (params.merge_variant) {
     case StedcMergeVariant::Fused:
-        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
         break;
     case StedcMergeVariant::FusedCta:
-        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
         break;
     default:
         // Baseline path is handled by the caller in stedc.cc.
@@ -151,13 +144,13 @@ void stedc_merge_dispatch(Queue& ctx,
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
-template void stedc_merge_dispatch<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const VectorView<float>&, int64_t, int64_t, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_dispatch<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const VectorView<double>&, int64_t, int64_t, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
+template void stedc_merge_dispatch<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
+template void stedc_merge_dispatch<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-template void stedc_merge_dispatch<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const VectorView<float>&, int64_t, int64_t, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_dispatch<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const VectorView<double>&, int64_t, int64_t, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
+template void stedc_merge_dispatch<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
+template void stedc_merge_dispatch<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
 #endif
 
 } // namespace batchlas

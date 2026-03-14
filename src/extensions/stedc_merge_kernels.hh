@@ -11,9 +11,6 @@ void stedc_merge_fused(Queue& ctx,
                        const VectorView<T>& v,
                        const Span<T>& rho,
                        const Span<int32_t>& n_reduced,
-                       const VectorView<T>& e,
-                       int64_t m,
-                       int64_t n,
                        const MatrixView<T, MatrixFormat::Dense>& Qprime,
                        const VectorView<T>& temp_lambdas,
                        const StedcParams<T>& params);
@@ -24,9 +21,6 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const VectorView<T>& v,
                            const Span<T>& rho,
                            const Span<int32_t>& n_reduced,
-                           const VectorView<T>& e,
-                           int64_t m,
-                           int64_t n,
                            const MatrixView<T, MatrixFormat::Dense>& Qprime,
                            const VectorView<T>& temp_lambdas,
                            const StedcParams<T>& params);
@@ -37,10 +31,8 @@ void stedc_merge_fused_cta(Queue& ctx,
 // Inputs:
 //   eigenvalues  – sorted poles D[0..dd-1] per batch item (dd = n_reduced[bid])
 //   v            – secular vector z (already permuted, squared weights for Legacy path)
-//   rho          – rank-1 update coefficient per batch item
+//   rho          – signed rank-1 update coefficient per batch item
 //   n_reduced    – number of non-deflated poles per batch item
-//   e_m_minus_1  – e(m-1) per batch item, used for sign of rho
-//   n            – full problem size (for Qprime dimensioning)
 //
 // Outputs:
 //   Qprime       – n×n eigenvector matrix (identity for deflated columns)
@@ -51,9 +43,6 @@ void stedc_merge_dispatch(Queue& ctx,
                           const VectorView<T>& v,
                           const Span<T>& rho,
                           const Span<int32_t>& n_reduced,
-                          const VectorView<T>& e,  // original e vector (for sign at m-1)
-                          int64_t m,                // split point
-                          int64_t n,                // full problem size
                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
                           const VectorView<T>& temp_lambdas,
                           const StedcParams<T>& params);

@@ -680,14 +680,11 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                                 const VectorView<T>& v,
                                 const Span<T>& rho,
                                 const Span<int32_t>& n_reduced,
-                                const VectorView<T>& e,
-                                int64_t m,
-                                int64_t n,
                                 const MatrixView<T, MatrixFormat::Dense>& Qprime,
                                 const VectorView<T>& temp_lambdas,
                                 const StedcParams<T>& params) {
     const auto batch_size = eigenvalues.batch_size();
-    const int32_t nloc = static_cast<int32_t>(n);
+    const int32_t nloc = static_cast<int32_t>(Qprime.rows());
     const int32_t sg_size = 32;
 
     const auto dev = ctx->get_device();
@@ -734,7 +731,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 const auto d_prob = VectorView<T>(d_ptr, dd);
                 const auto z_prob = VectorView<T>(z_ptr, dd);
 
-                const T sign = (e(m - 1, bid) >= T(0)) ? T(1) : T(-1);
+                const T sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
                 for (int32_t root_ix = part_id; root_ix < dd; root_ix += parts_per_wg) {
@@ -767,13 +764,10 @@ void stedc_merge_fused_wg(Queue& ctx,
                           const VectorView<T>& v,
                           const Span<T>& rho,
                           const Span<int32_t>& n_reduced,
-                          const VectorView<T>& e,
-                          int64_t m,
-                          int64_t n,
                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
                           const VectorView<T>& temp_lambdas,
                           const StedcParams<T>& params) {
-    const int32_t nloc = static_cast<int32_t>(n);
+    const int32_t nloc = static_cast<int32_t>(Qprime.rows());
     const auto batch_size = eigenvalues.batch_size();
     const auto dev = ctx->get_device();
 
@@ -813,7 +807,7 @@ void stedc_merge_fused_wg(Queue& ctx,
                 const auto d_prob = VectorView<T>(d_ptr, dd);
                 const auto z_prob = VectorView<T>(z_ptr, dd);
 
-                const T sign = (e(m - 1, bid) >= T(0)) ? T(1) : T(-1);
+                const T sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
                 for (int32_t root_ix = 0; root_ix < dd; ++root_ix) {
@@ -846,16 +840,13 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const VectorView<T>& v,
                            const Span<T>& rho,
                            const Span<int32_t>& n_reduced,
-                           const VectorView<T>& e,
-                           int64_t m,
-                           int64_t n,
                            const MatrixView<T, MatrixFormat::Dense>& Qprime,
                            const VectorView<T>& temp_lambdas,
                            const StedcParams<T>& params) {
     const bool has32 = device_has_sub_group_size(ctx, 32);
 
     if (!has32) {
-        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
         return;
     }
 
@@ -864,29 +855,29 @@ void stedc_merge_fused_cta(Queue& ctx,
     const bool use_wg_path = requested > max_sg;
 
     if (use_wg_path) {
-        stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
         return;
     }
 
     if (requested <= 4) {
-        stedc_merge_fused_cta_impl<B, T, 4>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 4>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
     } else if (requested <= 8) {
-        stedc_merge_fused_cta_impl<B, T, 8>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 8>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
     } else if (requested <= 16) {
-        stedc_merge_fused_cta_impl<B, T, 16>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 16>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
     } else {
-        stedc_merge_fused_cta_impl<B, T, 32>(ctx, eigenvalues, v, rho, n_reduced, e, m, n, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 32>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
     }
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
-template void stedc_merge_fused_cta<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const VectorView<float>&, int64_t, int64_t, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_fused_cta<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const VectorView<double>&, int64_t, int64_t, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
+template void stedc_merge_fused_cta<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
+template void stedc_merge_fused_cta<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-template void stedc_merge_fused_cta<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const VectorView<float>&, int64_t, int64_t, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_fused_cta<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const VectorView<double>&, int64_t, int64_t, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
+template void stedc_merge_fused_cta<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
+template void stedc_merge_fused_cta<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
 #endif
 
 } // namespace batchlas
