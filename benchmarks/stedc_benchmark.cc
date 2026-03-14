@@ -5,6 +5,26 @@
 
 using namespace batchlas;
 
+template <typename Benchmark>
+static void StedcBenchSizes(Benchmark* b) {
+    for (int n : {64, 128, 256}) {
+        for (int batch : {128, 512, 2048}) {
+            for (int flattened : {0, 1}) {
+                b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::FusedCta), flattened, 0, 0});
+            }
+        }
+    }
+}
+
+template <typename Benchmark>
+static void StedcBenchSizesNetlib(Benchmark* b) {
+    for (int n : {32, 64, 128}) {
+        for (int batch : {1, 8, 32}) {
+            b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Baseline), 0, 0, 0});
+        }
+    }
+}
+
 // Batched STEDC benchmark
 template <typename T, Backend B>
 static void BM_STEDC(minibench::State& state) {
@@ -59,6 +79,6 @@ static void BM_STEDC(minibench::State& state) {
 
 // Register size/batch combinations at static‑init time using macro
 
-BATCHLAS_REGISTER_BENCHMARK(BM_STEDC, SquareBatchSizes);
+BATCHLAS_REGISTER_BENCHMARK(BM_STEDC, StedcBenchSizes);
 
 MINI_BENCHMARK_MAIN();
