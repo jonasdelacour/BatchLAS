@@ -110,7 +110,7 @@ namespace batchlas {
 
         Span<std::byte> spmm_workspace;
         if constexpr (MFormat == MatrixFormat::CSR) {
-            spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, S, AS, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
+              spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
         // NOTE: SYEVX repeatedly solves *tiny* dense eigenproblems (XtAX, StAS).

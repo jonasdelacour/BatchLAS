@@ -417,7 +417,17 @@ namespace batchlas {
 
         // Create a deep copy
         Matrix<T, MType> clone() const {
-            Matrix<T, MType> result(rows_, cols_, batch_size_);
+            // For CSR, must pass nnz_ so the constructor allocates enough
+            // capacity for data/col_indices before the std::copy calls below.
+            // Calling (rows_, cols_, batch_size_) for CSR hits the 4-arg CSR
+            // ctor with nnz=batch_size_, which is almost always too small.
+            Matrix<T, MType> result = [&]() -> Matrix<T, MType> {
+                if constexpr (MType == MatrixFormat::CSR) {
+                    return Matrix<T, MType>(rows_, cols_, nnz_, batch_size_);
+                } else {
+                    return Matrix<T, MType>(rows_, cols_, batch_size_);
+                }
+            }();
             
             // Copy main data
             std::copy(data_.begin(), data_.end(), result.data_.begin());

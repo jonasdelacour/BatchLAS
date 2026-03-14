@@ -474,8 +474,9 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                 int batch_val_col_base = b * csr_mat_stride; 
 
                 for (int csr_idx = start_nnz; csr_idx < end_nnz; ++csr_idx) {
-                    int c = csr_col_indices_ptr[csr_idx];
-                    T val = csr_data_ptr[csr_idx];
+                    int idx_in_batch = batch_val_col_base + csr_idx;
+                    int c = csr_col_indices_ptr[idx_in_batch];
+                    T val = csr_data_ptr[idx_in_batch];
 
                     // Calculate dense index (Column-Major)
                     size_t dense_idx = b * dense_stride + c * dense_ld + r;
@@ -2126,6 +2127,10 @@ template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::co
 template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
 template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
 template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const float&) const;
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const double&) const;
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const float&) const;
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const double&) const;
 
 //----------------------------------------------------------------------
 
