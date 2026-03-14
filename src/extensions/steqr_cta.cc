@@ -9,6 +9,7 @@
 #include "steqr_internal.hh"
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../util/kernel-trace.hh"
 #include "../util/template-instantiations.hh"
 #include <internal/sort.hh>
 #include <array>
@@ -155,6 +156,48 @@ namespace batchlas {
         return {diag, offdiag};
     }
 
+    template <size_t P, typename Partition, typename LocalAcc>
+    inline int32_t group_reduce_min_local(const Partition& partition,
+                                          LocalAcc& scratch,
+                                          int32_t base,
+                                          int32_t lane,
+                                          int32_t value) {
+        if (lane < static_cast<int32_t>(P)) {
+            scratch[base + lane] = value;
+        }
+        sycl::group_barrier(partition);
+        if (lane == 0) {
+            int32_t result = scratch[base];
+            for (int32_t idx = 1; idx < static_cast<int32_t>(P); ++idx) {
+                result = (scratch[base + idx] < result) ? scratch[base + idx] : result;
+            }
+            scratch[base] = result;
+        }
+        sycl::group_barrier(partition);
+        return scratch[base];
+    }
+
+    template <size_t P, typename Partition, typename LocalAcc>
+    inline int32_t group_reduce_max_local(const Partition& partition,
+                                          LocalAcc& scratch,
+                                          int32_t base,
+                                          int32_t lane,
+                                          int32_t value) {
+        if (lane < static_cast<int32_t>(P)) {
+            scratch[base + lane] = value;
+        }
+        sycl::group_barrier(partition);
+        if (lane == 0) {
+            int32_t result = scratch[base];
+            for (int32_t idx = 1; idx < static_cast<int32_t>(P); ++idx) {
+                result = (result < scratch[base + idx]) ? scratch[base + idx] : result;
+            }
+            scratch[base] = result;
+        }
+        sycl::group_barrier(partition);
+        return scratch[base];
+    }
+
     template <typename T, size_t P, typename Partition, typename QCache>
     inline void solve_2x2_and_update(Partition partition,
                                      T& diag,
@@ -169,7 +212,6 @@ namespace batchlas {
         const auto [rt1, rt2, cs, sn] = invoke_one_broadcast(partition, [&]() {
             return internal::laev2(a, b, c2);
         });
-
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         if (lane == l0) {
             diag = rt1;
@@ -641,6 +683,7 @@ namespace batchlas {
                 sycl::range<1>(ComputeVecs ? (probs_per_wg * P * P) : 1), cgh);
             auto D_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto E_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * (P - 1)), cgh);
+            auto I_local = sycl::local_accessor<int32_t, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
             cgh.parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(
                 sycl::nd_range<1>(global_size, wg_size),
@@ -663,6 +706,7 @@ namespace batchlas {
                     auto e_prob = e.batch_item(prob_id);
                     const int32_t base_d = part_id * static_cast<int32_t>(P);
                     const int32_t base_e = part_id * static_cast<int32_t>(P - 1);
+                    const int32_t base_i = part_id * static_cast<int32_t>(P);
 
                     // Compile-time selectable eigenvector accumulation (shared-memory Q).
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
@@ -698,7 +742,7 @@ namespace batchlas {
                         // Find end of current block: first i>=block_begin where E(i)==0; if none, block ends at n-1.
                         const int32_t block_end_candidate =
                             (lane >= block_begin && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1);
-                        const int32_t block_end = sycl::reduce_over_group(partition, block_end_candidate, sycl::minimum<int32_t>());
+                        const int32_t block_end = group_reduce_min_local<P>(partition, I_local, base_i, lane, block_end_candidate);
 
                         // Next block starts after block_end.
                         next_block_begin = block_end + 1;
@@ -768,7 +812,7 @@ namespace batchlas {
 
                                     // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
                                     const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
-                                    const int32_t m = sycl::reduce_over_group(partition, m_candidate, sycl::minimum<int32_t>());
+                                    const int32_t m = group_reduce_min_local<P>(partition, I_local, base_i, lane, m_candidate);
 
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
@@ -821,7 +865,7 @@ namespace batchlas {
                                     const int32_t l_u = static_cast<int32_t>(l);
                                     const int32_t m_candidate =
                                         (lane >= block_begin && lane < l_u && offdiag == T(0)) ? (lane + 1) : block_begin;
-                                    const int32_t m = sycl::reduce_over_group(partition, m_candidate, sycl::maximum<int32_t>());
+                                    const int32_t m = group_reduce_max_local<P>(partition, I_local, base_i, lane, m_candidate);
 
                                     if (m == l) {
                                         // Converged! Move to next eigenvalue.
@@ -904,6 +948,7 @@ namespace batchlas {
                     const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
                     JobType jobz, SteqrParams<T> params,
                     const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+        BATCHLAS_KERNEL_TRACE_SCOPE("steqr_cta");
         if (eigvects.rows() != eigvects.cols()) {
             throw std::invalid_argument("Matrix must be square for eigenvalue computation.");
         }

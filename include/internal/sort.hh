@@ -31,6 +31,90 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
     return ctx.get_event();
 }
 
+template <typename T, typename K>
+class ActiveArgsortKernel;
+
+template <typename T, typename K>
+Event argsort_active(Queue& ctx,
+                     VectorView<T> data,
+                     VectorView<K> indices,
+                     Span<int32_t> active_lengths,
+                     SortOrder order,
+                     bool fill_indices) {
+    const auto n = data.size();
+    const auto batch_size = data.batch_size();
+    if (data.inc() != 1 || indices.inc() != 1) {
+        throw std::runtime_error("argsort_active: data and indices must have unit increment (inc=1)");
+    }
+    if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
+        throw std::runtime_error("argsort_active: active_lengths must cover every batch item");
+    }
+
+    ctx->submit([&](sycl::handler& h) {
+        auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
+        auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
+
+        h.parallel_for<ActiveArgsortKernel<T, K>>(sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
+            const auto bid = item.get_group_linear_id();
+            const auto tid = item.get_local_linear_id();
+            const auto bdim = item.get_local_range()[0];
+            const auto cta = item.get_group();
+            const int32_t active_n = std::max<int32_t>(0, std::min<int32_t>(active_lengths[bid], n));
+            K* batch_indices = indices.batch_item(bid).data_ptr();
+
+            if (fill_indices) {
+                for (int i = tid; i < n; i += bdim) {
+                    local_indices[i] = static_cast<K>(i);
+                    local_values[i] = data(i, bid);
+                }
+            } else {
+                for (int i = tid; i < n; i += bdim) {
+                    local_indices[i] = batch_indices[i];
+                    local_values[i] = data(local_indices[i], bid);
+                }
+            }
+            sycl::group_barrier(cta);
+
+            auto should_swap = [&](int lhs, int rhs) {
+                const auto left = local_values[lhs];
+                const auto right = local_values[rhs];
+                if (order == SortOrder::Descending) {
+                    if (left < right) return true;
+                    if (right < left) return false;
+                } else {
+                    if (right < left) return true;
+                    if (left < right) return false;
+                }
+                return local_indices[rhs] < local_indices[lhs];
+            };
+
+            for (int pass = 0; pass < active_n; ++pass) {
+                const int start = pass & 1;
+                for (int i = start + 2 * tid; i + 1 < active_n; i += 2 * bdim) {
+                    if (should_swap(i, i + 1)) {
+                        auto tmp_index = local_indices[i];
+                        local_indices[i] = local_indices[i + 1];
+                        local_indices[i + 1] = tmp_index;
+
+                        auto tmp_value = local_values[i];
+                        local_values[i] = local_values[i + 1];
+                        local_values[i + 1] = tmp_value;
+                    }
+                }
+                sycl::group_barrier(cta);
+            }
+
+            for (int i = tid; i < active_n; i += bdim) {
+                batch_indices[i] = local_indices[i];
+            }
+            for (int i = active_n + tid; i < n; i += bdim) {
+                batch_indices[i] = static_cast<K>(i);
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
 struct PermutedCopyParams {
     std::pair<int32_t, int32_t> work_group_size_range = {-1, -1}; // Use default
 };
@@ -79,11 +163,129 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
     return ctx.get_event();
 }
 
+template <typename T, typename K>
+struct ActivePermutedCopyKernel {};
+
+template <typename T, typename RowK, typename ColK>
+struct ActivePermutedCopy2DKernel {};
+
+template <typename T, typename K>
+Event permuted_copy_active(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& src,
+                           const MatrixView<T, MatrixFormat::Dense>& dst,
+                           const VectorView<K>& indices,
+                           Span<int32_t> active_lengths,
+                           const PermutedCopyParams& params = {}) {
+    auto n = src.rows();
+    auto batch_size = src.batch_size();
+    if (src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1) {
+        throw std::runtime_error("permuted_copy_active: src, dst and indices must have unit increment");
+    }
+    if (src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()) {
+        throw std::runtime_error("permuted_copy_active: src, dst and indices must have the same dimensions");
+    }
+    if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
+        throw std::runtime_error("permuted_copy_active: active_lengths must cover every batch item");
+    }
+
+    auto total_work_items = src.rows() * src.cols() * batch_size;
+    bool use_default_work_group_size = (params.work_group_size_range.first == -1 && params.work_group_size_range.second == -1);
+    auto [global_size, local_size] = use_default_work_group_size ?
+        compute_nd_range_sizes(
+            total_work_items,
+            ctx.device(), KernelType::MEMORY_BOUND) :
+        std::pair<size_t, size_t>(params.work_group_size_range.first, params.work_group_size_range.second);
+
+    ctx->submit([&](sycl::handler& h) {
+        auto src_view = src.kernel_view();
+        auto dst_view = dst.kernel_view();
+        auto cols = src.cols();
+        h.parallel_for<ActivePermutedCopyKernel<T, K>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            auto gid = item.get_global_linear_id();
+            for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
+                int batch_id = index / (cols * n);
+                int rem = index % (cols * n);
+                int col = rem / n;
+                int row = rem % n;
+                const int32_t active_n = std::max<int32_t>(0, std::min<int32_t>(active_lengths[batch_id], n));
+                if (col < active_n) {
+                    dst_view(row, col, batch_id) = src_view(row, indices(col, batch_id), batch_id);
+                }
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
+template <typename T, typename RowK, typename ColK>
+Event permuted_copy_active_2d(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& src,
+                              const MatrixView<T, MatrixFormat::Dense>& dst,
+                              const VectorView<RowK>& row_indices,
+                              const VectorView<ColK>& col_indices,
+                              Span<int32_t> active_lengths,
+                              const PermutedCopyParams& params = {}) {
+    auto rows = src.rows();
+    auto cols = src.cols();
+    auto batch_size = src.batch_size();
+    if (src.inc() != 1 || dst.inc() != 1 || row_indices.inc() != 1 || col_indices.inc() != 1) {
+        throw std::runtime_error("permuted_copy_active_2d: src, dst, and index vectors must have unit increment");
+    }
+    if (src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() ||
+        src.batch_size() != row_indices.batch_size() || src.batch_size() != col_indices.batch_size()) {
+        throw std::runtime_error("permuted_copy_active_2d: src, dst, row_indices and col_indices must have matching dimensions");
+    }
+    if (row_indices.size() < rows || col_indices.size() < cols) {
+        throw std::runtime_error("permuted_copy_active_2d: index vectors must cover the active matrix dimensions");
+    }
+    if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
+        throw std::runtime_error("permuted_copy_active_2d: active_lengths must cover every batch item");
+    }
+
+    auto total_work_items = rows * cols * batch_size;
+    bool use_default_work_group_size = (params.work_group_size_range.first == -1 && params.work_group_size_range.second == -1);
+    auto [global_size, local_size] = use_default_work_group_size ?
+        compute_nd_range_sizes(
+            total_work_items,
+            ctx.device(), KernelType::MEMORY_BOUND) :
+        std::pair<size_t, size_t>(params.work_group_size_range.first, params.work_group_size_range.second);
+
+    ctx->submit([&](sycl::handler& h) {
+        auto src_view = src.kernel_view();
+        auto dst_view = dst.kernel_view();
+        h.parallel_for<ActivePermutedCopy2DKernel<T, RowK, ColK>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            auto gid = item.get_global_linear_id();
+            for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
+                int batch_id = index / (cols * rows);
+                int rem = index % (cols * rows);
+                int col = rem / rows;
+                int row = rem % rows;
+                const int32_t active_n = std::max<int32_t>(0, std::min<int32_t>(active_lengths[batch_id], rows));
+                if (row < active_n && col < active_n) {
+                    dst_view(row, col, batch_id) = src_view(row_indices(row, batch_id), col_indices(col, batch_id), batch_id);
+                }
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
 //Out of place permutation
 template <typename T, typename K>
 Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
     MatrixView<T>::copy(ctx, temp_storage, data);
     return permuted_copy(ctx, temp_storage, data, indices, params);
+}
+
+template <typename T, typename K>
+Event permute_active(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& data,
+                     const MatrixView<T, MatrixFormat::Dense>& temp_storage,
+                     const VectorView<K>& indices,
+                     Span<int32_t> active_lengths,
+                     const PermutedCopyParams& params = {}) {
+    MatrixView<T>::copy(ctx, temp_storage, data);
+    return permuted_copy_active(ctx, temp_storage, data, indices, active_lengths, params);
 }
 
 template <typename T, typename K>
@@ -141,6 +343,42 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
                 }
 
                 sycl::group_barrier(cta); // ensure all threads sync before the next outer iteration
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
+template <typename T, typename K>
+class ActivePermuteVectorKernel;
+
+template <typename T, typename K>
+Event permute_active(Queue& ctx,
+                     VectorView<T> data,
+                     VectorView<K> indices,
+                     Span<int32_t> active_lengths) {
+    const auto n = data.size();
+    const auto batch_size = data.batch_size();
+    if (data.inc() != 1 || indices.inc() != 1) {
+        throw std::runtime_error("permute_active: data and indices must have unit increment (inc=1)");
+    }
+    if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
+        throw std::runtime_error("permute_active: active_lengths must cover every batch item");
+    }
+
+    ctx->submit([&](sycl::handler& h) {
+        auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
+        h.parallel_for<ActivePermuteVectorKernel<T, K>>(sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
+            const auto bid = item.get_group_linear_id();
+            const auto bdim = item.get_local_range()[0];
+            const auto tid = item.get_local_linear_id();
+            const int32_t active_n = std::max<int32_t>(0, std::min<int32_t>(active_lengths[bid], n));
+            for (int i = tid; i < active_n; i += bdim) {
+                temp_mem[i] = data(indices(i, bid), bid);
+            }
+            sycl::group_barrier(item.get_group());
+            for (int i = tid; i < active_n; i += bdim) {
+                data(i, bid) = temp_mem[i];
             }
         });
     });
