@@ -1,10 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
 
-# Find Python and PyBind11
 find_package(Python COMPONENTS Interpreter Development REQUIRED)
 find_package(pybind11 CONFIG QUIET)
 
-# If pybind11 was not found via config, try to find it via PythonLibs
 if(NOT pybind11_FOUND)
     execute_process(
         COMMAND "${Python_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
@@ -14,59 +12,76 @@ if(NOT pybind11_FOUND)
     if(PYBIND11_CMAKE_DIR)
         find_package(pybind11 CONFIG REQUIRED PATHS "${PYBIND11_CMAKE_DIR}")
     else()
-        message(FATAL_ERROR "Could not find pybind11. Please install it with pip install pybind11")
+        message(FATAL_ERROR "Could not find pybind11. Install it with pip install pybind11")
     endif()
 endif()
 
-# Set modified PyBind11 flags
-set(PYBIND11_CPP_STANDARD -std=c++17)
+set(BATCHLAS_PY_PACKAGE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/batchlas")
+set(BATCHLAS_PY_PACKAGE_BUILD "${CMAKE_BINARY_DIR}/python/batchlas")
+file(MAKE_DIRECTORY "${BATCHLAS_PY_PACKAGE_BUILD}")
 
-# Create the Python extension module with a unique name to avoid conflicts with the main library
-pybind11_add_module(batchlas_python batchlas/batchlas_bindings.cpp)
-
-# Ensure we use position-independent code
-set_property(TARGET batchlas_python PROPERTY POSITION_INDEPENDENT_CODE ON)
-
-# Link against BatchLAS library, ensure WHOLE_ARCHIVE to include all symbols
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_link_libraries(batchlas_python PRIVATE 
-        -Wl,--whole-archive batchlas -Wl,--no-whole-archive
-    )
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Intel")
-    target_link_libraries(batchlas_python PRIVATE 
-        -Wl,-force_load batchlas
-    )
-else()
-    target_link_libraries(batchlas_python PRIVATE batchlas)
-endif()
-
-# If CUDA is enabled, explicitly link against CUDA libraries
-if(DEFINED CUBLAS_LIBRARY)
-    target_link_libraries(batchlas_python PRIVATE ${CUBLAS_LIBRARY})
-endif()
-if(DEFINED CUBLASLT_LIBRARY)
-    target_link_libraries(batchlas_python PRIVATE ${CUBLASLT_LIBRARY})
-endif()
-if(DEFINED CUSOLVER_LIBRARY)
-    target_link_libraries(batchlas_python PRIVATE ${CUSOLVER_LIBRARY})
-endif()
-if(DEFINED CUSPARSE_LIBRARY)
-    target_link_libraries(batchlas_python PRIVATE ${CUSPARSE_LIBRARY})
-endif()
-
-# Include directories
-target_include_directories(batchlas_python PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_BINARY_DIR}/include
+set(BATCHLAS_PY_EXTENSION_SOURCES
+    batchlas/module.cc
+    batchlas/bindings/types.cc
+    batchlas/bindings/ops_blas.cc
+    batchlas/bindings/ops_factorization.cc
+    batchlas/bindings/ops_spectral.cc
+    batchlas/bindings/ops_misc.cc
 )
 
-# Set the output directory and name for the Python module
-set_target_properties(batchlas_python PROPERTIES 
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/batchlas
-    OUTPUT_NAME "batchlas${Python_EXTENSION_SUFFIX}"
+pybind11_add_module(_batchlas ${BATCHLAS_PY_EXTENSION_SOURCES})
+
+target_compile_features(_batchlas PRIVATE cxx_std_17)
+target_include_directories(_batchlas PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}/include"
+    "${PROJECT_BINARY_DIR}/include"
+)
+target_link_libraries(_batchlas PRIVATE BatchLAS::batchlas)
+
+set_target_properties(_batchlas PROPERTIES
     PREFIX ""
+    OUTPUT_NAME "_batchlas"
+    LIBRARY_OUTPUT_DIRECTORY "${BATCHLAS_PY_PACKAGE_BUILD}"
+    BUILD_RPATH "${CMAKE_BINARY_DIR}/src"
+    INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}"
 )
 
-# Install the Python module
-install(TARGETS batchlas_python DESTINATION ${Python_SITEARCH}/batchlas)
-install(FILES batchlas/__init__.py DESTINATION ${Python_SITEARCH}/batchlas)
+set(BATCHLAS_PY_PACKAGE_FILES
+    batchlas/__init__.py
+    batchlas/_api.py
+    batchlas/_options.py
+)
+
+foreach(_py_file IN LISTS BATCHLAS_PY_PACKAGE_FILES)
+    get_filename_component(_py_name "${_py_file}" NAME)
+    add_custom_command(
+        TARGET _batchlas POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/${_py_file}"
+            "${BATCHLAS_PY_PACKAGE_BUILD}/${_py_name}"
+        VERBATIM
+    )
+endforeach()
+
+install(TARGETS _batchlas DESTINATION "${Python_SITEARCH}/batchlas")
+install(FILES ${BATCHLAS_PY_PACKAGE_FILES} DESTINATION "${Python_SITEARCH}/batchlas")
+
+if(BATCHLAS_BUILD_TESTS)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -c "import pytest"
+        RESULT_VARIABLE BATCHLAS_PYTEST_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+
+    if(BATCHLAS_PYTEST_RESULT EQUAL 0)
+        add_test(
+            NAME batchlas_python_build_import
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+                "${Python_EXECUTABLE}" -m pytest
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        )
+    endif()
+endif()

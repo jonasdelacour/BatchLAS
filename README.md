@@ -68,7 +68,7 @@ BatchLAS is a high-performance library for batched linear algebra operations tha
 - **Memory management**: Unified memory vectors and spans for cross-platform compatibility
 - **Backend abstraction**: Automatic backend selection or manual specification
 - **SYCL integration**: Full SYCL interoperability for cross-platform GPU computing
-- **Python bindings**: Complete Python interface with NumPy integration
+- **Python bindings**: High-level pybind11 wrapper with NumPy/SciPy integration for the supported public BatchLAS APIs
 
 ## Working Backends
 - NVIDIA CUDA (cuBLAS, cuSOLVER, cuSPARSE)
@@ -125,6 +125,33 @@ Available options:
 - `BATCHLAS_ENABLE_MKL`: Enable Intel oneMKL backend (default: OFF, experimental)
 - `BATCHLAS_AMD_ARCH`: AMD GPU architecture when building ROCm backend (default: gfx942)
 - `BATCHLAS_NVIDIA_ARCH`: NVIDIA GPU architecture when building CUDA backend (default: sm_50)
+
+### Python Bindings
+
+BatchLAS installs a Python package named `batchlas` when `BATCHLAS_BUILD_PYTHON=ON`.
+The package contains a compiled extension module (`_batchlas`) plus a pure-Python facade that accepts NumPy dense arrays and SciPy CSR/CSC sparse inputs.
+
+Build-tree import:
+
+```bash
+cmake -B build -DBATCHLAS_BUILD_PYTHON=ON -DBATCHLAS_BUILD_TESTS=ON
+cmake --build build -j$(nproc)
+PYTHONPATH="$PWD/build/python" python3 -c "import batchlas; print(batchlas.available_backends())"
+```
+
+Installed import:
+
+```bash
+cmake --install build
+python3 -c "import batchlas"
+```
+
+Python runtime requirements:
+- `numpy`
+- `scipy` for sparse wrappers
+- The same BatchLAS backend runtimes required by the C++ library build you installed, for example CUDA, ROCm, or host BLAS/LAPACK
+
+The Python wrapper is synchronous and returns host-side NumPy/SciPy objects. Unsupported dtype/backend combinations raise `NotImplementedError`.
 
 ## Quick Start
 
