@@ -124,6 +124,78 @@ TEST(MatrixViewTest, CopyAndMoveSemantics) {
     for (auto v : view3.data()) EXPECT_FLOAT_EQ(v, 5.0f);
 }
 
+#if BATCHLAS_HAS_CPU_TARGET || BATCHLAS_HAS_GPU_BACKEND
+TEST(MatrixViewTest, DenseCopyHandlesTallSkinnyViewsWithPadding) {
+    constexpr int rows = 5;
+    constexpr int cols = 3;
+    constexpr int ld = 7;
+    constexpr int stride = 29;
+    constexpr int batch = 2;
+
+    Matrix<float, MatrixFormat::Dense> src(rows, cols, batch, ld, stride);
+    Matrix<float, MatrixFormat::Dense> dst(rows, cols, batch, ld, stride);
+
+    src.fill(-1.0f);
+    dst.fill(-9.0f);
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src(i, j, b) = static_cast<float>(100 * b + 10 * j + i);
+            }
+        }
+    }
+
+    Queue ctx(Device::default_device());
+    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), src.view()).wait();
+    ctx.wait_and_throw();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_FLOAT_EQ(dst(i, j, b), src(i, j, b))
+                    << "Mismatch at batch=" << b << " row=" << i << " col=" << j;
+            }
+        }
+    }
+}
+
+TEST(MatrixViewTest, DenseCopyHandlesContiguousMatricesWithDifferentBatchStrides) {
+    constexpr int rows = 48;
+    constexpr int cols = 6;
+    constexpr int batch = 3;
+    constexpr int src_stride = rows * cols * 3;
+    constexpr int dst_stride = rows * cols;
+
+    Matrix<float, MatrixFormat::Dense> src(rows, cols, batch, rows, src_stride);
+    Matrix<float, MatrixFormat::Dense> dst(rows, cols, batch, rows, dst_stride);
+
+    src.fill(-1.0f);
+    dst.fill(-9.0f);
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src(i, j, b) = static_cast<float>(1000 * b + 100 * j + i);
+            }
+        }
+    }
+
+    Queue ctx(Device::default_device());
+    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), src.view()).wait();
+    ctx.wait_and_throw();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_FLOAT_EQ(dst(i, j, b), src(i, j, b))
+                    << "Mismatch at batch=" << b << " row=" << i << " col=" << j;
+            }
+        }
+    }
+}
+#endif
+
 // --- CSR MatrixView tests ---
 TEST(MatrixViewTest, ConstructFromCSRMatrix) {
     constexpr int rows = 3, cols = 3, nnz = 5, batch = 2;

@@ -93,6 +93,19 @@ namespace batchlas {
         auto R_new = S_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S_new
         auto XP_new = S_new({0,n}, {0,2 * block_vectors});                 //First two blocks of S_new
 
+        MatrixView<T, MatrixFormat::Dense> R_contiguous;
+        if (params.preconditioner != nullptr) {
+            auto R_contiguous_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
+            R_contiguous = MatrixView(
+                R_contiguous_data.data(),
+                n,
+                block_vectors,
+                n,
+                n * block_vectors,
+                batch_size,
+                pool.allocate<T*>(ctx, batch_size).data());
+        }
+
         auto R_preconditioned_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
         auto R_preconditioned = MatrixView(
             R_preconditioned_data.data(),
@@ -384,7 +397,9 @@ namespace batchlas {
 
             if (params.preconditioner != nullptr) {
                 trace("syevx: ILU(k) apply on residuals");
-                iluk_apply<B>(ctx, *params.preconditioner, R, R_preconditioned);
+                MatrixView<T, MatrixFormat::Dense>::copy(ctx, R_contiguous, R);
+                ctx.wait_and_throw();
+                iluk_apply<B>(ctx, *params.preconditioner, R_contiguous, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 ctx.wait_and_throw();
                 trace("syevx: ILU(k) apply done");
@@ -602,11 +617,16 @@ namespace batchlas {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
                         
+            if (params.preconditioner != nullptr) {
+                work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);            //R_contiguous_data
+                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);                               //R_contiguous ptrs
+            }
             work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
             work_size += BumpAllocator::allocation_size<int32_t>(ctx, batch_size); // converged_flags
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
+            work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);                            //R_preconditioned_data
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //lambdas
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals

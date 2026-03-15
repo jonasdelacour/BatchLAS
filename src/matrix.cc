@@ -1712,8 +1712,8 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
                     for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += item.get_global_range(0)) {
                         size_t b = idx / (src_view.rows() * src_view.cols());    // batch index
                         size_t remainder = idx % (src_view.rows() * src_view.cols());
-                        size_t i = remainder % src_view.cols();            // row index
-                        size_t j = remainder / src_view.cols();            // column index
+                        size_t i = remainder % src_view.rows();            // row index
+                        size_t j = remainder / src_view.rows();            // column index
                         
                         dest_view(i, j, b) = src_view(i, j, b);
                     }
