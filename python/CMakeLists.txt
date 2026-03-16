@@ -31,7 +31,7 @@ set(BATCHLAS_PY_EXTENSION_SOURCES
 
 pybind11_add_module(_batchlas ${BATCHLAS_PY_EXTENSION_SOURCES})
 
-target_compile_features(_batchlas PRIVATE cxx_std_17)
+target_compile_features(_batchlas PRIVATE cxx_std_20)
 target_include_directories(_batchlas PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${PROJECT_SOURCE_DIR}/include"

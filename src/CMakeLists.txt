@@ -78,7 +78,7 @@ function(batchlas_configure_component target)
             $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
-    target_compile_features(${target} PUBLIC cxx_std_17)
+    target_compile_features(${target} PUBLIC cxx_std_20)
     target_link_libraries(${target}
         PRIVATE
             batchlas_build_options
@@ -227,7 +227,7 @@ target_include_directories(batchlas
         $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_compile_features(batchlas INTERFACE cxx_std_17)
+target_compile_features(batchlas INTERFACE cxx_std_20)
 target_link_libraries(batchlas
     INTERFACE
         batchlas_sycl_options
