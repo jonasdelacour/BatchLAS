@@ -188,7 +188,7 @@ namespace batchlas {
             return result;
         }
         
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T safmin(){
             constexpr auto eps = std::numeric_limits<T>::epsilon();
             constexpr auto s1 = std::numeric_limits<T>::min();
@@ -196,29 +196,29 @@ namespace batchlas {
             return s2 > s1 ? s2 * (T(1) + eps) : s1;
         }
 
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T safmax(){
             return T(1) / safmin<T>();
         }
 
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T ssfmin(){
             return std::sqrt(safmin<T>()) / (std::numeric_limits<T>::epsilon() * std::numeric_limits<T>::epsilon());
         }
 
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T ssfmax(){
             return std::sqrt(safmax<T>()) / T(3.0);
         }
 
         //Matches LAPACK's DLAMCH/SLAMCH 'E' option
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T rounding_eps(){
             return std::numeric_limits<T>::epsilon() / T(2);
         }
 
         //Matches LAPACK's "eps2" used in DLAED2/DSTEQR
-        template <typename T, typename = std::enable_if_t<std::is_floating_point_v<T>>>
+        template <RealScalar T>
         inline constexpr T eps2(){
             return rounding_eps<T>() * rounding_eps<T>();
         }

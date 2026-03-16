@@ -56,18 +56,14 @@ inline bool should_run_backend(batchlas::Backend backend) {
     return false;  // Filter doesn't match, skip
 }
 
-// Portable type name checking using template specialization instead of typeid().name()
-template <typename T> struct is_float_type : std::false_type {};
-template <> struct is_float_type<float> : std::true_type {};
-template <> struct is_float_type<std::complex<float>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_float_type_v = std::is_same_v<batchlas::float_t<T>, float>;
 
-template <typename T> struct is_double_type : std::false_type {};
-template <> struct is_double_type<double> : std::true_type {};
-template <> struct is_double_type<std::complex<double>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_double_type_v = std::is_same_v<batchlas::float_t<T>, double>;
 
-template <typename T> struct is_complex_type : std::false_type {};
-template <> struct is_complex_type<std::complex<float>> : std::true_type {};
-template <> struct is_complex_type<std::complex<double>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_complex_type_v = batchlas::is_std_complex_v<T>;
 
 // Runtime filtering for float types - portable version using template specialization
 template <typename T>
@@ -79,11 +75,11 @@ inline bool should_run_float_type() {
     std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
     
     if (type_filter == "float") {
-        return is_float_type<T>::value;
+        return is_float_type_v<T>;
     } else if (type_filter == "double") {
-        return is_double_type<T>::value;
+        return is_double_type_v<T>;
     } else if (type_filter == "complex") {
-        return is_complex_type<T>::value;
+        return is_complex_type_v<T>;
     }
     
     return false;  // Filter doesn't match, skip

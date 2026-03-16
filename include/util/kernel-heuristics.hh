@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <algorithm>
 #include <limits>
-#include <tuple>
 #include <cstdint>
 #include "../../src/queue.hh"
 
@@ -22,6 +21,18 @@ enum class KernelType {
     GEMM,          ///< General matrix multiply
     SMALL_MATRIX,   ///< Small matrix operations
     TASK_BASED     ///< Task-based parallelism, e.g. no fine-grained parallelism, each thread solves one problem
+};
+
+struct BatchedNdRangeSizes {
+    size_t global_size;
+    size_t local_size;
+    bool use_grid_stride;
+};
+
+struct BatchedMatrixDecomposition {
+    size_t global_size;
+    size_t local_size;
+    size_t work_groups_per_matrix;
 };
 
 /**
@@ -144,17 +155,17 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
  * @param batch_size Number of matrices in batch
  * @param elements_per_matrix Number of elements per matrix
  * @param preferred_wg_size Optional preferred work-group size (0 = auto)
- * @return std::tuple<size_t, size_t, bool> {global_size, local_size, use_grid_stride}
+ * @return BatchedNdRangeSizes {global_size, local_size, use_grid_stride}
  */
-inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t total_work, 
-                                                                       const Device& device,
-                                                                       KernelType kernel_type,
-                                                                       size_t batch_size,
-                                                                       size_t problem_size,
-                                                                       size_t preferred_wg_size = 0,
-                                                                       size_t footprint_per_problem = 0,
-                                                                       size_t max_wg_size_for_kernel = 0
-                                                                    ) {
+inline BatchedNdRangeSizes compute_batched_nd_range_sizes(size_t total_work,
+                                                                             const Device& device,
+                                                                             KernelType kernel_type,
+                                                                             size_t batch_size,
+                                                                             size_t problem_size,
+                                                                             size_t preferred_wg_size = 0,
+                                                                             size_t footprint_per_problem = 0,
+                                                                             size_t max_wg_size_for_kernel = 0
+                                                                            ) {
     const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
     
     // Check if we need grid-stride approach due to int32 overflow
@@ -229,7 +240,9 @@ inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t to
         global_size = std::max(global_size, min_global_size);
     }
     
-    return {global_size, local_size, use_grid_stride};
+    return {.global_size = global_size,
+            .local_size = local_size,
+            .use_grid_stride = use_grid_stride};
 }
 
 /**
@@ -240,9 +253,9 @@ inline std::tuple<size_t, size_t, bool> compute_batched_nd_range_sizes(size_t to
  * @param device Target device
  * @param kernel_type Type of kernel operation
  * @param preferred_wg_size Optional preferred work-group size (0 = auto)
- * @return std::tuple<size_t, size_t, size_t> {global_size, local_size, work_groups_per_matrix}
+ * @return BatchedMatrixDecomposition {global_size, local_size, work_groups_per_matrix}
  */
-inline std::tuple<size_t, size_t, size_t> compute_batched_matrix_decomposition(
+inline BatchedMatrixDecomposition compute_batched_matrix_decomposition(
     size_t batch_size,
     size_t elements_per_matrix,
     const Device& device,
@@ -298,7 +311,9 @@ inline std::tuple<size_t, size_t, size_t> compute_batched_matrix_decomposition(
         global_size                  = batch_size * work_groups_per_matrix * local_size;
     }
 
-    return {global_size, local_size, work_groups_per_matrix};
+    return {.global_size = global_size,
+            .local_size = local_size,
+            .work_groups_per_matrix = work_groups_per_matrix};
 }
 
 /**

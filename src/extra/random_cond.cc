@@ -15,11 +15,6 @@ namespace batchlas {
 
 namespace detail {
     template <typename T>
-    constexpr bool is_std_complex_v =
-        std::is_same_v<T, std::complex<float>> ||
-        std::is_same_v<T, std::complex<double>>;
-
-    template <typename T>
     using real_t = float_t<T>;
 
     template <typename T>
@@ -297,7 +292,7 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
 
     // A = U * S * V^H
     gemm<B>(ctx, U.view(), S.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-    const Transpose v_trans = detail::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose v_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B>(ctx, tmp.view(), V.view(), A.view(), T(1), T(0), Transpose::NoTrans, v_trans);
     ctx.wait();
 
@@ -342,7 +337,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
     Matrix<T> A(n, n, batch_size);
 
     gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-    const Transpose q_trans = detail::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
     ctx.wait();
 
@@ -389,7 +384,7 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
     Matrix<T> A(n, n, batch_size);
 
     gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-    const Transpose r_trans = detail::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose r_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B>(ctx, tmp.view(), R.view(), A.view(), T(1), T(0), Transpose::NoTrans, r_trans);
     ctx.wait();
 
@@ -436,7 +431,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
     Matrix<T> A(n, n, batch_size);
 
     gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-    const Transpose q_trans = detail::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
     ctx.wait();
 
@@ -512,7 +507,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
     Matrix<T> A(n, n, batch_size);
 
     gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-    const Transpose q_trans = detail::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
     ctx.wait();
 

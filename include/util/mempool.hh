@@ -1,5 +1,7 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
@@ -37,14 +39,17 @@ struct BumpAllocator {
         if (alloc_size > byte_size){
             throw std::runtime_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
         }
-        
-        std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(data);
-        std::uintptr_t align = alignment<T>(device);
-        std::uintptr_t aligned = (addr % align == 0) ? addr : (addr + align - 1) & ~(align - 1);
-        T* ptr = reinterpret_cast<T*>(aligned);
 
-        data = reinterpret_cast<void*>(ptr + size);
-        byte_size -= (reinterpret_cast<char*>(data) - reinterpret_cast<char*>(reinterpret_cast<void*>(addr)));
+        void* aligned = data;
+        size_t remaining = byte_size;
+        if (std::align(alignment<T>(device), size * sizeof(T), aligned, remaining) == nullptr) {
+            throw std::runtime_error("Failed to align BumpAllocator storage for requested allocation.");
+        }
+
+        auto* next = static_cast<std::byte*>(aligned) + size * sizeof(T);
+        T* ptr = static_cast<T*>(aligned);
+        byte_size -= static_cast<size_t>(next - static_cast<std::byte*>(data));
+        data = next;
 
         return Span(ptr, size);
     }

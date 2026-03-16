@@ -2,7 +2,6 @@
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 #include <stdexcept>
-#include <type_traits>
 
 namespace batchlas {
 
@@ -34,7 +33,7 @@ void validate_symm_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
 
 }  // namespace
 
-template <Backend Ba, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+template <Backend Ba, RealScalar T>
 Event symm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
            const MatrixView<T, MatrixFormat::Dense>& B,

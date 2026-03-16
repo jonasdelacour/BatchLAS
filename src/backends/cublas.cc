@@ -1155,7 +1155,7 @@ namespace batchlas {
         return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
     }
 
-    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend Back, RealScalar T>
     Event symm(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
@@ -1167,7 +1167,7 @@ namespace batchlas {
         return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend Back, RealScalar T>
     Event syrk(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -1178,7 +1178,7 @@ namespace batchlas {
         return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
     }
 
-    template <Backend Back, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend Back, RealScalar T>
     Event syr2k(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,

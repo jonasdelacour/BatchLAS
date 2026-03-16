@@ -1,5 +1,7 @@
 #pragma once
 #include <complex>
+#include <concepts>
+#include <type_traits>
 namespace batchlas {
     template<typename T>
     struct base_type {
@@ -13,6 +15,40 @@ namespace batchlas {
 
     template<typename T>
     using float_t = typename base_type<T>::type;
+
+    template <typename T>
+    struct is_std_complex : std::false_type {};
+
+    template <typename T>
+    struct is_std_complex<std::complex<T>> : std::true_type {};
+
+    template <typename T>
+    inline constexpr bool is_std_complex_v = is_std_complex<T>::value;
+
+    template <typename T>
+    concept RealScalar = std::floating_point<T>;
+
+    template <typename T>
+    concept ComplexScalar = is_std_complex_v<T>;
+
+    template <typename T>
+    concept FloatingOrComplexScalar = RealScalar<T> || ComplexScalar<T>;
+
+    enum class MatrixFormat {
+        Dense,
+        CSR,    // Compressed Sparse Row
+        CSC,    // Compressed Sparse Column
+        COO,    // Coordinate
+        SELL,   // Sliced ELLPACK
+        BSR,    // Blocked Sparse Row
+        BLOCKED_ELL // Blocked ELLPACK
+    };
+
+    template <MatrixFormat F>
+    concept DenseMatrixFormat = F == MatrixFormat::Dense;
+
+    template <MatrixFormat F>
+    concept CsrMatrixFormat = F == MatrixFormat::CSR;
 
     enum class Backend {
         AUTO,
@@ -104,16 +140,6 @@ namespace batchlas {
     enum class VectorOrientation {
         Row,
         Column
-    };
-
-    enum class MatrixFormat {
-        Dense,
-        CSR,    // Compressed Sparse Row
-        CSC,    // Compressed Sparse Column
-        COO,    // Coordinate
-        SELL,   // Sliced ELLPACK
-        BSR,    // Blocked Sparse Row
-        BLOCKED_ELL // Blocked ELLPACK
     };
 
     enum class NormType {

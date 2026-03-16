@@ -3,12 +3,10 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
-#include <type_traits>
 
 namespace batchlas {
 
-template <Backend Ba, typename T,
-          typename std::enable_if<std::is_floating_point_v<T>, int>::type = 0>
+template <Backend Ba, RealScalar T>
 Event syrk(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
            const MatrixView<T, MatrixFormat::Dense>& C,
@@ -17,8 +15,7 @@ Event syrk(Queue& ctx,
            Uplo uplo,
            Transpose transA);
 
-template <Backend Ba, typename T,
-          typename std::enable_if<std::is_floating_point_v<T>, int>::type = 0>
+template <Backend Ba, RealScalar T>
 inline Event syrk(Queue& ctx,
                   const Matrix<T, MatrixFormat::Dense>& A,
                   const Matrix<T, MatrixFormat::Dense>& Cmat,

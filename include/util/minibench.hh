@@ -214,8 +214,8 @@ struct State {
 
     // Convenience: allow a single configurator object (callable as `cfg(State&)`)
     // to set up kernel + prepare/reset/timing hooks in one call.
-    template <typename Configurator,
-              typename = std::enable_if_t<std::is_invocable_v<Configurator, State&>>>
+    template <typename Configurator>
+        requires std::is_invocable_v<Configurator, State&>
     void SetKernel(Configurator&& cfg) {
         std::forward<Configurator>(cfg)(*this);
     }

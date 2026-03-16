@@ -207,7 +207,8 @@ struct is_wrapper<Pristine<T>> : std::true_type {};
 template <typename T>
 struct is_wrapper<Value<T>> : std::true_type {};
 
-template <typename T, std::enable_if_t<!is_wrapper<std::decay_t<T>>::value, int> = 0>
+template <typename T>
+    requires (!is_wrapper<std::remove_cvref_t<T>>::value)
 inline auto wrap_managed(T&& t) {
     using U = std::decay_t<T>;
     if constexpr (std::is_arithmetic_v<U> || std::is_enum_v<U> || std::is_trivially_copyable_v<U>) {

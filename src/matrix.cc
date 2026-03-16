@@ -148,7 +148,8 @@ inline int csr_random_nnz_per_matrix(int n, float density) {
 
 // Basic constructor for dense matrix (allocates uninitialized memory)
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     : rows_(rows), cols_(cols), batch_size_(batch_size),
       ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols) {
@@ -166,7 +167,8 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
 
 // Constructor from existing data (copies the data)
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld, 
                         int stride, int batch_size)
     : rows_(rows), cols_(cols), ld_(ld), stride_(stride > 0 ? stride : ld * cols), 
@@ -203,7 +205,8 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
 
 // Basic constructor for CSR sparse matrix (allocates uninitialized memory)
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+template <typename U, MatrixFormat M>
+    requires CsrMatrixFormat<M>
 Matrix<T, MType>::Matrix(int rows, int cols, int nnz, int batch_size)
     : rows_(rows), cols_(cols), nnz_(nnz), batch_size_(batch_size),
       matrix_stride_(nnz), offset_stride_(rows + 1) {
@@ -215,7 +218,8 @@ Matrix<T, MType>::Matrix(int rows, int cols, int nnz, int batch_size)
 
 // Constructor from existing data (copies the data)
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+template <typename U, MatrixFormat M>
+    requires CsrMatrixFormat<M>
 Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col_indices,
                         int nnz, int rows, int cols, int matrix_stride, 
                         int offset_stride, int batch_size)
@@ -524,7 +528,8 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
 
 
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrientation orientation)
     : rows_(orientation == VectorOrientation::Column ? vector_view.size() : 1),
       cols_(orientation == VectorOrientation::Row ? vector_view.size() : 1),
@@ -613,7 +618,8 @@ BackendMatrixHandle<T, MType>& Matrix<T, MType>::operator*() {
 
 // Factory method to create identity matrix with SYCL
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     
@@ -653,7 +659,8 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
 
 // Factory method to create triangular matrix with specific values using SYCL
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
                                              T non_diagonal_value, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
@@ -662,7 +669,8 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
                                              T non_diagonal_value) const {
     T* data_ptr = data_.data();
@@ -708,7 +716,8 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                                     Diag diag,
                                                     unsigned int seed) const {
@@ -763,7 +772,8 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
                                                     Diag diag) const {
     T* data_ptr = data_.data();
@@ -801,7 +811,8 @@ Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo,
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -846,7 +857,8 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -900,7 +912,8 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
 
 // Factory method to create random matrix
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
     result.view().fill_random(hermitian, seed).wait();
@@ -908,7 +921,8 @@ Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, in
 }
 
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+template <typename U, MatrixFormat M>
+    requires CsrMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
                                                          float density,
                                                          int batch_size,
@@ -921,7 +935,8 @@ Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) const {
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -999,7 +1014,8 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+template <MatrixFormat M>
+    requires CsrMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
                                                          float density,
                                                          unsigned int seed,
@@ -1229,7 +1245,8 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
     fill_zeros(ctx);
     fill_diagonal(ctx, value);
@@ -1238,7 +1255,8 @@ Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
 
 // Factory method to create zeros matrix
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Zeros(int rows, int cols, int batch_size) {
     Matrix<T, MType> result(rows, cols, batch_size);
     result.fill(T(0));
@@ -1247,7 +1265,8 @@ Matrix<T, MType> Matrix<T, MType>::Zeros(int rows, int cols, int batch_size) {
 
 // Factory method to create ones matrix
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Ones(int rows, int cols, int batch_size) {
     Matrix<T, MType> result(rows, cols, batch_size);
     result.fill(T(1));
@@ -1256,7 +1275,8 @@ Matrix<T, MType> Matrix<T, MType>::Ones(int rows, int cols, int batch_size) {
 
 // Factory method to create diagonal matrix
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batch_size) {
     int n = diag_values.size();
     Matrix<T, MType> result(n, n, batch_size);
@@ -1272,7 +1292,8 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k) const {
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
@@ -1284,7 +1305,8 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_
 template <typename T, MatrixFormat MType> struct FillDiagonalVectorKernel;
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k) const {
     int ld = ld_;
     int stride = stride_;
@@ -1299,7 +1321,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
 
     auto col_offset = (k >= 0) ? k : 0; // Adjust column offset based on k
     auto row_offset = (k < 0) ? -k : 0; // Adjust row offset based on k
-    ctx->submit([=](sycl::handler& cgh) {
+    ctx->submit([=, this](sycl::handler& cgh) {
         auto view = this->kernel_view();
         auto diag = diag_values;
         cgh.parallel_for<FillDiagonalVectorKernel<T, MType>>(
@@ -1322,7 +1344,8 @@ template <typename T, MatrixFormat MType> struct FillDiagonalVectorKernel {};
 
 template <typename T, MatrixFormat MType> struct FillDiagonalKernel {};
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) const {
     T* data_ptr = data_.data();
     int ld = ld_;
@@ -1350,7 +1373,8 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
 }
 
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     // Ensure the returned matrix is fully initialized before returning.
@@ -1359,7 +1383,8 @@ Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T sub_diag, T super_diag) const{
     T* data_ptr = data().data();
     int n = rows_; // Assuming square matrix
@@ -1400,7 +1425,8 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
 
 // Implement to_column_major using SYCL
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
     Matrix<T, MType> col_major(rows_, cols_, batch_size_);
     
@@ -1447,7 +1473,8 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
 
 // Implement to_row_major using SYCL
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     Matrix<T, MType> row_major(rows_, cols_, batch_size_);
     
@@ -1498,7 +1525,8 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
 
 // Constructor for dense matrix view
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                   int stride, int batch_size, T** data_ptrs) :
                 data_(data, (stride > 0 ? stride : 
@@ -1513,7 +1541,8 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
 
 // Constructor for CSR sparse matrix view
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::CSR, int>::type>
+template <typename U, MatrixFormat M>
+    requires CsrMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
             int nnz, int rows, int cols, int matrix_stride,
             int offset_stride, int batch_size, T** data_ptrs) :
@@ -1564,7 +1593,8 @@ MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
 
 // Constructor for a submatrix view from a Matrix object
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(
     const MatrixView<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : 
     MatrixView<T, MType>(matrix.data_ptr(),
@@ -1588,14 +1618,16 @@ MatrixView<T, MType>::MatrixView(
 }
 
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(
     const Matrix<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : MatrixView<T, MType>(matrix.view(), rows, cols, ld, stride, batch_size) {}
 
 
 // Element access (for dense matrices)
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 T& MatrixView<T, MType>::at(int row, int col, int batch) {
     if (batch < 0 || batch >= batch_size_) {
         throw std::out_of_range("Matrix indices out of range");
@@ -1609,7 +1641,8 @@ T& MatrixView<T, MType>::at(int row, int col, int batch) {
 }
 
 template <typename T, MatrixFormat MType>
-template <MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     if (batch < 0 || batch >= batch_size_) {
         throw std::out_of_range("Matrix indices out of range");
@@ -1652,7 +1685,8 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
 }
 
 template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M, typename std::enable_if<M == MatrixFormat::Dense, int>::type>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
 MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>& other,
                                                      T* data,
                                                      T** data_ptrs) {

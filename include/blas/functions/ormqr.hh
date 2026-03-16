@@ -96,12 +96,6 @@ namespace batchlas::blas::dispatch {
 
 namespace detail {
 
-template <typename U>
-struct is_std_complex : std::false_type {};
-
-template <typename U>
-struct is_std_complex<std::complex<U>> : std::true_type {};
-
 inline Provider normalize_ormqr_vendor_like(Provider p) {
     if (p == Provider::Netlib) return Provider::Vendor;
     return p;
@@ -113,7 +107,7 @@ inline bool ormqr_supports_blocked(const DeviceCaps& caps,
                                   Transpose trans) {
     if (!caps.is_gpu) return false;
 
-    if constexpr (is_std_complex<T>::value) {
+    if constexpr (is_std_complex_v<T>) {
         if (trans == Transpose::Trans) return false;
     }
 

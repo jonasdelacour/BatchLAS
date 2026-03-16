@@ -163,7 +163,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend B, RealScalar T>
     Event syrk(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -230,7 +230,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend B, RealScalar T>
     Event syr2k(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,

@@ -22,12 +22,6 @@ namespace batchlas {
 
 namespace {
 
-template <typename U>
-struct is_std_complex : std::false_type {};
-
-template <typename U>
-struct is_std_complex<std::complex<U>> : std::true_type {};
-
 template <typename T>
 inline void validate_syev_two_stage_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                          Span<typename base_type<T>::type> eigenvalues,
@@ -143,7 +137,7 @@ inline void build_phase_from_kd1_band(Queue& ctx,
             for (int32_t i = 0; i < n - 1; ++i) {
                 const T t = AB(1, i, b);
                 Real a = Real(0);
-                if constexpr (is_std_complex<T>::value) {
+                if constexpr (is_std_complex_v<T>) {
                     a = sycl::hypot(static_cast<Real>(t.real()), static_cast<Real>(t.imag()));
                 } else {
                     a = sycl::fabs(t);
@@ -389,7 +383,7 @@ Event syev_two_stage(Queue& ctx,
 
     Span<T> tau_q_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
 
-    if constexpr (is_std_complex<T>::value) {
+    if constexpr (is_std_complex_v<T>) {
         auto z_real_span = pool.allocate<Real>(ctx,
                                                static_cast<std::size_t>(n) *
                                                    static_cast<std::size_t>(n) *
@@ -635,7 +629,7 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         bytes += BumpAllocator::allocation_size<T>(ctx,
                                                    static_cast<std::size_t>(p) *
                                                        static_cast<std::size_t>(batch)); // tau for packed Qsub
-        if constexpr (is_std_complex<T>::value) {
+        if constexpr (is_std_complex_v<T>) {
             bytes += BumpAllocator::allocation_size<T>(ctx,
                                                        static_cast<std::size_t>(n) *
                                                            static_cast<std::size_t>(n) *

@@ -328,7 +328,7 @@ namespace batchlas{
         });
     }
 
-    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend B, RealScalar T>
     Event symm(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
@@ -395,7 +395,7 @@ namespace batchlas{
         });
     }
 
-    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend B, RealScalar T>
     Event syrk(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -455,7 +455,7 @@ namespace batchlas{
         });
     }
 
-    template <Backend B, typename T, typename std::enable_if<std::is_floating_point_v<T>, int>::type>
+    template <Backend B, RealScalar T>
     Event syr2k(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,

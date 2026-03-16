@@ -332,7 +332,7 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
     }
-    if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
+    if constexpr (!RealScalar<T>) {
         return false;
     }
     return true;
@@ -354,7 +354,7 @@ inline bool gesvd_supports_blocked(const DeviceCaps& caps,
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower;
     }
-    if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
+    if constexpr (!RealScalar<T>) {
         return false;
     }
     return true;
