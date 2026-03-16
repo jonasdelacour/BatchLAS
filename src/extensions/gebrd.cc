@@ -30,7 +30,9 @@ Event gebrd_unblocked_real(Queue& ctx,
     static_assert(!internal::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
 
-    const int32_t n = static_cast<int32_t>(a.rows());
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t k = std::min(m, n);
     const int32_t batch = static_cast<int32_t>(a.batch_size());
 
     ctx->submit([&](sycl::handler& cgh) {
@@ -43,10 +45,10 @@ Event gebrd_unblocked_real(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
 
-            for (int32_t i = 0; i < n; ++i) {
-                // Left Householder: annihilate A(i+1:n-1, i)
+            for (int32_t i = 0; i < k; ++i) {
+                // Left Householder: annihilate A(i+1:m-1, i)
                 Real sigma = Real(0);
-                for (int32_t r = i + 1; r < n; ++r) {
+                for (int32_t r = i + 1; r < m; ++r) {
                     sigma += A(r, i, b) * A(r, i, b);
                 }
 
@@ -58,18 +60,18 @@ Event gebrd_unblocked_real(Queue& ctx,
                     tau_l = (beta_l - alpha) / beta_l;
                     const Real scale = Real(1) / (alpha - beta_l);
                     A(i, i, b) = Real(1);
-                    for (int32_t r = i + 1; r < n; ++r) {
+                    for (int32_t r = i + 1; r < m; ++r) {
                         A(r, i, b) *= scale;
                     }
 
                     for (int32_t c = i + 1; c < n; ++c) {
                         Real dot = Real(0);
-                        for (int32_t r = i; r < n; ++r) {
+                        for (int32_t r = i; r < m; ++r) {
                             const Real vr = (r == i) ? Real(1) : A(r, i, b);
                             dot += conj_if_needed(vr) * A(r, c, b);
                         }
                         dot *= tau_l;
-                        for (int32_t r = i; r < n; ++r) {
+                        for (int32_t r = i; r < m; ++r) {
                             const Real vr = (r == i) ? Real(1) : A(r, i, b);
                             A(r, c, b) -= vr * dot;
                         }
@@ -80,7 +82,10 @@ Event gebrd_unblocked_real(Queue& ctx,
                 D(i, b) = beta_l;
                 TAUQ(i, b) = T(tau_l);
 
-                if (i >= n - 1) continue;
+                if (i >= n - 1) {
+                    TAUP(i, b) = T(0);
+                    continue;
+                }
 
                 // Right Householder: annihilate A(i, i+2:n-1)
                 Real sigma_r = Real(0);
@@ -100,7 +105,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                         A(i, c, b) *= scale_r;
                     }
 
-                    for (int32_t r = i + 1; r < n; ++r) {
+                    for (int32_t r = i + 1; r < m; ++r) {
                         Real dot = Real(0);
                         for (int32_t c = i + 1; c < n; ++c) {
                             const Real vc = (c == i + 1) ? Real(1) : A(i, c, b);
@@ -119,8 +124,11 @@ Event gebrd_unblocked_real(Queue& ctx,
                 TAUP(i, b) = T(tau_r);
             }
 
-            if (n > 0) {
-                TAUP(n - 1, b) = T(0);
+            for (int32_t i = k; i < tauq.size(); ++i) {
+                TAUQ(i, b) = T(0);
+            }
+            for (int32_t i = std::max<int32_t>(0, k - 1); i < taup.size(); ++i) {
+                TAUP(i, b) = T(0);
             }
         });
     });
@@ -139,8 +147,8 @@ Event gebrd_unblocked(Queue& ctx,
                       const VectorView<T>& taup) {
     static_cast<void>(B);
 
-    if (a.rows() != a.cols()) {
-        throw std::invalid_argument("gebrd_unblocked: current implementation supports square matrices only");
+    if (a.rows() < a.cols()) {
+        throw std::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
     if constexpr (internal::is_complex<T>::value) {
         throw std::runtime_error("gebrd_unblocked: complex types are not implemented yet");

@@ -64,7 +64,7 @@ bool ormbr_q_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
         static_cast<void>(c);
         return false;
     } else {
-        return a.rows() <= 32 && c.rows() == c.cols() && c.rows() == a.rows();
+        return a.rows() == a.cols() && a.rows() <= 32 && c.rows() == c.cols() && c.rows() == a.rows();
     }
 }
 
@@ -79,6 +79,7 @@ bool ormbr_p_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
         return false;
     } else {
         return side == Side::Right &&
+               a.rows() == a.cols() &&
                a.rows() <= 32 &&
                c.rows() == c.cols() &&
                c.rows() == a.rows();
@@ -93,7 +94,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
                         Side side,
                         Transpose trans,
                         const Span<std::byte>& ws) {
-    const int32_t n = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
 
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
@@ -367,7 +368,7 @@ Event ormbr_apply_p_unblocked(Queue& ctx,
                               Side side,
                               Transpose trans) {
     auto& c_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(c);
-    const int32_t n = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
     const int32_t k = std::max<int32_t>(0, std::min<int32_t>(a.rows(), a.cols()) - 1);
 
     const bool apply_conj_trans =
@@ -457,7 +458,7 @@ size_t ormbr_p_blocked_buffer_size_impl(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& c,
                                         Side side,
                                         int32_t block_size) {
-    const int nq = std::max<int>(0, static_cast<int>(a.rows()) - 1);
+    const int nq = std::max<int>(0, static_cast<int>(a.cols()) - 1);
     const int k = std::max<int>(0, std::min<int>(a.rows(), a.cols()) - 1);
     if (k == 0 || nq == 0) {
         return 0;
@@ -489,7 +490,7 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
                                  Transpose trans,
                                  const Span<std::byte>& ws,
                                  int32_t block_size) {
-    const int nq = static_cast<int>(a.rows());
+    const int nq = static_cast<int>(a.cols());
     const int k = std::max<int>(0, std::min<int>(a.rows(), a.cols()) - 1);
     if (k == 0 || nq <= 1) {
         return ctx.get_event();
@@ -579,9 +580,6 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 const MatrixView<T, MatrixFormat::Dense>& c,
                                 char vect,
                                 Side side) {
-    if (a.rows() != a.cols()) {
-        throw std::invalid_argument("ormbr: current implementation supports square A only");
-    }
     if (a.batch_size() != c.batch_size() || tau.batch_size() != a.batch_size()) {
         throw std::invalid_argument("ormbr: batch size mismatch");
     }
@@ -589,16 +587,16 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
         throw std::invalid_argument("ormbr: invalid batch size");
     }
 
-    const int32_t n = static_cast<int32_t>(a.rows());
-    const int32_t k = std::min<int32_t>(a.rows(), a.cols());
-    const int32_t nq = (side == Side::Left) ? static_cast<int32_t>(c.rows()) : static_cast<int32_t>(c.cols());
-    if (nq != n) {
-        throw std::invalid_argument("ormbr: expected nq == A.rows() for square-path staging");
-    }
-
     const char v = upper_ascii(vect);
     if (v != 'Q' && v != 'P') {
         throw std::invalid_argument("ormbr: vect must be 'Q' or 'P'");
+    }
+
+    const int32_t k = std::min<int32_t>(a.rows(), a.cols());
+    const int32_t order = (v == 'Q') ? static_cast<int32_t>(a.rows()) : static_cast<int32_t>(a.cols());
+    const int32_t nq = (side == Side::Left) ? static_cast<int32_t>(c.rows()) : static_cast<int32_t>(c.cols());
+    if (nq != order) {
+        throw std::invalid_argument("ormbr: C dimension does not match reflector order");
     }
 
     const int32_t need_tau = (v == 'Q') ? k : std::max<int32_t>(0, k - 1);

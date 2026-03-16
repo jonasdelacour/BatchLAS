@@ -39,13 +39,13 @@ inline void validate_gebrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 const VectorView<T>& tauq,
                                 const VectorView<T>& taup,
                                 const char* where) {
-    if (a.rows() != a.cols()) {
-        throw std::invalid_argument(std::string(where) + ": A must be square");
+    if (a.rows() < a.cols()) {
+        throw std::invalid_argument(std::string(where) + ": A must satisfy rows >= cols");
     }
 
-    const int32_t n = static_cast<int32_t>(a.rows());
-    const int32_t need_e = std::max<int32_t>(0, n - 1);
-    if (d.size() != n || e.size() != need_e || tauq.size() != n || taup.size() != n) {
+    const int32_t k = static_cast<int32_t>(a.cols());
+    const int32_t need_e = std::max<int32_t>(0, k - 1);
+    if (d.size() != k || e.size() != need_e || tauq.size() != k || taup.size() != k) {
         throw std::invalid_argument(std::string(where) + ": invalid d/e/tau sizes");
     }
     if (a.batch_size() != d.batch_size() || a.batch_size() != e.batch_size() ||
@@ -63,7 +63,7 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
                                  const VectorView<typename base_type<T>::type>& d,
                                  const VectorView<typename base_type<T>::type>& e) {
     auto& a_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a);
-    const int32_t n = static_cast<int32_t>(a.rows());
+    const int32_t k = static_cast<int32_t>(d.size());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
 
     ctx->submit([&](sycl::handler& h) {
@@ -72,14 +72,14 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
         auto E = e;
 
         h.parallel_for(
-            sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(std::max<int32_t>(1, n))),
+            sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(std::max<int32_t>(1, k))),
             [=](sycl::id<2> idx) {
                 const int32_t b = static_cast<int32_t>(idx[0]);
                 const int32_t i = static_cast<int32_t>(idx[1]);
-                if (i >= n) return;
+                if (i >= k) return;
 
                 A(i, i, b) = static_cast<T>(D(i, b));
-                if (i < n - 1) {
+                if (i < k - 1) {
                     A(i, i + 1, b) = static_cast<T>(E(i, b));
                 }
             });
@@ -113,20 +113,22 @@ Event gebrd_blocked_real(Queue& ctx,
     }
 
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
-    const int32_t n = static_cast<int32_t>(a.rows());
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t k_total = std::min(m, n);
     const int32_t batch = static_cast<int32_t>(a.batch_size());
 
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
 
-    auto x_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    auto x_buf = pool.allocate<T>(ctx, static_cast<size_t>(m) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
     auto y_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> x_mat(x_buf.data(), n, nb, n, static_cast<int64_t>(n) * static_cast<int64_t>(nb), batch);
+    MatrixView<T, MatrixFormat::Dense> x_mat(x_buf.data(), m, nb, m, static_cast<int64_t>(m) * static_cast<int64_t>(nb), batch);
     MatrixView<T, MatrixFormat::Dense> y_mat(y_buf.data(), n, nb, n, static_cast<int64_t>(n) * static_cast<int64_t>(nb), batch);
     const int32_t panel_wg = std::min<int32_t>(128, static_cast<int32_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()));
 
-    for (int32_t j0 = 0; j0 < n; j0 += nb) {
-        const int32_t ib = std::min(nb, n - j0);
+    for (int32_t j0 = 0; j0 < k_total; j0 += nb) {
+        const int32_t ib = std::min(nb, k_total - j0);
         auto x_panel = x_mat({j0, SliceEnd()}, {0, ib});
         auto y_panel = y_mat({j0, SliceEnd()}, {0, ib});
         x_panel.fill_zeros(ctx);
@@ -155,7 +157,7 @@ Event gebrd_blocked_real(Queue& ctx,
                 for (int32_t ii = 0; ii < ib; ++ii) {
                     const int32_t gi = j0 + ii;
 
-                    for (int32_t r = gi + lid; r < n; r += local_size) {
+                    for (int32_t r = gi + lid; r < m; r += local_size) {
                         T val = A(r, gi, b);
                         for (int32_t k = 0; k < ii; ++k) {
                             const int32_t gk = j0 + k;
@@ -167,7 +169,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     item.barrier(sycl::access::fence_space::global_space);
 
                     Real sigma_partial = Real(0);
-                    for (int32_t r = gi + 1 + lid; r < n; r += local_size) {
+                    for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
                         const T ari = A(r, gi, b);
                         sigma_partial += ari * ari;
                     }
@@ -197,28 +199,25 @@ Event gebrd_blocked_real(Queue& ctx,
                         TAUQ(gi, b) = tau_q;
                     }
 
-                    if (gi >= n - 1) {
-                        if (lid == 0) {
-                            A(gi, gi, b) = T(1);
-                        }
-                        continue;
-                    }
-
                     if (lid == 0) {
                         A(gi, gi, b) = T(1);
                     }
                     if (tau_q != T(0)) {
-                        for (int32_t r = gi + 1 + lid; r < n; r += local_size) {
+                        for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
                             A(r, gi, b) *= scale_q;
                         }
                     }
                     item.barrier(sycl::access::fence_space::global_space);
 
+                    if (gi >= n - 1) {
+                        continue;
+                    }
+
                     for (int32_t k = 0; k < ii; ++k) {
                         const int32_t gk = j0 + k;
                         T sum_a_partial = T(0);
                         T sum_x_partial = T(0);
-                        for (int32_t r = gi + lid; r < n; r += local_size) {
+                        for (int32_t r = gi + lid; r < m; r += local_size) {
                             const T argi = A(r, gi, b);
                             sum_a_partial += A(r, gk, b) * argi;
                             sum_x_partial += X(r, k, b) * argi;
@@ -234,7 +233,7 @@ Event gebrd_blocked_real(Queue& ctx,
 
                     for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
                         T y = T(0);
-                        for (int32_t r = gi; r < n; ++r) {
+                        for (int32_t r = gi; r < m; ++r) {
                             y += A(r, c, b) * A(r, gi, b);
                         }
                         for (int32_t k = 0; k < ii; ++k) {
@@ -317,7 +316,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 
-                    for (int32_t r = gi + 1 + lid; r < n; r += local_size) {
+                    for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
                         T x = T(0);
                         for (int32_t c = gi + 1; c < n; ++c) {
                             x += A(r, c, b) * A(gi, c, b);
@@ -384,12 +383,13 @@ size_t gebrd_blocked_buffer_size(Queue& ctx,
                                  int32_t block_size) {
     validate_gebrd_dims(a, d, e, tauq, taup, "gebrd_blocked_buffer_size");
 
-    const size_t n = static_cast<size_t>(a.rows());
+    const size_t m = static_cast<size_t>(a.rows());
+    const size_t n = static_cast<size_t>(a.cols());
     const size_t batch = static_cast<size_t>(a.batch_size());
     const size_t nb = static_cast<size_t>(gebrd_blocked_resolved_nb(block_size));
 
     size_t bytes = 0;
-    bytes += BumpAllocator::allocation_size<T>(ctx, n * nb * batch);
+    bytes += BumpAllocator::allocation_size<T>(ctx, m * nb * batch);
     bytes += BumpAllocator::allocation_size<T>(ctx, n * nb * batch);
     return bytes;
 }

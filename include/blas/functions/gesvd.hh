@@ -23,8 +23,9 @@
 
 namespace batchlas {
 
-// A is overwritten during factorization. Initial scope supports square matrices
-// and full-vector outputs (U and V^H).
+// A is overwritten during factorization. General real-matrix support accepts
+// rectangular inputs with full-vector outputs (U and V^H). Hermitian overloads
+// remain square-only.
 template <Backend B, typename T>
 Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -168,16 +169,15 @@ Event gesvd_vendor(Queue& ctx,
         throw std::runtime_error("gesvd_vendor: backend implementation not available yet");
     } else {
 #if BATCHLAS_HAS_HOST_BACKEND
-        if (A.rows() != A.cols()) {
-            throw std::invalid_argument("gesvd_vendor (NETLIB): square matrices only in current implementation");
-        }
-        if (A.batch_size() < 1 || A.rows() < 1) {
+        if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
             throw std::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
         }
 
-        const int n = static_cast<int>(A.rows());
+        const int m = static_cast<int>(A.rows());
+        const int n = static_cast<int>(A.cols());
+        const int k = std::min(m, n);
         const int batch = static_cast<int>(A.batch_size());
-        const std::size_t need_s = static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
+        const std::size_t need_s = static_cast<std::size_t>(k) * static_cast<std::size_t>(batch);
         if (singular_values.size() < need_s) {
             throw std::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
         }
@@ -186,8 +186,8 @@ Event gesvd_vendor(Queue& ctx,
         const char lapack_jobvt = (jobvh == SvdVectors::All) ? 'A' : 'N';
 
         if (jobu == SvdVectors::All) {
-            if (U.rows() != n || U.cols() != n || U.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (n x n) with matching batch");
+            if (U.rows() != m || U.cols() != m || U.batch_size() != batch) {
+                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x m) with matching batch");
             }
         }
         if (jobvh == SvdVectors::All) {
@@ -198,20 +198,20 @@ Event gesvd_vendor(Queue& ctx,
 
         ctx.wait();
 
-        std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, n - 1)));
+        std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
         auto& A_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(A);
         for (int b = 0; b < batch; ++b) {
             auto Ab = A_mut.batch_item(b);
             auto Ub = U.batch_item(b);
             auto Vhb = Vh.batch_item(b);
-            typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+            typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
 
             lapack_int info = 0;
             if constexpr (std::is_same_v<T, float>) {
                 info = LAPACKE_sgesvd(LAPACK_COL_MAJOR,
                                       lapack_jobu,
                                       lapack_jobvt,
-                                      n,
+                                      m,
                                       n,
                                       Ab.data_ptr(),
                                       Ab.ld(),
@@ -226,7 +226,7 @@ Event gesvd_vendor(Queue& ctx,
                 info = LAPACKE_dgesvd(LAPACK_COL_MAJOR,
                                       lapack_jobu,
                                       lapack_jobvt,
-                                      n,
+                                      m,
                                       n,
                                       Ab.data_ptr(),
                                       Ab.ld(),
@@ -240,7 +240,7 @@ Event gesvd_vendor(Queue& ctx,
                 info = LAPACKE_cgesvd(LAPACK_COL_MAJOR,
                                       lapack_jobu,
                                       lapack_jobvt,
-                                      n,
+                                      m,
                                       n,
                                       reinterpret_cast<lapack_complex_float*>(Ab.data_ptr()),
                                       Ab.ld(),
@@ -254,7 +254,7 @@ Event gesvd_vendor(Queue& ctx,
                 info = LAPACKE_zgesvd(LAPACK_COL_MAJOR,
                                       lapack_jobu,
                                       lapack_jobvt,
-                                      n,
+                                      m,
                                       n,
                                       reinterpret_cast<lapack_complex_double*>(Ab.data_ptr()),
                                       Ab.ld(),
@@ -324,11 +324,12 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
                                std::optional<Uplo> hermitian_uplo = std::nullopt) {
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
-    if (A.rows() != A.cols()) return false;
-    if (A.rows() < 1 || A.rows() > 32 || A.batch_size() < 1) return false;
+    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
+    if (std::max(A.rows(), A.cols()) > 32) return false;
     if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
     if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     if (hermitian_uplo.has_value()) {
+        if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
     }
     if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
@@ -343,14 +344,14 @@ inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    SvdVectors jobu,
                                    SvdVectors jobvh,
                                    std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    // Current native path supports square real matrices with optional full
-    // U and/or V^H backtransforms via ORMBR.
+    // Current native path supports real matrices with optional full U and/or
+    // V^H backtransforms via ORMBR. Hermitian support remains square-only.
     if (!caps.is_gpu) return false;
-    if (A.rows() != A.cols()) return false;
-    if (A.rows() < 1 || A.batch_size() < 1) return false;
+    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
     if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
     if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     if (hermitian_uplo.has_value()) {
+        if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower;
     }
     if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
