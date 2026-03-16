@@ -65,17 +65,20 @@
     {
       "name": "dev",
       "configurePreset": "dev",
+      "jobs": 20,
       "targets": [
         "batchlas_components"
       ]
     },
     {
       "name": "dev-tests",
-      "configurePreset": "dev-tests"
+      "configurePreset": "dev-tests",
+      "jobs": 20
     },
     {
       "name": "fast-dev",
       "configurePreset": "fast-dev",
+      "jobs": 20,
       "targets": [
         "batchlas_components",
         "batchlas_smoke_tests"
@@ -83,11 +86,13 @@
     },
     {
       "name": "benchmarks",
-      "configurePreset": "benchmarks"
+      "configurePreset": "benchmarks",
+      "jobs": 20
     },
     {
       "name": "cuda",
-      "configurePreset": "cuda"
+      "configurePreset": "cuda",
+      "jobs": 20
     }
   ]
 }
