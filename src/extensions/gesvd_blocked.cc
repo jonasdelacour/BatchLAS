@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -321,6 +322,122 @@ template <typename T>
 inline T gesvd_zero_sigma_tol_host(T sigma_max) {
     const T eps = std::numeric_limits<T>::epsilon();
     return eps * std::max<T>(T(1), sigma_max);
+}
+
+template <typename T>
+inline T gesvd_conj_if_needed(const T& value) {
+    if constexpr (internal::is_complex<T>::value) {
+        return T(value.real(), -value.imag());
+    } else {
+        return value;
+    }
+}
+
+template <typename Real>
+void build_hermitian_svd_permutation(Queue& ctx,
+                                     const VectorView<Real>& eigenvalues,
+                                     const VectorView<int32_t>& permutation) {
+    const int32_t n = static_cast<int32_t>(eigenvalues.size());
+    const int32_t batch = static_cast<int32_t>(eigenvalues.batch_size());
+
+    ctx->submit([&](sycl::handler& h) {
+        auto Evals = eigenvalues;
+        auto Perm = permutation;
+        h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            const int32_t b = static_cast<int32_t>(tid[0]);
+            for (int32_t i = 0; i < n; ++i) {
+                Perm(i, b) = i;
+            }
+
+            for (int32_t i = 0; i < n; ++i) {
+                int32_t best = i;
+                int32_t best_idx = Perm(i, b);
+                Real best_abs = sycl::fabs(Evals(best_idx, b));
+                Real best_val = Evals(best_idx, b);
+                for (int32_t j = i + 1; j < n; ++j) {
+                    const int32_t cand_idx = Perm(j, b);
+                    const Real cand_val = Evals(cand_idx, b);
+                    const Real cand_abs = sycl::fabs(cand_val);
+                    if (cand_abs > best_abs || (cand_abs == best_abs && cand_val > best_val)) {
+                        best = j;
+                        best_idx = cand_idx;
+                        best_abs = cand_abs;
+                        best_val = cand_val;
+                    }
+                }
+                const int32_t tmp = Perm(i, b);
+                Perm(i, b) = Perm(best, b);
+                Perm(best, b) = tmp;
+            }
+        });
+    });
+}
+
+template <typename Real>
+void finalize_hermitian_values(Queue& ctx,
+                               const VectorView<Real>& eigenvalues,
+                               const VectorView<int32_t>& permutation,
+                               Span<Real> singular_values) {
+    const int32_t n = static_cast<int32_t>(eigenvalues.size());
+    const int32_t batch = static_cast<int32_t>(eigenvalues.batch_size());
+
+    ctx->submit([&](sycl::handler& h) {
+        auto Evals = eigenvalues;
+        auto Perm = permutation;
+        Real* s_out = singular_values.data();
+        h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
+            const int32_t linear = static_cast<int32_t>(tid[0]);
+            const int32_t b = linear / n;
+            const int32_t i = linear - b * n;
+            const int32_t src = Perm(i, b);
+            s_out[static_cast<size_t>(b) * static_cast<size_t>(n) + static_cast<size_t>(i)] = sycl::fabs(Evals(src, b));
+        });
+    });
+}
+
+template <typename T>
+void build_hermitian_vectors(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& eigenvectors,
+                             const VectorView<typename base_type<T>::type>& eigenvalues,
+                             const VectorView<int32_t>& permutation,
+                             const MatrixView<T, MatrixFormat::Dense>& u_out,
+                             const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                             bool want_u,
+                             bool want_vh) {
+    using Real = typename base_type<T>::type;
+
+    const int32_t n = static_cast<int32_t>(eigenvectors.rows());
+    const int32_t batch = static_cast<int32_t>(eigenvectors.batch_size());
+    auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u_out);
+    auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh_out);
+
+    ctx->submit([&](sycl::handler& h) {
+        auto Q = eigenvectors.kernel_view();
+        auto Evals = eigenvalues;
+        auto Perm = permutation;
+        auto U = u_mut.kernel_view();
+        auto Vh = vh_mut.kernel_view();
+        h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
+            const int32_t linear = static_cast<int32_t>(tid[0]);
+            const int32_t b = linear / n;
+            const int32_t tgt = linear - b * n;
+            const int32_t src = Perm(tgt, b);
+            const Real lambda = Evals(src, b);
+            const T sign = (lambda < Real(0)) ? T(-1) : T(1);
+
+            if (want_u) {
+                for (int32_t row = 0; row < n; ++row) {
+                    U(row, tgt, b) = Q(row, src, b);
+                }
+            }
+
+            if (want_vh) {
+                for (int32_t col = 0; col < n; ++col) {
+                    Vh(tgt, col, b) = sign * gesvd_conj_if_needed(Q(col, src, b));
+                }
+            }
+        });
+    });
 }
 
 template <typename T>
@@ -642,6 +759,74 @@ Event gesvd_native_impl(Queue& ctx,
 }
 
 template <Backend B, typename T>
+Event gesvd_native_hermitian_impl(Queue& ctx,
+                                  const MatrixView<T, MatrixFormat::Dense>& a_in,
+                                  Span<typename base_type<T>::type> singular_values,
+                                  const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                  const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                  SvdVectors jobu,
+                                  SvdVectors jobvh,
+                                  const Span<std::byte>& ws,
+                                  GesvdNativeMode mode,
+                                  Uplo hermitian_uplo,
+                                  const char* where) {
+    using Real = typename base_type<T>::type;
+
+    validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, where);
+
+    if (!ctx.in_order()) {
+        throw std::runtime_error(std::string(where) + ": requires an in-order Queue");
+    }
+    if (hermitian_uplo != Uplo::Lower && hermitian_uplo != Uplo::Upper) {
+        throw std::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
+    }
+
+    const int32_t n = static_cast<int32_t>(a_in.rows());
+    const int32_t batch = static_cast<int32_t>(a_in.batch_size());
+    const bool want_u = jobu == SvdVectors::All;
+    const bool want_vh = jobvh == SvdVectors::All;
+    const bool need_vecs = want_u || want_vh;
+    const GesvdStageProfiler profiler{ctx, where, n, batch, gesvd_stage_profile_enabled()};
+
+    auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
+    Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
+    BumpAllocator pool(ws_mut);
+
+    auto eigvals_span = pool.allocate<Real>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto perm_span = pool.allocate<int32_t>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
+    VectorView<Real> eigvals_view(eigvals_span, n, batch, 1, n);
+    VectorView<int32_t> perm_view(perm_span, n, batch, 1, n);
+
+    const JobType jobz = need_vecs ? JobType::EigenVectors : JobType::NoEigenVectors;
+    const size_t syev_ws_bytes = (mode == GesvdNativeMode::CTA)
+        ? syev_cta_buffer_size<B, T>(ctx, a, jobz)
+        : syev_blocked_buffer_size<B, T>(ctx, a, jobz, hermitian_uplo);
+    auto syev_ws = pool.allocate<std::byte>(ctx, syev_ws_bytes);
+
+    profiler.run("gesvd.hermitian.syev", [&] {
+        if (mode == GesvdNativeMode::CTA) {
+            syev_cta<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws);
+        } else {
+            syev_blocked<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws);
+        }
+    });
+    profiler.run("gesvd.hermitian.sort", [&] {
+        build_hermitian_svd_permutation(ctx, eigvals_view, perm_view);
+    });
+    profiler.run("gesvd.hermitian.values", [&] {
+        finalize_hermitian_values(ctx, eigvals_view, perm_view, singular_values);
+    });
+
+    if (need_vecs) {
+        profiler.run("gesvd.hermitian.vectors", [&] {
+            build_hermitian_vectors(ctx, a, eigvals_view, perm_view, u_out, vh_out, want_u, want_vh);
+        });
+    }
+
+    return ctx.get_event();
+}
+
+template <Backend B, typename T>
 size_t gesvd_native_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& a,
                                 Span<typename base_type<T>::type> singular_values,
@@ -720,6 +905,37 @@ size_t gesvd_native_buffer_size(Queue& ctx,
     }
 }
 
+template <Backend B, typename T>
+size_t gesvd_native_hermitian_buffer_size(Queue& ctx,
+                                          const MatrixView<T, MatrixFormat::Dense>& a,
+                                          Span<typename base_type<T>::type> singular_values,
+                                          const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                          const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                          SvdVectors jobu,
+                                          SvdVectors jobvh,
+                                          GesvdNativeMode mode,
+                                          Uplo hermitian_uplo,
+                                          const char* where) {
+    validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
+    if (hermitian_uplo != Uplo::Lower && hermitian_uplo != Uplo::Upper) {
+        throw std::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
+    }
+
+    const size_t n = static_cast<size_t>(a.rows());
+    const size_t batch = static_cast<size_t>(a.batch_size());
+    const bool need_vecs = jobu == SvdVectors::All || jobvh == SvdVectors::All;
+    const JobType jobz = need_vecs ? JobType::EigenVectors : JobType::NoEigenVectors;
+
+    size_t bytes = 0;
+    bytes += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, n * batch);
+    bytes += BumpAllocator::allocation_size<int32_t>(ctx, n * batch);
+    bytes += BumpAllocator::allocation_size<std::byte>(ctx,
+        mode == GesvdNativeMode::CTA
+            ? syev_cta_buffer_size<B, T>(ctx, a, jobz)
+            : syev_blocked_buffer_size<B, T>(ctx, a, jobz, hermitian_uplo));
+    return bytes;
+}
+
 } // namespace
 
 template <Backend B, typename T>
@@ -744,6 +960,29 @@ Event gesvd_blocked(Queue& ctx,
 }
 
 template <Backend B, typename T>
+Event gesvd_blocked(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    Span<typename base_type<T>::type> singular_values,
+                    const MatrixView<T, MatrixFormat::Dense>& u_out,
+                    const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                    SvdVectors jobu,
+                    SvdVectors jobvh,
+                    Uplo hermitian_uplo,
+                    const Span<std::byte>& ws) {
+    return gesvd_native_hermitian_impl<B, T>(ctx,
+                                             a_in,
+                                             singular_values,
+                                             u_out,
+                                             vh_out,
+                                             jobu,
+                                             jobvh,
+                                             ws,
+                                             GesvdNativeMode::Blocked,
+                                             hermitian_uplo,
+                                             "gesvd_blocked");
+}
+
+template <Backend B, typename T>
 size_t gesvd_blocked_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  Span<typename base_type<T>::type> singular_values,
@@ -760,6 +999,27 @@ size_t gesvd_blocked_buffer_size(Queue& ctx,
                                           jobvh,
                                           GesvdNativeMode::Blocked,
                                           "gesvd_blocked_buffer_size");
+}
+
+template <Backend B, typename T>
+size_t gesvd_blocked_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 Span<typename base_type<T>::type> singular_values,
+                                 const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                 SvdVectors jobu,
+                                 SvdVectors jobvh,
+                                 Uplo hermitian_uplo) {
+    return gesvd_native_hermitian_buffer_size<B, T>(ctx,
+                                                    a,
+                                                    singular_values,
+                                                    u_out,
+                                                    vh_out,
+                                                    jobu,
+                                                    jobvh,
+                                                    GesvdNativeMode::Blocked,
+                                                    hermitian_uplo,
+                                                    "gesvd_blocked_buffer_size");
 }
 
 template <Backend B, typename T>
@@ -788,6 +1048,33 @@ Event gesvd_cta(Queue& ctx,
 }
 
 template <Backend B, typename T>
+Event gesvd_cta(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& a_in,
+                Span<typename base_type<T>::type> singular_values,
+                const MatrixView<T, MatrixFormat::Dense>& u_out,
+                const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                SvdVectors jobu,
+                SvdVectors jobvh,
+                Uplo hermitian_uplo,
+                const Span<std::byte>& ws) {
+    validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
+    if (a_in.rows() > 32) {
+        throw std::invalid_argument("gesvd_cta: currently supports 1 <= n <= 32");
+    }
+    return gesvd_native_hermitian_impl<B, T>(ctx,
+                                             a_in,
+                                             singular_values,
+                                             u_out,
+                                             vh_out,
+                                             jobu,
+                                             jobvh,
+                                             ws,
+                                             GesvdNativeMode::CTA,
+                                             hermitian_uplo,
+                                             "gesvd_cta");
+}
+
+template <Backend B, typename T>
 size_t gesvd_cta_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& a,
                              Span<typename base_type<T>::type> singular_values,
@@ -810,6 +1097,31 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                                           "gesvd_cta_buffer_size");
 }
 
+template <Backend B, typename T>
+size_t gesvd_cta_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& a,
+                             Span<typename base_type<T>::type> singular_values,
+                             const MatrixView<T, MatrixFormat::Dense>& u_out,
+                             const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                             SvdVectors jobu,
+                             SvdVectors jobvh,
+                             Uplo hermitian_uplo) {
+    validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
+    if (a.rows() > 32) {
+        throw std::invalid_argument("gesvd_cta_buffer_size: currently supports 1 <= n <= 32");
+    }
+    return gesvd_native_hermitian_buffer_size<B, T>(ctx,
+                                                    a,
+                                                    singular_values,
+                                                    u_out,
+                                                    vh_out,
+                                                    jobu,
+                                                    jobvh,
+                                                    GesvdNativeMode::CTA,
+                                                    hermitian_uplo,
+                                                    "gesvd_cta_buffer_size");
+}
+
 #define GESVD_BLOCKED_INSTANTIATE(back, fp) \
     template Event gesvd_blocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
@@ -820,6 +1132,16 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         SvdVectors, \
         SvdVectors, \
         const Span<std::byte>&); \
+    template Event gesvd_blocked<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        SvdVectors, \
+        SvdVectors, \
+        Uplo, \
+        const Span<std::byte>&); \
     template size_t gesvd_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -828,6 +1150,15 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
         SvdVectors); \
+    template size_t gesvd_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        SvdVectors, \
+        SvdVectors, \
+        Uplo); \
     template Event gesvd_cta<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -837,6 +1168,16 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         SvdVectors, \
         SvdVectors, \
         const Span<std::byte>&); \
+    template Event gesvd_cta<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        SvdVectors, \
+        SvdVectors, \
+        Uplo, \
+        const Span<std::byte>&); \
     template size_t gesvd_cta_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -844,7 +1185,16 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
-        SvdVectors);
+        SvdVectors); \
+    template size_t gesvd_cta_buffer_size<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        SvdVectors, \
+        SvdVectors, \
+        Uplo);
 
 #define GESVD_BLOCKED_INSTANTIATE_FOR_BACKEND(back) \
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(GESVD_BLOCKED_INSTANTIATE, back)

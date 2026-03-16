@@ -12,9 +12,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -76,7 +78,28 @@ struct backend_real_types {
     using type = typename test_utils::tuple_to_types<tuple_type>::type;
 };
 
+template <template <typename, Backend> class Config>
+struct backend_complex_types {
+    using tuple_type = decltype(std::tuple_cat(
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+        std::tuple<Config<std::complex<float>, Backend::NETLIB>,
+                   Config<std::complex<double>, Backend::NETLIB>>{},
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+        std::tuple<Config<std::complex<float>, Backend::CUDA>,
+                   Config<std::complex<double>, Backend::CUDA>>{},
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+        std::tuple<Config<std::complex<float>, Backend::ROCM>,
+                   Config<std::complex<double>, Backend::ROCM>>{},
+#endif
+        std::tuple<>{}));
+
+    using type = typename test_utils::tuple_to_types<tuple_type>::type;
+};
+
 using GesvdTestTypes = typename backend_real_types<GesvdConfig>::type;
+using GesvdHermitianComplexTestTypes = typename backend_complex_types<GesvdConfig>::type;
 
 template <typename Config>
 class GesvdTest : public test_utils::BatchLASTest<Config> {
@@ -90,7 +113,105 @@ protected:
     }
 };
 
+template <typename Config>
+class GesvdHermitianComplexTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using Scalar = typename Config::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    static constexpr Backend B = Config::BackendVal;
+
+    static constexpr Real tol() {
+        return std::is_same_v<Real, float> ? Real(8e-2f) : Real(1e-10);
+    }
+};
+
 TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
+TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
+
+template <typename T>
+inline T conj_value(const T& value) {
+    if constexpr (test_utils::is_complex<T>::value) {
+        return std::conj(value);
+    } else {
+        return value;
+    }
+}
+
+template <typename T>
+inline typename base_type<T>::type abs_squared_value(const T& value) {
+    using Real = typename base_type<T>::type;
+    if constexpr (test_utils::is_complex<T>::value) {
+        return static_cast<Real>(std::norm(value));
+    } else {
+        return value * value;
+    }
+}
+
+template <typename Scalar>
+int lapacke_gesvd_values_only_any(int n,
+                                  Scalar* a_col_major,
+                                  typename base_type<Scalar>::type* s_out,
+                                  typename base_type<Scalar>::type* superb) {
+    using Real = typename base_type<Scalar>::type;
+    if constexpr (std::is_same_v<Scalar, float>) {
+        return LAPACKE_sgesvd(LAPACK_COL_MAJOR,
+                              'N',
+                              'N',
+                              n,
+                              n,
+                              a_col_major,
+                              n,
+                              s_out,
+                              nullptr,
+                              1,
+                              nullptr,
+                              1,
+                              superb);
+    } else if constexpr (std::is_same_v<Scalar, double>) {
+        return LAPACKE_dgesvd(LAPACK_COL_MAJOR,
+                              'N',
+                              'N',
+                              n,
+                              n,
+                              a_col_major,
+                              n,
+                              s_out,
+                              nullptr,
+                              1,
+                              nullptr,
+                              1,
+                              superb);
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
+        return LAPACKE_cgesvd(LAPACK_COL_MAJOR,
+                              'N',
+                              'N',
+                              n,
+                              n,
+                              reinterpret_cast<lapack_complex_float*>(a_col_major),
+                              n,
+                              s_out,
+                              nullptr,
+                              1,
+                              nullptr,
+                              1,
+                              superb);
+    } else {
+        static_assert(std::is_same_v<Scalar, std::complex<double>>);
+        return LAPACKE_zgesvd(LAPACK_COL_MAJOR,
+                              'N',
+                              'N',
+                              n,
+                              n,
+                              reinterpret_cast<lapack_complex_double*>(a_col_major),
+                              n,
+                              s_out,
+                              nullptr,
+                              1,
+                              nullptr,
+                              1,
+                              superb);
+    }
+}
 
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
@@ -245,29 +366,49 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                     Matrix<Scalar, MatrixFormat::Dense>& Vh,
                                     SvdVectors jobu,
                                     SvdVectors jobvh,
-                                    const char* provider) {
+                                    const char* provider,
+                                    std::optional<Uplo> hermitian_uplo = std::nullopt) {
     std::unique_ptr<ScopedEnvVar> env;
     if (provider != nullptr) {
         env = std::make_unique<ScopedEnvVar>("BATCHLAS_GESVD_PROVIDER", provider);
     }
 
     try {
-        const size_t ws_bytes = gesvd_buffer_size<B>(ctx,
-                                                     A.view(),
-                                                     s.to_span(),
-                                                     U.view(),
-                                                     Vh.view(),
-                                                     jobu,
-                                                     jobvh);
+        const size_t ws_bytes = hermitian_uplo.has_value()
+            ? gesvd_buffer_size<B>(ctx,
+                                   A.view(),
+                                   s.to_span(),
+                                   U.view(),
+                                   Vh.view(),
+                                   jobu,
+                                   jobvh,
+                                   *hermitian_uplo)
+            : gesvd_buffer_size<B>(ctx,
+                                   A.view(),
+                                   s.to_span(),
+                                   U.view(),
+                                   Vh.view(),
+                                   jobu,
+                                   jobvh);
         UnifiedVector<std::byte> ws(ws_bytes);
-        auto evt = gesvd<B>(ctx,
-                            A.view(),
-                            s.to_span(),
-                            U.view(),
-                            Vh.view(),
-                            jobu,
-                            jobvh,
-                            ws.to_span());
+        auto evt = hermitian_uplo.has_value()
+            ? gesvd<B>(ctx,
+                       A.view(),
+                       s.to_span(),
+                       U.view(),
+                       Vh.view(),
+                       jobu,
+                       jobvh,
+                       *hermitian_uplo,
+                       ws.to_span())
+            : gesvd<B>(ctx,
+                       A.view(),
+                       s.to_span(),
+                       U.view(),
+                       Vh.view(),
+                       jobu,
+                       jobvh,
+                       ws.to_span());
         evt.wait();
     } catch (const std::exception& ex) {
         return ex.what();
@@ -286,19 +427,18 @@ void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Den
 
     std::vector<Real> s_ref(static_cast<size_t>(n));
     std::vector<Real> superb(static_cast<size_t>(std::max(0, n - 1)));
-    std::vector<Real> a_host(static_cast<size_t>(n) * static_cast<size_t>(n));
+    std::vector<Scalar> a_host(static_cast<size_t>(n) * static_cast<size_t>(n));
 
     for (int b = 0; b < batch; ++b) {
         SCOPED_TRACE("batch=" + std::to_string(b));
         auto Ab = A_ref.view().batch_item(b);
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                a_host[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)] =
-                    static_cast<Real>(Ab(i, j, 0));
+                a_host[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)] = Ab(i, j, 0);
             }
         }
 
-        const int info = lapacke_gesvd_values_only<Real>(n, a_host.data(), s_ref.data(), superb.data());
+        const int info = lapacke_gesvd_values_only_any<Scalar>(n, a_host.data(), s_ref.data(), superb.data());
         EXPECT_EQ(info, 0);
         if (info != 0) {
             continue;
@@ -341,12 +481,12 @@ void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M) {
         auto Mb = M.view().batch_item(b);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
-                Real dot = Real(0);
+                Scalar dot = Scalar(0);
                 for (int k = 0; k < n; ++k) {
-                    dot += static_cast<Real>(Mb(k, i, 0)) * static_cast<Real>(Mb(k, j, 0));
+                    dot += conj_value(Mb(k, i, 0)) * Mb(k, j, 0);
                 }
-                const Real target = (i == j) ? Real(1) : Real(0);
-                EXPECT_NEAR(dot, target, gesvd_ortho_tol<Real>());
+                const Scalar target = (i == j) ? Scalar(1) : Scalar(0);
+                test_utils::expect_near(dot, target, gesvd_ortho_tol<Real>());
             }
         }
     }
@@ -363,12 +503,12 @@ void expect_orthonormal_rows(const Matrix<Scalar, MatrixFormat::Dense>& M) {
         auto Mb = M.view().batch_item(b);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
-                Real dot = Real(0);
+                Scalar dot = Scalar(0);
                 for (int k = 0; k < n; ++k) {
-                    dot += static_cast<Real>(Mb(i, k, 0)) * static_cast<Real>(Mb(j, k, 0));
+                    dot += Mb(i, k, 0) * conj_value(Mb(j, k, 0));
                 }
-                const Real target = (i == j) ? Real(1) : Real(0);
-                EXPECT_NEAR(dot, target, gesvd_ortho_tol<Real>());
+                const Scalar target = (i == j) ? Scalar(1) : Scalar(0);
+                test_utils::expect_near(dot, target, gesvd_ortho_tol<Real>());
             }
         }
     }
@@ -394,19 +534,135 @@ void expect_reconstruction(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
         Real ref2 = Real(0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
-                Real recon = Real(0);
+                Scalar recon = Scalar(0);
                 for (int k = 0; k < n; ++k) {
-                    recon += static_cast<Real>(Ub(i, k, 0)) * sb[k] * static_cast<Real>(Vhb(k, j, 0));
+                    recon += Ub(i, k, 0) * Scalar(sb[k]) * Vhb(k, j, 0);
                 }
-                const Real ref = static_cast<Real>(Ab(i, j, 0));
-                const Real diff = recon - ref;
-                err2 += diff * diff;
-                ref2 += ref * ref;
+                const Scalar ref = Ab(i, j, 0);
+                const Scalar diff = recon - ref;
+                err2 += abs_squared_value(diff);
+                ref2 += abs_squared_value(ref);
             }
         }
 
         const Real rel_err = std::sqrt(err2 / std::max(ref2, Real(1e-20)));
         EXPECT_LE(rel_err, gesvd_recon_tol<Real>());
+    }
+}
+
+TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+#if !BATCHLAS_HAS_HOST_BACKEND
+    GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
+#else
+    const int n = 12;
+    const int batch = 2;
+
+    Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 4242);
+    Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+    UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
+    Matrix<Scalar, MatrixFormat::Dense> U_dummy(1, 1, batch);
+    Matrix<Scalar, MatrixFormat::Dense> Vh_dummy(1, 1, batch);
+
+    const size_t ws_bytes = gesvd_buffer_size<B>(*this->ctx,
+                                                 A.view(),
+                                                 s.to_span(),
+                                                 U_dummy.view(),
+                                                 Vh_dummy.view(),
+                                                 SvdVectors::None,
+                                                 SvdVectors::None,
+                                                 Uplo::Lower);
+    UnifiedVector<std::byte> ws(ws_bytes);
+
+    auto evt = gesvd<B>(*this->ctx,
+                        A.view(),
+                        s.to_span(),
+                        U_dummy.view(),
+                        Vh_dummy.view(),
+                        SvdVectors::None,
+                        SvdVectors::None,
+                        Uplo::Lower,
+                        ws.to_span());
+    evt.wait();
+
+    expect_singular_values_match_lapacke(A_ref, s);
+#endif
+}
+
+TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSvd) {
+    using Scalar = typename TestFixture::Scalar;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+    } else {
+        const int n = 48;
+        const int batch = 2;
+
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 5151);
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+        UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
+        Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
+        Matrix<Scalar, MatrixFormat::Dense> Vh(n, n, batch);
+
+        const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx,
+                                                                   A,
+                                                                   s,
+                                                                   U,
+                                                                   Vh,
+                                                                   SvdVectors::All,
+                                                                   SvdVectors::All,
+                                                                   "blocked",
+                                                                   Uplo::Lower);
+        ASSERT_TRUE(err.empty()) << err;
+
+        expect_singular_values_match_lapacke(A_ref, s);
+        expect_orthonormal_columns(U);
+        expect_orthonormal_rows(Vh);
+        expect_reconstruction(A_ref, s, U, Vh);
+    }
+}
+
+TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
+    using Scalar = typename TestFixture::Scalar;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA) {
+        GTEST_SKIP() << "CTA native provider is only covered on CUDA in this test pass.";
+    } else {
+        const int n = 16;
+        const int batch = 2;
+
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 6161);
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+        UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
+        Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
+        Matrix<Scalar, MatrixFormat::Dense> Vh(n, n, batch);
+
+        const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx,
+                                                                   A,
+                                                                   s,
+                                                                   U,
+                                                                   Vh,
+                                                                   SvdVectors::All,
+                                                                   SvdVectors::All,
+                                                                   "cta",
+                                                                   Uplo::Lower);
+        ASSERT_TRUE(err.empty()) << err;
+
+        expect_singular_values_match_lapacke(A_ref, s);
+        expect_orthonormal_columns(U);
+        expect_orthonormal_rows(Vh);
+        expect_reconstruction(A_ref, s, U, Vh);
     }
 }
 

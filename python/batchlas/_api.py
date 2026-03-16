@@ -614,22 +614,38 @@ def ormqr(
     )
 
 
-def gesvd(a: Any, *, compute_vectors: bool = True, backend: str = "auto", device: str | None = None):
+def gesvd(
+    a: Any,
+    *,
+    compute_vectors: bool = True,
+    uplo: str | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+):
     return _unwrap(
         _ext._gesvd(
             _coerce_dense_matrix(a),
             compute_vectors,
+            uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
         )
     )
 
 
-def gesvd_blocked(a: Any, *, compute_vectors: bool = True, backend: str = "auto", device: str | None = None):
+def gesvd_blocked(
+    a: Any,
+    *,
+    compute_vectors: bool = True,
+    uplo: str | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+):
     return _unwrap(
         _ext._gesvd_blocked(
             _coerce_dense_matrix(a),
             compute_vectors,
+            uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
         )

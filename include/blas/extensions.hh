@@ -1078,6 +1078,17 @@ namespace batchlas {
                         const Span<std::byte>& ws);
 
     template <Backend B, typename T>
+    Event gesvd_blocked(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& a_in,
+                        Span<typename base_type<T>::type> singular_values,
+                        const MatrixView<T, MatrixFormat::Dense>& u_out,
+                        const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                        SvdVectors jobu,
+                        SvdVectors jobvh,
+                        Uplo hermitian_uplo,
+                        const Span<std::byte>& ws);
+
+    template <Backend B, typename T>
     size_t gesvd_blocked_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& a,
                                      Span<typename base_type<T>::type> singular_values,
@@ -1085,6 +1096,16 @@ namespace batchlas {
                                      const MatrixView<T, MatrixFormat::Dense>& vh_out,
                                      SvdVectors jobu,
                                      SvdVectors jobvh);
+
+    template <Backend B, typename T>
+    size_t gesvd_blocked_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& a,
+                                     Span<typename base_type<T>::type> singular_values,
+                                     const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                     SvdVectors jobu,
+                                     SvdVectors jobvh,
+                                     Uplo hermitian_uplo);
 
     /**
      * @brief CTA-oriented native SVD entry point for very small real square matrices.
@@ -1103,6 +1124,17 @@ namespace batchlas {
                     const Span<std::byte>& ws);
 
     template <Backend B, typename T>
+    Event gesvd_cta(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    Span<typename base_type<T>::type> singular_values,
+                    const MatrixView<T, MatrixFormat::Dense>& u_out,
+                    const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                    SvdVectors jobu,
+                    SvdVectors jobvh,
+                    Uplo hermitian_uplo,
+                    const Span<std::byte>& ws);
+
+    template <Backend B, typename T>
     size_t gesvd_cta_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  Span<typename base_type<T>::type> singular_values,
@@ -1110,6 +1142,16 @@ namespace batchlas {
                                  const MatrixView<T, MatrixFormat::Dense>& vh_out,
                                  SvdVectors jobu,
                                  SvdVectors jobvh);
+
+    template <Backend B, typename T>
+    size_t gesvd_cta_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 Span<typename base_type<T>::type> singular_values,
+                                 const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                 SvdVectors jobu,
+                                 SvdVectors jobvh,
+                                 Uplo hermitian_uplo);
 
     /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.

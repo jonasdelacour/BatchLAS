@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -35,6 +36,17 @@ Event gesvd(Queue& ctx,
             Span<std::byte> workspace);
 
 template <Backend B, typename T>
+Event gesvd(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            Span<typename base_type<T>::type> singular_values,
+            const MatrixView<T, MatrixFormat::Dense>& U,
+            const MatrixView<T, MatrixFormat::Dense>& Vh,
+            SvdVectors jobu,
+            SvdVectors jobvh,
+            Uplo hermitian_uplo,
+            Span<std::byte> workspace);
+
+template <Backend B, typename T>
 size_t gesvd_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<typename base_type<T>::type> singular_values,
@@ -42,6 +54,16 @@ size_t gesvd_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& Vh,
                          SvdVectors jobu,
                          SvdVectors jobvh);
+
+template <Backend B, typename T>
+size_t gesvd_buffer_size(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Span<typename base_type<T>::type> singular_values,
+                         const MatrixView<T, MatrixFormat::Dense>& U,
+                         const MatrixView<T, MatrixFormat::Dense>& Vh,
+                         SvdVectors jobu,
+                         SvdVectors jobvh,
+                         Uplo hermitian_uplo);
 
 template <Backend B, typename T>
 inline Event gesvd(Queue& ctx,
@@ -63,6 +85,27 @@ inline Event gesvd(Queue& ctx,
 }
 
 template <Backend B, typename T>
+inline Event gesvd(Queue& ctx,
+                   const Matrix<T, MatrixFormat::Dense>& A,
+                   Span<typename base_type<T>::type> singular_values,
+                   const Matrix<T, MatrixFormat::Dense>& U,
+                   const Matrix<T, MatrixFormat::Dense>& Vh,
+                   SvdVectors jobu,
+                   SvdVectors jobvh,
+                   Uplo hermitian_uplo,
+                   Span<std::byte> workspace) {
+    return gesvd<B, T>(ctx,
+                       MatrixView<T, MatrixFormat::Dense>(A),
+                       singular_values,
+                       MatrixView<T, MatrixFormat::Dense>(U),
+                       MatrixView<T, MatrixFormat::Dense>(Vh),
+                       jobu,
+                       jobvh,
+                       hermitian_uplo,
+                       workspace);
+}
+
+template <Backend B, typename T>
 inline size_t gesvd_buffer_size(Queue& ctx,
                                 const Matrix<T, MatrixFormat::Dense>& A,
                                 Span<typename base_type<T>::type> singular_values,
@@ -77,6 +120,25 @@ inline size_t gesvd_buffer_size(Queue& ctx,
                                    MatrixView<T, MatrixFormat::Dense>(Vh),
                                    jobu,
                                    jobvh);
+}
+
+template <Backend B, typename T>
+inline size_t gesvd_buffer_size(Queue& ctx,
+                                const Matrix<T, MatrixFormat::Dense>& A,
+                                Span<typename base_type<T>::type> singular_values,
+                                const Matrix<T, MatrixFormat::Dense>& U,
+                                const Matrix<T, MatrixFormat::Dense>& Vh,
+                                SvdVectors jobu,
+                                SvdVectors jobvh,
+                                Uplo hermitian_uplo) {
+    return gesvd_buffer_size<B, T>(ctx,
+                                   MatrixView<T, MatrixFormat::Dense>(A),
+                                   singular_values,
+                                   MatrixView<T, MatrixFormat::Dense>(U),
+                                   MatrixView<T, MatrixFormat::Dense>(Vh),
+                                   jobu,
+                                   jobvh,
+                                   hermitian_uplo);
 }
 
 } // namespace batchlas
@@ -154,6 +216,7 @@ Event gesvd_vendor(Queue& ctx,
                                       Ab.data_ptr(),
                                       Ab.ld(),
                                       sb,
+
                                       (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
                                       (jobu == SvdVectors::All) ? Ub.ld() : 1,
                                       (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
@@ -257,16 +320,20 @@ template <typename T>
 inline bool gesvd_supports_cta(const DeviceCaps& caps,
                                const MatrixView<T, MatrixFormat::Dense>& A,
                                SvdVectors jobu,
-                               SvdVectors jobvh) {
+                               SvdVectors jobvh,
+                               std::optional<Uplo> hermitian_uplo = std::nullopt) {
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.rows() > 32 || A.batch_size() < 1) return false;
+    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
+    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    if (hermitian_uplo.has_value()) {
+        return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
+    }
     if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
         return false;
     }
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     return true;
 }
 
@@ -274,17 +341,21 @@ template <typename T>
 inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                    SvdVectors jobu,
-                                   SvdVectors jobvh) {
+                                   SvdVectors jobvh,
+                                   std::optional<Uplo> hermitian_uplo = std::nullopt) {
     // Current native path supports square real matrices with optional full
     // U and/or V^H backtransforms via ORMBR.
     if (!caps.is_gpu) return false;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.batch_size() < 1) return false;
+    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
+    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    if (hermitian_uplo.has_value()) {
+        return *hermitian_uplo == Uplo::Lower;
+    }
     if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
         return false;
     }
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     return true;
 }
 
@@ -293,13 +364,14 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
                                       const DeviceCaps& caps,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
                                       SvdVectors jobu,
-                                      SvdVectors jobvh) {
+                                      SvdVectors jobvh,
+                                      std::optional<Uplo> hermitian_uplo = std::nullopt) {
     Provider chosen = normalize_gesvd_vendor_like(policy.forced);
     if (chosen != Provider::Auto) {
-        if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh)) {
+        if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return chosen;
         }
-        if (chosen == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh)) {
+        if (chosen == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh, hermitian_uplo)) {
             return chosen;
         }
         if (chosen == Provider::Vendor) return Provider::Vendor;
@@ -308,10 +380,10 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
 
     for (Provider p : policy.order) {
         p = normalize_gesvd_vendor_like(p);
-        if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh)) {
+        if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return p;
         }
-        if (p == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh)) {
+        if (p == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh, hermitian_uplo)) {
             return p;
         }
         if (p == Provider::Vendor) return Provider::Vendor;
@@ -330,10 +402,11 @@ inline Event gesvd_dispatch(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& Vh,
                             SvdVectors jobu,
                             SvdVectors jobvh,
+                            std::optional<Uplo> hermitian_uplo,
                             Span<std::byte> workspace) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
-    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh);
+    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;
@@ -343,9 +416,13 @@ inline Event gesvd_dispatch(Queue& ctx,
     if (chosen == Provider::Vendor) {
         need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else if (chosen == Provider::BatchLAS_CTA) {
-        need_ws = gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+        need_ws = hermitian_uplo.has_value()
+            ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
+            : gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else {
-        need_ws = gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+        need_ws = hermitian_uplo.has_value()
+            ? gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
+            : gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
     if (workspace.size() < need_ws) {
@@ -366,10 +443,14 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (chosen == Provider::BatchLAS_CTA) {
-        return gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+        return hermitian_uplo.has_value()
+            ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
+            : gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
-    return gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+    return hermitian_uplo.has_value()
+        ? gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
+        : gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
 }
 
 template <Backend B, typename T>
@@ -379,10 +460,11 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
                                          const MatrixView<T, MatrixFormat::Dense>& U,
                                          const MatrixView<T, MatrixFormat::Dense>& Vh,
                                          SvdVectors jobu,
-                                         SvdVectors jobvh) {
+                                         SvdVectors jobvh,
+                                         std::optional<Uplo> hermitian_uplo) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
-    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh);
+    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;
@@ -393,10 +475,14 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
     }
 
     if (chosen == Provider::BatchLAS_CTA) {
-        return gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+        return hermitian_uplo.has_value()
+            ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
+            : gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
-    return gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    return hermitian_uplo.has_value()
+        ? gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
+        : gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
 }
 
 } // namespace batchlas::blas::dispatch
@@ -412,7 +498,20 @@ inline Event gesvd(Queue& ctx,
                    SvdVectors jobu,
                    SvdVectors jobvh,
                    Span<std::byte> workspace) {
-    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace);
+    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt, workspace);
+}
+
+template <Backend B, typename T>
+inline Event gesvd(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   Span<typename base_type<T>::type> singular_values,
+                   const MatrixView<T, MatrixFormat::Dense>& U,
+                   const MatrixView<T, MatrixFormat::Dense>& Vh,
+                   SvdVectors jobu,
+                   SvdVectors jobvh,
+                   Uplo hermitian_uplo,
+                   Span<std::byte> workspace) {
+    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace);
 }
 
 template <Backend B, typename T>
@@ -423,7 +522,19 @@ inline size_t gesvd_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& Vh,
                                 SvdVectors jobu,
                                 SvdVectors jobvh) {
-    return blas::dispatch::gesvd_buffer_size_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    return blas::dispatch::gesvd_buffer_size_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt);
+}
+
+template <Backend B, typename T>
+inline size_t gesvd_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                Span<typename base_type<T>::type> singular_values,
+                                const MatrixView<T, MatrixFormat::Dense>& U,
+                                const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                SvdVectors jobu,
+                                SvdVectors jobvh,
+                                Uplo hermitian_uplo) {
+    return blas::dispatch::gesvd_buffer_size_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo);
 }
 
 } // namespace batchlas

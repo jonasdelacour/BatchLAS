@@ -244,7 +244,8 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                             bool compute_vectors,
                             Backend backend,
                             const std::optional<std::string>& device_name,
-                            bool blocked) {
+                            bool blocked,
+                            std::optional<Uplo> hermitian_uplo) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
     const int n = out.rows();
     Vector<typename base_type<T>::type> singular_values(n, out.batch_size());
@@ -257,20 +258,84 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             if (blocked) {
-                return batchlas::gesvd_blocked_buffer_size<B, T>(queue, out.view(), singular_values.data(), u.view(),
-                                                                 vh.view(), job, job);
+                return hermitian_uplo.has_value()
+                    ? batchlas::gesvd_blocked_buffer_size<B, T>(queue,
+                                                                out.view(),
+                                                                singular_values.data(),
+                                                                u.view(),
+                                                                vh.view(),
+                                                                job,
+                                                                job,
+                                                                *hermitian_uplo)
+                    : batchlas::gesvd_blocked_buffer_size<B, T>(queue,
+                                                                out.view(),
+                                                                singular_values.data(),
+                                                                u.view(),
+                                                                vh.view(),
+                                                                job,
+                                                                job);
             }
-            return batchlas::gesvd_buffer_size<B, T>(queue, out.view(), singular_values.data(), u.view(), vh.view(),
-                                                     job, job);
+            return hermitian_uplo.has_value()
+                ? batchlas::gesvd_buffer_size<B, T>(queue,
+                                                    out.view(),
+                                                    singular_values.data(),
+                                                    u.view(),
+                                                    vh.view(),
+                                                    job,
+                                                    job,
+                                                    *hermitian_uplo)
+                : batchlas::gesvd_buffer_size<B, T>(queue,
+                                                    out.view(),
+                                                    singular_values.data(),
+                                                    u.view(),
+                                                    vh.view(),
+                                                    job,
+                                                    job);
         },
         [&](auto backend_tag, Span<std::byte> workspace) {
             constexpr Backend B = decltype(backend_tag)::value;
             if (blocked) {
-                batchlas::gesvd_blocked<B, T>(queue, out.view(), singular_values.data(), u.view(), vh.view(), job,
-                                              job, workspace);
+                if (hermitian_uplo.has_value()) {
+                    batchlas::gesvd_blocked<B, T>(queue,
+                                                  out.view(),
+                                                  singular_values.data(),
+                                                  u.view(),
+                                                  vh.view(),
+                                                  job,
+                                                  job,
+                                                  *hermitian_uplo,
+                                                  workspace);
+                } else {
+                    batchlas::gesvd_blocked<B, T>(queue,
+                                                  out.view(),
+                                                  singular_values.data(),
+                                                  u.view(),
+                                                  vh.view(),
+                                                  job,
+                                                  job,
+                                                  workspace);
+                }
             } else {
-                batchlas::gesvd<B, T>(queue, out.view(), singular_values.data(), u.view(), vh.view(), job, job,
-                                      workspace);
+                if (hermitian_uplo.has_value()) {
+                    batchlas::gesvd<B, T>(queue,
+                                          out.view(),
+                                          singular_values.data(),
+                                          u.view(),
+                                          vh.view(),
+                                          job,
+                                          job,
+                                          *hermitian_uplo,
+                                          workspace);
+                } else {
+                    batchlas::gesvd<B, T>(queue,
+                                          out.view(),
+                                          singular_values.data(),
+                                          u.view(),
+                                          vh.view(),
+                                          job,
+                                          job,
+                                          workspace);
+                }
             }
         });
     queue.wait();
@@ -476,25 +541,35 @@ void init_factorization_ops(py::module_& module) {
 
     module.def("_gesvd", [](const DenseMatrix& a,
                              bool compute_vectors,
+                             const py::object& uplo_name_obj,
                              const std::string& backend_name,
                              const py::object& device_name_obj) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
+        const auto uplo_name = optional_string_from_obj(uplo_name_obj);
+        const auto hermitian_uplo = uplo_name.has_value()
+            ? std::optional<Uplo>(parse_uplo(*uplo_name))
+            : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, false);
+            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, false, hermitian_uplo);
         });
     });
 
     module.def("_gesvd_blocked", [](const DenseMatrix& a,
                                      bool compute_vectors,
+                                     const py::object& uplo_name_obj,
                                      const std::string& backend_name,
                                      const py::object& device_name_obj) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
+        const auto uplo_name = optional_string_from_obj(uplo_name_obj);
+        const auto hermitian_uplo = uplo_name.has_value()
+            ? std::optional<Uplo>(parse_uplo(*uplo_name))
+            : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, true);
+            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, true, hermitian_uplo);
         });
     });
 
