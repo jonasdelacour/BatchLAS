@@ -974,6 +974,45 @@ namespace batchlas {
                           const VectorView<T>& taup);
 
     /**
+     * @brief CTA-parallel small-matrix GEBRD for real square matrices.
+     *
+     * Intended for very small dense problems (`1 <= n <= 32`) where one CTA can
+     * cooperatively reduce one matrix to upper bidiagonal form.
+     */
+    template <Backend B, typename T>
+    Event gebrd_cta(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a,
+                    const VectorView<typename base_type<T>::type>& d,
+                    const VectorView<typename base_type<T>::type>& e,
+                    const VectorView<T>& tauq,
+                    const VectorView<T>& taup,
+                    size_t cta_wg_size_multiplier = 1);
+
+    /**
+     * @brief Blocked GEBRD for real square dense matrices.
+     *
+     * Uses a DLABRD-style blocked panel factorization plus GEMM trailing updates.
+     */
+    template <Backend B, typename T>
+    Event gebrd_blocked(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& a,
+                        const VectorView<typename base_type<T>::type>& d,
+                        const VectorView<typename base_type<T>::type>& e,
+                        const VectorView<T>& tauq,
+                        const VectorView<T>& taup,
+                        const Span<std::byte>& ws,
+                        int32_t block_size = 16);
+
+    template <Backend B, typename T>
+    size_t gebrd_blocked_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& a,
+                                     const VectorView<typename base_type<T>::type>& d,
+                                     const VectorView<typename base_type<T>::type>& e,
+                                     const VectorView<T>& tauq,
+                                     const VectorView<T>& taup,
+                                     int32_t block_size = 16);
+
+    /**
      * @brief BDSQR-like implicit bidiagonal QR for singular values (values-only).
      *
      * Computes singular values from bidiagonal coefficients (d,e) and writes them
@@ -996,8 +1035,8 @@ namespace batchlas {
     /**
      * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
      *
-        * Current implementation supports `vect='Q'` (tauq, blocked ORMQR path)
-        * and `vect='P'` (taup, staged unblocked reflector application).
+        * Current implementation supports `vect='Q'` (tauq, CTA/blocked ORMQR path)
+        * and `vect='P'` (taup, blocked compact-WY path over the right reflectors).
      */
     template <Backend B, typename T>
     Event ormbr(Queue& ctx,
@@ -1046,6 +1085,31 @@ namespace batchlas {
                                      const MatrixView<T, MatrixFormat::Dense>& vh_out,
                                      SvdVectors jobu,
                                      SvdVectors jobvh);
+
+    /**
+     * @brief CTA-oriented native SVD entry point for very small real square matrices.
+     *
+     * Current scope matches the native blocked path except it is intended for
+     * `1 <= n <= 32` and small-batch CUDA execution.
+     */
+    template <Backend B, typename T>
+    Event gesvd_cta(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    Span<typename base_type<T>::type> singular_values,
+                    const MatrixView<T, MatrixFormat::Dense>& u_out,
+                    const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                    SvdVectors jobu,
+                    SvdVectors jobvh,
+                    const Span<std::byte>& ws);
+
+    template <Backend B, typename T>
+    size_t gesvd_cta_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 Span<typename base_type<T>::type> singular_values,
+                                 const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                 SvdVectors jobu,
+                                 SvdVectors jobvh);
 
     /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.

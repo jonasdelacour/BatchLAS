@@ -21,8 +21,8 @@ using namespace batchlas;
 namespace {
 
 template <typename Benchmark>
-void GesvdAccSizes(Benchmark* b) {
-    for (double n : {16.0, 32.0, 64.0, 128.0}) b->Args({n});
+void GesvdCtaAccSizes(Benchmark* b) {
+    for (double n : {8.0, 16.0, 32.0}) b->Args({n});
 }
 
 template <typename T>
@@ -119,12 +119,12 @@ inline int lapacke_gesvd_values_only(int n,
 }
 
 template <typename Real, Backend B>
-void run_gesvd_blocked_acc(miniacc::State& state) {
+void run_gesvd_cta_acc(miniacc::State& state) {
     const int n = std::max(2, state.arg_int(0));
     const int chunk_batch = miniacc_acc::chunk_batch_from_samples(state.samples());
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    state.SetTag("impl", "gesvd_blocked");
+    state.SetTag("impl", "gesvd_cta");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Real>());
 
@@ -146,21 +146,21 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
 
         try {
             UnifiedVector<std::byte> ws(
-                gesvd_blocked_buffer_size<B, Real>(*q,
-                                                   A_work.view(),
-                                                   s.to_span(),
-                                                   U.view(),
-                                                   Vh.view(),
-                                                   SvdVectors::All,
-                                                   SvdVectors::All));
-            gesvd_blocked<B, Real>(*q,
-                                   A_work.view(),
-                                   s.to_span(),
-                                   U.view(),
-                                   Vh.view(),
-                                   SvdVectors::All,
-                                   SvdVectors::All,
-                                   ws.to_span());
+                gesvd_cta_buffer_size<B, Real>(*q,
+                                               A_work.view(),
+                                               s.to_span(),
+                                               U.view(),
+                                               Vh.view(),
+                                               SvdVectors::All,
+                                               SvdVectors::All));
+            gesvd_cta<B, Real>(*q,
+                               A_work.view(),
+                               s.to_span(),
+                               U.view(),
+                               Vh.view(),
+                               SvdVectors::All,
+                               SvdVectors::All,
+                               ws.to_span());
             q->wait();
         } catch (const std::exception& ex) {
             for (int b = 0; b < cur_batch; ++b) {
@@ -268,15 +268,10 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
 } // namespace
 
 template <typename Real, Backend B>
-static void ACC_GESVD_BLOCKED(miniacc::State& state) {
-    run_gesvd_blocked_acc<Real, B>(state);
+static void ACC_GESVD_CTA(miniacc::State& state) {
+    run_gesvd_cta_acc<Real, B>(state);
 }
 
-template <typename Benchmark>
-void GesvdAccSizesNetlib(Benchmark* b) {
-    GesvdAccSizes(b);
-}
-
-BATCHLAS_REGISTER_ACCURACY(ACC_GESVD_BLOCKED, GesvdAccSizes)
+BATCHLAS_ACC_CUDA(ACC_GESVD_CTA, GesvdCtaAccSizes)
 
 MINI_ACC_MAIN()

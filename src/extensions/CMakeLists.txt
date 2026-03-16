@@ -1,4 +1,5 @@
 set(EXTENSIONS_CTA_SOURCES
+    gebrd_cta.cc
     ormqr_cta.cc
     steqr_cta.cc
     stedc_merge_cta.cc
@@ -19,6 +20,7 @@ set(EXTENSIONS_EIGEN_SOURCES
 
 set(EXTENSIONS_FACTORIZATION_SOURCES
     gebrd.cc
+    gebrd_blocked.cc
     bdsqr.cc
     ormbr.cc
     gesvd_blocked.cc
@@ -55,4 +57,3 @@ target_sources(batchlas_extensions_factorization_obj PRIVATE ${EXTENSIONS_FACTOR
 target_sources(batchlas_extensions_symmetric_obj PRIVATE ${EXTENSIONS_SYMMETRIC_SOURCES})
 target_sources(batchlas_extensions_tridiag_obj PRIVATE ${EXTENSIONS_TRIDIAG_SOURCES})
 target_sources(batchlas_extensions_cta_obj PRIVATE ${EXTENSIONS_CTA_SOURCES})
-

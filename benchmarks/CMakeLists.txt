@@ -7,6 +7,7 @@ set(BENCHMARK_TARGETS
     stedc_acc
     syev_cta_acc
     syev_blocked_acc
+    gesvd_cta_acc
     gesvd_blocked_acc
     syevx_acc
     band_reduction_benchmark
@@ -32,6 +33,7 @@ set(BENCHMARK_TARGETS
     syev_benchmark
     syev_cta_benchmark
     syev_blocked_benchmark
+    gesvd_cta_benchmark
     gesvd_blocked_benchmark
     syevx_benchmark
     lanczos_benchmark

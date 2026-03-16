@@ -353,7 +353,9 @@ Event steqr_wg(Queue& ctx,
     auto deflation_indices = pool.allocate<std::array<int32_t, 3>>(ctx, batch_size * max_subproblems);
 
     for (int64_t i = 0; i < n - 1; ++i) {
-        givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
+        if (jobz == JobType::EigenVectors) {
+            givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
+        }
         steqr_wg_impl(ctx,
                       d,
                       e,

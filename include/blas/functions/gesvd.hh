@@ -254,6 +254,23 @@ inline Provider normalize_gesvd_vendor_like(Provider p) {
 }
 
 template <typename T>
+inline bool gesvd_supports_cta(const DeviceCaps& caps,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               SvdVectors jobu,
+                               SvdVectors jobvh) {
+    if (!caps.is_gpu) return false;
+    if (caps.max_sub_group < 32) return false;
+    if (A.rows() != A.cols()) return false;
+    if (A.rows() < 1 || A.rows() > 32 || A.batch_size() < 1) return false;
+    if constexpr (!std::is_same_v<T, typename base_type<T>::type>) {
+        return false;
+    }
+    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
+    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    return true;
+}
+
+template <typename T>
 inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                    SvdVectors jobu,
@@ -279,6 +296,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
                                       SvdVectors jobvh) {
     Provider chosen = normalize_gesvd_vendor_like(policy.forced);
     if (chosen != Provider::Auto) {
+        if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh)) {
+            return chosen;
+        }
         if (chosen == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh)) {
             return chosen;
         }
@@ -288,6 +308,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
 
     for (Provider p : policy.order) {
         p = normalize_gesvd_vendor_like(p);
+        if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh)) {
+            return p;
+        }
         if (p == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh)) {
             return p;
         }
@@ -319,6 +342,8 @@ inline Event gesvd_dispatch(Queue& ctx,
     size_t need_ws = 0;
     if (chosen == Provider::Vendor) {
         need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    } else if (chosen == Provider::BatchLAS_CTA) {
+        need_ws = gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else {
         need_ws = gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
@@ -338,6 +363,10 @@ inline Event gesvd_dispatch(Queue& ctx,
 
     if (chosen == Provider::Vendor) {
         return backend::gesvd_vendor<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+    }
+
+    if (chosen == Provider::BatchLAS_CTA) {
+        return gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
     return gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
@@ -361,6 +390,10 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
 
     if (chosen == Provider::Vendor) {
         return backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    }
+
+    if (chosen == Provider::BatchLAS_CTA) {
+        return gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
     return gesvd_blocked_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
