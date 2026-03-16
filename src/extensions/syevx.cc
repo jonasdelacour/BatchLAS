@@ -58,6 +58,7 @@ namespace batchlas {
         auto pool = BumpAllocator(workspace);
         auto n = A.rows_;
         auto batch_size = A.batch_size();
+        const bool want_eigenvectors = jobz == JobType::EigenVectors;
         auto Sdata =        pool.allocate<T>(ctx, n * block_vectors * 3 * batch_size);
         auto ASdata =       pool.allocate<T>(ctx, n * block_vectors * 3 * batch_size);
         auto S_newdata =    pool.allocate<T>(ctx, n * block_vectors * 3 * batch_size);
@@ -67,6 +68,7 @@ namespace batchlas {
         auto lambdas =      pool.allocate<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);
         auto residuals =    pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
+        auto best_quality = pool.allocate<typename base_type<T>::type>(ctx, batch_size);
         auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
 
         auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
@@ -92,6 +94,19 @@ namespace batchlas {
         auto P_new = S_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S_new
         auto R_new = S_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S_new
         auto XP_new = S_new({0,n}, {0,2 * block_vectors});                 //First two blocks of S_new
+
+        MatrixView<T, MatrixFormat::Dense> X_best;
+        if (want_eigenvectors) {
+            auto X_bestdata = pool.allocate<T>(ctx, n * neigs * batch_size);
+            X_best = MatrixView(
+                X_bestdata.data(),
+                n,
+                static_cast<int>(neigs),
+                n,
+                n * static_cast<int64_t>(neigs),
+                batch_size,
+                pool.allocate<T*>(ctx, batch_size).data());
+        }
 
         MatrixView<T, MatrixFormat::Dense> R_contiguous;
         if (params.preconditioner != nullptr) {
@@ -266,6 +281,9 @@ namespace batchlas {
                 auto Xdata = X.data_ptr();
                 auto AXdata = AX.data_ptr();
                 auto flags = converged_flags.data();
+                auto best_quality_data = best_quality.data();
+                auto Xbest_data = want_eigenvectors ? X_best.data_ptr() : nullptr;
+                auto update_best = sycl::local_accessor<int32_t, 1>(1, h);
                 h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
@@ -280,7 +298,9 @@ namespace batchlas {
                     auto blockresiduals = residuals.subspan(bid * (neigs), neigs);
                     auto blockbestresiduals = best_residuals.subspan(bid * (neigs), neigs);
                     auto blockW = W.subspan(bid * (neigs), neigs);
-    
+                    if (tid == 0) {
+                        update_best[0] = 0;
+                    }
                     sycl::group_barrier(cta);
                     for (int i = tid; i < n*block_vectors; i+=local_size){
                         auto eigvect_id = i / n;
@@ -312,13 +332,30 @@ namespace batchlas {
                     }
                     
                     sycl::group_barrier(cta);
-                    if (tid < neigs){
-                        auto bestresidual = blockbestresiduals[tid];
-                        auto residual = blockresiduals[tid];
-                        const bool update = (bestresidual > residual) || (it == 0);
+                    if (tid == 0){
+                        float_type current_quality = blockresiduals[0];
+                        for (size_t i = 1; i < neigs; ++i) {
+                            if (blockresiduals[i] > current_quality) {
+                                current_quality = blockresiduals[i];
+                            }
+                        }
+
+                        const bool update = (it == 0) || (current_quality < best_quality_data[bid]);
                         if (update){
-                            blockbestresiduals[tid] = residual;
-                            blockW[tid] = blockLambdas[params.find_largest ? (num_eigvals - 1 - tid) : tid];
+                            best_quality_data[bid] = current_quality;
+                            for (size_t i = 0; i < neigs; ++i) {
+                                blockbestresiduals[i] = blockresiduals[i];
+                                blockW[i] = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                            }
+                            update_best[0] = 1;
+                        }
+                    }
+
+                    sycl::group_barrier(cta);
+                    if (want_eigenvectors && update_best[0] != 0) {
+                        auto* blockXbest = Xbest_data + bid * (n * neigs);
+                        for (int i = int(tid); i < int(n * neigs); i += int(local_size)) {
+                            blockXbest[i] = blockX[i];
                         }
                     }
 
@@ -493,46 +530,20 @@ namespace batchlas {
                 trace_wait("syevx: reverse selected StAS eigvec block done");
             }
             auto Z = StAS({0, Nvecs}, {eig_col_start, eig_col_start + block_vectors});
-            //X(i+1) =  [X(i), R(i), P(i)] * [Zx, Zr, Zp]^T
+            // X(i+1) = S * C_x. For the next search block, keep only the non-X
+            // coefficient rows of the selected Ritz vectors, which avoids the
+            // fragile difference direction X(i+1)-X(i) while preserving the
+            // locally-optimal combination of the P/R parts of the trial basis.
+            auto C_p_active = MatrixView(C_p, Nvecs, block_vectors, C_p.ld(), C_p.stride());
+            auto Z_search = Z({block_vectors, Nvecs}, {0, block_vectors});
 
-            //Compute C_p = C_x - [I 
-            //                     0
-            //                     0]
-            trace("syevx: build C_p submit");
-            ctx -> submit([&](sycl::handler& h){
-                const int64_t Nactive = block_vectors; // When we start soft-locking, update this
-                const auto* Z_ptr = Z.data_ptr();
-                const int64_t Z_stride = Z.stride();
-                const int64_t Z_ld = Z.ld();
-                auto* Cp_ptr = C_p.data_ptr();
-                const int64_t Cp_stride = C_p.stride();
-                const int64_t Cp_ld = C_p.ld();
-
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}), [=](sycl::nd_item<1> item){
-                    const int64_t tid = int64_t(item.get_local_linear_id());
-                    const int64_t bid = int64_t(item.get_group_linear_id());
-                    const int64_t local_size = int64_t(item.get_local_range(0));
-
-                    const auto* Zb = Z_ptr + bid * Z_stride;
-                    auto* Cpb = Cp_ptr + bid * Cp_stride;
-
-                    // C_p = Z - I (on the first Nactive columns/rows)
-                    const int64_t total = Nvecs * Nactive;
-                    for (int64_t linear = tid; linear < total; linear += local_size) {
-                        const int64_t row = linear % Nvecs;
-                        const int64_t col = linear / Nvecs;
-                        const int64_t idxZ = row + col * Z_ld;
-                        const int64_t idxC = row + col * Cp_ld;
-                        auto v = Zb[idxZ];
-                        if (row == col) {
-                            v -= T(1);
-                        }
-                        Cpb[idxC] = v;
-                    }
-                });
-            });
-            trace_wait("syevx: build C_p done");
-            
+            trace("syevx: build search-direction coefficients");
+            C_p_active.fill_zeros(ctx);
+            MatrixView<T, MatrixFormat::Dense>::copy(
+                ctx,
+                C_p_active({block_vectors, Nvecs}, {0, block_vectors}),
+                Z_search);
+            trace_wait("syevx: build search-direction coefficients done");
 
 
             //Compute new search directions
@@ -543,12 +554,12 @@ namespace batchlas {
             gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Orthonormalize C_p against the best eigenvectors
             trace("syevx: ortho C_p vs Z submit");
-            ortho<B>(ctx, MatrixView(C_p, Nvecs, block_vectors, Nvecs), Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
+            ortho<B>(ctx, C_p_active, Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
             trace("syevx: update P/AP submit");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
             //Make an implicit update of AP
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), MatrixView(C_p, Nvecs, block_vectors, Nvecs), AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
@@ -560,10 +571,12 @@ namespace batchlas {
             }
         }
 
-        // The residual kernel already populated W with the best eigenvalues seen during iterations.
-        // For eigenvectors, copy the final X to V (they should be reasonably close to the true eigenvectors).
-        if (jobz == JobType::EigenVectors){
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, int64_t(neigs)}));
+        // The residual kernel snapshots the best Ritz block seen during the iteration.
+        if (want_eigenvectors){
+            const auto vectors_to_return = completed_iterations > 0
+                ? X_best
+                : X({0, n}, {0, static_cast<int64_t>(neigs)});
+            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), vectors_to_return);
         }
 
         return ctx.get_event();
@@ -622,6 +635,10 @@ namespace batchlas {
                 work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);                               //R_contiguous ptrs
             }
             work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
+            if (jobz == JobType::EigenVectors) {
+                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);
+                work_size += BumpAllocator::allocation_size<T>(ctx, n * neigs * batch_size);
+            }
             work_size += BumpAllocator::allocation_size<int32_t>(ctx, batch_size); // converged_flags
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
@@ -630,6 +647,7 @@ namespace batchlas {
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //lambdas
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals
+            work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, batch_size);                      //best block quality
 
             return work_size;
     }

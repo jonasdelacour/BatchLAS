@@ -245,6 +245,11 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
         auto rel_err = std::abs(ritz_vals[i] - expected[i]) / std::abs(expected[i]);
         EXPECT_NEAR(rel_err, 0.0f, 3e-4f)
             << "Ritz value mismatch at index " << i << ": expected " << expected[i] << ", got " << ritz_vals[i];
+
+        auto pair_rel_err = std::abs(ritz_vals[i] - W[i]) / std::abs(expected[i]);
+        EXPECT_NEAR(pair_rel_err, 0.0f, 3e-4f)
+            << "Returned eigenvector/eigenvalue mismatch at index " << i
+            << ": Ritz=" << ritz_vals[i] << ", W=" << W[i];
     }
 }
 
