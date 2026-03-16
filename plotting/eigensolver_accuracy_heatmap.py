@@ -47,6 +47,22 @@ METRIC_INFO = {
     },
 }
 
+DEFAULT_IMPL_ORDER = [
+    "steqr_cta_exp",
+    "steqr_cta_pg",
+    "stedc",
+    "syev_vendor",
+    "syev_cta_exp",
+    "syev_cta_pg",
+    "syev_blocked",
+    "syevx",
+]
+
+IMPL_ALIASES = {
+    "cuda": "syev_vendor",
+    "vendor": "syev_vendor",
+}
+
 
 def _default_csv_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +96,37 @@ def _derive_output_paths(base_output: Optional[str], metric: str) -> tuple[str, 
 def _default_bench_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(here, "..", "build", "benchmarks", "eigensolver_accuracy")
+
+
+def _normalize_impl_name(value: str) -> str:
+    key = (value or "").strip()
+    if not key:
+        return key
+    return IMPL_ALIASES.get(key.lower(), key)
+
+
+def _default_impls(df: pd.DataFrame) -> list[str]:
+    available_impls = set(df["impl"].astype(str).tolist())
+    impls = [impl for impl in DEFAULT_IMPL_ORDER if impl in available_impls]
+    if impls:
+        return impls
+    return sorted(available_impls)
+
+
+def _wants_vendor_syev(explicit_impls: list[str]) -> bool:
+    if explicit_impls:
+        return "syev_vendor" in explicit_impls
+    return True
+
+
+def _run_command(cmd: list[str], *, env: Optional[dict[str, str]] = None) -> None:
+    run_env = os.environ.copy()
+    env_prefix = ""
+    if env:
+        run_env.update(env)
+        env_prefix = " ".join(f"{k}={v}" for k, v in env.items()) + " "
+    print(f"Running: {env_prefix}{' '.join(cmd)}")
+    subprocess.run(cmd, check=True, env=run_env)
 
 
 def _unique_or_none(df: pd.DataFrame, col: str) -> Optional[str]:
@@ -223,19 +270,7 @@ def plot_multi_heatmap(
 
     impls = [imp for imp in impls if imp]
     if not impls:
-        default_impls = [
-            "steqr_cta_exp",
-            "steqr_cta_pg",
-            "stedc",
-            "syev_cta_exp",
-            "syev_cta_pg",
-            "syev_blocked",
-            "syevx",
-        ]
-        available_impls = set(df["impl"].astype(str).tolist())
-        impls = [imp for imp in default_impls if imp in available_impls]
-        if not impls:
-            impls = sorted(available_impls)
+        impls = _default_impls(df)
     else:
         missing_impls = [imp for imp in impls if imp not in set(df["impl"].astype(str).tolist())]
         if missing_impls:
@@ -359,7 +394,7 @@ def plot_mean_lines_by_n(
 
     impls = [imp for imp in impls if imp]
     if not impls:
-        impls = sorted(set(df["impl"].astype(str).tolist()))
+        impls = _default_impls(df)
     else:
         missing_impls = [imp for imp in impls if imp not in set(df["impl"].astype(str).tolist())]
         if missing_impls:
@@ -480,6 +515,11 @@ def main() -> None:
     parser.add_argument("--bench-syevx-extra-directions", type=int, default=None, help="eigensolver_accuracy --syevx-extra-directions value")
     parser.add_argument("--bench-syevx-neigs", type=int, default=None, help="eigensolver_accuracy --syevx-neigs value")
     parser.add_argument("--bench-syevx-find-largest", default=None, help="eigensolver_accuracy --syevx-find-largest value (0|1|true|false)")
+    parser.add_argument(
+        "--bench-run-vendor-syev",
+        action="store_true",
+        help="run an additional eigensolver_accuracy --impl=syev pass with BATCHLAS_SYEV_PROVIDER=VENDOR",
+    )
 
     parser.add_argument("--impls", default=None, help="comma-separated impl list for plots")
     parser.add_argument("--ns", default=None, help="comma-separated N list for plots (default: 4,8,16,32)")
@@ -498,15 +538,20 @@ def main() -> None:
     if args.bench_type not in {"float", "double"}:
         raise ValueError("--bench-type must be 'float' or 'double'")
 
+    impls = [_normalize_impl_name(s) for s in args.impls.split(",")] if args.impls else []
+    wants_vendor_syev = _wants_vendor_syev(impls)
+
     if args.run:
         run_ns = _parse_ns(args.ns)
         schemes = _parse_bench_schemes(args.bench_scheme)
         temp_paths = []
+        run_vendor_syev = args.bench_run_vendor_syev or (
+            wants_vendor_syev and args.bench_backend.upper() == "CUDA"
+        )
 
         for n in run_ns:
             for scheme in schemes:
-                single_output = (len(run_ns) == 1) and (len(schemes) == 1)
-                out_path = args.csv if single_output else f"{args.csv}.n{n}.{scheme}.tmp"
+                out_path = f"{args.csv}.n{n}.{scheme}.tmp"
                 cmd = [
                     args.bench_bin,
                     f"--impl={args.bench_impl}",
@@ -538,10 +583,26 @@ def main() -> None:
                 if args.bench_syevx_find_largest is not None:
                     cmd.append(f"--syevx-find-largest={args.bench_syevx_find_largest}")
 
-                print("Running:", " ".join(cmd))
-                subprocess.run(cmd, check=True)
-                if not single_output:
-                    temp_paths.append(out_path)
+                _run_command(cmd)
+                temp_paths.append(out_path)
+
+            if run_vendor_syev:
+                out_path = f"{args.csv}.n{n}.vendor.tmp"
+                cmd = [
+                    args.bench_bin,
+                    "--impl=syev",
+                    f"--backend={args.bench_backend}",
+                    f"--type={args.bench_type}",
+                    f"--n={n}",
+                    f"--samples={args.bench_samples}",
+                    f"--batch={args.bench_batch}",
+                    f"--log10-cond-min={args.bench_log10_cond_min}",
+                    f"--log10-cond-max={args.bench_log10_cond_max}",
+                    f"--seed={args.bench_seed}",
+                    f"--output={out_path}",
+                ]
+                _run_command(cmd, env={"BATCHLAS_SYEV_PROVIDER": "VENDOR"})
+                temp_paths.append(out_path)
 
         if temp_paths:
             frames = [pd.read_csv(path) for path in temp_paths]
@@ -557,7 +618,6 @@ def main() -> None:
         raise FileNotFoundError(f"CSV not found: {args.csv}")
 
     df = pd.read_csv(args.csv)
-    impls = [s.strip() for s in args.impls.split(",")] if args.impls else []
     ns = _parse_ns(args.ns)
 
     clamp_x = _resolve_clamp(args.clamp_x, args.clamp_x_min, args.clamp_x_max, name="clamp-x")

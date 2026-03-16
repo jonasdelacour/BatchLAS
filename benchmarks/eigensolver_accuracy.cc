@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -25,7 +26,7 @@ using namespace batchlas;
 namespace {
 
 struct Options {
-    std::string impl = "all"; // all|steqr_cta|stedc|syev_cta|syev_blocked|syevx
+    std::string impl = "all"; // all|steqr_cta|stedc|syev|syev_cta|syev_blocked|syevx
     std::string backend = "CUDA"; // CUDA|ROCM|MKL|NETLIB
     std::string dtype = "float"; // float|double
     int n = 32;
@@ -62,6 +63,23 @@ SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
     if (key == "lapack") return SteqrShiftStrategy::Lapack;
     if (key == "wilkinson") return SteqrShiftStrategy::Wilkinson;
     throw std::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
+}
+
+std::string syev_dispatch_impl_name() {
+    const char* raw = std::getenv("BATCHLAS_SYEV_PROVIDER");
+    if (!raw || !*raw) return "syev_auto";
+
+    const auto key = to_lower(std::string(raw));
+    if (key == "vendor") return "syev_vendor";
+    if (key == "cta" || key == "batchlas_cta" || key == "batchlas-cta") return "syev_cta_dispatch";
+    if (key == "blocked" || key == "batchlas_blocked" || key == "batchlas-blocked") {
+        return "syev_blocked_dispatch";
+    }
+    if (key == "two_stage" || key == "two-stage" || key == "batchlas_two_stage" || key == "batchlas-two-stage") {
+        return "syev_two_stage_dispatch";
+    }
+    if (key == "netlib") return "syev_netlib";
+    return "syev_auto";
 }
 
 Options parse_args(int argc, char** argv) {
@@ -128,7 +146,7 @@ Options parse_args(int argc, char** argv) {
                 << "  O = ||Z^T Z - I|| / n\n"
                 << "  max relative eigenvalue error vs LAPACKE fp64 STERF\n\n"
                 << "Options:\n"
-                << "  --impl all|steqr_cta|stedc|syev_cta|syev_blocked|syevx\n"
+                << "  --impl all|steqr_cta|stedc|syev|syev_cta|syev_blocked|syevx\n"
                 << "  --scheme pg|exp\n"
                 << "  --backend CUDA|ROCM|MKL|NETLIB\n"
                 << "  --type float|double\n"
@@ -380,12 +398,13 @@ int run_accuracy(const Options& opt) {
 
     const bool run_steqr_cta = run_impl(opt.impl, "steqr_cta");
     const bool run_stedc = run_impl(opt.impl, "stedc");
+    const bool run_syev = (opt.impl == "syev");
     const bool run_syev_cta = run_impl(opt.impl, "syev_cta");
     const bool run_syev_blocked = run_impl(opt.impl, "syev_blocked");
     const bool run_syevx = run_impl(opt.impl, "syevx");
 
-    if (!run_steqr_cta && !run_stedc && !run_syev_cta && !run_syev_blocked && !run_syevx) {
-        std::cerr << "No impl selected. Use --impl all|steqr_cta|stedc|syev_cta|syev_blocked|syevx\n";
+    if (!run_steqr_cta && !run_stedc && !run_syev && !run_syev_cta && !run_syev_blocked && !run_syevx) {
+        std::cerr << "No impl selected. Use --impl all|steqr_cta|stedc|syev|syev_cta|syev_blocked|syevx\n";
         return 2;
     }
 
@@ -622,6 +641,46 @@ int run_accuracy(const Options& opt) {
                 }
             }
 
+            if (run_syev) {
+                try {
+                    auto A_work = A.clone();
+                    UnifiedVector<Real> eigvals(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
+
+                    UnifiedVector<std::byte> ws(
+                        syev_buffer_size<B, Real>(*q,
+                                                  A_work.view(),
+                                                  eigvals.to_span(),
+                                                  JobType::EigenVectors,
+                                                  Uplo::Lower));
+                    syev<B, Real>(*q,
+                                  A_work.view(),
+                                  eigvals.to_span(),
+                                  JobType::EigenVectors,
+                                  Uplo::Lower,
+                                  ws.to_span());
+                    q->wait();
+
+                    VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
+                    const std::string impl_name = syev_dispatch_impl_name();
+                    emit_metrics_rows<B, Real>(out,
+                                               *q,
+                                               impl_name.c_str(),
+                                               n,
+                                               false,
+                                               opt,
+                                               sample_id,
+                                               target_log10,
+                                               A,
+                                               evals_view,
+                                               A_work,
+                                               conds,
+                                               ref_eigs_sorted,
+                                               ref_ok);
+                } catch (const std::exception& ex) {
+                    std::cerr << "syev dispatch failed: " << ex.what() << "\n";
+                }
+            }
+
             if (run_syevx) {
                 try {
                     auto A_work = A.clone();
@@ -632,7 +691,7 @@ int run_accuracy(const Options& opt) {
                     auto V = Matrix<Real>::Zeros(n, neigs, cur_batch);
 
                     SyevxParams<Real> params{};
-                    params.algorithm = OrthoAlgorithm::Chol2;
+                    params.algorithm = OrthoAlgorithm::ShiftChol3;
                     params.iterations = std::max(1, opt.syevx_iterations);
                     params.extra_directions = std::max(0, opt.syevx_extra_directions);
                     params.find_largest = opt.syevx_find_largest;
