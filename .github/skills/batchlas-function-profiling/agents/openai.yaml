@@ -1,0 +1,4 @@
+interface:
+  display_name: "BatchLAS Profiling"
+  short_description: "Profile BatchLAS functions and kernels"
+  default_prompt: "Use $batchlas-function-profiling to isolate a bottleneck in this BatchLAS function or benchmark."
