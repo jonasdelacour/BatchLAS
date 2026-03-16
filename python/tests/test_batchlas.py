@@ -161,3 +161,26 @@ def test_sparse_syevx_accepts_iluk_preconditioner():
     values = np.asarray(values)
     assert values.shape == (2, 2)
     assert np.isfinite(values).all()
+
+
+def test_gesvd_accepts_hermitian_uplo_for_complex_input():
+    a = np.array(
+        [
+            [2.0 + 0.0j, 1.0 - 2.0j],
+            [1.0 + 2.0j, -3.0 + 0.0j],
+        ],
+        dtype=np.complex64,
+    )
+
+    try:
+        u, s, vh = bl.gesvd(a, uplo="lower", backend="auto")
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    assert s.shape == (2,)
+    assert u.shape == (2, 2)
+    assert vh.shape == (2, 2)
+
+    _, ref_s, _ = np.linalg.svd(a, full_matrices=True)
+    np.testing.assert_allclose(np.asarray(s), ref_s, rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(np.asarray(u) @ np.diag(np.asarray(s)) @ np.asarray(vh), a, rtol=5e-4, atol=5e-4)
