@@ -530,6 +530,12 @@ int run_accuracy(const Options& opt) {
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     StedcParams<Real> params{};
+                    SteqrParams<Real> steqr_params{};
+                    steqr_params.max_sweeps = opt.max_sweeps;
+                    steqr_params.cta_update_scheme = opt.scheme;
+                    steqr_params.cta_shift_strategy = parse_shift_strategy(opt.cta_shift);
+                    params.leaf_steqr_params = steqr_params;
+                    
                     UnifiedVector<std::byte> ws(
                         stedc_workspace_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
                     stedc<B, Real>(*q,
