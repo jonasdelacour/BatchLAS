@@ -1,335 +1,191 @@
-<div align="center">
-  <img src="BatchLAS_logo_transparent.png" alt="BatchLAS Logo" width="200">
-</div>
+# BatchLAS
 
-BatchLAS is a high-performance library for batched linear algebra operations that supports multiple backends. It provides an abstraction layer over different vendor-specific libraries while maintaining high performance.
+BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA, ROCm, netlib BLAS/LAPACK, and oneMKL. The repository currently contains the C++ library, an optional pybind11-based Python package, a broad unit-test suite, benchmark executables, tuning scripts, and research notebooks used to validate newer eigensolver and factorization work.
 
-## Features
+## Current Status
 
-- Unified API for different hardware backends
-- Batched matrix operations
-- Support for dense and sparse matrices
-- SYCL interoperability for cross-platform performance
+- SYCL is mandatory for building the library.
+- The project builds as `C++20` and defaults to `RelWithDebInfo`.
+- The installed CMake package exports `BatchLAS::batchlas` plus component libraries.
+- The repository includes active work on dense factorizations, spectral routines, orthogonalization, sparse eigensolvers, and performance benchmarking.
+- Recommended development entry points are the CMake presets in `CMakePresets.json`.
 
-## Currently Implemented Operations
+## Implemented Surface Area
 
-### Dense Matrix Operations
-- **Basic BLAS operations**
-  - Matrix-matrix multiplication (gemm)
-  - Matrix-vector multiplication (gemv) 
-  - Triangular solve (trsm)
+The public C++ headers under `include/` currently expose these main groups of functionality.
 
-- **LAPACK operations**
-  - Cholesky factorization (potrf)
-  - LU factorization with partial pivoting (getrf)
-  - Solution of linear systems using LU factorization (getrs)
-  - Matrix inversion (getri, inv)
-  - QR factorization (geqrf)
-  - Generation of orthogonal matrix from QR factorization (orgqr)
-  - Multiplication by orthogonal matrix from QR factorization (ormqr)
-  - Symmetric eigenvalue decomposition (syev)
+### Dense BLAS and Factorization
 
-- **Matrix orthogonalization with multiple algorithms**
-  - Cholesky-based methods (Chol2, Cholesky, ShiftChol3)
-  - Classical Gram-Schmidt with reorthogonalization (CGS2)
-  - Householder QR-based orthogonalization
-  - SVQB (SVD-based orthogonalization)
+- `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`
+- `potrf`, `getrf`, `getrs`, `getri`
+- `geqrf`, `orgqr`, `ormqr`
+- `syev`, `gesvd`
 
-- **Utility operations**
-  - Matrix norms (Frobenius, 1-norm, infinity-norm)
-  - Condition number computation (cond)
-  - Matrix transpose
-  - Matrix creation utilities (Identity, Random, Zeros, Ones, Diagonal, Triangular, TriDiagToeplitz)
+### Sparse and Spectral Extensions
 
-### Sparse Matrix Operations
-- **Basic operations**
-  - Sparse matrix-dense matrix multiplication (spmm)
-  - Support for CSR (Compressed Sparse Row) format
-  - Format conversion between dense and sparse
+- `spmm`
+- `syevx` for partial symmetric eigensolves
+- `lanczos`
+- `steqr`, `stedc`, and related tridiagonal helpers
+- `ritz_values`
+- `iluk` preconditioning support
 
-- **Sparse eigensolvers**
-  - Batched LOBPCG for partial eigendecomposition (syevx)
-    - Finds largest or smallest eigen-pairs
-    - Supports both sparse and dense matrices
-    - Configurable orthogonalization algorithms and tolerances
-  - Batched Lanczos algorithm for full eigendecompositions (lanczos)
-    - Supports sparse and dense matrices
-    - Configurable orthogonalization and sorting options
-  - Specialized tridiagonal eigensolvers for Lanczos
-  - Ritz values computation (ritz_values)
-    - Computes eigenvalue approximations from trial vectors
-    - Uses Rayleigh quotient for each trial vector
-    - Supports both sparse and dense matrices
-    - See [RITZ_VALUES.md](RITZ_VALUES.md) for detailed usage
+### Orthogonalization and Utilities
 
-### Advanced Features
-- **Batched operations**: All operations support processing multiple matrices simultaneously
-- **Multiple data formats**: Dense and CSR sparse matrix support
-- **Memory management**: Unified memory vectors and spans for cross-platform compatibility
-- **Backend abstraction**: Automatic backend selection or manual specification
-- **SYCL integration**: Full SYCL interoperability for cross-platform GPU computing
-- **Python bindings**: High-level pybind11 wrapper with NumPy/SciPy integration for the supported public BatchLAS APIs
+- `ortho` with multiple orthogonalization algorithms
+- matrix generators and structured constructors
+- norms, condition numbers, transpose, and related helpers
 
-## Working Backends
-- NVIDIA CUDA (cuBLAS, cuSOLVER, cuSPARSE)
-- AMD ROCm (rocBLAS, rocSOLVER, rocSPARSE)
-- CPU (CBLAS, LAPACKE)
+### Python Package
+
+When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`.
+
+## Repository Layout
+
+- `include/`: public C++ headers
+- `src/`: library implementation and backend/component targets
+- `tests/`: GoogleTest-based unit tests and smoke-test subset
+- `benchmarks/`: performance and accuracy benchmark executables
+- `python/`: pybind11 bindings, Python facade, and Python tests
+- `scripts/`: benchmark campaign helpers and result-processing scripts
+- `playground/`: notebooks and exploratory scripts for algorithm work
+- `docs/`: architecture notes and design documentation
 
 ## Requirements
 
-- C++17 compatible compiler
-- CMake 3.14 or higher
-- SYCL implementation (Intel oneAPI DPC++)
-- Optional: CUDA toolkit for NVIDIA GPUs
-- Optional: ROCm for AMD GPUs
-- Optional: Netlib BLAS/LAPACK for CPU
-- Optional: Intel oneMKL for optimized CPU backend (currently experimental)
-- For oneMKL support, set the `MKLROOT` environment variable to your oneAPI installation
-- Optional: Python 3.x (for Python bindings)
+Minimum build requirements:
 
-## Installation
+- CMake 3.14+
+- A C++20 compiler with SYCL support
+- A SYCL runtime/toolchain discoverable by CMake
 
-### Basic Installation
+Common optional dependencies:
+
+- CUDA Toolkit for NVIDIA backends
+- ROCm for AMD backends
+- LAPACKE and CBLAS for the netlib host backend
+- oneMKL for the optional MKL backend
+- Python 3, pybind11, NumPy, and SciPy for Python bindings
+
+Notes:
+
+- SYCL support is not optional in the current build system.
+- The CMake logic is primarily written around IntelLLVM/Clang-style SYCL compilers.
+- The default build type is `RelWithDebInfo`, not `Debug`.
+
+For a Linux-oriented environment setup with package suggestions and oneAPI notes, see `AGENTS.md`.
+
+## Build
+
+### Recommended Preset Workflow
+
+Configure and build using the checked-in presets:
 
 ```bash
-git clone https://github.com/yourusername/BatchLAS.git
-cd BatchLAS
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-make install
+cmake --preset dev
+cmake --build --preset dev
 ```
 
-### Configuration Options
+Useful presets currently provided:
 
-BatchLAS can be configured with various options:
+- `dev`: default `RelWithDebInfo` library build
+- `dev-tests`: library build with the full test suite enabled
+- `fast-dev`: library build plus the smoke-test subset
+- `benchmarks`: benchmark build with tuning support enabled
+- `cuda`: optional CUDA-enabled build when the environment supports it
+
+### Manual Configuration
 
 ```bash
-cmake .. \
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DBATCHLAS_BUILD_TESTS=ON \
-  -DBATCHLAS_BUILD_EXAMPLES=ON \
-  -DBATCHLAS_ENABLE_CUDA=ON \
-  -DBATCHLAS_ENABLE_ROCM=ON \
-  -DBATCHLAS_ENABLE_OPENMP=ON \
-  -DBATCHLAS_BUILD_PYTHON=ON
+  -DBATCHLAS_BUILD_BENCHMARKS=OFF \
+  -DBATCHLAS_BUILD_PYTHON=OFF
+
+cmake --build build -j"$(nproc)"
 ```
 
-Available options:
-- `BATCHLAS_BUILD_TESTS`: Build test suite (default: ON)
-- `BATCHLAS_BUILD_EXAMPLES`: Build examples (default: OFF)
-- `BATCHLAS_BUILD_DOCS`: Build documentation (default: OFF)
-- `BATCHLAS_ENABLE_CUDA`: Enable CUDA support (default: OFF)
-- `BATCHLAS_ENABLE_ROCM`: Enable ROCm support (default: OFF)
-- `BATCHLAS_ENABLE_OPENMP`: Enable OpenMP support (default: OFF)
-- `BATCHLAS_BUILD_PYTHON`: Build Python bindings (default: ON)
-- `BATCHLAS_ENABLE_MKL`: Enable Intel oneMKL backend (default: OFF, experimental)
-- `BATCHLAS_AMD_ARCH`: AMD GPU architecture when building ROCm backend (default: gfx942)
-- `BATCHLAS_NVIDIA_ARCH`: NVIDIA GPU architecture when building CUDA backend (default: sm_50)
+Common CMake options:
 
-### Python Bindings
+- `BATCHLAS_BUILD_TESTS`: build unit tests
+- `BATCHLAS_BUILD_BENCHMARKS`: build benchmark executables
+- `BATCHLAS_BUILD_PYTHON`: build the Python package
+- `BATCHLAS_ENABLE_CUDA`: enable CUDA backend support
+- `BATCHLAS_ENABLE_ROCM`: enable ROCm backend support even if no AMD GPU is auto-detected
+- `BATCHLAS_ENABLE_NETLIB`: enable the host netlib backend
+- `BATCHLAS_ENABLE_MKL`: enable the oneMKL backend
+- `BATCHLAS_ENABLE_TUNING`: enable tuning targets; intended for benchmark builds
+- `BATCHLAS_CPU_TARGET`: override SYCL CPU target selection (`auto`, `native_cpu`, `spir64_x86_64`, `none`)
+- `BATCHLAS_TEST_TARGET_SET`: choose `all` or `smoke`
+- `BATCHLAS_AMD_ARCH`: override ROCm target architecture
+- `BATCHLAS_NVIDIA_ARCH`: override CUDA target architecture
 
-BatchLAS installs a Python package named `batchlas` when `BATCHLAS_BUILD_PYTHON=ON`.
-The package contains a compiled extension module (`_batchlas`) plus a pure-Python facade that accepts NumPy dense arrays and SciPy CSR/CSC sparse inputs.
+## Test
 
-Build-tree import:
+Build tests and run them with either the preset or a manual build:
 
 ```bash
-cmake -B build -DBATCHLAS_BUILD_PYTHON=ON -DBATCHLAS_BUILD_TESTS=ON
-cmake --build build -j$(nproc)
+cmake --preset dev-tests
+cmake --build --preset dev-tests
+ctest --test-dir build/presets/dev-tests --output-on-failure
+```
+
+For a faster edit-build-test loop, the `fast-dev` preset builds only the smoke subset:
+
+- `util_span_tests`
+- `util_vector_tests`
+- `matrix_tests`
+
+## Benchmarks and Tuning
+
+The repository contains a large benchmark suite under `benchmarks/`, including BLAS kernels, QR/SVD paths, eigensolvers, band reduction, and sparse workflows. A typical benchmark build looks like this:
+
+```bash
+cmake --preset benchmarks
+cmake --build --preset benchmarks
+```
+
+The `scripts/` directory contains campaign helpers and archived CSV outputs from prior runs. Tuning support is wired through `BATCHLAS_ENABLE_TUNING` and the optional `BATCHLAS_TUNING_PROFILE` cache entry.
+
+## Python Bindings
+
+Enable the Python package like this:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DBATCHLAS_BUILD_PYTHON=ON \
+  -DBATCHLAS_BUILD_TESTS=ON
+
+cmake --build build -j"$(nproc)"
+```
+
+The build places the importable package under `build/python`, so a build-tree import looks like:
+
+```bash
 PYTHONPATH="$PWD/build/python" python3 -c "import batchlas; print(batchlas.available_backends())"
 ```
 
-Installed import:
+The extension module is built with pybind11 and linked against the installed or in-tree `BatchLAS::batchlas` target.
 
-```bash
-cmake --install build
-python3 -c "import batchlas"
+## Consuming BatchLAS from CMake
+
+After installation, the project exports a standard CMake package. A consuming project can use:
+
+```cmake
+find_package(BatchLAS CONFIG REQUIRED)
+target_link_libraries(my_target PRIVATE BatchLAS::batchlas)
 ```
 
-Python runtime requirements:
-- `numpy`
-- `scipy` for sparse wrappers
-- The same BatchLAS backend runtimes required by the C++ library build you installed, for example CUDA, ROCm, or host BLAS/LAPACK
+The install tree also exports the generated configuration headers needed by the public interface.
 
-The Python wrapper is synchronous and returns host-side NumPy/SciPy objects. Unsupported dtype/backend combinations raise `NotImplementedError`.
+## Development Notes
 
-## Quick Start
-
-Here's a simple example of using BatchLAS for matrix multiplication:
-
-```cpp
-#include <batchlas.hh>
-
-using namespace batchlas;
-
-int main() {
-    // Create a context
-    auto ctx = Queue(Device::default_device());
-    
-    // Define matrix dimensions
-    const int rows = 1000;
-    const int cols = 1000;
-    const int k = 1000;
-    const int batch_size = 10;
-    
-    // Create matrices using factory methods
-    auto A = Matrix<float>::Random(rows, k, batch_size);
-    auto B = Matrix<float>::Random(k, cols, batch_size);
-    auto C = Matrix<float>::Zeros(rows, cols, batch_size);
-    
-    // Initialize data (if needed, Random already initializes)
-    // A.fill(1.0f); // Example: fill A with 1.0f
-    // B.fill(2.0f); // Example: fill B with 2.0f
-    
-    // Perform batched matrix multiplication using views of the matrices
-    gemm<Backend::AUTO>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
-    
-    // Wait for completion
-    ctx.wait();
-    
-    return 0;
-}
-```
-
-## Advanced Features
-
-### Matrix Creation and Utilities
-
-BatchLAS provides comprehensive matrix creation utilities:
-
-```cpp
-// Create various matrix types
-auto identity = Matrix<float>::Identity(100, batch_size);          // Identity matrices
-auto random = Matrix<float>::Random(100, 100, false, batch_size);  // Random matrices
-auto zeros = Matrix<float>::Zeros(100, 100, batch_size);           // Zero matrices  
-auto ones = Matrix<float>::Ones(100, 100, batch_size);             // Matrices filled with ones
-auto tridiag = Matrix<float>::TriDiagToeplitz(100, 2.0f, -1.0f, -1.0f, batch_size); // Tridiagonal matrices
-
-// Create sparse matrices in CSR format
-auto sparse_A = Matrix<float, MatrixFormat::CSR>(rows, cols, nnz, batch_size);
-
-// Matrix utilities
-auto norms = norm<float, MatrixFormat::Dense>(ctx, A, NormType::Frobenius);
-auto conditions = cond<Backend::AUTO>(ctx, A, NormType::Frobenius);
-auto A_transposed = transpose(ctx, A);
-auto A_inverse = inv<Backend::AUTO>(ctx, A);
-```
-
-### Orthogonalization
-
-BatchLAS provides various orthogonalization algorithms with configurable parameters:
-
-```cpp
-// Allocate workspace memory
-UnifiedVector<std::byte> workspace(ortho_buffer_size<Backend::AUTO>(
-    ctx, matrices, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
-
-// Orthogonalize matrices using different algorithms
-ortho<Backend::AUTO>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::CGS2);       // Classical Gram-Schmidt
-ortho<Backend::AUTO>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::Chol2);      // Cholesky-based
-ortho<Backend::AUTO>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::Householder); // QR-based
-ortho<Backend::AUTO>(ctx, matrices, Transpose::NoTrans, workspace, OrthoAlgorithm::SVQB);       // SVD-based
-
-// Orthogonalize with respect to an external metric
-ortho<Backend::AUTO>(ctx, A, M, Transpose::NoTrans, Transpose::NoTrans, workspace, OrthoAlgorithm::Chol2, 2);
-```
-
-### Sparse Eigensolvers
-
-For large-scale eigenvalue problems:
-
-```cpp
-// LOBPCG for finding specific eigenvalues
-SyevxParams<float> lobpcg_params;
-lobpcg_params.find_largest = true;           // Find largest eigenvalues
-lobpcg_params.iterations = 100;              // Maximum iterations
-lobpcg_params.extra_directions = 10;         // Extra search directions
-lobpcg_params.algorithm = OrthoAlgorithm::CGS2; // Orthogonalization method
-
-UnifiedVector<std::byte> syevx_workspace(syevx_buffer_size<Backend::AUTO>(
-    ctx, sparse_A, eigenvalues, neigs, JobType::EigenVectors, eigenvectors, lobpcg_params));
-
-syevx<Backend::AUTO>(ctx, sparse_A, eigenvalues, neigs, syevx_workspace, 
-                     JobType::EigenVectors, eigenvectors, lobpcg_params);
-
-// Lanczos for full eigendecomposition
-LanczosParams<float> lanczos_params;
-lanczos_params.ortho_algorithm = OrthoAlgorithm::CGS2;
-lanczos_params.sort_enabled = true;
-lanczos_params.sort_order = SortOrder::Ascending;
-
-UnifiedVector<std::byte> lanczos_workspace(lanczos_buffer_size<Backend::AUTO>(
-    ctx, sparse_A, all_eigenvalues, JobType::EigenVectors, all_eigenvectors, lanczos_params));
-
-lanczos<Backend::AUTO>(ctx, sparse_A, all_eigenvalues, lanczos_workspace,
-                       JobType::EigenVectors, all_eigenvectors, lanczos_params);
-```
-
-### Matrix and Vector Views
-
-Work efficiently with matrix and vector subsets:
-
-```cpp
-// Create views into existing data
-auto A_view = A.view(50, 50);  // View first 50x50 submatrix
-auto batch_item = A[0];        // View single matrix from batch
-auto col_vector = VectorView<float>(matrix_data + col_offset, rows, 1, 0, batch_size);
-
-// Access and manipulate individual elements
-float value = A_view.at(10, 20, 0);  // Element at row 10, col 20, batch 0
-A_view.at(5, 5, 0) = 2.5f;           // Set element value
-```
-
-## Testing
-
-To run the test suite:
-
-```bash
-cd build
-ctest
-```
-
-## Performance Tuning
-
-BatchLAS automatically selects the most suitable backend for your hardware, but you can manually specify a backend for optimal performance in specific use cases:
-
-```cpp
-// Use CUDA backend explicitly on NVIDIA hardware
-gemm<Backend::CUDA>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
-
-// Use ROCm backend explicitly on AMD hardware  
-gemm<Backend::ROCM>(ctx, A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans);
-```
-
-## Benchmarks
-
-Benchmark executables are built in the `benchmarks` directory. Each benchmark
-registers a default set of input sizes, but you can override these at runtime by
-providing custom sizes on the command line. Arguments may be integers,
-comma&#8209;separated lists or `start:end:num` ranges. When custom sizes are
-supplied they replace the registered ones for all benchmarks. You can further
-limit execution to specific backends or floating point types using the
-`--backend` and `--type` options.
-
-Example:
-
-```bash
-./gemm_benchmark 512 512 128 10
-./gemm_benchmark 64:256:4 64:256:4 64:256:4 1,2,4
-./gemm_benchmark --backend=CUDA --type=float 256 256 64 8
-./ortho_benchmark --backend=ROCM --type=double 1024 512 4
-./syevx_benchmark --backend=AUTO 2048 2048 50 2
-```
-
-Available benchmarks include:
-- `gemm_benchmark`: Dense matrix multiplication
-- `gemv_benchmark`: Matrix-vector multiplication  
-- `ortho_benchmark`: Orthogonalization algorithms
-- `syevx_benchmark`: Sparse eigenvalue solvers
-- `lanczos_benchmark`: Lanczos eigenvalue algorithm
-- `spmm_benchmark`: Sparse matrix-dense matrix multiplication
-- `trsm_benchmark`: Triangular solve operations
+- The top-level `batchlas` target is an interface facade over split component libraries.
+- The repository includes implementation notes for ongoing work in the root markdown files and under `docs/`.
+- `playground/` contains exploratory notebooks and scripts used during algorithm development.
 
 ## License
 
-TBD
+Source files in the repository use MIT SPDX identifiers, but there is currently no top-level `LICENSE` file checked in. If you plan to distribute the project outside the repository context, adding a root license file would make the licensing state unambiguous.
