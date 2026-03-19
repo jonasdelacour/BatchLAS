@@ -1,3 +1,8 @@
+
+<div align="center">
+  <img src="BatchLAS_logo_transparent.png" alt="BatchLAS Logo" width="200">
+</div>
+
 # BatchLAS
 
 BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA, ROCm, netlib BLAS/LAPACK, and oneMKL. The repository currently contains the C++ library, an optional pybind11-based Python package, a broad unit-test suite, benchmark executables, tuning scripts, and research notebooks used to validate newer eigensolver and factorization work.
@@ -188,4 +193,4 @@ The install tree also exports the generated configuration headers needed by the 
 
 ## License
 
-Source files in the repository use MIT SPDX identifiers, but there is currently no top-level `LICENSE` file checked in. If you plan to distribute the project outside the repository context, adding a root license file would make the licensing state unambiguous.
+BatchLAS is licensed under the MIT License. See `LICENSE` for the full text.
