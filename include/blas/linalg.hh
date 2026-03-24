@@ -5,6 +5,7 @@
 // Include the enum declarations
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
+#include <blas/device.hh>
 #include <blas/functions.hh>
 #include <blas/extra.hh>
 #include <blas/extensions.hh>
