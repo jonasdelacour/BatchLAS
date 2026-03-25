@@ -1,3 +1,4 @@
+#include <blas/device.hh>
 #include <blas/extensions.hh>
 #include <blas/matrix.hh>
 
@@ -5,6 +6,9 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+
+#include <util/sycl-local-accessor-helpers.hh>
+#include <util/group-invoke.hh>
 
 #include <algorithm>
 #include <complex>
@@ -16,25 +20,16 @@ namespace batchlas {
 
 namespace {
 
+template <typename T>
+struct HouseholderScalars {
+    T tau{};
+    T beta{};
+    T scale{};
+};
+
 template <typename U>
 inline U conj_if_needed(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
-inline typename base_type<T>::type abs2_if_complex(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real re = x.real();
-        const Real im = x.imag();
-        return re * re + im * im;
-    } else {
-        return x * x;
-    }
+    return batchlas::device::detail::conjugate_if_needed(x);
 }
 
 template <typename Real>
@@ -42,35 +37,70 @@ inline Real sign_nonzero_real(Real x) {
     return (sycl::signbit(x) ? Real(-1) : Real(1));
 }
 
-template <typename T>
-inline T sign_nonzero(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real a = sycl::hypot(x.real(), x.imag());
-        if (a == Real(0)) return T(1);
-        return x / a;
-    } else {
-        return T(sign_nonzero_real(static_cast<Real>(x)));
+template <typename Real>
+inline Real sign_nonzero(const Real& x) {
+    return sign_nonzero_real(x);
+}
+
+template <typename Real>
+inline std::complex<Real> sign_nonzero(const std::complex<Real>& x) {
+    const Real magnitude = sycl::hypot(x.real(), x.imag());
+    if (magnitude == Real(0)) {
+        return std::complex<Real>(1);
     }
+    return x / magnitude;
 }
 
 template <typename T>
-inline T reduce_sum_group(const sycl::group<1>& g, T x) {
-    if constexpr (internal::is_complex<T>::value) {
-        using R = typename T::value_type;
-        const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
-        return T(re, im);
-    } else {
-        return sycl::reduce_over_group(g, x, sycl::plus<T>());
-    }
+inline T hermitian_diagonal(const T& value) {
+    return value;
 }
 
-template <typename T>
-inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
-                                                        typename base_type<T>::type x) {
-    using R = typename base_type<T>::type;
-    return sycl::reduce_over_group(g, x, sycl::plus<R>());
+template <typename Real>
+inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
+    return std::complex<Real>(value.real(), Real(0));
+}
+
+template <typename Real>
+inline Real dotc_norm_sq_real(const Real& value) {
+    return value;
+}
+
+template <typename Real>
+inline Real dotc_norm_sq_real(const std::complex<Real>& value) {
+    return value.real();
+}
+
+template <typename Real>
+inline HouseholderScalars<Real> compute_householder_scalars(const Real& alpha, Real xnorm) {
+    HouseholderScalars<Real> result;
+    if (xnorm == Real(0)) {
+        result.beta = alpha;
+        return result;
+    }
+
+    result.beta = -sign_nonzero(alpha) * Real(sycl::hypot(alpha, xnorm));
+    result.tau = (result.beta - alpha) / result.beta;
+    result.scale = Real(1) / (alpha - result.beta);
+    return result;
+}
+
+template <typename Real>
+inline HouseholderScalars<std::complex<Real>> compute_householder_scalars(const std::complex<Real>& alpha, Real xnorm) {
+    using Complex = std::complex<Real>;
+
+    HouseholderScalars<Complex> result;
+    if (xnorm == Real(0) && alpha.imag() == Real(0)) {
+        result.beta = alpha;
+        return result;
+    }
+
+    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
+    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
+    result.beta = -sign_nonzero(alpha) * Complex(beta_abs);
+    result.tau = (result.beta - alpha) / result.beta;
+    result.scale = Complex(1) / (alpha - result.beta);
+    return result;
 }
 
 template <typename T, int WG, bool FuseTrailingUpdate>
@@ -114,57 +144,46 @@ Event latrd_lower_panel_batched_wg(Queue& q,
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                T* v_ptr = util::get_raw_ptr(v_local);
+                T* wcol_ptr = util::get_raw_ptr(wcol_local);
+                T* vip_ptr = util::get_raw_ptr(vip_local);
+                T* wip_ptr = util::get_raw_ptr(wip_local);
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
 
-                auto Ah = [&](int r, int c) -> T {
-                    // Treat A as Hermitian/symmetric using the lower triangle.
-                    if (r >= c) return Ab(r, c);
-                    return conj_if_needed(Ab(c, r));
-                };
-
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
+                    const int tail = n - (i + 1);
+                    auto a_col_tail = Ab(Slice(i + 1, SliceEnd()), i);
+                    auto v_tail = VectorView<T>(v_ptr + i + 1, tail);
+                    auto wcol_tail = VectorView<T>(wcol_ptr + i + 1, tail);
 
                     // Cache vip/wip for p<i (shared across all r updates below).
-                    if (lid < i) {
-                        const int p = lid;
-                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
-                        wip_local[p] = Wb(i, p);
+                    if (i > 0) {
+                        auto vip_view = VectorView<T>(vip_ptr, i);
+                        auto wip_view = VectorView<T>(wip_ptr, i);
+                        batchlas::device::copy(it, Ab(i, Slice(0, i)), vip_view);
+                        batchlas::device::copy(it, Wb(i, Slice(0, i)), wip_view);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // Update diagonal element A(i,i) using previously computed V/W (j0..i-1).
-                    if (lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
+                    if (i > 0) {
+                        const auto vip_view = VectorView<T>(vip_ptr, i);
+                        const auto wip_view = VectorView<T>(wip_ptr, i);
+                        const T panel_dot = batchlas::device::dotc(it, vip_view, wip_view);
+                        if (lid == 0) {
+                            Ab(i, i) = hermitian_diagonal(Ab(i, i) - panel_dot - conj_if_needed(panel_dot));
                         }
-                        Ab(i, i) = aii;
                     }
 
                     // Update column i entries from row i+1 .. n-1.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-
-                            // V(r,p)
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-
-                            const T wrp = Wb(r, p);
-                            val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
-                        }
-                        Ab(r, i) = val;
+                    for (int p = 0; p < i; ++p) {
+                        const auto vp_tail = Ab(Slice(i + 1, SliceEnd()), p);
+                        const auto wp_tail = Wb(Slice(i + 1, SliceEnd()), p);
+                        batchlas::device::axpy(it, vp_tail, a_col_tail, -conj_if_needed(wip_ptr[p]));
+                        batchlas::device::axpy(it, wp_tail, a_col_tail, -conj_if_needed(vip_ptr[p]));
                     }
                     // Ensure updated Ab(r,i) values are visible before other lanes read them
                     // (later phases use a different lane-to-row mapping).
@@ -174,64 +193,21 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     using Real = typename base_type<T>::type;
 
                     const int x0 = i + 2;
-                    Real sumsq = Real(0);
-                    for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += abs2_if_complex(Ab(r, i));
-                    }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
-
-                    T alpha = T(0);
-                    if (lid == 0 && i + 1 < n) {
-                        alpha = Ab(i + 1, i);
-                    }
-                    alpha = sycl::group_broadcast(g, alpha);
-
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lid == 0) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (internal::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        E_view(i, b) = beta;
-                        TAU_view(i, b) = tau_i;
-
-                        // Set v(0)=1 at A(i+1,i).
+                    const Real sumsq = x0 < n
+                        ? dotc_norm_sq_real(batchlas::device::dotc(it, Ab(Slice(x0, SliceEnd()), i), Ab(Slice(x0, SliceEnd()), i)))
+                        : Real(0);
+                    
+                    auto [alpha, tau_i, scale] = invoke_one_broadcast(g, [=] {
+                        T alpha = i + 1 < n ? Ab(i + 1, i) : T(0);
+                        const auto householder = compute_householder_scalars(alpha, sycl::sqrt(sumsq));
+                        E_view(i, b) = householder.beta;
+                        TAU_view(i, b) = householder.tau;
                         Ab(i + 1, i) = T(1);
-                    }
+                        return std::array<T,3>{alpha, householder.tau, householder.scale};
+                    });
 
-                    // Broadcast tau/scale.
-                    tau_i = sycl::group_broadcast(g, tau_i);
-                    scale = sycl::group_broadcast(g, scale);
-
-                    if (tau_i != T(0)) {
-                        for (int r = x0 + lid; r < n; r += wg) {
-                            Ab(r, i) *= scale;
-                        }
+                    if (tau_i != T(0) && x0 < n) {
+                        batchlas::device::scal(it, Ab(Slice(x0, SliceEnd()), i), scale);
                     }
 
                     // Ensure scaling stores are visible before other lanes read Ab(r,i)
@@ -239,8 +215,11 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     it.barrier(sycl::access::fence_space::global_space);
 
                     // Build v in local memory for the upcoming A*v, dot-products, and updates.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        v_local[r] = (r == i + 1) ? T(1) : Ab(r, i);
+                    if (lid == 0) {
+                        v_ptr[i + 1] = T(1);
+                    }
+                    if (x0 < n) {
+                        batchlas::device::copy(it, Ab(Slice(x0, SliceEnd()), i), VectorView<T>(v_ptr + x0, n - x0));
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
@@ -251,64 +230,59 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     // Compute raw w (before scaling by tau) for the *updated* trailing matrix:
                     //   A := A - V*W^H - W*V^H  (within the current panel, columns j0..i-1)
                     // without explicitly forming A.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T acc = T(0);
-                        for (int c = i + 1; c < n; ++c) {
-                            const T vc = v_local[c];
-                            acc += Ah(r, c) * vc;
-                        }
-                        wcol_local[r] = acc;
-                    }
+                    auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                        Ab.data() + (i + 1) + (i + 1) * Ab.ld(),
+                        tail,
+                        tail,
+                        Ab.ld());
+                    batchlas::device::hemv(it,
+                                           trailing_view,
+                                           v_tail,
+                                           wcol_tail,
+                                           T(1),
+                                           T(0),
+                                           Uplo::Lower,
+                                           batchlas::device::DeviceBlasPolicy::Auto);
+                    // Generic hemv may materialize the output from only a subset of lanes,
+                    // so all threads must wait before applying the correction updates.
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // Apply intra-panel corrections from previously computed reflectors.
                     for (int p = 0; p < i; ++p) {
                         const int pc = p;
 
                         // gamma = W(:,pc)^H * v, delta = V(:,p)^H * v
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
-                        for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = v_local[c];
-
-                            gamma_partial += conj_if_needed(Wb(c, pc)) * vc;
-
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += conj_if_needed(vcp) * vc;
-                        }
-                        const T gamma = reduce_sum_group(g, gamma_partial);
-                        const T delta = reduce_sum_group(g, delta_partial);
-
+                        const auto vp_tail = Ab(Slice(i + 1, SliceEnd()), p);
+                        const auto wp_tail = Wb(Slice(i + 1, SliceEnd()), pc);
+                        const T gamma = batchlas::device::dotc(it, wp_tail, v_tail);
+                        const T delta = batchlas::device::dotc(it, vp_tail, v_tail);
                         for (int r = i + 1 + lid; r < n; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
-                            const T wrp = Wb(r, pc);
-                            wcol_local[r] -= vrp * gamma + wrp * delta;
+                            wcol_local[r] -= vp_tail(r - (i + 1)) * gamma + wp_tail(r - (i + 1)) * delta;
                         }
                     }
+
+                    // The correction loop writes shared local W entries with a lane-to-row
+                    // mapping that differs from the subsequent BLAS helpers.
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // Scale by tau.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        wcol_local[r] *= tau_i;
-                    }
+                    batchlas::device::scal(it, wcol_tail, tau_i);
+
+                    // dotc/axpy may read W with a different work distribution than scal.
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // dot = v^H * w
-                    T dot_partial = T(0);
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        dot_partial += conj_if_needed(vr) * wcol_local[r];
-                    }
-                    const T dot = reduce_sum_group(g, dot_partial);
+                    const T dot = batchlas::device::dotc(it, v_tail, wcol_tail);
 
                     // w += (-0.5 * tau * dot) * v
                     const T alpha2 = T(-0.5) * tau_i * dot;
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        wcol_local[r] += alpha2 * vr;
-                    }
+                    batchlas::device::axpy(it, v_tail, wcol_tail, alpha2);
+
+                    // Commit the fully updated local W column after all local-memory writes land.
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // Commit the computed W column to global memory once.
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wb(r, col) = wcol_local[r];
-                    }
+                    batchlas::device::copy(it, wcol_tail, Wb(Slice(i + 1, SliceEnd()), col));
                     // Ensure all global writes to A/W from this iteration are visible before the next iteration
                     // reads Wb(i,p) / Ab(i,p) computed by other lanes.
                     it.barrier(sycl::access::fence_space::global_space);
@@ -317,29 +291,32 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                 if constexpr (FuseTrailingUpdate) {
                     const int j2 = ib;
                     const int n2 = n - j2;
-                    for (int lin = lid; lin < n2 * n2; lin += wg) {
-                        const int r = lin % n2;
-                        const int c = lin / n2;
-                        if (r < c) continue;
+                    if (n2 > 0) {
+                        auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Ab.data() + j2 + j2 * Ab.ld(),
+                            n2,
+                            n2,
+                            Ab.ld());
+                        auto v_panel_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Ab.data() + j2,
+                            n2,
+                            ib,
+                            Ab.ld());
+                        auto w_panel_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Wb.data() + j2,
+                            n2,
+                            ib,
+                            Wb.ld());
 
-                        const int rr = j2 + r;
-                        const int cc = j2 + c;
-                        T acc = T(0);
-                        for (int k = 0; k < ib; ++k) {
-                            const T vrk = (rr == k + 1) ? T(1) : ((rr > k + 1) ? Ab(rr, k) : T(0));
-                            const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
-                            const T wrk = Wb(rr, k);
-                            const T wck = Wb(cc, k);
-                            acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
-                        }
-
-                        T a_rc = Ab(rr, cc) - acc;
-                        if constexpr (internal::is_complex<T>::value) {
-                            if (rr == cc) {
-                                a_rc = T(a_rc.real(), typename T::value_type(0));
-                            }
-                        }
-                        Ab(rr, cc) = a_rc;
+                        batchlas::device::her2k(it,
+                                                v_panel_view,
+                                                w_panel_view,
+                                                trailing_view,
+                                                T(-1),
+                                                T(1),
+                                                Uplo::Lower,
+                                                Transpose::NoTrans,
+                                                batchlas::device::DeviceBlasPolicy::Auto);
                     }
                 }
             });
@@ -374,11 +351,12 @@ Event latrd_lower_panel_batched(Queue& q,
     if (wg_hint == 256) {
         return call(std::integral_constant<int, 256>{});
     }
-    // For very small n, a smaller work-group reduces wasted lanes and barrier overhead.
-    if (n <= 64) {
+    // For small panels, a smaller work-group reduces wasted lanes, barrier overhead,
+    // and register pressure in the reduction-heavy panel kernel.
+    if (n <= 128) {
         return call(std::integral_constant<int, 64>{});
     }
-    if (n <= 128) {
+    if (n <= 256) {
         return call(std::integral_constant<int, 128>{});
     }
     return call(std::integral_constant<int, 256>{});
