@@ -22,6 +22,20 @@ inline constexpr int kRegisterMatrixTileAStride = kRegisterMatrixTileK + 1;
 inline constexpr int kRegisterMatrixTileBStride = kRegisterMatrixTileN + 1;
 inline constexpr int kRegisterMatrixLhsStages = 1;
 inline constexpr int kRegisterMatrixRhsStages = 1;
+inline constexpr int kComplexRank2kTileM = 64;
+inline constexpr int kComplexRank2kTileN = 64;
+inline constexpr int kComplexRank2kTileK = 32;
+inline constexpr int kComplexRank2kInKernelTileK = 24;
+inline constexpr int kComplexRank2kThreadTileRows = 4;
+inline constexpr int kComplexRank2kThreadTileCols = 4;
+inline constexpr int kComplexRank2kLocalRows = kComplexRank2kTileM / kComplexRank2kThreadTileRows;
+inline constexpr int kComplexRank2kLocalCols = kComplexRank2kTileN / kComplexRank2kThreadTileCols;
+inline constexpr int kComplexRank2kThreadsPerGroup = kComplexRank2kLocalRows * kComplexRank2kLocalCols;
+inline constexpr int kComplexRank2kSubgroupRows = kMaxSupportedSubgroupSize / kComplexRank2kLocalCols;
+inline constexpr int kComplexRank2kSubgroupTileM = kComplexRank2kSubgroupRows * kComplexRank2kThreadTileRows;
+inline constexpr int kComplexRank2kTileAStride = kComplexRank2kTileK + 1;
+inline constexpr int kComplexRank2kInKernelTileAStride = kComplexRank2kInKernelTileK + 1;
+inline constexpr int kComplexRank2kTileBStride = kComplexRank2kTileN + 1;
 inline constexpr int kOptimizedGemmTileM = 128;
 inline constexpr int kOptimizedGemmTileN = 32;
 inline constexpr int kOptimizedGemmTileK = 32;
@@ -84,9 +98,36 @@ struct RegisterMatrixAccumTile {
 };
 
 template <typename T>
+struct ComplexRank2kAccumTile {
+    std::array<T, kComplexRank2kThreadTileRows * kComplexRank2kThreadTileCols> values{};
+
+    template <int Row, int Col>
+    inline constexpr T& get() {
+        return std::get<Row * kComplexRank2kThreadTileCols + Col>(values);
+    }
+
+    template <int Row, int Col>
+    inline constexpr const T& get() const {
+        return std::get<Row * kComplexRank2kThreadTileCols + Col>(values);
+    }
+};
+
+template <typename T>
 struct RegisterMatrixWorkspace {
     T lhs[kMaxSubgroupsPerWorkGroup][kRegisterMatrixLhsStages][kRegisterMatrixSubgroupTileM * kRegisterMatrixTileAStride];
     T rhs[kRegisterMatrixRhsStages][kRegisterMatrixTileK * kRegisterMatrixTileBStride];
+};
+
+template <typename T>
+struct ComplexRank2kWorkspace {
+    T lhs[kMaxSubgroupsPerWorkGroup][kComplexRank2kSubgroupTileM * kComplexRank2kTileAStride];
+    T rhs[kComplexRank2kTileK * kComplexRank2kTileBStride];
+};
+
+template <typename T>
+struct ComplexRank2kInKernelWorkspace {
+    T lhs[kMaxSubgroupsPerWorkGroup][kComplexRank2kSubgroupTileM * kComplexRank2kInKernelTileAStride];
+    T rhs[kComplexRank2kInKernelTileK * kComplexRank2kTileBStride];
 };
 
 template <typename T>
@@ -193,6 +234,26 @@ template <typename Item>
 inline constexpr int subgroup_count(const Item& item) {
     const int sg_size = subgroup_size(item);
     return std::max(1, detail::item_local_linear_range(item) / std::max(1, sg_size));
+}
+
+template <typename Item, typename Fn>
+inline constexpr void for_each_subgroup_vector_index(const Item& item, int extent, Fn&& fn) {
+    const int sg_size = subgroup_size(item);
+    const int lane = subgroup_local_id(item);
+    const int sg_id = subgroup_group_id(item);
+    const int total_sg = subgroup_count(item);
+    const int block = 2 * sg_size;
+
+    for (int base = sg_id * block; base < extent; base += total_sg * block) {
+        const int index0 = base + lane;
+        if (index0 < extent) {
+            fn(index0);
+        }
+        const int index1 = index0 + sg_size;
+        if (index1 < extent) {
+            fn(index1);
+        }
+    }
 }
 
 inline constexpr int rows_per_subgroup(int extent, int total_sg, int max_rows) {
@@ -350,6 +411,23 @@ inline constexpr bool can_use_symv_no_trans_column_sweep_fast_path(const Item& i
 }
 
 template <typename T, typename Item>
+inline constexpr bool can_use_symv_no_trans_row_sweep_fast_path(const Item& item,
+                                                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                                DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+
+    const int local_size = detail::item_local_linear_range(item);
+    const int extent = a.rows();
+    return a.rows() == a.cols() && extent > 0 && extent <= 128 && local_size >= 32;
+}
+
+template <typename T, typename Item>
 inline constexpr bool can_use_matrix_fast_path(const Item& item,
                                                int row_extent,
                                                int col_extent,
@@ -368,6 +446,99 @@ inline constexpr bool can_use_matrix_fast_path(const Item& item,
     }
 
     return row_extent >= 8 && col_extent >= sg_size && contract_extent >= sg_size;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rank1_update_fast_path(const Item& item,
+                                                     const VectorView<T>& x,
+                                                     const Rank1UpdateOperand<T>& operand,
+                                                     DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (policy == DeviceBlasPolicy::Auto || policy == DeviceBlasPolicy::Generic) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    if (!subgroup_policy_matches(policy, sg_size)) {
+        return false;
+    }
+    const int sg_count = subgroup_count(item);
+    if (sg_size > kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    return x.size() > 0 && operand.y.size() > 0 && x.size() <= 64 && operand.y.size() <= 64;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rank2k_fast_path(const Item& item,
+                                               const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                               const MatrixMatrixOperand<T>& operand,
+                                               SymmetricRank2kTransform transform,
+                                               DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (policy == DeviceBlasPolicy::Generic) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    if (policy == DeviceBlasPolicy::Auto) {
+        if (transform.trans != Transpose::NoTrans || sg_size != 16) {
+            return false;
+        }
+    } else if (!subgroup_policy_matches(policy, sg_size)) {
+        return false;
+    }
+    const int sg_count = subgroup_count(item);
+    if (sg_size > kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    return detail::output_size(a, transform.trans) > 0 &&
+        detail::input_size(a, transform.trans) > 0 &&
+        operand.c.rows() > 0 &&
+        detail::output_size(a, transform.trans) <= 256 &&
+        detail::input_size(a, transform.trans) <= 32;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rankk_fast_path(const Item& item,
+                                              const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                              const RankKOperand<T>& operand,
+                                              SymmetricRankKTransform transform,
+                                              DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (policy == DeviceBlasPolicy::Generic) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    if (policy == DeviceBlasPolicy::Auto) {
+        if (transform.trans != Transpose::NoTrans || sg_size != 16) {
+            return false;
+        }
+    } else if (!subgroup_policy_matches(policy, sg_size)) {
+        return false;
+    }
+    const int sg_count = subgroup_count(item);
+    if (sg_size > kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    return detail::output_size(a, transform.trans) > 0 &&
+        detail::input_size(a, transform.trans) > 0 &&
+        operand.c.rows() > 0 &&
+        detail::output_size(a, transform.trans) <= 256 &&
+        detail::input_size(a, transform.trans) <= 32;
 }
 
 template <typename T, typename Item>
@@ -646,6 +817,306 @@ inline constexpr void write_register_matrix_tile(MatrixMatrixOperand<T> operand,
     });
 }
 
+template <typename T, typename Transform>
+inline constexpr void write_rank2k_register_tile(MatrixMatrixOperand<T> operand,
+                                                 Transform transform,
+                                                 int row_base,
+                                                 int col_base,
+                                                 int extent,
+                                                 const RegisterMatrixAccumTile<T>& accum) {
+    static_for<kRegisterMatrixThreadTileRows>([&](auto row_idx) {
+        constexpr int i = row_idx;
+        const int row = row_base + i;
+        if (row >= extent) {
+            return;
+        }
+        static_for<kRegisterMatrixThreadTileCols>([&](auto col_idx) {
+            constexpr int j = col_idx;
+            const int col = col_base + j;
+            if (col >= extent || !detail::triangular_storage_contains(transform.uplo, row, col)) {
+                return;
+            }
+            T value = operand.beta * operand.c(row, col) + accum.template get<i, j>();
+            if constexpr (ComplexScalar<T>) {
+                if (transform.hermitian && row == col) {
+                    value = T(value.real(), typename T::value_type(0));
+                }
+            }
+            operand.c(row, col) = value;
+        });
+    });
+}
+
+template <typename T, typename Transform>
+inline constexpr void write_complex_rank2k_tile(MatrixMatrixOperand<T> operand,
+                                                Transform transform,
+                                                int row_base,
+                                                int col_base,
+                                                int extent,
+                                                const ComplexRank2kAccumTile<T>& accum) {
+    static_for<kComplexRank2kThreadTileRows>([&](auto row_idx) {
+        constexpr int i = row_idx;
+        const int row = row_base + i;
+        if (row >= extent) {
+            return;
+        }
+        static_for<kComplexRank2kThreadTileCols>([&](auto col_idx) {
+            constexpr int j = col_idx;
+            const int col = col_base + j;
+            if (col >= extent || !detail::triangular_storage_contains(transform.uplo, row, col)) {
+                return;
+            }
+            T value = operand.beta * operand.c(row, col) + accum.template get<i, j>();
+            if constexpr (ComplexScalar<T>) {
+                if (transform.hermitian && row == col) {
+                    value = T(value.real(), typename T::value_type(0));
+                }
+            }
+            operand.c(row, col) = value;
+        });
+    });
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rank2k_in_kernel_fast_path(const Item& item,
+                                                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                                 const MatrixMatrixOperand<T>& operand,
+                                                                 SymmetricRank2kTransform transform,
+                                                                 DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<1>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rankk_in_kernel_fast_path(const Item& item,
+                                                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                                const RankKOperand<T>& operand,
+                                                                SymmetricRankKTransform transform,
+                                                                DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<1>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
+                                                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                             const MatrixMatrixOperand<T>& operand,
+                                                             SymmetricRank2kTransform transform,
+                                                             DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
+                                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                            const RankKOperand<T>& operand,
+                                                            SymmetricRankKTransform transform,
+                                                            DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
+                                                        const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                        const MatrixMatrixOperand<T>& operand,
+                                                        SymmetricRank2kTransform transform,
+                                                        DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kRegisterMatrixTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rankk_register_fast_path(const Item& item,
+                                                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                       const RankKOperand<T>& operand,
+                                                       SymmetricRankKTransform transform,
+                                                       DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
+        static_cast<void>(item);
+        static_cast<void>(a);
+        static_cast<void>(operand);
+        static_cast<void>(transform);
+        static_cast<void>(policy);
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::item_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kRegisterMatrixTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
 template <typename T, typename... Ops>
 inline constexpr void accumulate_cached_operands(std::array<T, sizeof...(Ops)>& partials,
                                                  const std::tuple<Ops...>& operands,
@@ -664,6 +1135,98 @@ inline constexpr void accumulate_cached_operands(std::array<T, sizeof...(Ops)>& 
         (void)operands;
         (void)input_index;
     }
+}
+
+template <typename Item, typename T>
+inline constexpr void ger(const Item& item,
+                          const VectorView<T>& x,
+                          Rank1UpdateOperand<T> operand,
+                          OuterProductTransform transform) {
+    const auto sg = item.get_sub_group();
+    const int sg_size = subgroup_size(item);
+    const int lane = subgroup_local_id(item);
+    const int sg_id = subgroup_group_id(item);
+    const int total_sg = subgroup_count(item);
+    const int row_extent = operand.a.rows();
+    const int col_extent = operand.a.cols();
+    const int rows_per_sg = rows_per_subgroup(row_extent, total_sg, kMaxMatrixRowsPerSubgroup);
+    const int col_tiles = (col_extent + sg_size - 1) / sg_size;
+    const int row_tiles = (row_extent + rows_per_sg - 1) / rows_per_sg;
+
+    for (int linear_tile = sg_id; linear_tile < row_tiles * col_tiles; linear_tile += total_sg) {
+        const int tile_row = linear_tile / col_tiles;
+        const int tile_col = linear_tile % col_tiles;
+        const int base_row = tile_row * rows_per_sg;
+        const int col = tile_col * sg_size + lane;
+        const T y_value = col < col_extent ? detail::maybe_conjugate(operand.y(col), transform.conjugate_y) : T(0);
+        std::array<T, kMaxMatrixRowsPerSubgroup> x_values{};
+
+        for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+            const int row = base_row + row_offset;
+            const T x_lane = (lane == row_offset && row < row_extent)
+                ? detail::maybe_conjugate(x(row), transform.conjugate_x)
+                : T(0);
+            x_values[static_cast<std::size_t>(row_offset)] =
+                sycl::select_from_group(sg, x_lane, static_cast<uint32_t>(row_offset));
+        }
+
+        if (col < col_extent) {
+            for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+                const int row = base_row + row_offset;
+                if (row >= row_extent) {
+                    continue;
+                }
+                detail::accumulate_rank1_output(operand, row, col, x_values[static_cast<std::size_t>(row_offset)] * y_value);
+            }
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void copy(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y) {
+    for_each_subgroup_vector_index(item, x.size(), [&](int index) {
+        y(index) = x(index);
+    });
+}
+
+template <typename Item, typename T>
+inline constexpr void copyc(const Item& item,
+                            const VectorView<T>& x,
+                            const VectorView<T>& y) {
+    for_each_subgroup_vector_index(item, x.size(), [&](int index) {
+        y(index) = detail::conjugate_if_needed(x(index));
+    });
+}
+
+template <typename Item, typename T>
+inline constexpr void scal(const Item& item,
+                           const VectorView<T>& x,
+                           T alpha) {
+    for_each_subgroup_vector_index(item, x.size(), [&](int index) {
+        x(index) *= alpha;
+    });
+}
+
+template <typename Item, typename T>
+inline constexpr void axpy(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha) {
+    for_each_subgroup_vector_index(item, x.size(), [&](int index) {
+        y(index) += alpha * x(index);
+    });
+}
+
+template <typename Item, typename T>
+inline constexpr void hadamard(const Item& item,
+                               const VectorView<T>& x,
+                               const VectorView<T>& y,
+                               const VectorView<T>& z) {
+    for_each_subgroup_vector_index(item, x.size(), [&](int index) {
+        z(index) = x(index) * y(index);
+    });
 }
 
 template <typename Item, typename T, typename... Ops>
@@ -888,6 +1451,24 @@ inline constexpr void trmv_transpose_subgroup_dots(const Item& item,
         if (lane == 0) {
             operand.y(output_index) = operand.alpha * partial + operand.beta * operand.y(output_index);
         }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void symv_no_trans_row_sweep(const Item& item,
+                                              const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                              const MatrixVectorOperand<T>& operand,
+                                              SymmetricTransform transform) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int local_size = detail::item_local_linear_range(item);
+    const int extent = a.rows();
+
+    for (int row = linear_tid; row < extent; row += local_size) {
+        T accum = T(0);
+        for (int col = 0; col < extent; ++col) {
+            accum += detail::symmetric_matrix_entry(a, row, col, transform) * operand.x(col);
+        }
+        operand.y(row) = operand.alpha * accum + operand.beta * operand.y(row);
     }
 }
 
@@ -1131,6 +1712,699 @@ inline constexpr void gemm(const Item& item,
                 }
                 detail::write_matrix_output(operand, row, col, partials[static_cast<std::size_t>(row_offset)]);
             }
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rank2k(const Item& item,
+                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                             MatrixMatrixOperand<T> operand,
+                             SymmetricRank2kTransform transform) {
+    const auto sg = item.get_sub_group();
+    const int sg_size = subgroup_size(item);
+    const int lane = subgroup_local_id(item);
+    const int sg_id = subgroup_group_id(item);
+    const int total_sg = subgroup_count(item);
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const Transpose rhs_transform = detail::rank2k_rhs_transform(transform);
+    const T alpha2 = detail::secondary_rank2k_alpha(operand.alpha, transform.hermitian);
+    const int rows_per_sg = rows_per_subgroup(extent, total_sg, kMaxMatrixRowsPerSubgroup);
+    const int col_tiles = (extent + sg_size - 1) / sg_size;
+    const int row_tiles = (extent + rows_per_sg - 1) / rows_per_sg;
+
+    for (int linear_tile = sg_id; linear_tile < row_tiles * col_tiles; linear_tile += total_sg) {
+        const int tile_row = linear_tile / col_tiles;
+        const int tile_col = linear_tile % col_tiles;
+        const int base_row = tile_row * rows_per_sg;
+        const int col = tile_col * sg_size + lane;
+        std::array<T, kMaxMatrixRowsPerSubgroup> partials{};
+
+        for (int k = 0; k < contract_extent; ++k) {
+            const T rhs1 = col < extent ? detail::matrix_entry(operand.b, k, col, rhs_transform) : T(0);
+            const T rhs2 = col < extent ? detail::matrix_entry(a, k, col, rhs_transform) : T(0);
+
+            for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+                const int row = base_row + row_offset;
+                const T a_lane = (lane == row_offset && row < extent)
+                    ? detail::matrix_entry(a, row, k, transform.trans)
+                    : T(0);
+                const T b_lane = (lane == row_offset && row < extent)
+                    ? detail::matrix_entry(operand.b, row, k, transform.trans)
+                    : T(0);
+                const T lhs1 = sycl::select_from_group(sg, a_lane, static_cast<uint32_t>(row_offset));
+                const T lhs2 = sycl::select_from_group(sg, b_lane, static_cast<uint32_t>(row_offset));
+
+                if (col < extent && row < extent && detail::triangular_storage_contains(transform.uplo, row, col)) {
+                    partials[static_cast<std::size_t>(row_offset)] += operand.alpha * lhs1 * rhs1 + alpha2 * lhs2 * rhs2;
+                }
+            }
+        }
+
+        if (col < extent) {
+            for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+                const int row = base_row + row_offset;
+                if (row >= extent || !detail::triangular_storage_contains(transform.uplo, row, col)) {
+                    continue;
+                }
+                T value = operand.beta * operand.c(row, col) + partials[static_cast<std::size_t>(row_offset)];
+                if constexpr (ComplexScalar<T>) {
+                    if (transform.hermitian && row == col) {
+                        value = T(value.real(), typename T::value_type(0));
+                    }
+                }
+                operand.c(row, col) = value;
+            }
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rankk(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            RankKOperand<T> operand,
+                            SymmetricRankKTransform transform) {
+    const auto sg = item.get_sub_group();
+    const int sg_size = subgroup_size(item);
+    const int lane = subgroup_local_id(item);
+    const int sg_id = subgroup_group_id(item);
+    const int total_sg = subgroup_count(item);
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const Transpose rhs_transform = detail::rankk_rhs_transform(transform);
+    const int rows_per_sg = rows_per_subgroup(extent, total_sg, kMaxMatrixRowsPerSubgroup);
+    const int col_tiles = (extent + sg_size - 1) / sg_size;
+    const int row_tiles = (extent + rows_per_sg - 1) / rows_per_sg;
+
+    for (int linear_tile = sg_id; linear_tile < row_tiles * col_tiles; linear_tile += total_sg) {
+        const int tile_row = linear_tile / col_tiles;
+        const int tile_col = linear_tile % col_tiles;
+        const int base_row = tile_row * rows_per_sg;
+        const int col = tile_col * sg_size + lane;
+        std::array<T, kMaxMatrixRowsPerSubgroup> partials{};
+
+        for (int k = 0; k < contract_extent; ++k) {
+            const T rhs = col < extent ? detail::matrix_entry(a, k, col, rhs_transform) : T(0);
+
+            for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+                const int row = base_row + row_offset;
+                const T a_lane = (lane == row_offset && row < extent)
+                    ? detail::matrix_entry(a, row, k, transform.trans)
+                    : T(0);
+                const T lhs = sycl::select_from_group(sg, a_lane, static_cast<uint32_t>(row_offset));
+
+                if (col < extent && row < extent && detail::triangular_storage_contains(transform.uplo, row, col)) {
+                    partials[static_cast<std::size_t>(row_offset)] += operand.alpha * lhs * rhs;
+                }
+            }
+        }
+
+        if (col < extent) {
+            for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
+                const int row = base_row + row_offset;
+                if (row >= extent || !detail::triangular_storage_contains(transform.uplo, row, col)) {
+                    continue;
+                }
+                T value = operand.beta * operand.c(row, col) + partials[static_cast<std::size_t>(row_offset)];
+                if constexpr (ComplexScalar<T>) {
+                    if (transform.hermitian && row == col) {
+                        value = T(value.real(), typename T::value_type(0));
+                    }
+                }
+                operand.c(row, col) = value;
+            }
+        }
+    }
+}
+
+template <typename Item, typename T, typename LhsLoader, typename RhsLoader>
+inline constexpr void accumulate_rank2k_register_tiled_pass(const Item& item,
+                                                            RegisterMatrixWorkspace<T>* workspace,
+                                                            int linear_tid,
+                                                            int subgroup_id,
+                                                            int contract_extent,
+                                                            LhsLoader&& lhs_loader,
+                                                            RhsLoader&& rhs_loader,
+                                                            RegisterMatrixAccumTile<T>& accum) {
+    const int tile_count = (contract_extent + kRegisterMatrixTileK - 1) / kRegisterMatrixTileK;
+    if (tile_count <= 0) {
+        return;
+    }
+
+    load_register_matrix_stage(item,
+                               workspace,
+                               linear_tid,
+                               subgroup_id,
+                               0,
+                               0,
+                               true,
+                               true,
+                               0,
+                               std::min(kRegisterMatrixTileK, contract_extent),
+                               lhs_loader,
+                               rhs_loader);
+    sycl::group_barrier(item.get_group());
+
+    for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
+        const int current_k_base = tile_idx * kRegisterMatrixTileK;
+        const int current_tile_extent = std::min(kRegisterMatrixTileK, contract_extent - current_k_base);
+        const int next_tile_idx = tile_idx + 1;
+        const int current_lhs_stage = register_matrix_lhs_stage(tile_idx);
+        const int current_rhs_stage = register_matrix_rhs_stage(tile_idx);
+
+        if (next_tile_idx < tile_count) {
+            const int next_k_base = next_tile_idx * kRegisterMatrixTileK;
+            const int next_tile_extent = std::min(kRegisterMatrixTileK, contract_extent - next_k_base);
+            if constexpr (kRegisterMatrixRhsStages > 1) {
+                load_register_matrix_stage(item,
+                                           workspace,
+                                           linear_tid,
+                                           subgroup_id,
+                                           current_lhs_stage,
+                                           register_matrix_rhs_stage(next_tile_idx),
+                                           false,
+                                           kRegisterMatrixRhsStages > 1,
+                                           next_k_base,
+                                           next_tile_extent,
+                                           lhs_loader,
+                                           rhs_loader);
+            }
+        }
+
+        accumulate_register_matrix_stage(item,
+                                         workspace,
+                                         subgroup_id,
+                                         current_lhs_stage,
+                                         current_rhs_stage,
+                                         linear_tid / kRegisterMatrixLocalCols,
+                                         linear_tid % kRegisterMatrixLocalCols,
+                                         current_tile_extent,
+                                         accum);
+
+        if (next_tile_idx < tile_count) {
+            const int next_k_base = next_tile_idx * kRegisterMatrixTileK;
+            const int next_tile_extent = std::min(kRegisterMatrixTileK, contract_extent - next_k_base);
+            if constexpr (kRegisterMatrixRhsStages == 1) {
+                sycl::group_barrier(item.get_group());
+            } else {
+                sycl::group_barrier(item.get_sub_group());
+            }
+            load_register_matrix_stage(item,
+                                       workspace,
+                                       linear_tid,
+                                       subgroup_id,
+                                       0,
+                                       kRegisterMatrixRhsStages == 1 ? 0 : register_matrix_rhs_stage(next_tile_idx),
+                                       true,
+                                       kRegisterMatrixRhsStages == 1,
+                                       next_k_base,
+                                       next_tile_extent,
+                                       lhs_loader,
+                                       rhs_loader);
+            sycl::group_barrier(item.get_group());
+        }
+    }
+
+    sycl::group_barrier(item.get_group());
+}
+
+template <int TileK, int TileAStride, typename Workspace, typename Item, typename T, typename LhsLoader, typename RhsLoader>
+inline constexpr void accumulate_complex_rank2k_tiled_pass_impl(const Item& item,
+                                                                Workspace* workspace,
+                                                                int linear_tid,
+                                                                int subgroup_id,
+                                                                int local_row,
+                                                                int local_col,
+                                                                int contract_extent,
+                                                                LhsLoader&& lhs_loader,
+                                                                RhsLoader&& rhs_loader,
+                                                                ComplexRank2kAccumTile<T>& accum) {
+    const auto sg = item.get_sub_group();
+    const int sg_lane = subgroup_local_id(item);
+    const int sg_row = sg_lane / kComplexRank2kLocalCols;
+    const int sg_col = sg_lane % kComplexRank2kLocalCols;
+    const int lhs_row_base = (local_row % kComplexRank2kSubgroupRows) * kComplexRank2kThreadTileRows;
+    const int lhs_source_lane = sg_row * kComplexRank2kLocalCols;
+    const int rhs_source_lane_base = sg_col;
+    const int rhs_col_base = local_col * kComplexRank2kThreadTileCols;
+    T* lhs_tile = workspace->lhs[subgroup_id];
+    T* rhs_tile = workspace->rhs;
+
+    for (int k_base = 0; k_base < contract_extent; k_base += TileK) {
+        const int tile_extent = std::min(TileK, contract_extent - k_base);
+
+        for (int index = sg_lane; index < kComplexRank2kSubgroupTileM * TileK; index += kMaxSupportedSubgroupSize) {
+            const int subgroup_tile_r = index / TileK;
+            const int tile_k = index % TileK;
+            const int tile_r = subgroup_id * kComplexRank2kSubgroupTileM + subgroup_tile_r;
+            lhs_tile[subgroup_tile_r * TileAStride + tile_k] =
+                tile_k < tile_extent ? lhs_loader(tile_r, k_base + tile_k) : T(0);
+        }
+        for (int index = linear_tid; index < TileK * kComplexRank2kTileN; index += kComplexRank2kThreadsPerGroup) {
+            const int tile_k = index / kComplexRank2kTileN;
+            const int tile_c = index % kComplexRank2kTileN;
+            rhs_tile[tile_k * kComplexRank2kTileBStride + tile_c] =
+                tile_k < tile_extent ? rhs_loader(tile_c, k_base + tile_k) : T(0);
+        }
+        sycl::group_barrier(item.get_group());
+
+        for (int kk = 0; kk < tile_extent; ++kk) {
+            std::array<T, kComplexRank2kThreadTileRows> lhs_frag{};
+            std::array<T, kComplexRank2kThreadTileCols> rhs_frag{};
+
+            static_for<kComplexRank2kThreadTileRows>([&](auto row_idx) {
+                constexpr int i = row_idx;
+                const T lhs_lane = sg_col == 0 ? lhs_tile[(lhs_row_base + i) * TileAStride + kk] : T(0);
+                lhs_frag[static_cast<std::size_t>(i)] =
+                    sycl::select_from_group(sg, lhs_lane, static_cast<uint32_t>(lhs_source_lane));
+            });
+
+            static_for<kComplexRank2kThreadTileCols>([&](auto col_idx) {
+                constexpr int j = col_idx;
+                const T rhs_lane = sg_row == 0 ? rhs_tile[kk * kComplexRank2kTileBStride + rhs_col_base + j] : T(0);
+                rhs_frag[static_cast<std::size_t>(j)] =
+                    sycl::select_from_group(sg, rhs_lane, static_cast<uint32_t>(rhs_source_lane_base));
+            });
+
+            static_for<kComplexRank2kThreadTileRows>([&](auto row_idx) {
+                constexpr int i = row_idx;
+                const T lhs_value = lhs_frag[static_cast<std::size_t>(i)];
+                static_for<kComplexRank2kThreadTileCols>([&](auto col_idx) {
+                    constexpr int j = col_idx;
+                    accum.template get<i, j>() += lhs_value * rhs_frag[static_cast<std::size_t>(j)];
+                });
+            });
+        }
+
+        sycl::group_barrier(item.get_group());
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rank2k_complex_tiled(const Item& item,
+                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                           MatrixMatrixOperand<T> operand,
+                                           SymmetricRank2kTransform transform,
+                                           ComplexRank2kWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kComplexRank2kLocalCols;
+    const int local_col = linear_tid % kComplexRank2kLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kComplexRank2kTileM - 1) / kComplexRank2kTileM;
+    const int col_tiles = (extent + kComplexRank2kTileN - 1) / kComplexRank2kTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rank2k_rhs_transform(transform);
+    const T alpha2 = detail::secondary_rank2k_alpha(operand.alpha, transform.hermitian);
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kComplexRank2kTileM;
+            const int tile_col_base = tile_col * kComplexRank2kTileN;
+            const int row_base = tile_row_base + local_row * kComplexRank2kThreadTileRows;
+            const int col_base = tile_col_base + local_col * kComplexRank2kThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kComplexRank2kTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kComplexRank2kTileN <= tile_row_base) {
+                continue;
+            }
+
+            ComplexRank2kAccumTile<T> accum;
+
+            auto lhs1_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs1_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(operand.b, global_k, global_col, rhs_transform);
+            };
+            auto lhs2_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return alpha2 * detail::matrix_entry(operand.b, global_row, global_k, transform.trans);
+            };
+            auto rhs2_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kTileK, kComplexRank2kTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs1_loader, rhs1_loader, accum);
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kTileK, kComplexRank2kTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs2_loader, rhs2_loader, accum);
+
+            write_complex_rank2k_tile(operand, transform, row_base, col_base, extent, accum);
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rankk_complex_tiled(const Item& item,
+                                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                          RankKOperand<T> operand,
+                                          SymmetricRankKTransform transform,
+                                          ComplexRank2kWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kComplexRank2kLocalCols;
+    const int local_col = linear_tid % kComplexRank2kLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kComplexRank2kTileM - 1) / kComplexRank2kTileM;
+    const int col_tiles = (extent + kComplexRank2kTileN - 1) / kComplexRank2kTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rankk_rhs_transform(transform);
+    MatrixMatrixOperand<T> rank_operand{a, operand.c, operand.alpha, operand.beta};
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kComplexRank2kTileM;
+            const int tile_col_base = tile_col * kComplexRank2kTileN;
+            const int row_base = tile_row_base + local_row * kComplexRank2kThreadTileRows;
+            const int col_base = tile_col_base + local_col * kComplexRank2kThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kComplexRank2kTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kComplexRank2kTileN <= tile_row_base) {
+                continue;
+            }
+
+            ComplexRank2kAccumTile<T> accum;
+
+            auto lhs_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kTileK, kComplexRank2kTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs_loader, rhs_loader, accum);
+
+            write_complex_rank2k_tile(rank_operand, transform, row_base, col_base, extent, accum);
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rank2k_complex_in_kernel_tiled(const Item& item,
+                                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                     MatrixMatrixOperand<T> operand,
+                                                     SymmetricRank2kTransform transform,
+                                                     ComplexRank2kInKernelWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kComplexRank2kLocalCols;
+    const int local_col = linear_tid % kComplexRank2kLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kComplexRank2kTileM - 1) / kComplexRank2kTileM;
+    const int col_tiles = (extent + kComplexRank2kTileN - 1) / kComplexRank2kTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rank2k_rhs_transform(transform);
+    const T alpha2 = detail::secondary_rank2k_alpha(operand.alpha, transform.hermitian);
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kComplexRank2kTileM;
+            const int tile_col_base = tile_col * kComplexRank2kTileN;
+            const int row_base = tile_row_base + local_row * kComplexRank2kThreadTileRows;
+            const int col_base = tile_col_base + local_col * kComplexRank2kThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kComplexRank2kTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kComplexRank2kTileN <= tile_row_base) {
+                continue;
+            }
+
+            ComplexRank2kAccumTile<T> accum;
+
+            auto lhs1_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs1_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(operand.b, global_k, global_col, rhs_transform);
+            };
+            auto lhs2_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return alpha2 * detail::matrix_entry(operand.b, global_row, global_k, transform.trans);
+            };
+            auto rhs2_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kInKernelTileK, kComplexRank2kInKernelTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs1_loader, rhs1_loader, accum);
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kInKernelTileK, kComplexRank2kInKernelTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs2_loader, rhs2_loader, accum);
+
+            write_complex_rank2k_tile(operand, transform, row_base, col_base, extent, accum);
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rankk_complex_in_kernel_tiled(const Item& item,
+                                                    const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                    RankKOperand<T> operand,
+                                                    SymmetricRankKTransform transform,
+                                                    ComplexRank2kInKernelWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kComplexRank2kLocalCols;
+    const int local_col = linear_tid % kComplexRank2kLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kComplexRank2kTileM - 1) / kComplexRank2kTileM;
+    const int col_tiles = (extent + kComplexRank2kTileN - 1) / kComplexRank2kTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rankk_rhs_transform(transform);
+    MatrixMatrixOperand<T> rank_operand{a, operand.c, operand.alpha, operand.beta};
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kComplexRank2kTileM;
+            const int tile_col_base = tile_col * kComplexRank2kTileN;
+            const int row_base = tile_row_base + local_row * kComplexRank2kThreadTileRows;
+            const int col_base = tile_col_base + local_col * kComplexRank2kThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kComplexRank2kTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kComplexRank2kTileN <= tile_row_base) {
+                continue;
+            }
+
+            ComplexRank2kAccumTile<T> accum;
+
+            auto lhs_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row_base + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col_base + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_complex_rank2k_tiled_pass_impl<kComplexRank2kInKernelTileK, kComplexRank2kInKernelTileAStride>(
+                item, workspace, linear_tid, subgroup_id, local_row, local_col, contract_extent, lhs_loader, rhs_loader, accum);
+
+            write_complex_rank2k_tile(rank_operand, transform, row_base, col_base, extent, accum);
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rank2k_register_tiled(const Item& item,
+                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                            MatrixMatrixOperand<T> operand,
+                                            SymmetricRank2kTransform transform,
+                                            RegisterMatrixWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kRegisterMatrixLocalCols;
+    const int local_col = linear_tid % kRegisterMatrixLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kRegisterMatrixTileM - 1) / kRegisterMatrixTileM;
+    const int col_tiles = (extent + kRegisterMatrixTileN - 1) / kRegisterMatrixTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rank2k_rhs_transform(transform);
+    const T alpha2 = detail::secondary_rank2k_alpha(operand.alpha, transform.hermitian);
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kRegisterMatrixTileM;
+            const int tile_col_base = tile_col * kRegisterMatrixTileN;
+            const int row_base = tile_row * kRegisterMatrixTileM + local_row * kRegisterMatrixThreadTileRows;
+            const int col_base = tile_col * kRegisterMatrixTileN + local_col * kRegisterMatrixThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kRegisterMatrixTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kRegisterMatrixTileN <= tile_row_base) {
+                continue;
+            }
+
+            RegisterMatrixAccumTile<T> accum;
+
+            auto lhs1_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row * kRegisterMatrixTileM + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs1_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col * kRegisterMatrixTileN + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(operand.b, global_k, global_col, rhs_transform);
+            };
+            auto lhs2_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row * kRegisterMatrixTileM + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return alpha2 * detail::matrix_entry(operand.b, global_row, global_k, transform.trans);
+            };
+            auto rhs2_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col * kRegisterMatrixTileN + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_rank2k_register_tiled_pass(
+                item, workspace, linear_tid, subgroup_id, contract_extent, lhs1_loader, rhs1_loader, accum);
+            accumulate_rank2k_register_tiled_pass(
+                item, workspace, linear_tid, subgroup_id, contract_extent, lhs2_loader, rhs2_loader, accum);
+
+            write_rank2k_register_tile(operand, transform, row_base, col_base, extent, accum);
+        }
+    }
+}
+
+template <typename Item, typename T>
+inline constexpr void rankk_register_tiled(const Item& item,
+                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                           RankKOperand<T> operand,
+                                           SymmetricRankKTransform transform,
+                                           RegisterMatrixWorkspace<T>* workspace) {
+    const int linear_tid = detail::item_local_linear_id(item);
+    const int subgroup_id = subgroup_group_id(item);
+    const int local_row = linear_tid / kRegisterMatrixLocalCols;
+    const int local_col = linear_tid % kRegisterMatrixLocalCols;
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    const int row_tiles = (extent + kRegisterMatrixTileM - 1) / kRegisterMatrixTileM;
+    const int col_tiles = (extent + kRegisterMatrixTileN - 1) / kRegisterMatrixTileN;
+    const int tile_row_start = matrix_tile_group_row(item);
+    const int tile_col_start = matrix_tile_group_col(item);
+    const int tile_row_stride = matrix_tile_group_row_stride(item);
+    const int tile_col_stride = matrix_tile_group_col_stride(item);
+    const Transpose rhs_transform = detail::rankk_rhs_transform(transform);
+    MatrixMatrixOperand<T> rank_operand{a, operand.c, operand.alpha, operand.beta};
+
+    for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
+        for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
+            const int tile_row_base = tile_row * kRegisterMatrixTileM;
+            const int tile_col_base = tile_col * kRegisterMatrixTileN;
+            const int row_base = tile_row * kRegisterMatrixTileM + local_row * kRegisterMatrixThreadTileRows;
+            const int col_base = tile_col * kRegisterMatrixTileN + local_col * kRegisterMatrixThreadTileCols;
+
+            if (transform.uplo == Uplo::Lower && tile_row_base + kRegisterMatrixTileM <= tile_col_base) {
+                continue;
+            }
+            if (transform.uplo == Uplo::Upper && tile_col_base + kRegisterMatrixTileN <= tile_row_base) {
+                continue;
+            }
+
+            RegisterMatrixAccumTile<T> accum;
+
+            auto lhs_loader = [&](int tile_r, int global_k) {
+                const int global_row = tile_row * kRegisterMatrixTileM + tile_r;
+                if (global_row >= extent) {
+                    return T(0);
+                }
+                return operand.alpha * detail::matrix_entry(a, global_row, global_k, transform.trans);
+            };
+            auto rhs_loader = [&](int tile_c, int global_k) {
+                const int global_col = tile_col * kRegisterMatrixTileN + tile_c;
+                if (global_col >= extent) {
+                    return T(0);
+                }
+                return detail::matrix_entry(a, global_k, global_col, rhs_transform);
+            };
+
+            accumulate_rank2k_register_tiled_pass(
+                item, workspace, linear_tid, subgroup_id, contract_extent, lhs_loader, rhs_loader, accum);
+
+            write_rank2k_register_tile(rank_operand, transform, row_base, col_base, extent, accum);
         }
     }
 }

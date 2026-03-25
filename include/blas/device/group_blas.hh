@@ -39,6 +39,20 @@ struct MatrixMatrixOperand {
     T beta = T(0);
 };
 
+template <typename T>
+struct RankKOperand {
+    KernelMatrixView<T, MatrixFormat::Dense> c{};
+    T alpha = T(1);
+    T beta = T(0);
+};
+
+template <typename T>
+struct Rank1UpdateOperand {
+    VectorView<T> y{};
+    KernelMatrixView<T, MatrixFormat::Dense> a{};
+    T alpha = T(1);
+};
+
 struct MatrixVectorTransform {
     Transpose trans = Transpose::NoTrans;
 };
@@ -58,6 +72,24 @@ struct TriangularTransform {
 struct SymmetricTransform {
     Side side = Side::Left;
     Uplo uplo = Uplo::Upper;
+    bool hermitian = false;
+};
+
+struct OuterProductTransform {
+    bool conjugate_x = false;
+    bool conjugate_y = false;
+};
+
+struct SymmetricRank2kTransform {
+    Uplo uplo = Uplo::Upper;
+    Transpose trans = Transpose::NoTrans;
+    bool hermitian = false;
+};
+
+struct SymmetricRankKTransform {
+    Uplo uplo = Uplo::Upper;
+    Transpose trans = Transpose::NoTrans;
+    bool hermitian = false;
 };
 
 template <typename T>
@@ -80,6 +112,20 @@ inline constexpr MatrixMatrixOperand<T> make_matmat_operand(const KernelMatrixVi
 }
 
 template <typename T>
+inline constexpr RankKOperand<T> make_rankk_operand(const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                                                    T alpha = T(1),
+                                                    T beta = T(0)) {
+    return RankKOperand<T>{c, alpha, beta};
+}
+
+template <typename T>
+inline constexpr Rank1UpdateOperand<T> make_rank1_update_operand(const VectorView<T>& y,
+                                                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                                 T alpha = T(1)) {
+    return Rank1UpdateOperand<T>{y, a, alpha};
+}
+
+template <typename T>
 inline constexpr GemvOperand<T> make_gemv_operand(const VectorView<T>& x,
                                                   const VectorView<T>& y,
                                                   T alpha = T(1),
@@ -88,6 +134,18 @@ inline constexpr GemvOperand<T> make_gemv_operand(const VectorView<T>& x,
 }
 
 namespace detail {
+
+template <typename Group, typename T>
+inline constexpr T reduce_sum_group(const Group& group, const T& value) {
+    if constexpr (ComplexScalar<T>) {
+        using Real = typename T::value_type;
+        const Real re = sycl::reduce_over_group(group, value.real(), sycl::plus<Real>());
+        const Real im = sycl::reduce_over_group(group, value.imag(), sycl::plus<Real>());
+        return T(re, im);
+    } else {
+        return sycl::reduce_over_group(group, value, sycl::plus<T>());
+    }
+}
 
 template <typename T>
 inline constexpr T conjugate_if_needed(const T& value) {
@@ -131,6 +189,11 @@ concept MatrixVectorOperandFor = std::same_as<std::remove_cvref_t<Op>, MatrixVec
 
 template <typename T, typename Op>
 concept MatrixMatrixOperandFor = std::same_as<std::remove_cvref_t<Op>, MatrixMatrixOperand<T>>;
+
+template <typename T>
+inline constexpr T maybe_conjugate(const T& value, bool conjugate) {
+    return conjugate ? conjugate_if_needed(value) : value;
+}
 
 template <typename T>
 inline constexpr T matrix_entry(const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -252,11 +315,72 @@ inline constexpr void validate_symmetric_operand(const KernelMatrixView<T, Matri
     }
 }
 
+template <typename T>
+inline constexpr void validate_rank1_operand(const VectorView<T>& x,
+                                             const Rank1UpdateOperand<T>& operand) {
+    assert(x.batch_size() == 1 && "device::ger expects a single logical input vector; pass batch_item() for batched data");
+    assert(operand.y.batch_size() == 1 && "device::ger expects a single logical input vector; pass batch_item() for batched data");
+    validate_single_problem(operand.a, Transpose::NoTrans);
+    assert(operand.a.rows() == x.size() && "device::ger matrix row count must match x size");
+    assert(operand.a.cols() == operand.y.size() && "device::ger matrix column count must match y size");
+}
+
+template <typename T>
+inline constexpr void validate_rank2k_operand(const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                              const MatrixMatrixOperand<T>& operand,
+                                              SymmetricRank2kTransform transform) {
+    validate_single_problem(a, transform.trans);
+    assert(operand.b.batch_size() == 1 && "device::syr2k expects a single logical input matrix; pass batch_item() for batched data");
+    assert(operand.c.batch_size() == 1 && "device::syr2k expects a single logical output matrix; pass batch_item() for batched data");
+    assert(a.rows() == operand.b.rows() && "device::syr2k input matrices must have matching row counts");
+    assert(a.cols() == operand.b.cols() && "device::syr2k input matrices must have matching column counts");
+    const int extent = output_size(a, transform.trans);
+    assert(operand.c.rows() == extent && "device::syr2k output matrix row count does not match op(A)");
+    assert(operand.c.cols() == extent && "device::syr2k output matrix column count does not match op(A)");
+}
+
+template <typename T>
+inline constexpr void validate_rankk_operand(const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                             const RankKOperand<T>& operand,
+                                             SymmetricRankKTransform transform) {
+    validate_single_problem(a, transform.trans);
+    assert(operand.c.batch_size() == 1 && "device::syrk expects a single logical output matrix; pass batch_item() for batched data");
+    const int extent = output_size(a, transform.trans);
+    assert(operand.c.rows() == extent && "device::syrk output matrix row count does not match op(A)");
+    assert(operand.c.cols() == extent && "device::syrk output matrix column count does not match op(A)");
+}
+
+template <typename T>
+inline constexpr void validate_vector_operand(const VectorView<T>& x,
+                                              const char* op_name) {
+    (void)op_name;
+    assert(x.batch_size() == 1 && "device vector BLAS expects a single logical vector; pass batch_item() for batched data");
+}
+
+template <typename T>
+inline constexpr void validate_vector_operands(const VectorView<T>& x,
+                                               const VectorView<T>& y,
+                                               const char* op_name) {
+    validate_vector_operand(x, op_name);
+    validate_vector_operand(y, op_name);
+    assert(x.size() == y.size() && "device vector BLAS operands must have matching sizes");
+}
+
+template <typename T>
+inline constexpr void validate_vector_operands(const VectorView<T>& x,
+                                               const VectorView<T>& y,
+                                               const VectorView<T>& z,
+                                               const char* op_name) {
+    validate_vector_operands(x, y, op_name);
+    validate_vector_operand(z, op_name);
+    assert(x.size() == z.size() && "device vector BLAS operands must have matching sizes");
+}
+
 template <typename Group, typename T, std::size_t... I>
 inline constexpr void reduce_partials_impl(const Group& group,
                                            std::array<T, sizeof...(I)>& values,
                                            std::index_sequence<I...>) {
-    ((values[I] = sycl::reduce_over_group(group, values[I], sycl::plus<T>())), ...);
+    ((values[I] = reduce_sum_group(group, values[I])), ...);
 }
 
 template <typename Group, typename T, typename... Ops>
@@ -380,9 +504,17 @@ inline constexpr T symmetric_matrix_entry(const KernelMatrixView<T, MatrixFormat
                                           int col,
                                           SymmetricTransform transform) {
     if (transform.uplo == Uplo::Lower) {
-        return row >= col ? a(row, col) : a(col, row);
+        if (row >= col) {
+            return a(row, col);
+        }
+        const T value = a(col, row);
+        return transform.hermitian ? conjugate_if_needed(value) : value;
     }
-    return row <= col ? a(row, col) : a(col, row);
+    if (row <= col) {
+        return a(row, col);
+    }
+    const T value = a(col, row);
+    return transform.hermitian ? conjugate_if_needed(value) : value;
 }
 
 template <typename T>
@@ -391,6 +523,60 @@ inline constexpr void write_matrix_output(const MatrixMatrixOperand<T>& operand,
                                           int col,
                                           const T& value) {
     operand.c(row, col) = operand.alpha * value + operand.beta * operand.c(row, col);
+}
+
+template <typename T>
+inline constexpr void accumulate_rank1_output(const Rank1UpdateOperand<T>& operand,
+                                              int row,
+                                              int col,
+                                              const T& value) {
+    operand.a(row, col) += operand.alpha * value;
+}
+
+inline constexpr Transpose rank2k_rhs_transform(SymmetricRank2kTransform transform) {
+    if (transform.trans == Transpose::NoTrans) {
+        return transform.hermitian ? Transpose::ConjTrans : Transpose::Trans;
+    }
+    return Transpose::NoTrans;
+}
+
+inline constexpr Transpose rankk_rhs_transform(SymmetricRankKTransform transform) {
+    if (transform.trans == Transpose::NoTrans) {
+        return transform.hermitian ? Transpose::ConjTrans : Transpose::Trans;
+    }
+    return Transpose::NoTrans;
+}
+
+template <typename T>
+inline constexpr T secondary_rank2k_alpha(const T& alpha, bool hermitian) {
+    return hermitian ? conjugate_if_needed(alpha) : alpha;
+}
+
+template <typename T>
+inline constexpr SymmetricTransform canonical_hermitian_transform(SymmetricTransform transform) {
+    return SymmetricTransform{
+        .side = transform.side,
+        .uplo = transform.uplo,
+        .hermitian = ComplexScalar<T>,
+    };
+}
+
+template <typename T>
+inline constexpr SymmetricRank2kTransform canonical_hermitian_transform(SymmetricRank2kTransform transform) {
+    return SymmetricRank2kTransform{
+        .uplo = transform.uplo,
+        .trans = transform.trans,
+        .hermitian = ComplexScalar<T>,
+    };
+}
+
+template <typename T>
+inline constexpr SymmetricRankKTransform canonical_hermitian_transform(SymmetricRankKTransform transform) {
+    return SymmetricRankKTransform{
+        .uplo = transform.uplo,
+        .trans = transform.trans,
+        .hermitian = ComplexScalar<T>,
+    };
 }
 
 } // namespace detail
@@ -417,15 +603,17 @@ inline constexpr void gemm(const Item& item,
     const int row_extent = detail::output_size(a, transform.trans_a);
     const int col_extent = detail::input_size(operand.b, transform.trans_b);
     const int contract_extent = detail::input_size(a, transform.trans_a);
-    auto* gemm_workspace =
-        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GemmWorkspace<T>>(item.get_group()).get();
-    if (detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(item, a, operand, transform, policy)) {
-        detail::subgroup::gemm_aligned_nn_large(item, a, operand, gemm_workspace);
-        return;
-    }
-    if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
-        detail::subgroup::gemm_register_tiled(item, a, operand, transform, gemm_workspace);
-        return;
+    if constexpr (std::is_same_v<T, float>) {
+        auto* gemm_workspace =
+            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GemmWorkspace<T>>(item.get_group()).get();
+        if (detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(item, a, operand, transform, policy)) {
+            detail::subgroup::gemm_aligned_nn_large(item, a, operand, gemm_workspace);
+            return;
+        }
+        if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
+            detail::subgroup::gemm_register_tiled(item, a, operand, transform, gemm_workspace);
+            return;
+        }
     }
     if (detail::subgroup::can_use_matrix_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
         detail::subgroup::gemm(item, a, operand, transform);
@@ -487,6 +675,273 @@ inline constexpr void gemm(const Item& item,
          beta,
          GeneralMatrixTransform{.trans_a = trans_a, .trans_b = trans_b},
          policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void ger(const Group& group,
+                          const VectorView<T>& x,
+                          Rank1UpdateOperand<T> operand,
+                          OuterProductTransform transform = {}) {
+    detail::validate_rank1_operand(x, operand);
+    detail::generic::ger(group, x, operand, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void ger(const Item& item,
+                          const VectorView<T>& x,
+                          Rank1UpdateOperand<T> operand,
+                          OuterProductTransform transform = {},
+                          DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    detail::validate_rank1_operand(x, operand);
+    if (detail::subgroup::can_use_rank1_update_fast_path<T>(item, x, operand, policy)) {
+        detail::subgroup::ger(item, x, operand, transform);
+        return;
+    }
+    detail::generic::ger(item.get_group(), x, operand, transform);
+}
+
+template <typename Group, typename T>
+inline constexpr void ger(const Group& group,
+                          const VectorView<T>& x,
+                          const VectorView<T>& y,
+                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                          T alpha = T(1)) {
+    ger(group, x, make_rank1_update_operand(y, a, alpha), OuterProductTransform{});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void ger(const Item& item,
+                          const VectorView<T>& x,
+                          const VectorView<T>& y,
+                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                          T alpha = T(1),
+                          DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    ger(item, x, make_rank1_update_operand(y, a, alpha), OuterProductTransform{}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void geru(const Group& group,
+                           const VectorView<T>& x,
+                           Rank1UpdateOperand<T> operand) {
+    ger(group, x, operand, OuterProductTransform{});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void geru(const Item& item,
+                           const VectorView<T>& x,
+                           Rank1UpdateOperand<T> operand,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    ger(item, x, operand, OuterProductTransform{}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void geru(const Group& group,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           T alpha = T(1)) {
+    ger(group, x, y, a, alpha);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void geru(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           T alpha = T(1),
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    ger(item, x, y, a, alpha, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void gerc(const Group& group,
+                           const VectorView<T>& x,
+                           Rank1UpdateOperand<T> operand) {
+    ger(group, x, operand, OuterProductTransform{.conjugate_y = true});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void gerc(const Item& item,
+                           const VectorView<T>& x,
+                           Rank1UpdateOperand<T> operand,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    ger(item, x, operand, OuterProductTransform{.conjugate_y = true}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void gerc(const Group& group,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           T alpha = T(1)) {
+    gerc(group, x, make_rank1_update_operand(y, a, alpha));
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void gerc(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           T alpha = T(1),
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    gerc(item, x, make_rank1_update_operand(y, a, alpha), policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void copy(const Group& group,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "copy");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        y(index) = x(index);
+    }
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void copy(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "copy");
+    detail::subgroup::copy(item, x, y);
+}
+
+template <typename Group, typename T>
+inline constexpr void copyc(const Group& group,
+                            const VectorView<T>& x,
+                            const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "copyc");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        y(index) = detail::conjugate_if_needed(x(index));
+    }
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void copyc(const Item& item,
+                            const VectorView<T>& x,
+                            const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "copyc");
+    detail::subgroup::copyc(item, x, y);
+}
+
+template <typename Group, typename T>
+inline constexpr void scal(const Group& group,
+                           const VectorView<T>& x,
+                           T alpha) {
+    detail::validate_vector_operand(x, "scal");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        x(index) *= alpha;
+    }
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void scal(const Item& item,
+                           const VectorView<T>& x,
+                           T alpha) {
+    detail::validate_vector_operand(x, "scal");
+    detail::subgroup::scal(item, x, alpha);
+}
+
+template <typename Group, typename T>
+inline constexpr void axpy(const Group& group,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha = T(1)) {
+    detail::validate_vector_operands(x, y, "axpy");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        y(index) += alpha * x(index);
+    }
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void axpy(const Item& item,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha = T(1)) {
+    detail::validate_vector_operands(x, y, "axpy");
+    detail::subgroup::axpy(item, x, y, alpha);
+}
+
+template <typename Group, typename T>
+inline constexpr void hadamard(const Group& group,
+                               const VectorView<T>& x,
+                               const VectorView<T>& y,
+                               const VectorView<T>& z) {
+    detail::validate_vector_operands(x, y, z, "hadamard");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        z(index) = x(index) * y(index);
+    }
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void hadamard(const Item& item,
+                               const VectorView<T>& x,
+                               const VectorView<T>& y,
+                               const VectorView<T>& z) {
+    detail::validate_vector_operands(x, y, z, "hadamard");
+    detail::subgroup::hadamard(item, x, y, z);
+}
+
+template <typename Group, typename T>
+inline constexpr T dotu(const Group& group,
+                        const VectorView<T>& x,
+                        const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "dotu");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+    T partial = T(0);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        partial += x(index) * y(index);
+    }
+
+    return detail::reduce_sum_group(group, partial);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr T dotu(const Item& item,
+                        const VectorView<T>& x,
+                        const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "dotu");
+    return dotu(item.get_group(), x, y);
+}
+
+template <typename Group, typename T>
+inline constexpr T dotc(const Group& group,
+                        const VectorView<T>& x,
+                        const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "dotc");
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+    T partial = T(0);
+
+    for (int index = local_id; index < x.size(); index += local_size) {
+        partial += detail::conjugate_if_needed(x(index)) * y(index);
+    }
+
+    return detail::reduce_sum_group(group, partial);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr T dotc(const Item& item,
+                        const VectorView<T>& x,
+                        const VectorView<T>& y) {
+    detail::validate_vector_operands(x, y, "dotc");
+    return dotc(item.get_group(), x, y);
 }
 
 template <typename Group, typename T, typename... Ops>
@@ -739,6 +1194,10 @@ inline constexpr void symxv(const Item& item,
     detail::validate_symmetric_operands(a, operands, transform);
     if constexpr (sizeof...(Ops) == 1) {
         const auto& operand = std::get<0>(operands);
+        if (detail::subgroup::can_use_symv_no_trans_row_sweep_fast_path<T>(item, a, policy)) {
+            detail::subgroup::symv_no_trans_row_sweep(item, a, operand, transform);
+            return;
+        }
         if (detail::subgroup::can_use_symv_no_trans_column_sweep_fast_path<T>(item, a, policy)) {
             detail::subgroup::symv_no_trans_column_sweep(item, a, operand, transform);
             return;
@@ -761,6 +1220,36 @@ inline constexpr void symxv(const Item& item,
 }
 
 template <typename Group, typename T>
+inline constexpr void hemv_impl(const Group& group,
+                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                const VectorView<T>& x,
+                                const VectorView<T>& y,
+                                T alpha,
+                                T beta,
+                                SymmetricTransform transform) {
+    symxv(group,
+          a,
+          detail::canonical_hermitian_transform<T>(transform),
+          make_matvec_operand(x, y, alpha, beta));
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void hemv_impl(const Item& item,
+                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                const VectorView<T>& x,
+                                const VectorView<T>& y,
+                                T alpha,
+                                T beta,
+                                SymmetricTransform transform,
+                                DeviceBlasPolicy policy) {
+    symxv(item,
+          a,
+          detail::canonical_hermitian_transform<T>(transform),
+          policy,
+          make_matvec_operand(x, y, alpha, beta));
+}
+
+template <typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const VectorView<T>& x,
@@ -768,7 +1257,7 @@ inline constexpr void symv(const Group& group,
                            T alpha,
                            T beta,
                            SymmetricTransform transform) {
-    symxv(group, a, transform, make_matvec_operand(x, y, alpha, beta));
+    hemv_impl(group, a, x, y, alpha, beta, transform);
 }
 
 template <detail::NdItemLike Item, typename T>
@@ -780,7 +1269,7 @@ inline constexpr void symv(const Item& item,
                            T beta,
                            SymmetricTransform transform,
                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
-    symxv(item, a, transform, policy, make_matvec_operand(x, y, alpha, beta));
+    hemv_impl(item, a, x, y, alpha, beta, transform, policy);
 }
 
 template <typename Group, typename T>
@@ -804,6 +1293,355 @@ inline constexpr void symv(const Item& item,
                            Uplo uplo = Uplo::Upper,
                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
     symv(item, a, x, y, alpha, beta, SymmetricTransform{.side = Side::Left, .uplo = uplo}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void hemv(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha,
+                           T beta,
+                           SymmetricTransform transform) {
+    hemv_impl(group, a, x, y, alpha, beta, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void hemv(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha,
+                           T beta,
+                           SymmetricTransform transform,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    hemv_impl(item, a, x, y, alpha, beta, transform, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void hemv(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper) {
+    hemv(group, a, x, y, alpha, beta, SymmetricTransform{.side = Side::Left, .uplo = uplo});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void hemv(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const VectorView<T>& x,
+                           const VectorView<T>& y,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    hemv(item, a, x, y, alpha, beta, SymmetricTransform{.side = Side::Left, .uplo = uplo}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void her2k_impl(const Group& group,
+                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                 MatrixMatrixOperand<T> operand,
+                                 SymmetricRank2kTransform transform) {
+    const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
+    detail::validate_rank2k_operand(a, operand, canonical_transform);
+    detail::generic::rank2k(group, a, operand, canonical_transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void her2k_impl(const Item& item,
+                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                 MatrixMatrixOperand<T> operand,
+                                 SymmetricRank2kTransform transform,
+                                 DeviceBlasPolicy policy) {
+    const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
+    detail::validate_rank2k_operand(a, operand, canonical_transform);
+    if (detail::subgroup::can_use_complex_rank2k_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        auto* workspace =
+            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kInKernelWorkspace<T>>(item.get_group()).get();
+        detail::subgroup::rank2k_complex_in_kernel_tiled(item, a, operand, canonical_transform, workspace);
+        return;
+    }
+    if (detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        auto* workspace =
+            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(item.get_group()).get();
+        detail::subgroup::rank2k_complex_tiled(item, a, operand, canonical_transform, workspace);
+        return;
+    }
+    if constexpr (std::is_same_v<T, float>) {
+        if (detail::subgroup::can_use_rank2k_register_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            auto* workspace =
+                sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(item.get_group()).get();
+            detail::subgroup::rank2k_register_tiled(item, a, operand, canonical_transform, workspace);
+            return;
+        }
+    }
+    if (detail::subgroup::can_use_rank2k_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        detail::subgroup::rank2k(item, a, operand, canonical_transform);
+        return;
+    }
+    detail::generic::rank2k(item.get_group(), a, operand, canonical_transform);
+}
+
+template <typename Group, typename T>
+inline constexpr void herk_impl(const Group& group,
+                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                RankKOperand<T> operand,
+                                SymmetricRankKTransform transform) {
+    const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
+    detail::validate_rankk_operand(a, operand, canonical_transform);
+    detail::generic::rankk(group, a, operand, canonical_transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void herk_impl(const Item& item,
+                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                RankKOperand<T> operand,
+                                SymmetricRankKTransform transform,
+                                DeviceBlasPolicy policy) {
+    const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
+    detail::validate_rankk_operand(a, operand, canonical_transform);
+    if (detail::subgroup::can_use_complex_rankk_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        auto* workspace =
+            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kInKernelWorkspace<T>>(item.get_group()).get();
+        detail::subgroup::rankk_complex_in_kernel_tiled(item, a, operand, canonical_transform, workspace);
+        return;
+    }
+    if (detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        auto* workspace =
+            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(item.get_group()).get();
+        detail::subgroup::rankk_complex_tiled(item, a, operand, canonical_transform, workspace);
+        return;
+    }
+    if constexpr (std::is_same_v<T, float>) {
+        if (detail::subgroup::can_use_rankk_register_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            auto* workspace =
+                sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(item.get_group()).get();
+            detail::subgroup::rankk_register_tiled(item, a, operand, canonical_transform, workspace);
+            return;
+        }
+    }
+    if (detail::subgroup::can_use_rankk_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+        detail::subgroup::rankk(item, a, operand, canonical_transform);
+        return;
+    }
+    detail::generic::rankk(item.get_group(), a, operand, canonical_transform);
+}
+
+template <typename Group, typename T>
+inline constexpr void syrk(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           SymmetricRankKTransform transform) {
+    herk_impl(group, a, operand, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void syrk(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           SymmetricRankKTransform transform,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    herk_impl(item, a, operand, transform, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void syrk(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans) {
+    syrk(group, a, make_rankk_operand(c, alpha, beta), SymmetricRankKTransform{.uplo = uplo, .trans = trans});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void syrk(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    syrk(item,
+         a,
+         make_rankk_operand(c, alpha, beta),
+         SymmetricRankKTransform{.uplo = uplo, .trans = trans},
+         policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void herk(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           SymmetricRankKTransform transform) {
+    herk_impl(group, a, operand, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void herk(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           SymmetricRankKTransform transform,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    herk_impl(item, a, operand, transform, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void herk(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans) {
+    herk(group, a, operand, SymmetricRankKTransform{.uplo = uplo, .trans = trans});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void herk(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           RankKOperand<T> operand,
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    herk(item, a, operand, SymmetricRankKTransform{.uplo = uplo, .trans = trans}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void herk(const Group& group,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans) {
+    herk(group, a, make_rankk_operand(c, alpha, beta), uplo, trans);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void herk(const Item& item,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                           const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                           T alpha = T(1),
+                           T beta = T(0),
+                           Uplo uplo = Uplo::Upper,
+                           Transpose trans = Transpose::NoTrans,
+                           DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    herk(item, a, make_rankk_operand(c, alpha, beta), uplo, trans, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void syr2k(const Group& group,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            SymmetricRank2kTransform transform) {
+    her2k_impl(group, a, operand, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void syr2k(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            SymmetricRank2kTransform transform,
+                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    her2k_impl(item, a, operand, transform, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void syr2k(const Group& group,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                            T alpha = T(1),
+                            T beta = T(0),
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans) {
+    syr2k(group,
+          a,
+          make_matmat_operand(b, c, alpha, beta),
+          SymmetricRank2kTransform{.uplo = uplo, .trans = trans});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void syr2k(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                            T alpha = T(1),
+                            T beta = T(0),
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans,
+                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    syr2k(item,
+          a,
+          make_matmat_operand(b, c, alpha, beta),
+          SymmetricRank2kTransform{.uplo = uplo, .trans = trans},
+          policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void her2k(const Group& group,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            SymmetricRank2kTransform transform) {
+    her2k_impl(group, a, operand, transform);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void her2k(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            SymmetricRank2kTransform transform,
+                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    her2k_impl(item, a, operand, transform, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void her2k(const Group& group,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans) {
+    her2k(group, a, operand, SymmetricRank2kTransform{.uplo = uplo, .trans = trans});
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void her2k(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            MatrixMatrixOperand<T> operand,
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans,
+                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    her2k(item, a, operand, SymmetricRank2kTransform{.uplo = uplo, .trans = trans}, policy);
+}
+
+template <typename Group, typename T>
+inline constexpr void her2k(const Group& group,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                            T alpha = T(1),
+                            T beta = T(0),
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans) {
+    her2k(group, a, make_matmat_operand(b, c, alpha, beta), uplo, trans);
+}
+
+template <detail::NdItemLike Item, typename T>
+inline constexpr void her2k(const Item& item,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
+                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
+                            T alpha = T(1),
+                            T beta = T(0),
+                            Uplo uplo = Uplo::Upper,
+                            Transpose trans = Transpose::NoTrans,
+                            DeviceBlasPolicy policy = DeviceBlasPolicy::Auto) {
+    her2k(item, a, make_matmat_operand(b, c, alpha, beta), uplo, trans, policy);
 }
 
 template <typename Group, typename T>
