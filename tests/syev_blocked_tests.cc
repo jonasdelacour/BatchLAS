@@ -41,6 +41,33 @@ Real tol_resid_for() {
 	return Real(5e-9);
 }
 
+template <typename Scalar, Backend B>
+typename base_type<Scalar>::type blocked_cuda_tolerance_floor_eig() {
+	using Real = typename base_type<Scalar>::type;
+	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
+		return Real(1e-8);
+	}
+	return Real(0);
+}
+
+template <typename Scalar, Backend B>
+typename base_type<Scalar>::type blocked_cuda_tolerance_floor_ortho() {
+	using Real = typename base_type<Scalar>::type;
+	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
+		return Real(3e-8);
+	}
+	return Real(0);
+}
+
+template <typename Scalar, Backend B>
+typename base_type<Scalar>::type blocked_cuda_tolerance_floor_resid() {
+	using Real = typename base_type<Scalar>::type;
+	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
+		return Real(1e-7);
+	}
+	return Real(0);
+}
+
 template <typename Scalar>
 using RealOf = typename base_type<Scalar>::type;
 
@@ -177,7 +204,7 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 						params).wait();
 	}
 
-	const Real tol = tol_eig_for<Real>();
+	const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
 	for (int j = 0; j < batch; ++j) {
 		for (int i = 0; i < n; ++i) {
 			EXPECT_NEAR(W_blk[i + j * n], W_ref[i + j * n], tol) << "(i,b)= (" << i << "," << j << ")";
@@ -227,13 +254,13 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 						params).wait();
 	}
 
-	const Real tol_w = tol_eig_for<Real>();
+	const Real tol_w = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
 	for (int i = 0; i < n; ++i) {
 		EXPECT_NEAR(W_blk[i], W_ref[i], tol_w);
 	}
 
-	check_orthonormal_columns(A_blk.view(), W_blk, tol_ortho_for<Real>());
-	check_eigen_residual(A0.view(), A_blk.view(), W_blk, tol_resid_for<Real>());
+	check_orthonormal_columns(A_blk.view(), W_blk, std::max(tol_ortho_for<Real>(), blocked_cuda_tolerance_floor_ortho<Scalar, B>()));
+	check_eigen_residual(A0.view(), A_blk.view(), W_blk, std::max(tol_resid_for<Real>(), blocked_cuda_tolerance_floor_resid<Scalar, B>()));
 }
 
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {

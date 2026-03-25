@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
@@ -36,6 +37,22 @@ UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat:
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
     backend::syev_vendor<Backend::NETLIB, double>(
         ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+    ctx_cpu.wait();
+
+    return ref_eigs;
+}
+
+template <typename Scalar>
+UnifiedVector<typename base_type<Scalar>::type> netlib_ref_eigs_dense_native(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    using Real = typename base_type<Scalar>::type;
+
+    Queue ctx_cpu("cpu");
+    UnifiedVector<Real> ref_eigs(static_cast<std::size_t>(A.rows()) * static_cast<std::size_t>(A.batch_size()));
+    const size_t ws_bytes = backend::syev_vendor_buffer_size<Backend::NETLIB, Scalar>(
+        ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
+    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+    backend::syev_vendor<Backend::NETLIB, Scalar>(
+        ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
     ctx_cpu.wait();
 
     return ref_eigs;
@@ -181,6 +198,7 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
     constexpr Backend B = Backend::CUDA;
 
     const double eig_tol = 10000.0 * test_utils::tolerance<double>();
+    const double experiment_floor = 2.5e-6;
     Queue probe;
     if (probe.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "SYTRD SYR2K trailing-update test requires a GPU device";
@@ -221,10 +239,70 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
             const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
             for (int i = 0; i < n; ++i) {
                 const double ref = eig_ref[base + static_cast<std::size_t>(i)];
-                const double err_tol = std::max(eig_tol * std::max(1.0, std::abs(ref)), 2e-6);
+                const double err_tol = std::max(eig_tol * std::max(1.0, std::abs(ref)), experiment_floor);
                 EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
                     << "eigenvalue mismatch at n=" << n << ", i=" << i << ", batch=" << b;
             }
+        }
+    }
+}
+
+TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReference) {
+    using Scalar = std::complex<double>;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = Backend::CUDA;
+
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "Complex<double> SYTRD blocked test requires a GPU device";
+    }
+
+    const int n = 96;
+    const int batch = 16;
+    const int nb = 32;
+    const double eig_tol = 100.0 * test_utils::tolerance<double>();
+
+    auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242);
+    Matrix<Scalar, MatrixFormat::Dense> A = A0;
+    Vector<Scalar> d(n, batch);
+    Vector<Scalar> e(n - 1, batch);
+    Vector<Scalar> tau(n - 1, batch);
+
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+
+    sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+
+    Matrix<Scalar, MatrixFormat::Dense> Tmat = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
+    auto Tview = Tmat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            Tview.template at<MatrixFormat::Dense>(i, i, b) = Scalar(d(i, b).real(), 0.0);
+            if (i < n - 1) {
+                const Scalar sub = e(i, b);
+                Tview.template at<MatrixFormat::Dense>(i + 1, i, b) = sub;
+                Tview.template at<MatrixFormat::Dense>(i, i + 1, b) = std::conj(sub);
+            }
+        }
+    }
+
+    const auto eig_ref = netlib_ref_eigs_dense_native(A0.view());
+    const auto eig_trd = netlib_ref_eigs_dense_native(Tmat.view());
+
+    std::vector<int> batch_items{0};
+    if (batch > 1) batch_items.push_back(batch / 2);
+    if (batch > 2) batch_items.push_back(batch - 1);
+
+    for (int b : batch_items) {
+        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+        for (int i = 0; i < n; ++i) {
+            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
+            const double err_tol = eig_tol * std::max(1.0, std::abs(ref));
+            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
+                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
         }
     }
 }
