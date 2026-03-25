@@ -815,11 +815,11 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
     T* data_ptr = data_.data();
-    size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
     auto ld = ld_; // Leading dimension
     auto stride = stride_; // Stride for batched matrices
+    const size_t total_elements = static_cast<size_t>(batch_size) * static_cast<size_t>(n) * static_cast<size_t>(n);
 
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
@@ -861,11 +861,11 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
     T* data_ptr = data_.data();
-    size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
     auto ld = ld_; // Leading dimension
     auto stride = stride_; // Stride for batched matrices
+    const size_t total_elements = static_cast<size_t>(batch_size) * static_cast<size_t>(n) * static_cast<size_t>(n);
 
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
