@@ -1,4 +1,5 @@
 #include <blas/extensions.hh>
+#include <blas/device.hh>
 #include <blas/functions.hh>
 #include <blas/matrix.hh>
 #include <internal/sytrd_blocked.hh>
@@ -24,6 +25,13 @@
 namespace batchlas {
 
 namespace {
+
+template <typename T>
+struct HouseholderScalars {
+    T tau{};
+    T beta{};
+    T scale{};
+};
 
 inline bool env_truthy(const char* v) {
     if (!v) return false;
@@ -53,13 +61,22 @@ inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     return SytrdTrailingUpdateMode::Gemm;
 }
 
+inline int32_t latrd_lower_panel_wg_hint_override() {
+    const char* v = std::getenv("BATCHLAS_LATRD_LOWER_PANEL_WG_HINT");
+    if (!v || *v == '\0') {
+        return tuning::latrd_lower_panel_wg_hint();
+    }
+
+    const int value = std::atoi(v);
+    if (value == 64 || value == 128 || value == 256) {
+        return value;
+    }
+    return tuning::latrd_lower_panel_wg_hint();
+}
+
 template <typename U>
 inline U conj_if_needed(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
+    return batchlas::device::detail::conjugate_if_needed(x);
 }
 
 template <typename T>
@@ -79,16 +96,47 @@ inline Real sign_nonzero_real(Real x) {
     return (sycl::signbit(x) ? Real(-1) : Real(1));
 }
 
-template <typename T>
-inline T sign_nonzero(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real a = sycl::hypot(x.real(), x.imag());
-        if (a == Real(0)) return T(1);
-        return x / a;
-    } else {
-        return T(sign_nonzero_real(static_cast<Real>(x)));
+template <typename Real>
+inline Real sign_nonzero(const Real& x) {
+    return sign_nonzero_real(x);
+}
+
+template <typename Real>
+inline std::complex<Real> sign_nonzero(const std::complex<Real>& x) {
+    const Real magnitude = sycl::hypot(x.real(), x.imag());
+    return (magnitude == Real(0)) ? std::complex<Real>(1) : (x / magnitude);
+}
+
+template <typename Real>
+inline HouseholderScalars<Real> compute_householder_scalars(const Real& alpha, Real xnorm) {
+    HouseholderScalars<Real> result;
+    if (xnorm == Real(0)) {
+        result.beta = alpha;
+        return result;
     }
+
+    result.beta = -sign_nonzero(alpha) * Real(sycl::hypot(alpha, xnorm));
+    result.tau = (result.beta - alpha) / result.beta;
+    result.scale = Real(1) / (alpha - result.beta);
+    return result;
+}
+
+template <typename Real>
+inline HouseholderScalars<std::complex<Real>> compute_householder_scalars(const std::complex<Real>& alpha, Real xnorm) {
+    using Complex = std::complex<Real>;
+
+    HouseholderScalars<Complex> result;
+    if (xnorm == Real(0) && alpha.imag() == Real(0)) {
+        result.beta = alpha;
+        return result;
+    }
+
+    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
+    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
+    result.beta = -sign_nonzero(alpha) * Complex(beta_abs);
+    result.tau = (result.beta - alpha) / result.beta;
+    result.scale = Complex(1) / (alpha - result.beta);
+    return result;
 }
 
 template <typename T>
@@ -117,56 +165,47 @@ template <typename T>
 class SytrdLowerLocalSmallKernel;
 
 template <typename T>
+inline std::size_t sytrd_rank2k_local_size(const Queue& q) {
+    const std::size_t max_work_group_size = q.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
+        return std::min<std::size_t>(256, max_work_group_size);
+    }
+    return std::min<std::size_t>(128, max_work_group_size);
+}
+
+template <typename T>
 Event update_vw_lower_small(Queue& q,
                             const MatrixView<T, MatrixFormat::Dense>& v2,
                             const MatrixView<T, MatrixFormat::Dense>& w2,
                             const MatrixView<T, MatrixFormat::Dense>& a22) {
-    const int n2 = a22.rows();
-    const int ib = v2.cols();
-    const int lda = a22.ld();
-    const int ldv = v2.ld();
-    const int ldw = w2.ld();
-    const int stride_a = a22.stride();
-    const int stride_v = v2.stride();
-    const int stride_w = w2.stride();
-    T* a_ptr = a22.data_ptr();
-    const T* v_ptr = v2.data_ptr();
-    const T* w_ptr = w2.data_ptr();
     const int batch = a22.batch_size();
+    const std::size_t local_size = sytrd_rank2k_local_size<T>(q);
 
     (void)q->submit([&](sycl::handler& h) {
+        const auto v_view = v2.kernel_view();
+        const auto w_view = w2.kernel_view();
+        const auto a_view = a22.kernel_view();
+
         h.parallel_for<UpdateVWLowerSmallKernel<T>>(
-            sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n2) * static_cast<size_t>(n2)),
-            [=](sycl::id<2> idx) {
-                const int b = static_cast<int>(idx[0]);
-                const int lin = static_cast<int>(idx[1]);
-                const int r = lin % n2;
-                const int c = lin / n2;
-                if (r < c) return; // lower triangle only
-
-                T* A = a_ptr + b * stride_a;
-                const T* V = v_ptr + b * stride_v;
-                const T* W = w_ptr + b * stride_w;
-
-                // A(r,c) -= sum_k ( V(r,k) * conj(W(c,k)) + W(r,k) * conj(V(c,k)) )
-                T acc = T(0);
-                for (int k = 0; k < ib; ++k) {
-                    const T vrk = V[r + k * ldv];
-                    const T vck = V[c + k * ldv];
-                    const T wrk = W[r + k * ldw];
-                    const T wck = W[c + k * ldw];
-                    acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
+            [=](sycl::nd_item<1> item) {
+                const int b = static_cast<int>(item.get_group(0));
+                if (b >= batch) {
+                    return;
                 }
 
-                A[r + c * lda] -= acc;
-
-                // Keep diagonal real for Hermitian matrices.
-                if constexpr (internal::is_complex<T>::value) {
-                    if (r == c) {
-                        const T x = A[r + c * lda];
-                        A[r + c * lda] = T(x.real(), typename T::value_type(0));
-                    }
-                }
+                const auto vb = v_view.batch_item(b);
+                const auto wb = w_view.batch_item(b);
+                const auto ab = a_view.batch_item(b);
+                batchlas::device::her2k(item,
+                                        vb,
+                                        wb,
+                                        ab,
+                                        T(-1),
+                                        T(1),
+                                        Uplo::Lower,
+                                        Transpose::NoTrans,
+                                        batchlas::device::DeviceBlasPolicy::Auto);
             });
     });
 
@@ -202,6 +241,8 @@ Event sytrd_lower_local_small(Queue& q,
 
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                T* Al_ptr = A_local.template get_multi_ptr<sycl::access::decorated::no>().get();
+                T* W_ptr = W_local.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 T* A = a_ptr + b * stride_a;
                 T* Eb = e_ptr + b * stride_e;
@@ -210,7 +251,6 @@ Event sytrd_lower_local_small(Queue& q,
                 const int ld_loc = n;
                 auto Al = [&](int r, int c) -> T& { return A_local[r + c * ld_loc]; };
 
-                // Load A into local memory.
                 if (lane < n) {
                     for (int c = 0; c < n; ++c) {
                         Al(lane, c) = A[lane + c * lda];
@@ -218,78 +258,55 @@ Event sytrd_lower_local_small(Queue& q,
                 }
                 it.barrier(sycl::access::fence_space::local_space);
 
-                // Unblocked SYTD2-style reduction (Lower): for k=0..n-2
                 for (int k = 0; k < n - 1; ++k) {
-                    // Form Householder reflector to annihilate A(k+2:n-1, k)
                     using Real = typename base_type<T>::type;
 
                     const int alpha_row = k + 1;
                     const int x0 = k + 2;
-
-                    Real sumsq = Real(0);
-                    if (lane >= x0 && lane < n) {
-                        sumsq = abs2_if_complex(Al(lane, k));
-                    }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
-
-                    T alpha = T(0);
-                    if (lane == alpha_row) {
-                        alpha = Al(alpha_row, k);
-                    }
-                    alpha = sycl::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
+                    const int tail = n - alpha_row;
+                    const bool lane_in_tail = (lane >= alpha_row && lane < n);
+                    const Real sumsq_partial = (lane >= x0 && lane < n) ? abs2_if_complex(Al(lane, k)) : Real(0);
+                    const Real sumsq = reduce_sum_group_real<T>(g, sumsq_partial);
 
                     T tau_k = T(0);
-                    T beta = alpha;
                     T scale = T(0);
-
                     if (lane == alpha_row) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (internal::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_k = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_k = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_k = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_k = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        Eb[k] = beta;
-                        Taub[k] = tau_k;
-
-                        // Store v(0)=1 at A(k+1,k).
+                        const T alpha = Al(alpha_row, k);
+                        const auto scalars = compute_householder_scalars(alpha, sycl::sqrt(sumsq));
+                        Eb[k] = scalars.beta;
+                        Taub[k] = scalars.tau;
                         Al(alpha_row, k) = T(1);
+                        tau_k = scalars.tau;
+                        scale = scalars.scale;
                     }
-
                     tau_k = sycl::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
                     scale = sycl::group_broadcast(g, scale, sycl::id<1>(alpha_row));
 
-                    if (tau_k != T(0)) {
-                        if (lane >= x0 && lane < n) {
-                            Al(lane, k) *= scale;
-                        }
+                    if (tau_k != T(0) && x0 < n) {
+                        batchlas::device::scal(g, VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0), scale);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    // Compute w = tau * A(k+1:n-1, k+1:n-1) * v
-                    if (lane < n) {
+                    if constexpr (!internal::is_complex<T>::value) {
+                        auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Al_ptr + alpha_row + alpha_row * ld_loc,
+                            tail,
+                            tail,
+                            ld_loc,
+                            ld_loc * n);
+                        auto v_view = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
+                        auto w_view = VectorView<T>(W_ptr + alpha_row, tail);
+                        batchlas::device::hemv(it,
+                                               trailing_view,
+                                               v_view,
+                                               w_view,
+                                               tau_k,
+                                               T(0),
+                                               Uplo::Lower,
+                                               batchlas::device::DeviceBlasPolicy::Auto);
+                    } else if (lane < n) {
                         T w = T(0);
-                        if (lane >= alpha_row) {
+                        if (lane_in_tail) {
                             for (int c = alpha_row; c < n; ++c) {
                                 const T vc = (c == alpha_row) ? T(1) : Al(c, k);
                                 w += Al(lane, c) * vc;
@@ -300,42 +317,54 @@ Event sytrd_lower_local_small(Queue& q,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    // dot = v^H * w
-                    T dot_partial = T(0);
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        dot_partial = conj_if_needed(vr) * W_local[lane];
-                    }
+                    const T vr = lane_in_tail ? ((lane == alpha_row) ? T(1) : Al(lane, k)) : T(0);
+                    const T dot_partial = lane_in_tail ? (conj_if_needed(vr) * W_local[lane]) : T(0);
                     const T dot = reduce_sum_group(g, dot_partial);
 
                     const T alpha2 = T(-0.5) * tau_k * dot;
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
+                    if (lane_in_tail) {
                         W_local[lane] += alpha2 * vr;
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    // Apply rank-2 update to trailing block A(alpha_row:n-1, alpha_row:n-1).
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        const T wr = W_local[lane];
-                        for (int c = alpha_row; c <= lane; ++c) {
-                            const T vc = (c == alpha_row) ? T(1) : Al(c, k);
-                            const T wc = W_local[c];
-                            T a_rc = Al(lane, c);
-                            a_rc -= vr * conj_if_needed(wc) + wr * conj_if_needed(vc);
-                            Al(lane, c) = a_rc;
-                            if (lane != c) {
-                                Al(c, lane) = conj_if_needed(a_rc);
-                            } else if constexpr (internal::is_complex<T>::value) {
-                                Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
+                    auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
+                        Al_ptr + alpha_row + alpha_row * ld_loc,
+                        tail,
+                        tail,
+                        ld_loc,
+                        ld_loc * n);
+                    auto v_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
+                        Al_ptr + alpha_row + k * ld_loc,
+                        tail,
+                        1,
+                        ld_loc,
+                        ld_loc);
+                    auto w_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
+                        W_ptr + alpha_row,
+                        tail,
+                        1,
+                        tail,
+                        tail);
+                    batchlas::device::her2k(it,
+                                            v_matrix,
+                                            w_matrix,
+                                            trailing_view,
+                                            T(-1),
+                                            T(1),
+                                            Uplo::Lower,
+                                            Transpose::NoTrans,
+                                            batchlas::device::DeviceBlasPolicy::Auto);
+                    if constexpr (internal::is_complex<T>::value) {
+                        it.barrier(sycl::access::fence_space::local_space);
+                        if (lane_in_tail) {
+                            for (int c = alpha_row; c < lane; ++c) {
+                                Al(c, lane) = conj_if_needed(Al(lane, c));
                             }
                         }
                     }
                     it.barrier(sycl::access::fence_space::local_space);
                 }
 
-                // Write back A.
                 if (lane < n) {
                     for (int c = 0; c < n; ++c) {
                         A[lane + c * lda] = Al(lane, c);
@@ -520,7 +549,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
     const bool fuse_override_on = env_truthy(fuse_env);
     const bool fuse_override_off = env_falsy(fuse_env);
-    const bool fuse_default = (B == Backend::CUDA) && (n == 256);
+    const bool fuse_default = false;
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
     constexpr bool allow_syr2k_experiment = (B == Backend::CUDA) && std::is_same_v<T, float>;
     const bool use_syr2k_trailing_update = allow_syr2k_experiment &&
@@ -531,7 +560,9 @@ Event sytrd_blocked_impl(Queue& ctx,
 
         const int j2 = j0 + ib;
         const int n2 = n - j2;
-        const bool fuse_this_panel = enable_fused_panel_update && n2 > 0 && n2 <= 128;
+        const bool fuse_this_panel = n2 > 0 &&
+                         (fuse_override_on ||
+                          (enable_fused_panel_update && n2 <= 128));
 
         {
             BATCHLAS_KERNEL_TRACE_SCOPE(fuse_this_panel ? "sytrd_blocked.panel_fused"
@@ -545,7 +576,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                                           E_panel,
                                           TAU_panel,
                                           W_panel,
-                                          tuning::latrd_lower_panel_wg_hint(),
+                                          latrd_lower_panel_wg_hint_override(),
                                           fuse_this_panel);
         }
 
@@ -560,8 +591,14 @@ Event sytrd_blocked_impl(Queue& ctx,
             } else {
                 if constexpr (allow_syr2k_experiment) {
                     if (use_syr2k_trailing_update) {
-                        BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
-                        syr2k<B>(ctx, V2, W2, A22, T(-1), T(1), Uplo::Lower, Transpose::NoTrans);
+                        {
+                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
+                            syr2k<B>(ctx, V2, W2, A22, T(-1), T(1), Uplo::Lower, Transpose::NoTrans);
+                        }
+                        {
+                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k_symmetrize");
+                            A22.symmetrize(ctx, Uplo::Lower);
+                        }
                     } else {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
