@@ -1,6 +1,7 @@
 
 
 #include <blas/matrix.hh>
+#include <blas/device.hh>
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
@@ -92,6 +93,7 @@ inline void apply_reflector_small(const Partition& part,
                                   int32_t n,
                                   int32_t lane,
                                   const T* V_local,
+                                  T* Work_local,
                                   int32_t offset,
                                   int32_t len,
                                   T tau,
@@ -102,40 +104,39 @@ inline void apply_reflector_small(const Partition& part,
 
     if (tau_eff == T(0) || len <= 0) return;
 
-    // Specialize work assignment to avoid cross-lane reductions.
-    // LEFT:  lanes map to columns; each lane computes a full dot product for its column.
-    // RIGHT: lanes map to rows; each lane computes a full dot product for its row.
-    // This removes the O(P^2) select_from_group reduction overhead in the common n<=32 case.
+    auto v_view = VectorView<T>(const_cast<T*>(V_local), len);
+
     if (left) {
-        const int32_t j = lane;
-        if (j >= n) return;
-
-        // dot = v^H * C(offset:offset+len-1, j)
-        T dot = T(0);
-        for (int32_t r = 0; r < len; ++r) {
-            const T v_r = V_local[r];
-            dot += detail::conj_val(v_r) * C_local[(offset + r) + j * P_i];
+        if (lane < n) {
+            T dot = T(0);
+            for (int32_t r = 0; r < len; ++r) {
+                const T v_r = V_local[r];
+                dot += detail::conj_val(v_r) * C_local[(offset + r) + lane * P_i];
+            }
+            Work_local[lane] = tau_eff * dot;
         }
-        const T gamma = tau_eff * dot;
+        sycl::group_barrier(part);
 
-        for (int32_t r = 0; r < len; ++r) {
-            const T v_r = V_local[r];
-            C_local[(offset + r) + j * P_i] -= v_r * gamma;
+        auto gamma_view = VectorView<T>(Work_local, n);
+        auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset, len, n, P_i, P_i * n);
+        if constexpr (internal::is_complex<T>::value) {
+            batchlas::device::geru(part, v_view, gamma_view, c_sub, T(-1));
+        } else {
+            batchlas::device::ger(part, v_view, gamma_view, c_sub, T(-1));
         }
     } else {
-        const int32_t i = lane;
-        if (i >= n) return;
-
-        // dot = C(i, offset:offset+len-1) * v
-        T dot = T(0);
-        for (int32_t c = 0; c < len; ++c) {
-            dot += C_local[i + (offset + c) * P_i] * V_local[c];
+        if (lane < n) {
+            T dot = T(0);
+            for (int32_t c = 0; c < len; ++c) {
+                dot += C_local[lane + (offset + c) * P_i] * V_local[c];
+            }
+            Work_local[lane] = tau_eff * dot;
         }
-        const T gamma = tau_eff * dot;
+        sycl::group_barrier(part);
 
-        for (int32_t c = 0; c < len; ++c) {
-            C_local[i + (offset + c) * P_i] -= gamma * detail::conj_val(V_local[c]);
-        }
+        auto gamma_view = VectorView<T>(Work_local, n);
+        auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset * P_i, n, len, P_i, P_i * n);
+        batchlas::device::gerc(part, gamma_view, v_view, c_sub, T(-1));
     }
 }
 
@@ -328,8 +329,10 @@ inline void ormqx_cta_impl(Queue& ctx,
             // Local storage per problem:
             // - Full P x P tile for C (column-major)
             // - One length-P vector v
+            // - One length-P work vector for reflector coefficients
             auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+            auto Work_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
             cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
                 sycl::nd_range<1>(global_size, wg_size),
@@ -353,6 +356,7 @@ inline void ormqx_cta_impl(Queue& ctx,
 
                     const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
+                    const int32_t base_work = part_id * static_cast<int32_t>(P);
 
                     const int32_t P_i = static_cast<int32_t>(P);
 
@@ -422,6 +426,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                             n,
                             lane,
                             &V_local[base_v],
+                            &Work_local[base_work],
                             offset,
                             len,
                             tau_i,
