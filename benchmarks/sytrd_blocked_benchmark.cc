@@ -13,13 +13,9 @@ namespace {
 
 template <typename Benchmark>
 inline void SytrdBlockedBenchSizes(Benchmark* b) {
-    for (int n : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 8, 32, 64}) {
-            for (int nb : {8, 16, 32, 64}) {
-                // uplo: 0=Lower, 1=Upper (blocked currently implements Lower only)
-                b->Args({n, bs, nb, 0});
-            }
-        }
+    for (int n : {64, 128, 256, 512}) {
+        // uplo: 0=Lower, 1=Upper (blocked currently implements Lower only)
+        b->Args({n, 1024, 32, 0});
     }
 }
 
@@ -70,6 +66,6 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
 }
 
 // Register at static-init time
-BATCHLAS_BENCH_CUDA(BM_SYTRD_BLOCKED, SytrdBlockedBenchSizes);
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_BLOCKED, SytrdBlockedBenchSizes);
 
 MINI_BENCHMARK_MAIN();

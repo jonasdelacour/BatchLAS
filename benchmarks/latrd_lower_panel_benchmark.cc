@@ -11,13 +11,10 @@ namespace {
 
 template <typename Benchmark>
 inline void LatrdLowerPanelBenchSizes(Benchmark* b) {
-    for (int n : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 8, 32, 64}) {
-            for (int ib : {8, 16, 32, 64}) {
-                // j0: benchmark the first panel by default.
-                b->Args({n, bs, ib, 0});
-            }
-        }
+    for (int n : {64, 128, 256, 512}) {
+        // j0: benchmark the first panel by default. fuse: 0=off, 1=on.
+        b->Args({n, 1024, 32, 0, 0});
+        b->Args({n, 1024, 32, 0, 1});
     }
 }
 
@@ -30,6 +27,7 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
     const size_t batch = state.range(1);
     const int ib = static_cast<int>(state.range(2));
     const int j0 = static_cast<int>(state.range(3));
+    const bool fuse_trailing_update = state.range(4) != 0;
 
     // Approximate: panel work dominated by matvecs over the trailing matrix.
     // Use a coarse model O(n^2 * ib).
@@ -51,18 +49,20 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
         bench::pristine(W0),
         j0,
         ib,
+        fuse_trailing_update,
         [](Queue& q,
            MatrixView<T, MatrixFormat::Dense> A,
            VectorView<T> e,
            VectorView<T> tau,
            MatrixView<T, MatrixFormat::Dense> W,
            int j0,
-           int ib) {
+           int ib,
+           bool fuse_trailing_update) {
             auto A_panel = A({j0, SliceEnd()}, {j0, SliceEnd()});
             auto e_panel = e(Slice(j0, j0 + ib));
             auto tau_panel = tau(Slice(j0, j0 + ib));
             auto W_panel = W({j0, SliceEnd()}, {0, ib});
-            latrd_lower_panel<B, T>(q, A_panel, e_panel, tau_panel, W_panel);
+            latrd_lower_panel<B, T>(q, A_panel, e_panel, tau_panel, W_panel, 0, fuse_trailing_update);
         });
 
     state.SetMetric("GFLOPS", approx_flops * 1e-9, minibench::Rate);
@@ -72,6 +72,6 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
 #endif
 }
 
-BATCHLAS_BENCH_CUDA(BM_LATRD_LOWER_PANEL, LatrdLowerPanelBenchSizes);
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_LATRD_LOWER_PANEL, LatrdLowerPanelBenchSizes);
 
 MINI_BENCHMARK_MAIN();

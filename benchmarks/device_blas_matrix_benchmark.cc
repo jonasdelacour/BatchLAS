@@ -20,6 +20,18 @@ using namespace batchlas;
 #define DEVICE_BLAS_BENCHMARK_NAME "device_blas_matrix_benchmark"
 #endif
 
+#ifndef DEVICE_BLAS_MATRIX_TRANS
+#define DEVICE_BLAS_MATRIX_TRANS 0
+#endif
+
+#ifndef DEVICE_BLAS_MATRIX_COMPLEX
+#define DEVICE_BLAS_MATRIX_COMPLEX 0
+#endif
+
+#ifndef DEVICE_BLAS_MATRIX_HERMITIAN
+#define DEVICE_BLAS_MATRIX_HERMITIAN 0
+#endif
+
 namespace {
 
 template <typename Tag>
@@ -29,6 +41,19 @@ template <typename Tag>
 class DeviceBlasMatrixTileKernel;
 
 constexpr device::DeviceBlasPolicy kPolicy = static_cast<device::DeviceBlasPolicy>(DEVICE_BLAS_POLICY);
+constexpr Transpose kRank2kTrans = static_cast<Transpose>(DEVICE_BLAS_MATRIX_TRANS);
+
+#if DEVICE_BLAS_MATRIX_COMPLEX
+using DeviceBlasMatrixScalar = std::complex<float>;
+constexpr const char* kDeviceBlasScalarName = "std::complex<float>";
+constexpr double kDeviceBlasLevel3FlopScale = 8.0;
+constexpr double kDeviceBlasRank2kFlopScale = 8.0;
+#else
+using DeviceBlasMatrixScalar = float;
+constexpr const char* kDeviceBlasScalarName = "float";
+constexpr double kDeviceBlasLevel3FlopScale = 2.0;
+constexpr double kDeviceBlasRank2kFlopScale = 2.0;
+#endif
 
 inline std::string device_blas_backend_tags() {
     std::string tags;
@@ -48,7 +73,19 @@ inline std::string device_blas_backend_tags() {
 }
 
 inline std::string device_blas_benchmark_name() {
-    return std::string("(") + DEVICE_BLAS_BENCHMARK_NAME + "<float" + device_blas_backend_tags() + ">)";
+    return std::string("(") + DEVICE_BLAS_BENCHMARK_NAME + "<" + kDeviceBlasScalarName + device_blas_backend_tags() + ">)";
+}
+
+inline std::size_t device_blas_rank_update_local_size(const Queue& queue) {
+    const std::size_t max_work_group_size = queue.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
+    const std::size_t subgroup_size = std::max<std::size_t>(1, queue.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+    const std::size_t preferred =
+        (kPolicy == device::DeviceBlasPolicy::Auto ||
+         kPolicy == device::DeviceBlasPolicy::Subgroup16 ||
+         kPolicy == device::DeviceBlasPolicy::Subgroup32)
+            ? std::min<std::size_t>(256, max_work_group_size)
+            : subgroup_size * 2;
+    return std::min(preferred, max_work_group_size);
 }
 
 template <typename KernelName, typename KernelFunc>
@@ -80,8 +117,8 @@ void launch_batched_matrix_tile_kernel(Queue& queue, int rows, int cols, int bat
 
 MINI_BENCHMARK(device_blas_matrix_benchmark) {
     const int n = state.range(0);
-    const int batch = state.range(3);
-
+    const int k = state.range(1);
+    const int batch = std::max(1, state.range(3) != 0 ? state.range(3) : state.range(2));
     auto queue = std::make_shared<Queue>(Device::default_device(), true);
     const std::size_t local_size = std::min<std::size_t>(256, queue->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
@@ -132,9 +169,9 @@ MINI_BENCHMARK(device_blas_matrix_benchmark) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 #elif DEVICE_BLAS_MATRIX_MODE == 2
-    auto A = Matrix<float>::Random(n, n, false, batch);
-    auto B = Matrix<float>::Random(n, n, false, batch);
-    auto C = Matrix<float>::Zeros(n, n, batch);
+    auto A = Matrix<DeviceBlasMatrixScalar>::Random(n, n, false, batch);
+    auto B = Matrix<DeviceBlasMatrixScalar>::Random(n, n, false, batch);
+    auto C = Matrix<DeviceBlasMatrixScalar>::Zeros(n, n, batch);
     state.SetKernel(queue,
                     std::move(A),
                     std::move(B),
@@ -143,26 +180,43 @@ MINI_BENCHMARK(device_blas_matrix_benchmark) {
                         const auto a_view = a.kernel_view();
                         const auto b_view = b.kernel_view();
                         const auto c_view = c.kernel_view();
-                        if (kPolicy == device::DeviceBlasPolicy::Generic || local_size < 256) {
+                        if (kPolicy == device::DeviceBlasPolicy::Generic || local_size < 256 ||
+                            !std::is_same_v<DeviceBlasMatrixScalar, float>) {
                             launch_batched_matrix_kernel<DeviceBlasMatrixKernel<std::integral_constant<int, 200 + DEVICE_BLAS_POLICY>>>(
                                 queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
                                     batchlas::device::symm(
-                                        item, a_view.batch_item(bid), b_view.batch_item(bid), c_view.batch_item(bid), 1.0f, 0.0f, Side::Left, Uplo::Lower, kPolicy);
+                                        item,
+                                        a_view.batch_item(bid),
+                                        b_view.batch_item(bid),
+                                        c_view.batch_item(bid),
+                                        DeviceBlasMatrixScalar(1),
+                                        DeviceBlasMatrixScalar(0),
+                                        Side::Left,
+                                        Uplo::Lower,
+                                        kPolicy);
                                 });
                         } else {
                             launch_batched_matrix_tile_kernel<DeviceBlasMatrixTileKernel<std::integral_constant<int, 200 + DEVICE_BLAS_POLICY>>>(
                                 queue, c.rows(), c.cols(), a.batch_size(), [=](sycl::nd_item<3> item, int bid) {
                                     batchlas::device::symm(
-                                        item, a_view.batch_item(bid), b_view.batch_item(bid), c_view.batch_item(bid), 1.0f, 0.0f, Side::Left, Uplo::Lower, kPolicy);
+                                        item,
+                                        a_view.batch_item(bid),
+                                        b_view.batch_item(bid),
+                                        c_view.batch_item(bid),
+                                        DeviceBlasMatrixScalar(1),
+                                        DeviceBlasMatrixScalar(0),
+                                        Side::Left,
+                                        Uplo::Lower,
+                                        kPolicy);
                                 });
                         }
                     });
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasLevel3FlopScale * n * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 #elif DEVICE_BLAS_MATRIX_MODE == 3
-    auto A = Matrix<float>::Random(n, n, false, batch);
-    auto B = Matrix<float>::Random(n, n, false, batch);
-    auto C = Matrix<float>::Zeros(n, n, batch);
+    auto A = Matrix<DeviceBlasMatrixScalar>::Random(n, n, false, batch);
+    auto B = Matrix<DeviceBlasMatrixScalar>::Random(n, n, false, batch);
+    auto C = Matrix<DeviceBlasMatrixScalar>::Zeros(n, n, batch);
     state.SetKernel(queue,
                     std::move(A),
                     std::move(B),
@@ -171,15 +225,16 @@ MINI_BENCHMARK(device_blas_matrix_benchmark) {
                         const auto a_view = a.kernel_view();
                         const auto b_view = b.kernel_view();
                         const auto c_view = c.kernel_view();
-                        if (kPolicy == device::DeviceBlasPolicy::Generic || local_size < 256) {
+                        if (kPolicy == device::DeviceBlasPolicy::Generic || local_size < 256 ||
+                            !std::is_same_v<DeviceBlasMatrixScalar, float>) {
                             launch_batched_matrix_kernel<DeviceBlasMatrixKernel<std::integral_constant<int, 300 + DEVICE_BLAS_POLICY>>>(
                                 queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
                                     batchlas::device::gemm(item,
                                                            a_view.batch_item(bid),
                                                            b_view.batch_item(bid),
                                                            c_view.batch_item(bid),
-                                                           1.0f,
-                                                           0.0f,
+                                                           DeviceBlasMatrixScalar(1),
+                                                           DeviceBlasMatrixScalar(0),
                                                            Transpose::NoTrans,
                                                            Transpose::NoTrans,
                                                            kPolicy);
@@ -191,15 +246,107 @@ MINI_BENCHMARK(device_blas_matrix_benchmark) {
                                                            a_view.batch_item(bid),
                                                            b_view.batch_item(bid),
                                                            c_view.batch_item(bid),
-                                                           1.0f,
-                                                           0.0f,
+                                                           DeviceBlasMatrixScalar(1),
+                                                           DeviceBlasMatrixScalar(0),
                                                            Transpose::NoTrans,
                                                            Transpose::NoTrans,
                                                            kPolicy);
                                 });
                         }
                     });
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasLevel3FlopScale * n * n * n), minibench::Rate);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
+#elif DEVICE_BLAS_MATRIX_MODE == 4
+    auto x = Vector<float>::random(n, batch);
+    auto y = Vector<float>::random(k, batch);
+    auto A = Matrix<float>::Zeros(n, k, batch);
+    state.SetKernel(queue,
+                    std::move(x),
+                    std::move(y),
+                    std::move(A),
+                    [](Queue& queue, auto xvec, auto yvec, auto a) {
+                        const auto a_view = a.kernel_view();
+                        const std::size_t local_size = device_blas_rank_update_local_size(queue);
+                        launch_batched_matrix_kernel<DeviceBlasMatrixKernel<std::integral_constant<int, 400 + DEVICE_BLAS_POLICY>>>(
+                            queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
+                                batchlas::device::ger(item,
+                                                      xvec.batch_item(bid),
+                                                      yvec.batch_item(bid),
+                                                      a_view.batch_item(bid),
+                                                      1.0f,
+                                                      kPolicy);
+                            });
+                    });
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * k), minibench::Rate);
+    state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
+#elif DEVICE_BLAS_MATRIX_MODE == 5
+    const int a_rows = kRank2kTrans == Transpose::NoTrans ? n : k;
+    const int a_cols = kRank2kTrans == Transpose::NoTrans ? k : n;
+    auto A = Matrix<DeviceBlasMatrixScalar>::Random(a_rows, a_cols, false, batch);
+    auto B = Matrix<DeviceBlasMatrixScalar>::Random(a_rows, a_cols, false, batch);
+    auto C = Matrix<DeviceBlasMatrixScalar>::Zeros(n, n, batch);
+    state.SetKernel(queue,
+                    std::move(A),
+                    std::move(B),
+                    std::move(C),
+                    [](Queue& queue, auto a, auto b, auto c) {
+                        const auto a_view = a.kernel_view();
+                        const auto b_view = b.kernel_view();
+                        const auto c_view = c.kernel_view();
+                        const std::size_t local_size = device_blas_rank_update_local_size(queue);
+                        if (kPolicy != device::DeviceBlasPolicy::Auto || local_size < 256) {
+                            launch_batched_matrix_kernel<DeviceBlasMatrixKernel<std::integral_constant<int, 500 + DEVICE_BLAS_POLICY>>>(
+                                queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
+                                    if constexpr (DEVICE_BLAS_MATRIX_HERMITIAN) {
+                                        batchlas::device::her2k(item,
+                                                                a_view.batch_item(bid),
+                                                                b_view.batch_item(bid),
+                                                                c_view.batch_item(bid),
+                                                                DeviceBlasMatrixScalar(1),
+                                                                DeviceBlasMatrixScalar(0),
+                                                                Uplo::Lower,
+                                                                kRank2kTrans,
+                                                                kPolicy);
+                                    } else {
+                                        batchlas::device::syr2k(item,
+                                                                a_view.batch_item(bid),
+                                                                b_view.batch_item(bid),
+                                                                c_view.batch_item(bid),
+                                                                DeviceBlasMatrixScalar(1),
+                                                                DeviceBlasMatrixScalar(0),
+                                                                Uplo::Lower,
+                                                                kRank2kTrans,
+                                                                kPolicy);
+                                    }
+                                });
+                        } else {
+                            launch_batched_matrix_tile_kernel<DeviceBlasMatrixTileKernel<std::integral_constant<int, 500 + DEVICE_BLAS_POLICY>>>(
+                                queue, c.rows(), c.cols(), a.batch_size(), [=](sycl::nd_item<3> item, int bid) {
+                                    if constexpr (DEVICE_BLAS_MATRIX_HERMITIAN) {
+                                        batchlas::device::her2k(item,
+                                                                a_view.batch_item(bid),
+                                                                b_view.batch_item(bid),
+                                                                c_view.batch_item(bid),
+                                                                DeviceBlasMatrixScalar(1),
+                                                                DeviceBlasMatrixScalar(0),
+                                                                Uplo::Lower,
+                                                                kRank2kTrans,
+                                                                kPolicy);
+                                    } else {
+                                        batchlas::device::syr2k(item,
+                                                                a_view.batch_item(bid),
+                                                                b_view.batch_item(bid),
+                                                                c_view.batch_item(bid),
+                                                                DeviceBlasMatrixScalar(1),
+                                                                DeviceBlasMatrixScalar(0),
+                                                                Uplo::Lower,
+                                                                kRank2kTrans,
+                                                                kPolicy);
+                                    }
+                                });
+                        }
+                    });
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasRank2kFlopScale * n * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 #else
 #error "Unsupported DEVICE_BLAS_MATRIX_MODE"

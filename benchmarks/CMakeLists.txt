@@ -49,6 +49,10 @@ set(BENCHMARK_TARGETS
     stehr_benchmark
     stedc_benchmark
     latrd_lower_panel_benchmark
+    latrd_panel_update_benchmark
+    latrd_w_column_benchmark
+    latrd_w_hemv_benchmark
+    latrd_w_corrections_benchmark
     sytrd_cta_benchmark
     sytrd_blocked_benchmark
     sytrd_sy2sb_benchmark
@@ -77,6 +81,14 @@ function(batchlas_add_device_blas_vector_target target_name mode policy)
     batchlas_configure_binary_target(${target_name})
 endfunction()
 
+function(batchlas_add_device_blas_helper_target target_name mode)
+    add_executable(${target_name} device_blas_helper_benchmark.cc)
+    target_compile_definitions(${target_name} PRIVATE
+        DEVICE_BLAS_HELPER_MODE=${mode}
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+    batchlas_configure_binary_target(${target_name})
+endfunction()
+
 function(batchlas_add_device_blas_trmv_variant_target target_name policy uplo trans diag)
     add_executable(${target_name} device_blas_vector_benchmark.cc)
     target_compile_definitions(${target_name} PRIVATE
@@ -95,6 +107,38 @@ function(batchlas_add_device_blas_matrix_target target_name mode policy)
     batchlas_configure_binary_target(${target_name})
 endfunction()
 
+function(batchlas_add_device_blas_complex_matrix_target target_name mode policy)
+    add_executable(${target_name} device_blas_matrix_benchmark.cc)
+    target_compile_definitions(${target_name} PRIVATE
+        DEVICE_BLAS_MATRIX_MODE=${mode}
+        DEVICE_BLAS_POLICY=${policy}
+        DEVICE_BLAS_MATRIX_COMPLEX=1
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+    batchlas_configure_binary_target(${target_name})
+endfunction()
+
+function(batchlas_add_device_blas_rank2k_target target_name policy trans)
+    add_executable(${target_name} device_blas_matrix_benchmark.cc)
+    target_compile_definitions(${target_name} PRIVATE
+        DEVICE_BLAS_MATRIX_MODE=5
+        DEVICE_BLAS_POLICY=${policy}
+        DEVICE_BLAS_MATRIX_TRANS=${trans}
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+    batchlas_configure_binary_target(${target_name})
+endfunction()
+
+function(batchlas_add_device_blas_her2k_target target_name policy trans)
+    add_executable(${target_name} device_blas_matrix_benchmark.cc)
+    target_compile_definitions(${target_name} PRIVATE
+        DEVICE_BLAS_MATRIX_MODE=5
+        DEVICE_BLAS_POLICY=${policy}
+        DEVICE_BLAS_MATRIX_TRANS=${trans}
+        DEVICE_BLAS_MATRIX_COMPLEX=1
+        DEVICE_BLAS_MATRIX_HERMITIAN=1
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+    batchlas_configure_binary_target(${target_name})
+endfunction()
+
 batchlas_add_device_blas_vector_target(device_blas_gemv_auto_benchmark 1 0)
 batchlas_add_device_blas_vector_target(device_blas_gemv_generic_benchmark 1 1)
 batchlas_add_device_blas_vector_target(device_blas_gemv_sg16_benchmark 1 2)
@@ -104,10 +148,33 @@ batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_auto_benchma
 batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_auto_benchmark 0 Upper Trans NonUnit)
 batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_unit_auto_benchmark 0 Upper Trans Unit)
 batchlas_add_device_blas_vector_target(device_blas_symv_auto_benchmark 3 0)
+batchlas_add_device_blas_helper_target(device_blas_copy_benchmark 1)
+batchlas_add_device_blas_helper_target(device_blas_scal_benchmark 2)
+batchlas_add_device_blas_helper_target(device_blas_axpy_benchmark 3)
+batchlas_add_device_blas_helper_target(device_blas_hadamard_benchmark 4)
+batchlas_add_device_blas_helper_target(device_blas_dotc_benchmark 5)
 
 batchlas_add_device_blas_matrix_target(device_blas_trmm_auto_benchmark 1 0)
 batchlas_add_device_blas_matrix_target(device_blas_trmm_generic_benchmark 1 1)
 batchlas_add_device_blas_matrix_target(device_blas_symm_auto_benchmark 2 0)
 batchlas_add_device_blas_matrix_target(device_blas_symm_generic_benchmark 2 1)
+batchlas_add_device_blas_complex_matrix_target(device_blas_symm_cfloat_auto_benchmark 2 0)
+batchlas_add_device_blas_complex_matrix_target(device_blas_symm_cfloat_generic_benchmark 2 1)
 batchlas_add_device_blas_matrix_target(device_blas_gemm_auto_benchmark 3 0)
 batchlas_add_device_blas_matrix_target(device_blas_gemm_generic_benchmark 3 1)
+batchlas_add_device_blas_complex_matrix_target(device_blas_gemm_cfloat_auto_benchmark 3 0)
+batchlas_add_device_blas_complex_matrix_target(device_blas_gemm_cfloat_generic_benchmark 3 1)
+batchlas_add_device_blas_matrix_target(device_blas_ger_auto_benchmark 4 0)
+batchlas_add_device_blas_matrix_target(device_blas_ger_generic_benchmark 4 1)
+batchlas_add_device_blas_matrix_target(device_blas_ger_sg16_benchmark 4 2)
+batchlas_add_device_blas_matrix_target(device_blas_ger_sg32_benchmark 4 3)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_auto_benchmark 0 0)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_generic_benchmark 1 0)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_sg16_benchmark 2 0)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_sg32_benchmark 3 0)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_trans_auto_benchmark 0 1)
+batchlas_add_device_blas_rank2k_target(device_blas_syr2k_trans_generic_benchmark 1 1)
+batchlas_add_device_blas_her2k_target(device_blas_her2k_auto_benchmark 0 0)
+batchlas_add_device_blas_her2k_target(device_blas_her2k_generic_benchmark 1 0)
+batchlas_add_device_blas_her2k_target(device_blas_her2k_conjtrans_auto_benchmark 0 2)
+batchlas_add_device_blas_her2k_target(device_blas_her2k_conjtrans_generic_benchmark 1 2)

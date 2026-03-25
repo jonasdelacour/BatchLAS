@@ -18,23 +18,17 @@ namespace {
 template <typename Benchmark>
 inline void SyevBlockedBenchSizes(Benchmark* b) {
     // Args: n, batch, jobz
-    for (int n : {64, 128, 256, 512, 1024}) {
-        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128}) {
-            for (int jobz : {0, 1}) {
-                b->Args({n, bs, jobz});
-            }
-        }
+    for (int n : {64, 128, 256, 512}) {
+        b->Args({n, 1024, 0});
     }
 }
 
 template <typename Benchmark>
 inline void SyevBlockedBenchSizesNetlib(Benchmark* b) {
     // Reduced grid for CPU runs.
-    for (int n : {32, 64, 128, 256}) {
-        for (int bs : {1, 10, 100}) {
-            for (int jobz : {0, 1}) {
-                b->Args({n, bs, jobz});
-            }
+    for (int n : {64, 128, 256}) {
+        for (int bs : {1, 10}) {
+            b->Args({n, bs, 0});
         }
     }
 }

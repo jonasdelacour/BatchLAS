@@ -3,6 +3,26 @@
 #include "bench_utils.hh"
 using namespace batchlas;
 
+namespace {
+
+template <typename Benchmark>
+inline void SyevBenchSizes(Benchmark* b) {
+    for (int n : {64, 128, 256, 512}) {
+        b->Args({n, 1024});
+    }
+}
+
+template <typename Benchmark>
+inline void SyevBenchSizesNetlib(Benchmark* b) {
+    for (int n : {64, 128, 256}) {
+        for (int batch : {1, 10}) {
+            b->Args({n, batch});
+        }
+    }
+}
+
+} // namespace
+
 // Symmetric eigenvalue decomposition benchmark
 template <typename T, Backend B>
 static void BM_SYEV(minibench::State& state) {
@@ -32,6 +52,6 @@ static void BM_SYEV(minibench::State& state) {
 }
 
 
-BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SteqrBenchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SyevBenchSizes);
 
 MINI_BENCHMARK_MAIN();
