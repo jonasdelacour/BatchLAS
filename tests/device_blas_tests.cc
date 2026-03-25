@@ -198,6 +198,111 @@ std::vector<T> reference_symm(const MatrixView<T, MatrixFormat::Dense>& a_view,
 }
 
 template <typename T>
+std::vector<T> reference_rank1_update(const VectorView<T>& x,
+                                      const VectorView<T>& y,
+                                      const MatrixView<T, MatrixFormat::Dense>& a_initial,
+                                      T alpha,
+                                      bool conjugate_x = false,
+                                      bool conjugate_y = false) {
+    std::vector<T> out(static_cast<std::size_t>(a_initial.rows() * a_initial.cols()), T{});
+
+    for (int j = 0; j < a_initial.cols(); ++j) {
+        for (int i = 0; i < a_initial.rows(); ++i) {
+            const T lhs = batchlas::device::detail::maybe_conjugate(x(i), conjugate_x);
+            const T rhs = batchlas::device::detail::maybe_conjugate(y(j), conjugate_y);
+            out[static_cast<std::size_t>(j * a_initial.rows() + i)] = a_initial(i, j) + alpha * lhs * rhs;
+        }
+    }
+
+    return out;
+}
+
+template <typename T>
+std::vector<T> reference_rank2k(const MatrixView<T, MatrixFormat::Dense>& a_view,
+                                const MatrixView<T, MatrixFormat::Dense>& b_view,
+                                const MatrixView<T, MatrixFormat::Dense>& c_initial,
+                                T alpha,
+                                T beta,
+                                Uplo uplo,
+                                Transpose trans,
+                                bool hermitian) {
+    auto a_kernel = a_view.kernel_view();
+    auto b_kernel = b_view.kernel_view();
+    std::vector<T> out(static_cast<std::size_t>(c_initial.rows() * c_initial.cols()), T{});
+    const int extent = batchlas::device::detail::output_size(a_kernel, trans);
+    const int contract_extent = batchlas::device::detail::input_size(a_kernel, trans);
+    const Transpose rhs_transform = (trans == Transpose::NoTrans)
+        ? (hermitian ? Transpose::ConjTrans : Transpose::Trans)
+        : Transpose::NoTrans;
+    const T alpha2 = hermitian ? batchlas::device::detail::conjugate_if_needed(alpha) : alpha;
+
+    for (int j = 0; j < c_initial.cols(); ++j) {
+        for (int i = 0; i < c_initial.rows(); ++i) {
+            T value = c_initial(i, j);
+            if (i < extent && j < extent && batchlas::device::detail::triangular_storage_contains(uplo, i, j)) {
+                T sum{};
+                for (int k = 0; k < contract_extent; ++k) {
+                    const T lhs1 = batchlas::device::detail::matrix_entry(a_kernel, i, k, trans);
+                    const T rhs1 = batchlas::device::detail::matrix_entry(b_kernel, k, j, rhs_transform);
+                    const T lhs2 = batchlas::device::detail::matrix_entry(b_kernel, i, k, trans);
+                    const T rhs2 = batchlas::device::detail::matrix_entry(a_kernel, k, j, rhs_transform);
+                    sum += alpha * lhs1 * rhs1 + alpha2 * lhs2 * rhs2;
+                }
+                value = beta * c_initial(i, j) + sum;
+                if constexpr (ComplexScalar<T>) {
+                    if (hermitian && i == j) {
+                        value = T(value.real(), typename T::value_type(0));
+                    }
+                }
+            }
+            out[static_cast<std::size_t>(j * c_initial.rows() + i)] = value;
+        }
+    }
+
+    return out;
+}
+
+template <typename T>
+std::vector<T> reference_rankk(const MatrixView<T, MatrixFormat::Dense>& a_view,
+                               const MatrixView<T, MatrixFormat::Dense>& c_initial,
+                               T alpha,
+                               T beta,
+                               Uplo uplo,
+                               Transpose trans,
+                               bool hermitian) {
+    auto a_kernel = a_view.kernel_view();
+    std::vector<T> out(static_cast<std::size_t>(c_initial.rows() * c_initial.cols()), T{});
+    const int extent = batchlas::device::detail::output_size(a_kernel, trans);
+    const int contract_extent = batchlas::device::detail::input_size(a_kernel, trans);
+    const Transpose rhs_transform = (trans == Transpose::NoTrans)
+        ? (hermitian ? Transpose::ConjTrans : Transpose::Trans)
+        : Transpose::NoTrans;
+
+    for (int j = 0; j < c_initial.cols(); ++j) {
+        for (int i = 0; i < c_initial.rows(); ++i) {
+            T value = c_initial(i, j);
+            if (i < extent && j < extent && batchlas::device::detail::triangular_storage_contains(uplo, i, j)) {
+                T sum{};
+                for (int k = 0; k < contract_extent; ++k) {
+                    const T lhs = batchlas::device::detail::matrix_entry(a_kernel, i, k, trans);
+                    const T rhs = batchlas::device::detail::matrix_entry(a_kernel, k, j, rhs_transform);
+                    sum += alpha * lhs * rhs;
+                }
+                value = beta * c_initial(i, j) + sum;
+                if constexpr (ComplexScalar<T>) {
+                    if (hermitian && i == j) {
+                        value = T(value.real(), typename T::value_type(0));
+                    }
+                }
+            }
+            out[static_cast<std::size_t>(j * c_initial.rows() + i)] = value;
+        }
+    }
+
+    return out;
+}
+
+template <typename T>
 void expect_matrix_matches_vector(const MatrixView<T, MatrixFormat::Dense>& actual,
                                   const std::vector<T>& expected,
                                   double tol = 1e-4) {
@@ -205,11 +310,21 @@ void expect_matrix_matches_vector(const MatrixView<T, MatrixFormat::Dense>& actu
     std::size_t index = 0;
     for (int j = 0; j < actual.cols(); ++j) {
         for (int i = 0; i < actual.rows(); ++i, ++index) {
-            EXPECT_NEAR(static_cast<double>(actual.template at<MatrixFormat::Dense>(i, j)),
-                        static_cast<double>(expected[index]),
-                        tol)
+            EXPECT_LE(std::abs(actual.template at<MatrixFormat::Dense>(i, j) - expected[index]),
+                      tol)
                 << "Mismatch at (" << i << ", " << j << ")";
         }
+    }
+}
+
+template <typename T>
+void expect_vector_matches_vector(const VectorView<T>& actual,
+                                  const std::vector<T>& expected,
+                                  double tol = 1e-5) {
+    ASSERT_EQ(static_cast<std::size_t>(actual.size()), expected.size());
+    for (int i = 0; i < actual.size(); ++i) {
+        EXPECT_LE(std::abs(actual(i) - expected[static_cast<std::size_t>(i)]), tol)
+            << "Mismatch at index " << i;
     }
 }
 
@@ -581,6 +696,958 @@ TEST(DeviceBlasTest, SymvUpperMatchesReferenceUsingOnlyStoredTriangle) {
     };
 
     expect_vector_near(VectorView<float>(y), expected, 3);
+}
+
+TEST(DeviceBlasTest, HemvLowerMatchesReferenceUsingStoredTriangle) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(3, 3);
+    Vector<Complex> x(3);
+    Vector<Complex> y(3);
+    auto a_host = a.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = Complex(3.0f, 0.0f);
+    a_host.at<MatrixFormat::Dense>(1, 0) = Complex(1.0f, -2.0f);
+    a_host.at<MatrixFormat::Dense>(2, 0) = Complex(-0.5f, 1.5f);
+    a_host.at<MatrixFormat::Dense>(1, 1) = Complex(4.0f, 0.0f);
+    a_host.at<MatrixFormat::Dense>(2, 1) = Complex(2.0f, 0.25f);
+    a_host.at<MatrixFormat::Dense>(2, 2) = Complex(5.0f, 0.0f);
+
+    x(0) = Complex(1.0f, -1.0f);
+    x(1) = Complex(0.5f, 2.0f);
+    x(2) = Complex(-1.5f, 0.25f);
+
+    y(0) = Complex(0.25f, 0.5f);
+    y(1) = Complex(-2.0f, 0.0f);
+    y(2) = Complex(1.0f, -0.75f);
+
+    std::array<Complex, 3> expected{};
+    const Complex alpha(0.75f, -0.25f);
+    const Complex beta(-0.5f, 0.0f);
+    for (int row = 0; row < 3; ++row) {
+        Complex acc{};
+        for (int col = 0; col < 3; ++col) {
+            const Complex a_rc = row >= col
+                ? a_host.at<MatrixFormat::Dense>(row, col)
+                : std::conj(a_host.at<MatrixFormat::Dense>(col, row));
+            acc += a_rc * x(col);
+        }
+        expected[static_cast<std::size_t>(row)] = alpha * acc + beta * y(row);
+    }
+
+    auto a_view = a.view().kernel_view();
+    auto x_view = VectorView<Complex>(x);
+    auto y_view = VectorView<Complex>(y);
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    ctx->submit([&](sycl::handler& h) {
+        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
+                       [=](sycl::nd_item<1> item) {
+                           batchlas::device::hemv(item.get_group(), a_view, x_view, y_view, alpha, beta, Uplo::Lower);
+                       });
+    });
+    ctx.wait_and_throw();
+
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_NEAR(std::abs(y(i) - expected[static_cast<std::size_t>(i)]), 0.0f, 1e-5f)
+            << "Mismatch at index " << i;
+    }
+}
+
+TEST(DeviceBlasTest, HemvLowerNdItemMatchesReferenceUsingStoredTriangle) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<double>;
+    Matrix<Complex, MatrixFormat::Dense> a(3, 3);
+    Vector<Complex> x(3);
+    Vector<Complex> y(3);
+    auto a_host = a.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = Complex(3.0, 0.0);
+    a_host.at<MatrixFormat::Dense>(1, 0) = Complex(1.0, -2.0);
+    a_host.at<MatrixFormat::Dense>(2, 0) = Complex(-0.5, 1.5);
+    a_host.at<MatrixFormat::Dense>(1, 1) = Complex(4.0, 0.0);
+    a_host.at<MatrixFormat::Dense>(2, 1) = Complex(2.0, 0.25);
+    a_host.at<MatrixFormat::Dense>(2, 2) = Complex(5.0, 0.0);
+
+    x(0) = Complex(1.0, -1.0);
+    x(1) = Complex(0.5, 2.0);
+    x(2) = Complex(-1.5, 0.25);
+
+    y(0) = Complex(0.25, 0.5);
+    y(1) = Complex(-2.0, 0.0);
+    y(2) = Complex(1.0, -0.75);
+
+    std::array<Complex, 3> expected{};
+    const Complex alpha(0.75, -0.25);
+    const Complex beta(-0.5, 0.0);
+    for (int row = 0; row < 3; ++row) {
+        Complex acc{};
+        for (int col = 0; col < 3; ++col) {
+            const Complex a_rc = row >= col
+                ? a_host.at<MatrixFormat::Dense>(row, col)
+                : std::conj(a_host.at<MatrixFormat::Dense>(col, row));
+            acc += a_rc * x(col);
+        }
+        expected[static_cast<std::size_t>(row)] = alpha * acc + beta * y(row);
+    }
+
+    auto a_view = a.view().kernel_view();
+    auto x_view = VectorView<Complex>(x);
+    auto y_view = VectorView<Complex>(y);
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::hemv(item,
+                               a_view,
+                               x_view,
+                               y_view,
+                               alpha,
+                               beta,
+                               Uplo::Lower,
+                               batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_NEAR(std::abs(y(i) - expected[static_cast<std::size_t>(i)]), 0.0, 1e-12)
+            << "Mismatch at index " << i;
+    }
+}
+
+TEST(DeviceBlasTest, VectorCopyScalAndAxpyGroupMatchReference) {
+    Queue ctx(Device::default_device());
+
+    Vector<float> x(5);
+    Vector<float> y(5);
+    Vector<float> z(5);
+
+    x(0) = 1.0f;
+    x(1) = -2.0f;
+    x(2) = 0.5f;
+    x(3) = 3.0f;
+    x(4) = -1.5f;
+
+    y(0) = -1.0f;
+    y(1) = 0.25f;
+    y(2) = 2.0f;
+    y(3) = -0.75f;
+    y(4) = 4.0f;
+
+    for (int i = 0; i < z.size(); ++i) {
+        z(i) = 0.0f;
+    }
+
+    const auto x_view = VectorView<float>(x);
+    const auto y_view = VectorView<float>(y);
+    const auto z_view = VectorView<float>(z);
+    const std::vector<float> expected_y = {
+        -1.0f + 1.5f * 1.0f,
+        0.25f + 1.5f * -2.0f,
+        2.0f + 1.5f * 0.5f,
+        -0.75f + 1.5f * 3.0f,
+        4.0f + 1.5f * -1.5f,
+    };
+    const std::vector<float> expected_z = {2.0f, -4.0f, 1.0f, 6.0f, -3.0f};
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::copy(group, x_view, z_view);
+        sycl::group_barrier(group);
+        batchlas::device::scal(group, z_view, 2.0f);
+        sycl::group_barrier(group);
+        batchlas::device::axpy(group, x_view, y_view, 1.5f);
+    });
+
+    expect_vector_matches_vector(VectorView<float>(y), expected_y);
+    expect_vector_matches_vector(VectorView<float>(z), expected_z);
+}
+
+TEST(DeviceBlasTest, VectorCopycAndHadamardGroupMatchReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Vector<Complex> x(4);
+    Vector<Complex> y(4);
+    Vector<Complex> xc(4);
+    Vector<Complex> z(4);
+
+    x(0) = Complex(1.0f, 2.0f);
+    x(1) = Complex(-0.5f, 0.25f);
+    x(2) = Complex(2.0f, -1.0f);
+    x(3) = Complex(0.75f, 0.5f);
+
+    y(0) = Complex(-1.0f, 0.5f);
+    y(1) = Complex(0.25f, -0.75f);
+    y(2) = Complex(1.5f, 1.0f);
+    y(3) = Complex(-0.5f, 2.0f);
+
+    for (int i = 0; i < xc.size(); ++i) {
+        xc(i) = Complex(0.0f, 0.0f);
+        z(i) = Complex(0.0f, 0.0f);
+    }
+
+    const auto x_view = VectorView<Complex>(x);
+    const auto y_view = VectorView<Complex>(y);
+    const auto xc_view = VectorView<Complex>(xc);
+    const auto z_view = VectorView<Complex>(z);
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::copyc(group, x_view, xc_view);
+        sycl::group_barrier(group);
+        batchlas::device::hadamard(group, xc_view, y_view, z_view);
+    });
+
+    for (int i = 0; i < x.size(); ++i) {
+        EXPECT_NEAR(std::abs(xc(i) - std::conj(x(i))), 0.0f, 1e-5f)
+            << "Mismatch in copyc at index " << i;
+        EXPECT_NEAR(std::abs(z(i) - std::conj(x(i)) * y(i)), 0.0f, 1e-5f)
+            << "Mismatch in hadamard at index " << i;
+    }
+}
+
+TEST(DeviceBlasTest, DotcGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Vector<Complex> x(4);
+    Vector<Complex> y(4);
+    Vector<Complex> out(1);
+
+    x(0) = Complex(1.0f, 2.0f);
+    x(1) = Complex(-0.5f, 0.25f);
+    x(2) = Complex(2.0f, -1.0f);
+    x(3) = Complex(0.75f, 0.5f);
+
+    y(0) = Complex(-1.0f, 0.5f);
+    y(1) = Complex(0.25f, -0.75f);
+    y(2) = Complex(1.5f, 1.0f);
+    y(3) = Complex(-0.5f, 2.0f);
+
+    out(0) = Complex(0.0f, 0.0f);
+
+    Complex expected = Complex(0.0f, 0.0f);
+    for (int i = 0; i < x.size(); ++i) {
+        expected += std::conj(x(i)) * y(i);
+    }
+
+    const auto x_view = VectorView<Complex>(x);
+    const auto y_view = VectorView<Complex>(y);
+    const auto out_view = VectorView<Complex>(out);
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        const Complex dot = batchlas::device::dotc(group, x_view, y_view);
+        if (group.get_local_linear_id() == 0) {
+            out_view(0) = dot;
+        }
+    });
+
+    EXPECT_NEAR(std::abs(out(0) - expected), 0.0f, 1e-5f);
+}
+
+TEST(DeviceBlasTest, GerGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 4);
+    Vector<float> x(3);
+    Vector<float> y(4);
+    auto a_host = a.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(1 + i + 2 * j);
+        }
+    }
+    x(0) = 1.0f;
+    x(1) = -2.0f;
+    x(2) = 0.5f;
+    y(0) = 2.0f;
+    y(1) = -1.0f;
+    y(2) = 3.0f;
+    y(3) = 0.25f;
+
+    const auto x_view = VectorView<float>(x);
+    const auto y_view = VectorView<float>(y);
+    const auto expected = reference_rank1_update(x_view, y_view, a.view(), 1.25f);
+    auto a_view = a.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::ger(group, x_view, y_view, a_view, 1.25f);
+    });
+
+    expect_matrix_matches_vector(a.view(), expected);
+}
+
+TEST(DeviceBlasTest, GercGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(2, 3);
+    Vector<Complex> x(2);
+    Vector<Complex> y(3);
+    auto a_host = a.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = Complex(1.0f, -0.5f);
+    a_host.at<MatrixFormat::Dense>(1, 0) = Complex(0.25f, 0.75f);
+    a_host.at<MatrixFormat::Dense>(0, 1) = Complex(-2.0f, 0.5f);
+    a_host.at<MatrixFormat::Dense>(1, 1) = Complex(1.5f, -1.0f);
+    a_host.at<MatrixFormat::Dense>(0, 2) = Complex(0.0f, 1.25f);
+    a_host.at<MatrixFormat::Dense>(1, 2) = Complex(-0.5f, -0.25f);
+
+    x(0) = Complex(1.0f, 2.0f);
+    x(1) = Complex(-0.5f, 0.25f);
+    y(0) = Complex(0.5f, -1.0f);
+    y(1) = Complex(-2.0f, 0.5f);
+    y(2) = Complex(1.5f, 0.75f);
+
+    const auto x_view = VectorView<Complex>(x);
+    const auto y_view = VectorView<Complex>(y);
+    const auto expected = reference_rank1_update(x_view, y_view, a.view(), Complex(0.75f, -0.5f), false, true);
+    auto a_view = a.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::gerc(group, x_view, y_view, a_view, Complex(0.75f, -0.5f));
+    });
+
+    expect_matrix_matches_vector(a.view(), expected);
+}
+
+TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a_auto(16, 12);
+    Matrix<float, MatrixFormat::Dense> a_generic(16, 12);
+    Vector<float> x(16);
+    Vector<float> y(12);
+    auto a_auto_host = a_auto.view();
+    auto a_generic_host = a_generic.view();
+
+    for (int j = 0; j < a_auto.cols(); ++j) {
+        for (int i = 0; i < a_auto.rows(); ++i) {
+            const float value = static_cast<float>(((3 * i + j) % 9) - 4);
+            a_auto_host.at<MatrixFormat::Dense>(i, j) = value;
+            a_generic_host.at<MatrixFormat::Dense>(i, j) = value;
+        }
+    }
+    for (int i = 0; i < x.size(); ++i) {
+        x(i) = static_cast<float>(i + 1) * 0.25f;
+    }
+    for (int i = 0; i < y.size(); ++i) {
+        y(i) = static_cast<float>(2 - i) * 0.5f;
+    }
+
+    const auto x_view = VectorView<float>(x);
+    const auto y_view = VectorView<float>(y);
+    const auto expected = reference_rank1_update(x_view, y_view, a_auto.view(), 0.75f);
+    auto a_auto_view = a_auto.view().kernel_view();
+    auto a_generic_view = a_generic.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::ger(item, x_view, y_view, a_auto_view, 0.75f, batchlas::device::DeviceBlasPolicy::Auto);
+    });
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::ger(item, x_view, y_view, a_generic_view, 0.75f, batchlas::device::DeviceBlasPolicy::Generic);
+    });
+
+    expect_matrix_matches_vector(a_auto.view(), expected, 1e-4);
+    for (int j = 0; j < a_auto.cols(); ++j) {
+        for (int i = 0; i < a_auto.rows(); ++i) {
+            EXPECT_NEAR(a_auto.view().template at<MatrixFormat::Dense>(i, j),
+                        a_generic.view().template at<MatrixFormat::Dense>(i, j),
+                        1e-5f)
+                << "Mismatch at (" << i << ", " << j << ")";
+        }
+    }
+}
+
+TEST(DeviceBlasTest, Syr2kGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 2);
+    Matrix<float, MatrixFormat::Dense> b(3, 2);
+    Matrix<float, MatrixFormat::Dense> c(3, 3);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(1 + i + 3 * j);
+            b_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(-2 + 2 * i - j);
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>((i >= j) ? (5 + i + j) : (-10 - i - j));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), -0.75f, 0.5f, Uplo::Lower, Transpose::NoTrans, false);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::syr2k(group, a_view, b_view, c_view, -0.75f, 0.5f, Uplo::Lower, Transpose::NoTrans);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected);
+}
+
+TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 2);
+    Matrix<float, MatrixFormat::Dense> c(3, 3);
+    auto a_host = a.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(1 + i + 3 * j);
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>((i >= j) ? (5 + i + j) : (-10 - i - j));
+        }
+    }
+
+    const auto expected = reference_rankk(a.view(), c.view(), -0.75f, 0.5f, Uplo::Lower, Transpose::NoTrans, false);
+    auto a_view = a.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::syrk(group, a_view, c_view, -0.75f, 0.5f, Uplo::Lower, Transpose::NoTrans);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected);
+}
+
+TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(3, 2);
+    Matrix<Complex, MatrixFormat::Dense> b(3, 2);
+    Matrix<Complex, MatrixFormat::Dense> c(3, 3);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = Complex(1.0f, 0.5f);
+    a_host.at<MatrixFormat::Dense>(1, 0) = Complex(-0.5f, 1.5f);
+    a_host.at<MatrixFormat::Dense>(2, 0) = Complex(2.0f, -1.0f);
+    a_host.at<MatrixFormat::Dense>(0, 1) = Complex(-1.0f, 0.25f);
+    a_host.at<MatrixFormat::Dense>(1, 1) = Complex(0.75f, -0.5f);
+    a_host.at<MatrixFormat::Dense>(2, 1) = Complex(1.25f, 0.5f);
+
+    b_host.at<MatrixFormat::Dense>(0, 0) = Complex(0.5f, -1.0f);
+    b_host.at<MatrixFormat::Dense>(1, 0) = Complex(1.25f, 0.75f);
+    b_host.at<MatrixFormat::Dense>(2, 0) = Complex(-0.25f, 0.5f);
+    b_host.at<MatrixFormat::Dense>(0, 1) = Complex(1.5f, 0.0f);
+    b_host.at<MatrixFormat::Dense>(1, 1) = Complex(-0.5f, -0.25f);
+    b_host.at<MatrixFormat::Dense>(2, 1) = Complex(0.75f, 1.0f);
+
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(2.0f + i + j, (i == j) ? 0.0f : (0.5f * (i - j)))
+                : Complex(-4.0f - i - j, 1.0f + i + j);
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::her2k(group, a_view, b_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected);
+}
+
+TEST(DeviceBlasTest, HerkGroupMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(3, 2);
+    Matrix<Complex, MatrixFormat::Dense> c(3, 3);
+    auto a_host = a.view();
+    auto c_host = c.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = Complex(1.0f, 0.5f);
+    a_host.at<MatrixFormat::Dense>(1, 0) = Complex(-0.5f, 1.5f);
+    a_host.at<MatrixFormat::Dense>(2, 0) = Complex(2.0f, -1.0f);
+    a_host.at<MatrixFormat::Dense>(0, 1) = Complex(-1.0f, 0.25f);
+    a_host.at<MatrixFormat::Dense>(1, 1) = Complex(0.75f, -0.5f);
+    a_host.at<MatrixFormat::Dense>(2, 1) = Complex(1.25f, 0.5f);
+
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(2.0f + i + j, (i == j) ? 0.0f : (0.5f * (i - j)))
+                : Complex(-4.0f - i - j, 1.0f + i + j);
+        }
+    }
+
+    const auto expected = reference_rankk(a.view(), c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](auto group) {
+        batchlas::device::herk(group, a_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected);
+}
+
+TEST(DeviceBlasTest, Syr2kNdItemAutoMatchesGeneric) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(24, 6);
+    Matrix<float, MatrixFormat::Dense> b(24, 6);
+    Matrix<float, MatrixFormat::Dense> c_auto(24, 24);
+    Matrix<float, MatrixFormat::Dense> c_generic(24, 24);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_auto_host = c_auto.view();
+    auto c_generic_host = c_generic.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(((2 * i + j) % 11) - 5);
+            b_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(((i + 3 * j) % 13) - 6);
+        }
+    }
+    for (int j = 0; j < c_auto.cols(); ++j) {
+        for (int i = 0; i < c_auto.rows(); ++i) {
+            const float value = static_cast<float>((i >= j) ? (1 + ((i + j) % 7)) : (-3 - ((i + j) % 5)));
+            c_auto_host.at<MatrixFormat::Dense>(i, j) = value;
+            c_generic_host.at<MatrixFormat::Dense>(i, j) = value;
+        }
+    }
+
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_auto_view = c_auto.view().kernel_view();
+    auto c_generic_view = c_generic.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::syr2k(item,
+                                a_view,
+                                b_view,
+                                c_auto_view,
+                                -0.5f,
+                                0.75f,
+                                Uplo::Lower,
+                                Transpose::NoTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::syr2k(item,
+                                a_view,
+                                b_view,
+                                c_generic_view,
+                                -0.5f,
+                                0.75f,
+                                Uplo::Lower,
+                                Transpose::NoTrans,
+                                batchlas::device::DeviceBlasPolicy::Generic);
+    });
+
+    for (int j = 0; j < c_auto.cols(); ++j) {
+        for (int i = 0; i < c_auto.rows(); ++i) {
+            EXPECT_NEAR(c_auto.view().template at<MatrixFormat::Dense>(i, j),
+                        c_generic.view().template at<MatrixFormat::Dense>(i, j),
+                        1e-4f)
+                << "Mismatch at (" << i << ", " << j << ")";
+        }
+    }
+}
+
+TEST(DeviceBlasTest, SyrkNdItem3DTiledTransposeMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Matrix register-tiled device BLAS path requires work-group size >= 256";
+    }
+
+    Matrix<float, MatrixFormat::Dense> a(48, 96);
+    Matrix<float, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(((5 * i + 3 * j) % 17) - 8);
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>((i >= j) ? (1 + ((i + 2 * j) % 11)) : (-4 - ((i + j) % 7)));
+        }
+    }
+
+    const auto expected = reference_rankk(a.view(), c.view(), -0.6f, 0.8f, Uplo::Lower, Transpose::Trans, false);
+    auto a_view = a.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+
+    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+        batchlas::device::syrk(item,
+                               a_view,
+                               c_view,
+                               -0.6f,
+                               0.8f,
+                               Uplo::Lower,
+                               Transpose::Trans,
+                               batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 5e-4);
+}
+
+TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Matrix register-tiled device BLAS path requires work-group size >= 256";
+    }
+
+    Matrix<float, MatrixFormat::Dense> a(48, 96);
+    Matrix<float, MatrixFormat::Dense> b(48, 96);
+    Matrix<float, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(((5 * i + 3 * j) % 17) - 8);
+            b_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>(((7 * i + 2 * j) % 19) - 9);
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = static_cast<float>((i >= j) ? (1 + ((i + 2 * j) % 11)) : (-4 - ((i + j) % 7)));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), -0.6f, 0.8f, Uplo::Lower, Transpose::Trans, false);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+
+    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+        batchlas::device::syr2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                -0.6f,
+                                0.8f,
+                                Uplo::Lower,
+                                Transpose::Trans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 5e-4);
+}
+
+TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Matrix register-tiled device BLAS path requires work-group size >= 256";
+    }
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(96, 48);
+    Matrix<Complex, MatrixFormat::Dense> b(96, 48);
+    Matrix<Complex, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((3 * i + 5 * j) % 23) - 11), static_cast<float>(((2 * i + j) % 9) - 4));
+            b_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((4 * i + 7 * j) % 21) - 10), static_cast<float>(((i + 3 * j) % 11) - 5));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<float>(2 + ((i + j) % 13)), (i == j) ? 0.0f : static_cast<float>(((2 * i - j) % 7) - 3))
+                : Complex(static_cast<float>(-5 - ((i + j) % 9)), static_cast<float>(((i + 2 * j) % 8) - 4));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+
+    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+        batchlas::device::her2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                Complex(-0.4f, 0.3f),
+                                Complex(0.9f, 0.0f),
+                                Uplo::Lower,
+                                Transpose::NoTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+}
+
+TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Matrix register-tiled device BLAS path requires work-group size >= 256";
+    }
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(96, 48);
+    Matrix<Complex, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((3 * i + 5 * j) % 23) - 11), static_cast<float>(((2 * i + j) % 9) - 4));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<float>(2 + ((i + j) % 13)), (i == j) ? 0.0f : static_cast<float>(((2 * i - j) % 7) - 3))
+                : Complex(static_cast<float>(-5 - ((i + j) % 9)), static_cast<float>(((i + 2 * j) % 8) - 4));
+        }
+    }
+
+    const auto expected = reference_rankk(a.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+
+    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+        batchlas::device::herk(item,
+                               a_view,
+                               c_view,
+                               Complex(-0.4f, 0.3f),
+                               Complex(0.9f, 0.0f),
+                               Uplo::Lower,
+                               Transpose::NoTrans,
+                               batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+}
+
+TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Matrix register-tiled device BLAS path requires work-group size >= 256";
+    }
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(48, 96);
+    Matrix<Complex, MatrixFormat::Dense> b(48, 96);
+    Matrix<Complex, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((5 * i + 2 * j) % 27) - 13), static_cast<float>(((3 * i + 4 * j) % 11) - 5));
+            b_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((6 * i + 5 * j) % 25) - 12), static_cast<float>(((2 * i + j) % 13) - 6));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<float>(3 + ((i + 2 * j) % 9)), (i == j) ? 0.0f : static_cast<float>(((i - 2 * j) % 7) - 3))
+                : Complex(static_cast<float>(-6 - ((i + j) % 10)), static_cast<float>(((i + 3 * j) % 9) - 4));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), Uplo::Lower, Transpose::ConjTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+
+    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+        batchlas::device::her2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                Complex(-0.35f, 0.2f),
+                                Complex(0.8f, 0.0f),
+                                Uplo::Lower,
+                                Transpose::ConjTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+}
+
+TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Compact 1D complex her2k path requires work-group size >= 256";
+    }
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(96, 48);
+    Matrix<Complex, MatrixFormat::Dense> b(96, 48);
+    Matrix<Complex, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((3 * i + 5 * j) % 23) - 11), static_cast<float>(((2 * i + j) % 9) - 4));
+            b_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((4 * i + 7 * j) % 21) - 10), static_cast<float>(((i + 3 * j) % 11) - 5));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<float>(2 + ((i + j) % 13)), (i == j) ? 0.0f : static_cast<float>(((2 * i - j) % 7) - 3))
+                : Complex(static_cast<float>(-5 - ((i + j) % 9)), static_cast<float>(((i + 2 * j) % 8) - 4));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::her2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                Complex(-0.4f, 0.3f),
+                                Complex(0.9f, 0.0f),
+                                Uplo::Lower,
+                                Transpose::NoTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+}
+
+TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
+    Queue ctx(Device::default_device());
+    if (!device_supports_matrix_register_tiles(ctx)) {
+        GTEST_SKIP() << "Compact 1D complex her2k path requires work-group size >= 256";
+    }
+
+    using Complex = std::complex<float>;
+    Matrix<Complex, MatrixFormat::Dense> a(48, 96);
+    Matrix<Complex, MatrixFormat::Dense> b(48, 96);
+    Matrix<Complex, MatrixFormat::Dense> c(96, 96);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((5 * i + 2 * j) % 27) - 13), static_cast<float>(((3 * i + 4 * j) % 11) - 5));
+            b_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<float>(((6 * i + 5 * j) % 25) - 12), static_cast<float>(((2 * i + j) % 13) - 6));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<float>(3 + ((i + 2 * j) % 9)), (i == j) ? 0.0f : static_cast<float>(((i - 2 * j) % 7) - 3))
+                : Complex(static_cast<float>(-6 - ((i + j) % 10)), static_cast<float>(((i + 3 * j) % 9) - 4));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), Uplo::Lower, Transpose::ConjTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::her2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                Complex(-0.35f, 0.2f),
+                                Complex(0.8f, 0.0f),
+                                Uplo::Lower,
+                                Transpose::ConjTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+}
+
+TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
+    Queue ctx(Device::default_device());
+
+    using Complex = std::complex<double>;
+    Matrix<Complex, MatrixFormat::Dense> a(64, 32);
+    Matrix<Complex, MatrixFormat::Dense> b(64, 32);
+    Matrix<Complex, MatrixFormat::Dense> c(64, 64);
+    auto a_host = a.view();
+    auto b_host = b.view();
+    auto c_host = c.view();
+
+    for (int j = 0; j < a.cols(); ++j) {
+        for (int i = 0; i < a.rows(); ++i) {
+            a_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<double>(((3 * i + 5 * j) % 29) - 14),
+                                                           static_cast<double>(((2 * i + j) % 13) - 6));
+            b_host.at<MatrixFormat::Dense>(i, j) = Complex(static_cast<double>(((4 * i + 7 * j) % 31) - 15),
+                                                           static_cast<double>(((i + 3 * j) % 17) - 8));
+        }
+    }
+    for (int j = 0; j < c.cols(); ++j) {
+        for (int i = 0; i < c.rows(); ++i) {
+            c_host.at<MatrixFormat::Dense>(i, j) = (i >= j)
+                ? Complex(static_cast<double>(2 + ((i + j) % 19)),
+                          (i == j) ? 0.0 : static_cast<double>(((2 * i - j) % 11) - 5))
+                : Complex(static_cast<double>(-5 - ((i + j) % 23)),
+                          static_cast<double>(((i + 2 * j) % 13) - 6));
+        }
+    }
+
+    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4, 0.3), Complex(0.9, 0.0), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    auto c_view = c.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::her2k(item,
+                                a_view,
+                                b_view,
+                                c_view,
+                                Complex(-0.4, 0.3),
+                                Complex(0.9, 0.0),
+                                Uplo::Lower,
+                                Transpose::NoTrans,
+                                batchlas::device::DeviceBlasPolicy::Auto);
+    });
+
+    expect_matrix_matches_vector(c.view(), expected, 1e-10);
 }
 
 TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
