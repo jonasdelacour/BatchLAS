@@ -57,17 +57,32 @@ inline constexpr void gemxv(const Group& group,
     const int inner_extent = detail::input_size(a, transform.trans);
     const int outer_extent = detail::output_size(a, transform.trans);
 
-    for (int output_index = 0; output_index < outer_extent; ++output_index) {
-        std::array<T, sizeof...(Ops)> partials{};
-
-        for (int input_index = local_id; input_index < inner_extent; input_index += local_size) {
-            const T a_ij = detail::matrix_entry(a, output_index, input_index, transform.trans);
-            detail::accumulate(partials, operands, a_ij, input_index);
-        }
-
-        detail::reduce_partials(group, partials, operands);
-        if (group.leader()) {
+    if (inner_extent < local_size) {
+        // Column-sweep: each thread owns a strided subset of output rows and
+        // iterates sequentially over all input columns.  No group reductions
+        // are needed, which avoids outer_extent costly group barriers when the
+        // inner dimension is too small to saturate the work-group.
+        for (int output_index = local_id; output_index < outer_extent; output_index += local_size) {
+            std::array<T, sizeof...(Ops)> partials{};
+            for (int input_index = 0; input_index < inner_extent; ++input_index) {
+                const T a_ij = detail::matrix_entry(a, output_index, input_index, transform.trans);
+                detail::accumulate(partials, operands, a_ij, input_index);
+            }
             detail::write_outputs(operands, output_index, partials);
+        }
+    } else {
+        for (int output_index = 0; output_index < outer_extent; ++output_index) {
+            std::array<T, sizeof...(Ops)> partials{};
+
+            for (int input_index = local_id; input_index < inner_extent; input_index += local_size) {
+                const T a_ij = detail::matrix_entry(a, output_index, input_index, transform.trans);
+                detail::accumulate(partials, operands, a_ij, input_index);
+            }
+
+            detail::reduce_partials(group, partials, operands);
+            if (group.leader()) {
+                detail::write_outputs(operands, output_index, partials);
+            }
         }
     }
 }

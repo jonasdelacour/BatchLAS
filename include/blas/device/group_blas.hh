@@ -1017,6 +1017,7 @@ inline constexpr void gemxv(const Item& item,
 }
 
 template <typename Group, typename T>
+    requires (!detail::NdItemLike<std::remove_cvref_t<Group>>)
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const VectorView<T>& x,
@@ -1040,6 +1041,7 @@ inline constexpr void gemv(const Item& item,
 }
 
 template <typename Group, typename T>
+    requires (!detail::NdItemLike<std::remove_cvref_t<Group>>)
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const VectorView<T>& x,

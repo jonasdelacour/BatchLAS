@@ -4,6 +4,7 @@
 #include <blas/matrix.hh>
 #include <internal/sytrd_blocked.hh>
 #include <util/mempool.hh>
+#include <util/group-invoke.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
@@ -268,64 +269,18 @@ Event sytrd_lower_local_small(Queue& q,
                     const Real sumsq_partial = (lane >= x0 && lane < n) ? abs2_if_complex(Al(lane, k)) : Real(0);
                     const Real sumsq = reduce_sum_group_real<T>(g, sumsq_partial);
 
-                    T tau_k = T(0);
-                    T scale = T(0);
-                    if (lane == alpha_row) {
+                    auto [tau_k, scale] = invoke_one_broadcast(g, [&]() {
                         const T alpha = Al(alpha_row, k);
                         const auto scalars = compute_householder_scalars(alpha, sycl::sqrt(sumsq));
-                        Eb[k] = scalars.beta;
-                        Taub[k] = scalars.tau;
                         Al(alpha_row, k) = T(1);
-                        tau_k = scalars.tau;
-                        scale = scalars.scale;
-                    }
-                    tau_k = sycl::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
-                    scale = sycl::group_broadcast(g, scale, sycl::id<1>(alpha_row));
+                        return std::array<T, 2>{scalars.tau, scalars.scale};
+                    });
 
                     if (tau_k != T(0) && x0 < n) {
                         batchlas::device::scal(g, VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0), scale);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if constexpr (!internal::is_complex<T>::value) {
-                        auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Al_ptr + alpha_row + alpha_row * ld_loc,
-                            tail,
-                            tail,
-                            ld_loc,
-                            ld_loc * n);
-                        auto v_view = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
-                        auto w_view = VectorView<T>(W_ptr + alpha_row, tail);
-                        batchlas::device::hemv(it,
-                                               trailing_view,
-                                               v_view,
-                                               w_view,
-                                               tau_k,
-                                               T(0),
-                                               Uplo::Lower,
-                                               batchlas::device::DeviceBlasPolicy::Auto);
-                    } else if (lane < n) {
-                        T w = T(0);
-                        if (lane_in_tail) {
-                            for (int c = alpha_row; c < n; ++c) {
-                                const T vc = (c == alpha_row) ? T(1) : Al(c, k);
-                                w += Al(lane, c) * vc;
-                            }
-                            w *= tau_k;
-                        }
-                        W_local[lane] = w;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const T vr = lane_in_tail ? ((lane == alpha_row) ? T(1) : Al(lane, k)) : T(0);
-                    const T dot_partial = lane_in_tail ? (conj_if_needed(vr) * W_local[lane]) : T(0);
-                    const T dot = reduce_sum_group(g, dot_partial);
-
-                    const T alpha2 = T(-0.5) * tau_k * dot;
-                    if (lane_in_tail) {
-                        W_local[lane] += alpha2 * vr;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
 
                     auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
                         Al_ptr + alpha_row + alpha_row * ld_loc,
@@ -333,6 +288,26 @@ Event sytrd_lower_local_small(Queue& q,
                         tail,
                         ld_loc,
                         ld_loc * n);
+                    auto v_view = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
+                    auto w_view = VectorView<T>(W_ptr + alpha_row, tail);
+                    batchlas::device::hemv(it,
+                                            trailing_view,
+                                            v_view,
+                                            w_view,
+                                            tau_k,
+                                            T(0),
+                                            Uplo::Lower,
+                                            batchlas::device::DeviceBlasPolicy::Auto);
+                    it.barrier(sycl::access::fence_space::local_space);
+
+                    auto v_vec = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
+                    auto w_vec = VectorView<T>(W_ptr + alpha_row, tail);
+                    const T dot = batchlas::device::dotc(it, v_vec, w_vec);
+
+                    const T alpha2 = T(-0.5) * tau_k * dot;
+                    batchlas::device::axpy(it, w_vec, v_vec, alpha2);
+                    it.barrier(sycl::access::fence_space::local_space);
+
                     auto v_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
                         Al_ptr + alpha_row + k * ld_loc,
                         tail,

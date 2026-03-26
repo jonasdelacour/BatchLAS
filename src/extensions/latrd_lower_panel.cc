@@ -179,11 +179,21 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     }
 
                     // Update column i entries from row i+1 .. n-1.
-                    for (int p = 0; p < i; ++p) {
-                        const auto vp_tail = Ab(Slice(i + 1, SliceEnd()), p);
-                        const auto wp_tail = Wb(Slice(i + 1, SliceEnd()), p);
-                        batchlas::device::axpy(it, vp_tail, a_col_tail, -conj_if_needed(wip_ptr[p]));
-                        batchlas::device::axpy(it, wp_tail, a_col_tail, -conj_if_needed(vip_ptr[p]));
+                    if (i > 0) {
+                        // Conjugate cached vip/wip in-place for gemv (LACGV-style).
+                        const int local_size = static_cast<int>(it.get_local_range(0));
+                        for (int j = lid; j < i; j += local_size) {
+                            vip_ptr[j] = conj_if_needed(vip_ptr[j]);
+                            wip_ptr[j] = conj_if_needed(wip_ptr[j]);
+                        }
+                        it.barrier(sycl::access::fence_space::local_space);
+
+                        auto v_prev = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Ab.data() + (i + 1), tail, i, Ab.ld());
+                        auto w_prev = KernelMatrixView<T, MatrixFormat::Dense>(
+                            Wb.data() + (i + 1), tail, i, Wb.ld());
+                        batchlas::device::gemv(it, v_prev, VectorView<T>(wip_ptr, i), a_col_tail, T(-1), T(1));
+                        batchlas::device::gemv(it, w_prev, VectorView<T>(vip_ptr, i), a_col_tail, T(-1), T(1));
                     }
                     // Ensure updated Ab(r,i) values are visible before other lanes read them
                     // (later phases use a different lane-to-row mapping).
