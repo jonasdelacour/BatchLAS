@@ -41,6 +41,7 @@ function(batchlas_install_package)
     )
     install(FILES
         "${PROJECT_BINARY_DIR}/include/batchlas/backend_config.h"
+        "${PROJECT_BINARY_DIR}/include/batchlas/device_limits.hh"
         "${PROJECT_BINARY_DIR}/include/batchlas/tuning_params.hh"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas"
     )

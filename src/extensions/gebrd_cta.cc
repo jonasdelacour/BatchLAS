@@ -57,16 +57,12 @@ inline T larfg_small(const Partition& part,
     const T alpha_leader = sycl::select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
     const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
-        T beta = alpha_leader;
-        T tau_l = T(0);
-        T scale = T(0);
-
-        if (len > 1 && xnorm != Real(0)) {
-            beta = -sycl::copysign(sycl::hypot(alpha_leader, xnorm), alpha_leader);
-            tau_l = (beta - alpha_leader) / beta;
-            scale = T(1) / (alpha_leader - beta);
+        if (len <= 1) {
+            return std::array<T, 3>{alpha_leader, T(0), T(0)};
         }
-        return std::array<T, 3>{beta, tau_l, scale};
+
+        const auto scalars = internal::larfg(alpha_leader, xnorm, len);
+        return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
     });
 
     if (lane == alpha_lane) {

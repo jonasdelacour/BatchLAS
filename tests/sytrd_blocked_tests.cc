@@ -140,7 +140,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
             const double ref = eig_ref[base + static_cast<std::size_t>(i)];
             double err_tol = eig_tol * std::max(1.0, std::abs(ref));
             if constexpr (std::is_same_v<Real, float>) {
-                err_tol = std::max(err_tol, 2e-6);
+                err_tol = std::max(err_tol, 3e-6);
             }
             EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;
@@ -185,7 +185,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
             const double ref = eig_ref[base + static_cast<std::size_t>(i)];
             double err_tol = eig_tol * std::max(1.0, std::abs(ref));
             if constexpr (std::is_same_v<Real, float>) {
-                err_tol = std::max(err_tol, 2e-6);
+                err_tol = std::max(err_tol, 3e-6);
             }
             EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;

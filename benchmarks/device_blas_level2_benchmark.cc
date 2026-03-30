@@ -146,14 +146,12 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                         const auto a_view = a.kernel_view();
                         launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 100 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
                             queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::gemv(item,
-                                                       a_view.batch_item(bid),
-                                                       x.batch_item(bid),
-                                                       y.batch_item(bid),
-                                                       DeviceBlasLevel2Scalar(1),
-                                                       DeviceBlasLevel2Scalar(0),
-                                                       kLevel2Trans,
-                                                       kPolicy);
+                                batchlas::device::gemv<kPolicy, kLevel2Trans>(item.get_group(),
+                                                               a_view.batch_item(bid),
+                                                               x.batch_item(bid),
+                                                               y.batch_item(bid),
+                                                               DeviceBlasLevel2Scalar(1),
+                                                               DeviceBlasLevel2Scalar(0));
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasGemvFlopScale * m * n), minibench::Rate);
@@ -173,14 +171,12 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                         const auto a_view = a.kernel_view();
                         launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 200 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_COMPLEX>>>(
                             queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::symv(item,
-                                                       a_view.batch_item(bid),
-                                                       x.batch_item(bid),
-                                                       y.batch_item(bid),
-                                                       DeviceBlasLevel2Scalar(1),
-                                                       DeviceBlasLevel2Scalar(0),
-                                                       Uplo::Lower,
-                                                       kPolicy);
+                                batchlas::device::symv<kPolicy, Uplo::Lower>(item.get_group(),
+                                                              a_view.batch_item(bid),
+                                                              x.batch_item(bid),
+                                                              y.batch_item(bid),
+                                                              DeviceBlasLevel2Scalar(1),
+                                                              DeviceBlasLevel2Scalar(0));
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasHemvFlopScale * n * n), minibench::Rate);
@@ -200,16 +196,13 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                         const auto a_view = a.kernel_view();
                         launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 300 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
                             queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::trmv(item,
-                                                       a_view.batch_item(bid),
-                                                       x.batch_item(bid),
-                                                       y.batch_item(bid),
-                                                       DeviceBlasLevel2Scalar(1),
-                                                       DeviceBlasLevel2Scalar(0),
-                                                       kTrmvUplo,
-                                                       kLevel2Trans,
-                                                       kTrmvDiag,
-                                                       kPolicy);
+                                batchlas::device::trmv<kPolicy, kTrmvUplo, kLevel2Trans, kTrmvDiag>(
+                                    item.get_group(),
+                                    a_view.batch_item(bid),
+                                    x.batch_item(bid),
+                                    y.batch_item(bid),
+                                    DeviceBlasLevel2Scalar(1),
+                                    DeviceBlasLevel2Scalar(0));
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasTrmvFlopScale * 0.5 * n * (n + 1)), minibench::Rate);

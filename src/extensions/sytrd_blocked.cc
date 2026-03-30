@@ -4,7 +4,6 @@
 #include <blas/matrix.hh>
 #include <internal/sytrd_blocked.hh>
 #include <util/mempool.hh>
-#include <util/group-invoke.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
@@ -26,13 +25,6 @@
 namespace batchlas {
 
 namespace {
-
-template <typename T>
-struct HouseholderScalars {
-    T tau{};
-    T beta{};
-    T scale{};
-};
 
 inline bool env_truthy(const char* v) {
     if (!v) return false;
@@ -62,101 +54,24 @@ inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     return SytrdTrailingUpdateMode::Gemm;
 }
 
-inline int32_t latrd_lower_panel_wg_hint_override() {
+inline int32_t latrd_lower_panel_wg_hint_override(int32_t full_n, int32_t batch) {
+    (void)batch;
+    const int32_t fallback = tuning::latrd_lower_panel_wg_hint_for_n(full_n);
     const char* v = std::getenv("BATCHLAS_LATRD_LOWER_PANEL_WG_HINT");
     if (!v || *v == '\0') {
-        return tuning::latrd_lower_panel_wg_hint();
+        return fallback;
     }
 
     const int value = std::atoi(v);
     if (value == 64 || value == 128 || value == 256) {
         return value;
     }
-    return tuning::latrd_lower_panel_wg_hint();
+    return fallback;
 }
 
 template <typename U>
 inline U conj_if_needed(const U& x) {
-    return batchlas::device::detail::conjugate_if_needed(x);
-}
-
-template <typename T>
-inline typename base_type<T>::type abs2_if_complex(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real re = x.real();
-        const Real im = x.imag();
-        return re * re + im * im;
-    } else {
-        return x * x;
-    }
-}
-
-template <typename Real>
-inline Real sign_nonzero_real(Real x) {
-    return (sycl::signbit(x) ? Real(-1) : Real(1));
-}
-
-template <typename Real>
-inline Real sign_nonzero(const Real& x) {
-    return sign_nonzero_real(x);
-}
-
-template <typename Real>
-inline std::complex<Real> sign_nonzero(const std::complex<Real>& x) {
-    const Real magnitude = sycl::hypot(x.real(), x.imag());
-    return (magnitude == Real(0)) ? std::complex<Real>(1) : (x / magnitude);
-}
-
-template <typename Real>
-inline HouseholderScalars<Real> compute_householder_scalars(const Real& alpha, Real xnorm) {
-    HouseholderScalars<Real> result;
-    if (xnorm == Real(0)) {
-        result.beta = alpha;
-        return result;
-    }
-
-    result.beta = -sign_nonzero(alpha) * Real(sycl::hypot(alpha, xnorm));
-    result.tau = (result.beta - alpha) / result.beta;
-    result.scale = Real(1) / (alpha - result.beta);
-    return result;
-}
-
-template <typename Real>
-inline HouseholderScalars<std::complex<Real>> compute_householder_scalars(const std::complex<Real>& alpha, Real xnorm) {
-    using Complex = std::complex<Real>;
-
-    HouseholderScalars<Complex> result;
-    if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-        result.beta = alpha;
-        return result;
-    }
-
-    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-    result.beta = -sign_nonzero(alpha) * Complex(beta_abs);
-    result.tau = (result.beta - alpha) / result.beta;
-    result.scale = Complex(1) / (alpha - result.beta);
-    return result;
-}
-
-template <typename T>
-inline T reduce_sum_group(const sycl::group<1>& g, T x) {
-    if constexpr (internal::is_complex<T>::value) {
-        using R = typename T::value_type;
-        const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
-        return T(re, im);
-    } else {
-        return sycl::reduce_over_group(g, x, sycl::plus<T>());
-    }
-}
-
-template <typename T>
-inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
-                                                        typename base_type<T>::type x) {
-    using R = typename base_type<T>::type;
-    return sycl::reduce_over_group(g, x, sycl::plus<R>());
+    return batchlas::device::detail::conj(x);
 }
 
 template <typename T>
@@ -198,15 +113,8 @@ Event update_vw_lower_small(Queue& q,
                 const auto vb = v_view.batch_item(b);
                 const auto wb = w_view.batch_item(b);
                 const auto ab = a_view.batch_item(b);
-                batchlas::device::her2k(item,
-                                        vb,
-                                        wb,
-                                        ab,
-                                        T(-1),
-                                        T(1),
-                                        Uplo::Lower,
-                                        Transpose::NoTrans,
-                                        batchlas::device::DeviceBlasPolicy::Auto);
+                batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+                    item.get_group(), vb, wb, ab, T(-1), T(1));
             });
     });
 
@@ -260,24 +168,14 @@ Event sytrd_lower_local_small(Queue& q,
                 it.barrier(sycl::access::fence_space::local_space);
 
                 for (int k = 0; k < n - 1; ++k) {
-                    using Real = typename base_type<T>::type;
-
                     const int alpha_row = k + 1;
                     const int x0 = k + 2;
                     const int tail = n - alpha_row;
                     const bool lane_in_tail = (lane >= alpha_row && lane < n);
-                    const Real sumsq_partial = (lane >= x0 && lane < n) ? abs2_if_complex(Al(lane, k)) : Real(0);
-                    const Real sumsq = reduce_sum_group_real<T>(g, sumsq_partial);
-
-                    auto [tau_k, scale] = invoke_one_broadcast(g, [&]() {
-                        const T alpha = Al(alpha_row, k);
-                        const auto scalars = compute_householder_scalars(alpha, sycl::sqrt(sumsq));
+                    T alpha = Al(alpha_row, k);
+                    const T tau_k = internal::larfg(g, alpha, VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0));
+                    if (lane == 0) {
                         Al(alpha_row, k) = T(1);
-                        return std::array<T, 2>{scalars.tau, scalars.scale};
-                    });
-
-                    if (tau_k != T(0) && x0 < n) {
-                        batchlas::device::scal(g, VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0), scale);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
@@ -290,22 +188,21 @@ Event sytrd_lower_local_small(Queue& q,
                         ld_loc * n);
                     auto v_view = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
                     auto w_view = VectorView<T>(W_ptr + alpha_row, tail);
-                    batchlas::device::hemv(it,
-                                            trailing_view,
-                                            v_view,
-                                            w_view,
-                                            tau_k,
-                                            T(0),
-                                            Uplo::Lower,
-                                            batchlas::device::DeviceBlasPolicy::Auto);
+                    batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+                        g,
+                        trailing_view,
+                        v_view,
+                        w_view,
+                        tau_k,
+                        T(0));
                     it.barrier(sycl::access::fence_space::local_space);
 
                     auto v_vec = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
                     auto w_vec = VectorView<T>(W_ptr + alpha_row, tail);
-                    const T dot = batchlas::device::dotc(it, v_vec, w_vec);
+                    const T dot = batchlas::device::dotc(g, v_vec, w_vec);
 
                     const T alpha2 = T(-0.5) * tau_k * dot;
-                    batchlas::device::axpy(it, w_vec, v_vec, alpha2);
+                    batchlas::device::axpy(g, w_vec, v_vec, alpha2);
                     it.barrier(sycl::access::fence_space::local_space);
 
                     auto v_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
@@ -320,15 +217,15 @@ Event sytrd_lower_local_small(Queue& q,
                         1,
                         tail,
                         tail);
-                    batchlas::device::her2k(it,
-                                            v_matrix,
-                                            w_matrix,
-                                            trailing_view,
-                                            T(-1),
-                                            T(1),
-                                            Uplo::Lower,
-                                            Transpose::NoTrans,
-                                            batchlas::device::DeviceBlasPolicy::Auto);
+                    batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto,
+                                                    Uplo::Lower,
+                                                    Transpose::NoTrans>(
+                        g,
+                        v_matrix,
+                        w_matrix,
+                        trailing_view,
+                        T(-1),
+                        T(1));
                     if constexpr (internal::is_complex<T>::value) {
                         it.barrier(sycl::access::fence_space::local_space);
                         if (lane_in_tail) {
@@ -524,11 +421,12 @@ Event sytrd_blocked_impl(Queue& ctx,
     const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
     const bool fuse_override_on = env_truthy(fuse_env);
     const bool fuse_override_off = env_falsy(fuse_env);
-    const bool fuse_default = false;
+    const bool fuse_default = tuning::sytrd_fuse_panel_update_for_n(n);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
     constexpr bool allow_syr2k_experiment = (B == Backend::CUDA) && std::is_same_v<T, float>;
     const bool use_syr2k_trailing_update = allow_syr2k_experiment &&
                                            (sytrd_trailing_update_mode() == SytrdTrailingUpdateMode::Syr2k);
+    const int32_t latrd_wg_hint = latrd_lower_panel_wg_hint_override(n, batch);
 
     for (int j0 = 0; j0 < k; j0 += nb) {
         const int ib = std::min(nb, k - j0);
@@ -551,7 +449,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                                           E_panel,
                                           TAU_panel,
                                           W_panel,
-                                          latrd_lower_panel_wg_hint_override(),
+                                          latrd_wg_hint,
                                           fuse_this_panel);
         }
 

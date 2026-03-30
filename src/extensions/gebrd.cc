@@ -53,12 +53,11 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha = A(i, i, b);
-                Real tau_l = Real(0);
-                Real beta_l = alpha;
-                if (sigma != Real(0)) {
-                    beta_l = -sycl::copysign(sycl::hypot(alpha, sycl::sqrt(sigma)), alpha);
-                    tau_l = (beta_l - alpha) / beta_l;
-                    const Real scale = Real(1) / (alpha - beta_l);
+                const auto left_scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - i);
+                const Real tau_l = left_scalars.tau;
+                const Real beta_l = left_scalars.beta;
+                if (tau_l != Real(0)) {
+                    const Real scale = left_scalars.scale;
                     A(i, i, b) = Real(1);
                     for (int32_t r = i + 1; r < m; ++r) {
                         A(r, i, b) *= scale;
@@ -94,12 +93,11 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha_r = A(i, i + 1, b);
-                Real tau_r = Real(0);
-                Real beta_r = alpha_r;
-                if (sigma_r != Real(0)) {
-                    beta_r = -sycl::copysign(sycl::hypot(alpha_r, sycl::sqrt(sigma_r)), alpha_r);
-                    tau_r = (beta_r - alpha_r) / beta_r;
-                    const Real scale_r = Real(1) / (alpha_r - beta_r);
+                const auto right_scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
+                const Real tau_r = right_scalars.tau;
+                const Real beta_r = right_scalars.beta;
+                if (tau_r != Real(0)) {
+                    const Real scale_r = right_scalars.scale;
                     A(i, i + 1, b) = Real(1);
                     for (int32_t c = i + 2; c < n; ++c) {
                         A(i, c, b) *= scale_r;

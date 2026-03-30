@@ -38,11 +38,6 @@ namespace batchlas {
         }
     }
 
-    template <typename Real>
-    inline Real sign_nonzero_real(Real x) {
-        return (sycl::signbit(x) ? Real(-1) : Real(1));
-    }
-
     // Unblocked symmetric tridiagonal reduction (LAPACK SYTD2-style) for very small matrices.
     //
     // This is intended as a building block for batched eigensolvers: it overwrites A with the
@@ -100,12 +95,6 @@ namespace batchlas {
         }
     }
 
-    template <typename T>
-    inline T sign_nonzero(T x) {
-        // Return +/-1 with sign of x, treating +0 as +.
-        return sign_nonzero_real(x);
-    }
-
     // Generate a Householder reflector H = I - tau * v v^T for a vector [alpha; x].
     // Mirrors DLARFG for the real case.
     //
@@ -139,46 +128,13 @@ namespace batchlas {
         // alpha lives inside the partition.
         const T alpha_leader = sycl::select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
-        // Leader computes beta/tau/scale.
         const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
-            T beta = alpha_leader;
-            T tau_l = T(0);
-            T scale = T(0);
-
             if (len <= 1) {
-                tau_l = T(0);
-                beta = alpha_leader;
-                scale = T(0);
-            } else if constexpr (internal::is_complex<T>::value) {
-                // Complex Householder (ZLARFG/CLARFG-style): choose beta with the same phase as alpha.
-                // NOTE: For Hermitian tridiagonal reduction, the off-diagonal can be made real later
-                // via a diagonal phase similarity on the tridiagonal (see syev_cta complex path).
-                const Real alpha_abs = sycl::hypot(alpha_leader.real(), alpha_leader.imag());
-
-                if (xnorm == Real(0) && alpha_leader.imag() == Real(0)) {
-                    tau_l = T(0);
-                    beta = alpha_leader;
-                    scale = T(0);
-                } else {
-                    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                    const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha_leader / alpha_abs);
-                    beta = -alpha_sign * T(beta_abs);
-                    tau_l = (beta - alpha_leader) / beta;
-                    scale = T(1) / (alpha_leader - beta);
-                }
-            } else {
-                if (xnorm == Real(0)) {
-                    tau_l = T(0);
-                    beta = alpha_leader;
-                    scale = T(0);
-                } else {
-                    beta = -sign_nonzero(alpha_leader) * sycl::hypot(alpha_leader, xnorm);
-                    tau_l = (beta - alpha_leader) / beta;
-                    scale = T(1) / (alpha_leader - beta);
-                }
+                return std::array<T, 3>{alpha_leader, T(0), T(0)};
             }
 
-            return std::array<T, 3>{beta, tau_l, scale};
+            const auto scalars = internal::larfg(alpha_leader, xnorm, len);
+            return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
         });
 
         tau = tau_b;

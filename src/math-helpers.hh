@@ -1,6 +1,8 @@
 #include <sycl/sycl.hpp>
 
 #include <blas/enums.hh>
+#include <blas/device.hh>
+#include <util/group-invoke.hh>
 
 #include <complex>
 
@@ -254,6 +256,22 @@ namespace batchlas {
         };
 
         template <typename T>
+        struct larfg_result {
+            T tau;
+            T beta;
+            T scale;
+        };
+
+        template <typename T>
+        inline constexpr base_float_t<T> dotc_norm_sq_real(const T& value) {
+            if constexpr (is_complex<T>::value) {
+                return value.real();
+            } else {
+                return value;
+            }
+        }
+
+        template <typename T>
         inline constexpr lartg_result<T> lartg(const T& f, const T& g)
         {
             using R = base_float_t<T>;
@@ -333,6 +351,87 @@ namespace batchlas {
                 const R r = r_unscaled * u;
                 return {c, T(s), T(r)};
             }
+        }
+
+        template <typename T>
+        inline constexpr larfg_result<T> larfg(const T& alpha, base_float_t<T> xnorm, int len)
+        {
+            using R = base_float_t<T>;
+
+            larfg_result<T> result{T(0), alpha, T(0)};
+
+            // LAPACK semantics: for N <= 1, tau = 0 and alpha is unchanged (beta = alpha).
+            if (len <= 1) {
+                return result;
+            }
+
+            if constexpr (is_complex<T>::value) {
+                if (xnorm == R(0) && alpha.imag() == R(0)) {
+                    return result;
+                }
+
+                const R alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
+                const R beta_abs = sycl::hypot(alpha_abs, xnorm);
+                const T alpha_sign = (alpha_abs == R(0)) ? T(1) : (alpha / alpha_abs);
+                result.beta = -alpha_sign * T(beta_abs);
+                result.tau = (result.beta - alpha) / result.beta;
+                result.scale = T(1) / (alpha - result.beta);
+                return result;
+            } else {
+                if (xnorm == R(0)) {
+                    return result;
+                }
+
+                const R alpha_r = static_cast<R>(alpha);
+                const R sign = sycl::signbit(alpha_r) ? R(-1) : R(1);
+                const R beta = -sign * sycl::hypot(alpha_r, xnorm);
+                result.beta = T(beta);
+                result.tau = (result.beta - alpha) / result.beta;
+                result.scale = T(1) / (alpha - result.beta);
+                return result;
+            }
+        }
+
+        template <typename Exec, typename T>
+        inline T larfg(const Exec& exec, T& alpha, const VectorView<T>& x)
+        {
+            using R = base_float_t<T>;
+
+            const int len = static_cast<int>(x.size()) + 1;
+            if (len <= 1) {
+                return T(0);
+            }
+
+            const auto& group = [&]() -> const auto& {
+                if constexpr (requires { exec.get_group(); }) {
+                    return exec.get_group();
+                } else {
+                    return exec;
+                }
+            }();
+
+            const R xnorm = (x.size() > 0)
+                ? sycl::sqrt(dotc_norm_sq_real(batchlas::device::dotc(group, x, x)))
+                : R(0);
+
+            const auto scalars = [&]() {
+                if constexpr (requires { exec.get_group(); }) {
+                    return invoke_one_broadcast(exec.get_group(), [&]() {
+                        return larfg(alpha, xnorm, len);
+                    });
+                } else {
+                    return invoke_one_broadcast(exec, [&]() {
+                        return larfg(alpha, xnorm, len);
+                    });
+                }
+            }();
+            alpha = scalars.beta;
+
+            if (scalars.tau != T(0) && x.size() > 0) {
+                batchlas::device::scal(group, x, scalars.scale);
+            }
+
+            return scalars.tau;
         }
 
         template <typename T>

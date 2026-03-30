@@ -15,14 +15,24 @@ inline constexpr int32_t ORMQR_BLOCK_SIZE_LARGE = 16;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_XLARGE = 16;
 
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = 8;
-inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = 16;
+inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = 16;
-inline constexpr int32_t SYTRD_BLOCK_SIZE_LARGE = 16;
-inline constexpr int32_t SYTRD_BLOCK_SIZE_XLARGE = 16;
+inline constexpr int32_t SYTRD_BLOCK_SIZE_LARGE = 24;
+inline constexpr int32_t SYTRD_BLOCK_SIZE_XLARGE = 32;
 
-inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_TINY = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_SMALL = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_MEDIUM = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_LARGE = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_XLARGE = 0;
 
-inline constexpr int32_t STEDC_RECURSION_THRESHOLD_TINY = 32;
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_TINY = 0;
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_SMALL = 0;
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_MEDIUM = 0;
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_LARGE = 0;
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_XLARGE = 0;
+
+inline constexpr int32_t STEDC_RECURSION_THRESHOLD_TINY = 16;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_SMALL = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_MEDIUM = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_LARGE = 32;
@@ -34,17 +44,17 @@ inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 2;
 
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 8;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 32;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 32;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 32;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_XLARGE = 32;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 4;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 4;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 4;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 4;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_XLARGE = 8;
 
 inline constexpr int32_t STEDC_WG_MULTIPLIER_TINY = 1;
 inline constexpr int32_t STEDC_WG_MULTIPLIER_SMALL = 1;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_MEDIUM = 1;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_LARGE = 1;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 1;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_MEDIUM = 2;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_LARGE = 2;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 4;
 
 inline constexpr int32_t ormqr_block_size_for_n(int32_t n) {
     if (n <= 64) return ORMQR_BLOCK_SIZE_TINY;
@@ -62,7 +72,23 @@ inline constexpr int32_t sytrd_block_size_for_n(int32_t n) {
     return SYTRD_BLOCK_SIZE_XLARGE;
 }
 
-inline constexpr int32_t latrd_lower_panel_wg_hint() { return LATRD_LOWER_PANEL_WG_HINT; }
+inline constexpr int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {
+    if (n <= 64) return LATRD_LOWER_PANEL_WG_HINT_TINY;
+    if (n <= 128) return LATRD_LOWER_PANEL_WG_HINT_SMALL;
+    if (n <= 256) return LATRD_LOWER_PANEL_WG_HINT_MEDIUM;
+    if (n <= 512) return LATRD_LOWER_PANEL_WG_HINT_LARGE;
+    return LATRD_LOWER_PANEL_WG_HINT_XLARGE;
+}
+
+inline constexpr int32_t latrd_lower_panel_wg_hint() { return latrd_lower_panel_wg_hint_for_n(256); }
+
+inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
+    if (n <= 64) return SYTRD_FUSE_PANEL_UPDATE_TINY != 0;
+    if (n <= 128) return SYTRD_FUSE_PANEL_UPDATE_SMALL != 0;
+    if (n <= 256) return SYTRD_FUSE_PANEL_UPDATE_MEDIUM != 0;
+    if (n <= 512) return SYTRD_FUSE_PANEL_UPDATE_LARGE != 0;
+    return SYTRD_FUSE_PANEL_UPDATE_XLARGE != 0;
+}
 
 inline constexpr int32_t stedc_recursion_threshold_for_n(int32_t n) {
     if (n <= 64) return STEDC_RECURSION_THRESHOLD_TINY;

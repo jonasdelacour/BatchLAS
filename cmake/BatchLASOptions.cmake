@@ -28,6 +28,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BATCHLAS_BUILD_TESTS "Build BatchLAS tests" ON)
 option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
+option(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS "Build device_blas_* benchmark targets" OFF)
 option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 option(BATCHLAS_ENABLE_CUDA "Enable CUDA support" OFF)

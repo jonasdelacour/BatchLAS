@@ -99,7 +99,7 @@ MINI_BENCHMARK(device_blas_level1_benchmark) {
                     [local_size](Queue& queue, auto x, auto y) {
                         launch_batched_level1_kernel<DeviceBlasLevel1Kernel<std::integral_constant<int, 100>>>(
                             queue, x.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::axpy(item, x.batch_item(bid), y.batch_item(bid), DeviceBlasLevel1Scalar(2.0f, -0.5f));
+                                batchlas::device::axpy(item.get_group(), x.batch_item(bid), y.batch_item(bid), DeviceBlasLevel1Scalar(2.0f, -0.5f));
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kComplexAxpyFlopsPerElement * n), minibench::Rate);
@@ -116,7 +116,7 @@ MINI_BENCHMARK(device_blas_level1_benchmark) {
                     [local_size](Queue& queue, auto x, auto y, auto result) {
                         launch_batched_level1_kernel<DeviceBlasLevel1Kernel<std::integral_constant<int, 200>>>(
                             queue, x.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                const auto value = batchlas::device::dotc(item, x.batch_item(bid), y.batch_item(bid));
+                                const auto value = batchlas::device::dotc(item.get_group(), x.batch_item(bid), y.batch_item(bid));
                                 if (item.get_local_linear_id() == 0) {
                                     result.batch_item(bid)(0) = value;
                                 }
@@ -132,7 +132,7 @@ MINI_BENCHMARK(device_blas_level1_benchmark) {
                     [local_size](Queue& queue, auto x) {
                         launch_batched_level1_kernel<DeviceBlasLevel1Kernel<std::integral_constant<int, 300>>>(
                             queue, x.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::scal(item, x.batch_item(bid), DeviceBlasLevel1Scalar(0.75f, 0.25f));
+                                batchlas::device::scal(item.get_group(), x.batch_item(bid), DeviceBlasLevel1Scalar(0.75f, 0.25f));
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kComplexScalFlopsPerElement * n), minibench::Rate);

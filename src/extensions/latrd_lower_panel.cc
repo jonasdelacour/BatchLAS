@@ -21,37 +21,6 @@ namespace batchlas {
 namespace {
 
 template <typename T>
-struct HouseholderScalars {
-    T tau{};
-    T beta{};
-    T scale{};
-};
-
-template <typename U>
-inline U conj_if_needed(const U& x) {
-    return batchlas::device::detail::conjugate_if_needed(x);
-}
-
-template <typename Real>
-inline Real sign_nonzero_real(Real x) {
-    return (sycl::signbit(x) ? Real(-1) : Real(1));
-}
-
-template <typename Real>
-inline Real sign_nonzero(const Real& x) {
-    return sign_nonzero_real(x);
-}
-
-template <typename Real>
-inline std::complex<Real> sign_nonzero(const std::complex<Real>& x) {
-    const Real magnitude = sycl::hypot(x.real(), x.imag());
-    if (magnitude == Real(0)) {
-        return std::complex<Real>(1);
-    }
-    return x / magnitude;
-}
-
-template <typename T>
 inline T hermitian_diagonal(const T& value) {
     return value;
 }
@@ -59,48 +28,6 @@ inline T hermitian_diagonal(const T& value) {
 template <typename Real>
 inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
     return std::complex<Real>(value.real(), Real(0));
-}
-
-template <typename Real>
-inline Real dotc_norm_sq_real(const Real& value) {
-    return value;
-}
-
-template <typename Real>
-inline Real dotc_norm_sq_real(const std::complex<Real>& value) {
-    return value.real();
-}
-
-template <typename Real>
-inline HouseholderScalars<Real> compute_householder_scalars(const Real& alpha, Real xnorm) {
-    HouseholderScalars<Real> result;
-    if (xnorm == Real(0)) {
-        result.beta = alpha;
-        return result;
-    }
-
-    result.beta = -sign_nonzero(alpha) * Real(sycl::hypot(alpha, xnorm));
-    result.tau = (result.beta - alpha) / result.beta;
-    result.scale = Real(1) / (alpha - result.beta);
-    return result;
-}
-
-template <typename Real>
-inline HouseholderScalars<std::complex<Real>> compute_householder_scalars(const std::complex<Real>& alpha, Real xnorm) {
-    using Complex = std::complex<Real>;
-
-    HouseholderScalars<Complex> result;
-    if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-        result.beta = alpha;
-        return result;
-    }
-
-    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-    result.beta = -sign_nonzero(alpha) * Complex(beta_abs);
-    result.tau = (result.beta - alpha) / result.beta;
-    result.scale = Complex(1) / (alpha - result.beta);
-    return result;
 }
 
 template <typename T, int WG, bool FuseTrailingUpdate>
@@ -116,8 +43,8 @@ Event latrd_lower_panel_batched_wg(Queue& q,
 
     (void)q->submit([&](sycl::handler& h) {
         // Create kernel-passable views inside submit (MatrixView is not trivially copyable).
-        KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
-        KernelMatrixView<T, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
+        auto A_view = a.kernel_view();
+        auto W_view = w.kernel_view();
 
         // VectorView is device-copyable in BatchLAS and provides indexing + batch abstraction.
         VectorView<T> E_view = e;
@@ -163,8 +90,8 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     if (i > 0) {
                         auto vip_view = VectorView<T>(vip_ptr, i);
                         auto wip_view = VectorView<T>(wip_ptr, i);
-                        batchlas::device::copy(it, Ab(i, Slice(0, i)), vip_view);
-                        batchlas::device::copy(it, Wb(i, Slice(0, i)), wip_view);
+                        batchlas::device::copy(g, Ab(i, Slice(0, i)), vip_view);
+                        batchlas::device::copy(g, Wb(i, Slice(0, i)), wip_view);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
@@ -172,64 +99,46 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     if (i > 0) {
                         const auto vip_view = VectorView<T>(vip_ptr, i);
                         const auto wip_view = VectorView<T>(wip_ptr, i);
-                        const T panel_dot = batchlas::device::dotc(it, vip_view, wip_view);
+                        const T panel_dot = batchlas::device::dotc(g, vip_view, wip_view);
                         if (lid == 0) {
-                            Ab(i, i) = hermitian_diagonal(Ab(i, i) - panel_dot - conj_if_needed(panel_dot));
+                            Ab(i, i) = hermitian_diagonal(Ab(i, i) - panel_dot - batchlas::device::detail::conj(panel_dot));
                         }
                     }
 
-                    // Update column i entries from row i+1 .. n-1.
+                    // Update column i entries from row i+1 .. n-1 using axpy-loop (mode1 from benchmark).
                     if (i > 0) {
-                        // Conjugate cached vip/wip in-place for gemv (LACGV-style).
-                        const int local_size = static_cast<int>(it.get_local_range(0));
-                        for (int j = lid; j < i; j += local_size) {
-                            vip_ptr[j] = conj_if_needed(vip_ptr[j]);
-                            wip_ptr[j] = conj_if_needed(wip_ptr[j]);
-                        }
                         it.barrier(sycl::access::fence_space::local_space);
+                        // axpy-loop update: a_col_tail -= sum_p (v_prev * wip + w_prev * vip)
+                        for (int p = 0; p < i; ++p) {
+                            auto v_prev = Ab(Slice(i + 1, SliceEnd()), p);
+                            auto w_prev = Wb(Slice(i + 1, SliceEnd()), p);
 
-                        auto v_prev = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Ab.data() + (i + 1), tail, i, Ab.ld());
-                        auto w_prev = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Wb.data() + (i + 1), tail, i, Wb.ld());
-                        batchlas::device::gemv(it, v_prev, VectorView<T>(wip_ptr, i), a_col_tail, T(-1), T(1));
-                        batchlas::device::gemv(it, w_prev, VectorView<T>(vip_ptr, i), a_col_tail, T(-1), T(1));
+                            // $A(i+1:n-1,i) -= conj(wip(p)) * V(:,p) + conj(vip(p)) * W(:,p)$
+                            batchlas::device::hadamard(g, a_col_tail, [&](T x, T w, T v) { return x - batchlas::device::detail::conj(wip_ptr[p]) * v - batchlas::device::detail::conj(vip_ptr[p]) * w; }, a_col_tail, w_prev, v_prev);
+                        }
                     }
-                    // Ensure updated Ab(r,i) values are visible before other lanes read them
-                    // (later phases use a different lane-to-row mapping).
                     it.barrier(sycl::access::fence_space::global_space);
 
                     // Generate Householder reflector to annihilate A(i+2:n-1,i).
-                    using Real = typename base_type<T>::type;
-
                     const int x0 = i + 2;
-                    const Real sumsq = x0 < n
-                        ? dotc_norm_sq_real(batchlas::device::dotc(it, Ab(Slice(x0, SliceEnd()), i), Ab(Slice(x0, SliceEnd()), i)))
-                        : Real(0);
-                    
-                    auto [alpha, tau_i, scale] = invoke_one_broadcast(g, [=] {
-                        T alpha = i + 1 < n ? Ab(i + 1, i) : T(0);
-                        const auto householder = compute_householder_scalars(alpha, sycl::sqrt(sumsq));
-                        E_view(i, b) = householder.beta;
-                        TAU_view(i, b) = householder.tau;
+                    T alpha_i = i + 1 < n ? Ab(i + 1, i) : T(0);
+                    const T tau_i = internal::larfg(g, alpha_i, Ab(Slice(x0, SliceEnd()), i));
+                    if (lid == 0) {
+                        E_view(i, b) = alpha_i;
+                        TAU_view(i, b) = tau_i;
                         Ab(i + 1, i) = T(1);
-                        return std::array<T,3>{alpha, householder.tau, householder.scale};
-                    });
-
-                    if (tau_i != T(0) && x0 < n) {
-                        batchlas::device::scal(it, Ab(Slice(x0, SliceEnd()), i), scale);
                     }
 
                     // Ensure scaling stores are visible before other lanes read Ab(r,i)
                     // (v_local fill uses a different lane-to-row mapping).
-                    it.barrier(sycl::access::fence_space::global_space);
+                    it.barrier(sycl::access::fence_space::local_space);
 
                     // Build v in local memory for the upcoming A*v, dot-products, and updates.
                     if (lid == 0) {
                         v_ptr[i + 1] = T(1);
                     }
                     if (x0 < n) {
-                        batchlas::device::copy(it, Ab(Slice(x0, SliceEnd()), i), VectorView<T>(v_ptr + x0, n - x0));
+                        batchlas::device::copy(g, Ab(Slice(x0, SliceEnd()), i), VectorView<T>(v_ptr + x0, n - x0));
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
@@ -245,16 +154,25 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         tail,
                         tail,
                         Ab.ld());
-                    batchlas::device::hemv(it,
-                                           trailing_view,
-                                           v_tail,
-                                           wcol_tail,
-                                           T(1),
-                                           T(0),
-                                           Uplo::Lower,
-                                           batchlas::device::DeviceBlasPolicy::Auto);
-                    // Generic hemv may materialize the output from only a subset of lanes,
-                    // so all threads must wait before applying the correction updates.
+                    batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+                        g,
+                        trailing_view,
+                        v_tail,
+                        wcol_tail,
+                        T(1),
+                        T(0));
+                    /* for (int r = lid; r < tail; r += wg) {
+                        T sum = T(0);
+                        // Lower triangle (including diagonal): A(r,c) where c <= r
+                        for (int c = 0; c <= r; ++c) {
+                            sum += trailing_view(r, c) * v_tail(c);
+                        }
+                        // Upper triangle: use conjugate symmetry A(r,c) = conj(A(c,r)) for c > r
+                        for (int c = r + 1; c < tail; ++c) {
+                            sum += batchlas::device::detail::conj(trailing_view(c, r)) * v_tail(c);
+                        }
+                        wcol_tail(r) = sum;
+                    } */
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // Apply intra-panel corrections from previously computed reflectors.
@@ -262,37 +180,31 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         const int pc = p;
 
                         // gamma = W(:,pc)^H * v, delta = V(:,p)^H * v
-                        const auto vp_tail = Ab(Slice(i + 1, SliceEnd()), p);
-                        const auto wp_tail = Wb(Slice(i + 1, SliceEnd()), pc);
-                        const T gamma = batchlas::device::dotc(it, wp_tail, v_tail);
-                        const T delta = batchlas::device::dotc(it, vp_tail, v_tail);
+                        // W(:,)
+                        const auto vp_tail = Ab(Slice(i + 1), p);
+                        const auto wp_tail = Wb(Slice(i + 1), pc);
+                        const auto gamma = batchlas::device::dotc(g, wp_tail, v_tail);
+                        const auto delta = batchlas::device::dotc(g, vp_tail, v_tail);
                         for (int r = i + 1 + lid; r < n; r += wg) {
                             wcol_local[r] -= vp_tail(r - (i + 1)) * gamma + wp_tail(r - (i + 1)) * delta;
                         }
                     }
 
-                    // The correction loop writes shared local W entries with a lane-to-row
-                    // mapping that differs from the subsequent BLAS helpers.
                     it.barrier(sycl::access::fence_space::local_space);
-
                     // Scale by tau.
-                    batchlas::device::scal(it, wcol_tail, tau_i);
-
-                    // dotc/axpy may read W with a different work distribution than scal.
+                    batchlas::device::scal(g, wcol_tail, tau_i);
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // dot = v^H * w
-                    const T dot = batchlas::device::dotc(it, v_tail, wcol_tail);
+                    const T dot = batchlas::device::dotc(g, v_tail, wcol_tail);
 
                     // w += (-0.5 * tau * dot) * v
                     const T alpha2 = T(-0.5) * tau_i * dot;
-                    batchlas::device::axpy(it, v_tail, wcol_tail, alpha2);
-
-                    // Commit the fully updated local W column after all local-memory writes land.
+                    batchlas::device::axpy(g, v_tail, wcol_tail, alpha2);
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // Commit the computed W column to global memory once.
-                    batchlas::device::copy(it, wcol_tail, Wb(Slice(i + 1, SliceEnd()), col));
+                    batchlas::device::copy(g, wcol_tail, Wb(Slice(i + 1, SliceEnd()), col));
                     // Ensure all global writes to A/W from this iteration are visible before the next iteration
                     // reads Wb(i,p) / Ab(i,p) computed by other lanes.
                     it.barrier(sycl::access::fence_space::global_space);
@@ -302,31 +214,17 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                     const int j2 = ib;
                     const int n2 = n - j2;
                     if (n2 > 0) {
-                        auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Ab.data() + j2 + j2 * Ab.ld(),
-                            n2,
-                            n2,
-                            Ab.ld());
-                        auto v_panel_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Ab.data() + j2,
-                            n2,
-                            ib,
-                            Ab.ld());
-                        auto w_panel_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                            Wb.data() + j2,
-                            n2,
-                            ib,
-                            Wb.ld());
-
-                        batchlas::device::her2k(it,
-                                                v_panel_view,
-                                                w_panel_view,
-                                                trailing_view,
-                                                T(-1),
-                                                T(1),
-                                                Uplo::Lower,
-                                                Transpose::NoTrans,
-                                                batchlas::device::DeviceBlasPolicy::Auto);
+                        
+                        // Trailing update: $A := A - V*W^H - W*V^H$                         
+                        batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Subgroup16,
+                                                        Uplo::Lower,
+                                                        Transpose::NoTrans>(
+                            g,
+                            Ab(Slice(j2), Slice(0, ib)),
+                            Wb(Slice(j2), Slice(0, ib)),
+                            Ab(Slice(j2), Slice(j2)),
+                            T(-1),
+                            T(1));
                     }
                 }
             });

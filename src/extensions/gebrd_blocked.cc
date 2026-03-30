@@ -28,11 +28,6 @@ inline int32_t gebrd_blocked_resolved_nb(int32_t block_size) {
 }
 
 template <typename T>
-inline T sign_nonzero(const T& x) {
-    return sycl::signbit(x) ? T(-1) : T(1);
-}
-
-template <typename T>
 inline void validate_gebrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 const VectorView<typename base_type<T>::type>& d,
                                 const VectorView<typename base_type<T>::type>& e,
@@ -184,11 +179,10 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        if (sigma != Real(0)) {
-                            beta_q = -sign_nonzero(alpha) * sycl::hypot(alpha, sycl::sqrt(sigma));
-                            tau_q = (beta_q - alpha) / beta_q;
-                            scale_q = T(1) / (alpha - beta_q);
-                        }
+                        const auto scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - gi);
+                        beta_q = scalars.beta;
+                        tau_q = scalars.tau;
+                        scale_q = scalars.scale;
                     }
                     tau_q = sycl::group_broadcast(g, tau_q);
                     beta_q = sycl::group_broadcast(g, beta_q);
@@ -272,11 +266,10 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        if (sigma_r != Real(0)) {
-                            beta_p = -sign_nonzero(alpha_r) * sycl::hypot(alpha_r, sycl::sqrt(sigma_r));
-                            tau_p = (beta_p - alpha_r) / beta_p;
-                            scale_p = T(1) / (alpha_r - beta_p);
-                        }
+                        const auto scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        beta_p = scalars.beta;
+                        tau_p = scalars.tau;
+                        scale_p = scalars.scale;
                     }
                     tau_p = sycl::group_broadcast(g, tau_p);
                     beta_p = sycl::group_broadcast(g, beta_p);
