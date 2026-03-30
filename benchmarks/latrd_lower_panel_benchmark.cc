@@ -29,12 +29,9 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
     const int j0 = static_cast<int>(state.range(3));
     const bool fuse_trailing_update = state.range(4) != 0;
 
-    // Approximate: panel work dominated by matvecs over the trailing matrix.
-    // Use a coarse model O(n^2 * ib).
     const double approx_flops = 2.0 * double(n) * double(n) * double(ib) * double(batch);
 
     auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-
     auto e0 = Vector<T>::zeros(n - 1, batch);
     auto tau0 = Vector<T>::zeros(n - 1, batch);
     auto W0 = Matrix<T>::Zeros(n, std::max<int>(1, ib), batch);

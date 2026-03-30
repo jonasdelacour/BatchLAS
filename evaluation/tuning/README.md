@@ -56,6 +56,8 @@ Generated constants:
 
 - `ORMQR_BLOCK_SIZE_TINY`, `ORMQR_BLOCK_SIZE_SMALL`, `ORMQR_BLOCK_SIZE_MEDIUM`, `ORMQR_BLOCK_SIZE_LARGE`, `ORMQR_BLOCK_SIZE_XLARGE`
 - `SYTRD_BLOCK_SIZE_TINY`, `SYTRD_BLOCK_SIZE_SMALL`, `SYTRD_BLOCK_SIZE_MEDIUM`, `SYTRD_BLOCK_SIZE_LARGE`, `SYTRD_BLOCK_SIZE_XLARGE`
+- `LATRD_LOWER_PANEL_WG_HINT_TINY`, `LATRD_LOWER_PANEL_WG_HINT_SMALL`, `LATRD_LOWER_PANEL_WG_HINT_MEDIUM`, `LATRD_LOWER_PANEL_WG_HINT_LARGE`, `LATRD_LOWER_PANEL_WG_HINT_XLARGE`
+- `SYTRD_FUSE_PANEL_UPDATE_TINY`, `SYTRD_FUSE_PANEL_UPDATE_SMALL`, `SYTRD_FUSE_PANEL_UPDATE_MEDIUM`, `SYTRD_FUSE_PANEL_UPDATE_LARGE`, `SYTRD_FUSE_PANEL_UPDATE_XLARGE`
 
 STEDC constants are bucketed:
 
@@ -65,6 +67,8 @@ Runtime selection helpers:
 
 - `batchlas::tuning::ormqr_block_size_for_n(n)`
 - `batchlas::tuning::sytrd_block_size_for_n(n)`
+- `batchlas::tuning::latrd_lower_panel_wg_hint_for_n(n)`
+- `batchlas::tuning::sytrd_fuse_panel_update_for_n(n)`
 - `batchlas::tuning::stedc_recursion_threshold_for_n(n)`
 - `batchlas::tuning::stedc_merge_variant_for_n(n)`
 - `batchlas::tuning::stedc_threads_per_root_for_n(n)`
@@ -108,5 +112,5 @@ At runtime, recursion thresholds are clamped to local subproblem size (`threshol
 
 ## Notes
 
-- `syev` does not carry independent child block-size knobs; it always uses `ormqr_block_size_for_n` and `sytrd_block_size_for_n` from child-owned tuning.
+- `syev` now supports coupled tuning of SYTRD internals (`nb`, LATRD lower-panel `wg`, and fused panel update) so the selected tuple is optimized for end-to-end eigensolver time.
 - If your profile does not cover some size ranges, configured fallback bucket values are used for those missing ranges.

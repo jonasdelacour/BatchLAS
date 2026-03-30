@@ -13,9 +13,13 @@ namespace {
 
 template <typename Benchmark>
 inline void SytrdBlockedBenchSizes(Benchmark* b) {
-    for (int n : {64, 128, 256, 512}) {
-        // uplo: 0=Lower, 1=Upper (blocked currently implements Lower only)
-        b->Args({n, 1024, 32, 0});
+    auto ns = std::array{64, 128, 256, 512};
+    auto bs = std::array{8192, 4096, 2048, 1024};
+    auto nb = std::array{8,12,16,24,32};
+    for (size_t i = 0; i < ns.size(); ++i) {
+        for (int j = 0; j < nb.size(); ++j) {
+            b->Args({ns[i], bs[i], nb[j], 0}); // lower
+        }
     }
 }
 

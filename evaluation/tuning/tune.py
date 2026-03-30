@@ -38,6 +38,14 @@ def _default_benchmark_path(build_dir: Path, exe_name: str) -> Path:
     return build_dir / "benchmarks" / exe_name
 
 
+def _default_space_path(repo_root: Path) -> Path:
+    return repo_root / "evaluation" / "tuning" / "spaces" / "default.json"
+
+
+def _default_output_path(build_dir: Path) -> Path:
+    return build_dir / "tuning" / "profile.json"
+
+
 def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, check=True)
 
@@ -269,10 +277,15 @@ def _tune_one_bench(
 def main() -> int:
     parser = argparse.ArgumentParser(description="BatchLAS bottom-up tuning harness (grid search)")
     parser.add_argument("--build-dir", type=Path, default=None, help="Build directory (default: <repo>/build)")
-    parser.add_argument("--space", type=Path, required=True, help="Path to tuning space JSON")
+    parser.add_argument(
+        "--space",
+        type=Path,
+        default=None,
+        help="Path to tuning space JSON (default: <repo>/evaluation/tuning/spaces/default.json)",
+    )
     parser.add_argument("--backend", type=str, required=True, help="Backend passed to benchmarks (e.g., CUDA, ROCM, NETLIB, MKL)")
     parser.add_argument("--type", dest="dtype", type=str, required=True, help="Type passed to benchmarks (e.g., float, double)")
-    parser.add_argument("--out", type=Path, required=True, help="Output JSON profile path")
+    parser.add_argument("--out", type=Path, default=None, help="Output JSON profile path (default: <build-dir>/tuning/profile.json)")
 
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--min-time", type=float, default=25.0)
@@ -288,8 +301,10 @@ def main() -> int:
 
     repo_root = _repo_root()
     build_dir = args.build_dir or _default_build_dir(repo_root)
+    space_path = args.space or _default_space_path(repo_root)
+    out_path = args.out or _default_output_path(build_dir)
 
-    spaces = _load_spaces(args.space)
+    spaces = _load_spaces(space_path)
 
     results: List[Dict[str, Any]] = []
     for space in spaces:
@@ -334,9 +349,9 @@ def main() -> int:
         "results": results,
     }
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n")
-    print(f"Wrote tuning profile: {args.out}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n")
+    print(f"Wrote tuning profile: {out_path}")
 
     return 0
 

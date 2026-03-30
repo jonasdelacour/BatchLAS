@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
 
@@ -47,6 +48,16 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
     if (eigenvalues.size() < need) {
         throw std::invalid_argument("syev_blocked: eigenvalues span too small for n*batch.");
     }
+}
+
+inline int32_t sytrd_block_size_override(int32_t n) {
+    const int32_t fallback = tuning::sytrd_block_size_for_n(n);
+    const char* v = std::getenv("BATCHLAS_SYTRD_BLOCK_SIZE");
+    if (!v || *v == '\0') {
+        return fallback;
+    }
+    const int value = std::atoi(v);
+    return value > 0 ? value : fallback;
 }
 
 template <typename T>
@@ -126,7 +137,7 @@ Event syev_blocked(Queue& ctx,
     const int32_t n = static_cast<int32_t>(a_in.rows());
     const int32_t batch = static_cast<int32_t>(a_in.batch_size());
     const int32_t p = std::max<int32_t>(0, n - 1);
-    const int32_t sytrd_block_size = tuning::sytrd_block_size_for_n(n);
+    const int32_t sytrd_block_size = sytrd_block_size_override(n);
     const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
     // Overwrite A only when jobz==EigenVectors.
@@ -412,7 +423,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
-    const int32_t sytrd_block_size = tuning::sytrd_block_size_for_n(n);
+    const int32_t sytrd_block_size = sytrd_block_size_override(n);
     const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
     size_t bytes = 0;

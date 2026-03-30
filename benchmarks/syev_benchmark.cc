@@ -1,22 +1,37 @@
 #include <util/minibench.hh>
 #include <blas/functions.hh>
 #include "bench_utils.hh"
+
+#include <cstdlib>
+#include <string>
 using namespace batchlas;
 
 namespace {
 
 template <typename Benchmark>
 inline void SyevBenchSizes(Benchmark* b) {
-    for (int n : {64, 128, 256, 512}) {
-        b->Args({n, 1024});
-    }
+    auto add_cases = [&](int n, int batch, std::initializer_list<int> nbs) {
+        for (int nb : nbs) {
+            for (int wg : {0, 64, 128, 256}) {
+                for (int fuse : {0, 1}) {
+                    b->Args({n, batch, nb, wg, fuse});
+                }
+            }
+        }
+    };
+    add_cases(16, 16384, {8, 12, 16});
+    add_cases(32, 8192, {8, 12, 16, 24});
+    add_cases(64, 4096, {8, 12, 16, 24});
+    add_cases(128, 2048, {8, 12, 16, 24, 32});
+    add_cases(256, 1024, {8, 12, 16, 24, 32, 48, 64});
+    add_cases(512, 512, {8, 12, 16, 24, 32, 48, 64});
 }
 
 template <typename Benchmark>
 inline void SyevBenchSizesNetlib(Benchmark* b) {
     for (int n : {64, 128, 256}) {
         for (int batch : {1, 10}) {
-            b->Args({n, batch});
+            b->Args({n, batch, 16, 0, 0});
         }
     }
 }
@@ -28,6 +43,13 @@ template <typename T, Backend B>
 static void BM_SYEV(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
+    const int sytrd_block_size = static_cast<int>(state.range(2));
+    const int latrd_wg_hint = static_cast<int>(state.range(3));
+    const int fuse_panel_update = static_cast<int>(state.range(4));
+
+    ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
+    ::setenv("BATCHLAS_LATRD_LOWER_PANEL_WG_HINT", std::to_string(latrd_wg_hint).c_str(), 1);
+    ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     auto A = Matrix<T>::Random(n, n, true, batch);

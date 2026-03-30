@@ -138,7 +138,8 @@ def _emit_header(out_path: Path,
                  sytrd_medium: int,
                  sytrd_large: int,
                  sytrd_xlarge: int,
-                 latrd_lower_panel_wg_hint: int,
+                 latrd_wg: Dict[str, int],
+                 sytrd_fuse: Dict[str, int],
                  stedc_rt: Dict[str, int],
                  stedc_mv: Dict[str, int],
                  stedc_tpr: Dict[str, int],
@@ -165,7 +166,17 @@ inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = {sytrd_medium};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_LARGE = {sytrd_large};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_XLARGE = {sytrd_xlarge};
 
-inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT = {latrd_lower_panel_wg_hint};
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_TINY = {latrd_wg["tiny"]};
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_SMALL = {latrd_wg["small"]};
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_MEDIUM = {latrd_wg["medium"]};
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_LARGE = {latrd_wg["large"]};
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_XLARGE = {latrd_wg["xlarge"]};
+
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_TINY = {sytrd_fuse["tiny"]};
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_SMALL = {sytrd_fuse["small"]};
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_MEDIUM = {sytrd_fuse["medium"]};
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_LARGE = {sytrd_fuse["large"]};
+inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_XLARGE = {sytrd_fuse["xlarge"]};
 
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_TINY = {stedc_rt["tiny"]};
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_SMALL = {stedc_rt["small"]};
@@ -207,7 +218,23 @@ inline constexpr int32_t sytrd_block_size_for_n(int32_t n) {{
     return SYTRD_BLOCK_SIZE_XLARGE;
 }}
 
-inline constexpr int32_t latrd_lower_panel_wg_hint() {{ return LATRD_LOWER_PANEL_WG_HINT; }}
+inline constexpr int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {{
+    if (n <= 64) return LATRD_LOWER_PANEL_WG_HINT_TINY;
+    if (n <= 128) return LATRD_LOWER_PANEL_WG_HINT_SMALL;
+    if (n <= 256) return LATRD_LOWER_PANEL_WG_HINT_MEDIUM;
+    if (n <= 512) return LATRD_LOWER_PANEL_WG_HINT_LARGE;
+    return LATRD_LOWER_PANEL_WG_HINT_XLARGE;
+}}
+
+inline constexpr int32_t latrd_lower_panel_wg_hint() {{ return latrd_lower_panel_wg_hint_for_n(256); }}
+
+inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {{
+    if (n <= 64) return SYTRD_FUSE_PANEL_UPDATE_TINY != 0;
+    if (n <= 128) return SYTRD_FUSE_PANEL_UPDATE_SMALL != 0;
+    if (n <= 256) return SYTRD_FUSE_PANEL_UPDATE_MEDIUM != 0;
+    if (n <= 512) return SYTRD_FUSE_PANEL_UPDATE_LARGE != 0;
+    return SYTRD_FUSE_PANEL_UPDATE_XLARGE != 0;
+}}
 
 inline constexpr int32_t stedc_recursion_threshold_for_n(int32_t n) {{
     if (n <= 64) return STEDC_RECURSION_THRESHOLD_TINY;
@@ -262,6 +289,11 @@ def main() -> int:
     parser.add_argument("--fallback-sytrd-block-size-large", type=int, default=-1)
     parser.add_argument("--fallback-sytrd-block-size-xlarge", type=int, default=-1)
     parser.add_argument("--fallback-latrd-lower-panel-wg-hint", type=int, default=0)
+    parser.add_argument("--fallback-sytrd-fuse-panel-update-tiny", type=int, default=-1)
+    parser.add_argument("--fallback-sytrd-fuse-panel-update-small", type=int, default=-1)
+    parser.add_argument("--fallback-sytrd-fuse-panel-update-medium", type=int, default=-1)
+    parser.add_argument("--fallback-sytrd-fuse-panel-update-large", type=int, default=-1)
+    parser.add_argument("--fallback-sytrd-fuse-panel-update-xlarge", type=int, default=-1)
     for param in ["recursion-threshold", "merge-variant", "threads-per-root", "wg-multiplier"]:
         for bucket in ["tiny", "small", "medium", "large", "xlarge"]:
             parser.add_argument(f"--fallback-stedc-{param}-{bucket}", type=int, default=-1)
@@ -272,9 +304,11 @@ def main() -> int:
     ormqr_params = _find_best_params(profile, "ormqr_blocked")
     sytrd_params = _find_best_params(profile, "sytrd_blocked")
     latrd_params = _find_best_params(profile, "latrd_lower_panel")
+    syev_params = _find_best_params(profile, "syev")
 
     ormqr_entry = _find_bench_entry(profile, "ormqr_blocked")
     sytrd_entry = _find_bench_entry(profile, "sytrd_blocked")
+    syev_entry = _find_bench_entry(profile, "syev")
 
     ormqr_fallback = int(ormqr_params.get("block_size", 64))
     sytrd_fallback = int(sytrd_params.get("nb", 32))
@@ -308,7 +342,37 @@ def main() -> int:
                                           sytrd_xlarge_fallback,
                                           direction="min")
 
-    latrd_lower_panel_wg_hint = int(latrd_params.get("wg", args.fallback_latrd_lower_panel_wg_hint))
+    # Prefer end-to-end syev-coupled tuning when available.
+    if isinstance(syev_entry, dict):
+        sytrd_buckets = _derive_param_buckets(syev_entry,
+                                              "nb",
+                                              sytrd_buckets["tiny"],
+                                              sytrd_buckets["small"],
+                                              sytrd_buckets["medium"],
+                                              sytrd_buckets["large"],
+                                              sytrd_buckets["xlarge"],
+                                              direction="min")
+
+    latrd_wg_fallback = int(latrd_params.get("wg", args.fallback_latrd_lower_panel_wg_hint))
+    latrd_wg_buckets = _derive_param_buckets(syev_entry,
+                                             "wg",
+                                             latrd_wg_fallback,
+                                             latrd_wg_fallback,
+                                             latrd_wg_fallback,
+                                             latrd_wg_fallback,
+                                             latrd_wg_fallback,
+                                             direction="min")
+
+    sytrd_fuse_default = int(syev_params.get("fuse", 0))
+    sytrd_fuse_buckets = _derive_param_buckets(
+        syev_entry,
+        "fuse",
+        args.fallback_sytrd_fuse_panel_update_tiny if args.fallback_sytrd_fuse_panel_update_tiny >= 0 else sytrd_fuse_default,
+        args.fallback_sytrd_fuse_panel_update_small if args.fallback_sytrd_fuse_panel_update_small >= 0 else sytrd_fuse_default,
+        args.fallback_sytrd_fuse_panel_update_medium if args.fallback_sytrd_fuse_panel_update_medium >= 0 else sytrd_fuse_default,
+        args.fallback_sytrd_fuse_panel_update_large if args.fallback_sytrd_fuse_panel_update_large >= 0 else sytrd_fuse_default,
+        args.fallback_sytrd_fuse_panel_update_xlarge if args.fallback_sytrd_fuse_panel_update_xlarge >= 0 else sytrd_fuse_default,
+        direction="min")
 
     stedc_entry = _find_bench_entry(profile, "stedc")
     stedc_params = _find_best_params(profile, "stedc")
@@ -350,7 +414,8 @@ def main() -> int:
                  sytrd_buckets["medium"],
                  sytrd_buckets["large"],
                  sytrd_buckets["xlarge"],
-                 latrd_lower_panel_wg_hint,
+                 latrd_wg_buckets,
+                 sytrd_fuse_buckets,
                  stedc_rt_buckets,
                  stedc_mv_buckets,
                  stedc_tpr_buckets,
