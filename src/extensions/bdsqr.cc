@@ -22,10 +22,76 @@ inline Real safe_abs(Real x) {
 }
 
 template <typename Real>
+inline void apply_rotation_to_rows(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
+                                   int32_t batch,
+                                   int32_t row0,
+                                   int32_t row1,
+                                   Real c,
+                                   Real s) {
+    for (int32_t col = 0; col < matrix.cols(); ++col) {
+        const Real x0 = matrix(row0, col, batch);
+        const Real x1 = matrix(row1, col, batch);
+        matrix(row0, col, batch) = c * x0 + s * x1;
+        matrix(row1, col, batch) = -s * x0 + c * x1;
+    }
+}
+
+template <typename Real>
+inline void apply_rotation_to_cols(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
+                                   int32_t batch,
+                                   int32_t col0,
+                                   int32_t col1,
+                                   Real c,
+                                   Real s) {
+    for (int32_t row = 0; row < matrix.rows(); ++row) {
+        const Real x0 = matrix(row, col0, batch);
+        const Real x1 = matrix(row, col1, batch);
+        matrix(row, col0, batch) = c * x0 + s * x1;
+        matrix(row, col1, batch) = -s * x0 + c * x1;
+    }
+}
+
+template <typename Real>
+inline void scale_row(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
+                      int32_t batch,
+                      int32_t row,
+                      Real alpha) {
+    for (int32_t col = 0; col < matrix.cols(); ++col) {
+        matrix(row, col, batch) *= alpha;
+    }
+}
+
+template <typename Real>
+inline void swap_rows(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
+                      int32_t batch,
+                      int32_t row0,
+                      int32_t row1) {
+    for (int32_t col = 0; col < matrix.cols(); ++col) {
+        const Real tmp = matrix(row0, col, batch);
+        matrix(row0, col, batch) = matrix(row1, col, batch);
+        matrix(row1, col, batch) = tmp;
+    }
+}
+
+template <typename Real>
+inline void swap_cols(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
+                      int32_t batch,
+                      int32_t col0,
+                      int32_t col1) {
+    for (int32_t row = 0; row < matrix.rows(); ++row) {
+        const Real tmp = matrix(row, col0, batch);
+        matrix(row, col0, batch) = matrix(row, col1, batch);
+        matrix(row, col1, batch) = tmp;
+    }
+}
+
+template <typename Real>
 bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                const VectorView<Real>& d,
                                const VectorView<Real>& e,
                                Span<Real> singular_values_out,
+                               const MatrixView<Real, MatrixFormat::Dense>& u,
+                               const MatrixView<Real, MatrixFormat::Dense>& vh,
                                int32_t n,
                                int32_t batch,
                                bool sort_desc,
@@ -40,10 +106,14 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
         auto D = d;
         auto E = e;
         Real* out = singular_values_out.data();
+        auto U = u.kernel_view();
+        auto Vh = vh.kernel_view();
         int32_t* fail = fail_flags.data();
         const int32_t nn = n;
         const int32_t nb = batch;
         const bool descending = sort_desc;
+        const bool accumulate_u = u.rows() > 0 && u.cols() == n;
+        const bool accumulate_vh = vh.rows() == n && vh.cols() > 0;
 
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
@@ -105,6 +175,9 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         const auto r1 = internal::lartg<Real>(f, g);
                         const Real cs = r1.c;
                         const Real sn = r1.s;
+                        if (accumulate_vh) {
+                            apply_rotation_to_rows(Vh, b, k, k + 1, cs, sn);
+                        }
                         if (k > l) eb[k - 1] = r1.r;
 
                         const Real dk = db[k];
@@ -119,6 +192,9 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         const auto r2 = internal::lartg<Real>(f, g);
                         const Real cs2 = r2.c;
                         const Real sn2 = r2.s;
+                        if (accumulate_u) {
+                            apply_rotation_to_cols(U, b, k, k + 1, cs2, sn2);
+                        }
                         db[k] = r2.r;
 
                         const Real dk1b = db[k + 1];
@@ -142,17 +218,32 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
 
             Real* sb = out + static_cast<size_t>(b) * static_cast<size_t>(nn);
             for (int32_t i = 0; i < nn; ++i) {
-                sb[i] = safe_abs(db[i]);
+                if (db[i] < Real(0)) {
+                    db[i] = -db[i];
+                    if (accumulate_vh) {
+                        scale_row(Vh, b, i, Real(-1));
+                    }
+                }
+                sb[i] = db[i];
             }
 
-            // Small n in current tests, so simple O(n^2) ordering is fine in-kernel.
             if (descending) {
                 for (int32_t i = 0; i < nn; ++i) {
+                    int32_t best = i;
                     for (int32_t j = i + 1; j < nn; ++j) {
-                        if (sb[j] > sb[i]) {
-                            const Real tmp = sb[i];
-                            sb[i] = sb[j];
-                            sb[j] = tmp;
+                        if (sb[j] > sb[best]) {
+                            best = j;
+                        }
+                    }
+                    if (best != i) {
+                        const Real tmp = sb[i];
+                        sb[i] = sb[best];
+                        sb[best] = tmp;
+                        if (accumulate_u) {
+                            swap_cols(U, b, i, best);
+                        }
+                        if (accumulate_vh) {
+                            swap_rows(Vh, b, i, best);
                         }
                     }
                 }
@@ -189,6 +280,26 @@ Event bdsqr(Queue& ctx,
             Span<T> singular_values_out,
             const Span<std::byte>& ws,
             bool sort_desc) {
+    const auto empty = MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size());
+    return bdsqr<B, T>(ctx,
+                       d,
+                       e,
+                       singular_values_out,
+                       ws,
+                       empty,
+                       empty,
+                       sort_desc);
+}
+
+template <Backend B, typename T>
+Event bdsqr(Queue& ctx,
+            const VectorView<T>& d,
+            const VectorView<T>& e,
+            Span<T> singular_values_out,
+            const Span<std::byte>& ws,
+            const MatrixView<T, MatrixFormat::Dense>& u,
+            const MatrixView<T, MatrixFormat::Dense>& vh,
+            bool sort_desc) {
     static_cast<void>(B);
 
     const int32_t n = static_cast<int32_t>(d.size());
@@ -204,6 +315,16 @@ Event bdsqr(Queue& ctx,
     if (singular_values_out.size() < need_s) {
         throw std::invalid_argument("bdsqr: singular_values_out span too small");
     }
+    if (u.rows() > 0 || u.cols() > 0) {
+        if (u.cols() != n || u.batch_size() != batch) {
+            throw std::invalid_argument("bdsqr: U must have n columns and matching batch size");
+        }
+    }
+    if (vh.rows() > 0 || vh.cols() > 0) {
+        if (vh.rows() != n || vh.batch_size() != batch) {
+            throw std::invalid_argument("bdsqr: Vh must have n rows and matching batch size");
+        }
+    }
 
     if constexpr (internal::is_complex<T>::value) {
         throw std::runtime_error("bdsqr: complex types are not implemented yet");
@@ -215,6 +336,8 @@ Event bdsqr(Queue& ctx,
                                                      d,
                                                      e,
                                                      singular_values_out,
+                                                     u,
+                                                     vh,
                                                      n,
                                                      batch,
                                                      sort_desc,
@@ -237,6 +360,15 @@ size_t bdsqr_buffer_size(Queue& ctx,
 }
 
 #define BDSQR_INSTANTIATE(back, fp) \
+    template Event bdsqr<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        Span<BATCHLAS_UNPAREN fp>, \
+        const Span<std::byte>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        bool); \
     template Event bdsqr<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \

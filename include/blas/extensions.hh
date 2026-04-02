@@ -1013,10 +1013,13 @@ namespace batchlas {
                                      int32_t block_size = 16);
 
     /**
-     * @brief BDSQR-like implicit bidiagonal QR for singular values (values-only).
+     * @brief Bidiagonal QR iteration for a real upper bidiagonal matrix.
      *
-     * Computes singular values from bidiagonal coefficients (d,e) and writes them
-     * to singular_values_out in descending order.
+     * Computes singular values from bidiagonal coefficients `(d,e)`. The
+     * values-only overload writes singular values to `singular_values_out`.
+     * The matrix overload additionally accumulates the alternating right and
+     * left Givens rotations into `vh` and `u`, matching LAPACK's `BDSQR`
+     * contract of returning `P^T * vh` and `u * Q`.
      */
     template <Backend B, typename T>
     Event bdsqr(Queue& ctx,
@@ -1026,12 +1029,35 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 bool sort_desc = true);
 
+    template <Backend B, typename T>
+    Event bdsqr(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                const MatrixView<T, MatrixFormat::Dense>& u,
+                const MatrixView<T, MatrixFormat::Dense>& vh,
+                bool sort_desc = true);
+
     template <typename T>
     size_t bdsqr_buffer_size(Queue& ctx,
                              const VectorView<T>& d,
                              const VectorView<T>& e,
                              Span<T> singular_values_out);
 
+    template <typename T>
+    inline size_t bdsqr_buffer_size(Queue& ctx,
+                                    const VectorView<T>& d,
+                                    const VectorView<T>& e,
+                                    Span<T> singular_values_out,
+                                    const MatrixView<T, MatrixFormat::Dense>& u,
+                                    const MatrixView<T, MatrixFormat::Dense>& vh) {
+        static_cast<void>(u);
+        static_cast<void>(vh);
+        return bdsqr_buffer_size(ctx, d, e, singular_values_out);
+    }
+
+    
     /**
      * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
      *
@@ -1060,11 +1086,12 @@ namespace batchlas {
                              int32_t block_size = 32);
 
     /**
-     * @brief Blocked SVD orchestration entry point (initial scaffold).
+     * @brief Blocked native SVD for real dense matrices.
      *
-     * Intended pipeline (to be implemented incrementally):
+    * Current pipeline:
      *  1) GEBRD-style dense -> bidiagonal reduction
-     *  2) BDSQR/BDSDC-style bidiagonal SVD solve
+    *  2) direct bidiagonal SVD solve via BDSQR by default, with optional
+    *     explicit BDSDC selection for blocked mode
      *  3) ORMBR-style backtransforms for full U and V^H
      */
     template <Backend B, typename T>
