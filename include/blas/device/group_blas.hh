@@ -2,6 +2,7 @@
 
 #include <blas/device/detail/group_blas_common.hh>
 #include <blas/device/detail/group_blas_subgroup_common.hh>
+#include <blas/device/detail/group_blas_fill.hh>
 #include <blas/device/detail/group_blas_vector.hh>
 #include <blas/device/detail/group_blas_ger.hh>
 #include <blas/device/detail/group_blas_gemv.hh>

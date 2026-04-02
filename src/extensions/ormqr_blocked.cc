@@ -1,4 +1,5 @@
 #include <blas/functions.hh>
+#include <blas/device.hh>
 #include <blas/matrix.hh>
 #include <internal/ormqr_blocked.hh>
 #include <util/mempool.hh>
@@ -17,16 +18,6 @@
 namespace batchlas {
 
 namespace {
-
-template <typename U>
-inline U conj_if_needed(const U& x, bool do_conj) {
-    if (!do_conj) return x;
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 template <typename T>
 inline void validate_ormqr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
@@ -83,17 +74,6 @@ sycl::event larft_forward_columnwise_batched_wg(Queue& q,
                                                 int batch) {
     static_assert(WG > 0, "WG must be positive");
 
-    auto reduce_sum = [](const sycl::group<1>& g, T x) {
-        if constexpr (internal::is_complex<T>::value) {
-            using R = typename T::value_type;
-            const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
-            return T(re, im);
-        } else {
-            return sycl::reduce_over_group(g, x, sycl::plus<T>());
-        }
-    };
-
     return q->submit([&](sycl::handler& h) {
         h.parallel_for<KernelName>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
@@ -108,15 +88,11 @@ sycl::event larft_forward_columnwise_batched_wg(Queue& q,
 
                 const sycl::group<1> g = it.get_group();
                 const int lid = static_cast<int>(it.get_local_linear_id());
+                auto t_mat = KernelMatrixView<T, MatrixFormat::Dense>(t_b, ib, ib, ld_t, ld_t * ib);
+                auto v_mat = KernelMatrixView<T, MatrixFormat::Dense>(const_cast<T*>(v_b), m, ib, ld_v, ld_v * ib);
 
-                if (lid == 0) {
-                    for (int j = 0; j < ib; ++j) {
-                        for (int i = 0; i < ib; ++i) {
-                            t_b[i + j * ld_t] = T(0);
-                        }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::global_space);
+                batchlas::device::fill(g, t_mat, T(0));
+                sycl::group_barrier(g);
 
                 for (int j = 0; j < ib; ++j) {
                     const T tauj = tau_b[j];
@@ -124,36 +100,29 @@ sycl::event larft_forward_columnwise_batched_wg(Queue& q,
                         if (lid == 0) {
                             t_b[j + j * ld_t] = T(0);
                         }
-                        it.barrier(sycl::access::fence_space::global_space);
+                        sycl::group_barrier(g);
                         continue;
                     }
 
-                    for (int col = 0; col < j; ++col) {
-                        T partial = T(0);
-                        for (int r = j + 1 + lid; r < m; r += WG) {
-                            const T v_rc = v_b[r + col * ld_v];
-                            const T v_rj = v_b[r + j * ld_v];
-                            partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
-                        }
-                        const T sum_r = reduce_sum(g, partial);
-                        if (lid == 0) {
-                            const T sum = conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
-                            t_b[col + j * ld_t] = -tauj * sum;
-                        }
-                        it.barrier(sycl::access::fence_space::global_space);
+                    if (j > 0) {
+                        auto t_col = t_mat(Slice(0, j), j);
+                        auto t_prev = t_mat(Slice(0, j), Slice(0, j));
+                        auto v_prev = v_mat(Slice(j, m), Slice(0, j));
+                        auto v_col = v_mat(Slice(j, m), j);
+
+                        batchlas::device::gemv<Transpose::ConjTrans>(g, v_prev, v_col, t_col, T(1), T(0));
+                        sycl::group_barrier(g);
+                        batchlas::device::scal(g, t_col, -tauj);
+                        sycl::group_barrier(g);
+                        batchlas::device::trmv<Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
+                            g, t_prev, t_col, t_col, T(1), T(0));
+                        sycl::group_barrier(g);
                     }
 
                     if (lid == 0) {
-                        for (int row = 0; row < j; ++row) {
-                            T acc = T(0);
-                            for (int col = row; col < j; ++col) {
-                                acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
-                            }
-                            t_b[row + j * ld_t] = acc;
-                        }
                         t_b[j + j * ld_t] = tauj;
                     }
-                    it.barrier(sycl::access::fence_space::global_space);
+                    sycl::group_barrier(g);
                 }
             });
     });
