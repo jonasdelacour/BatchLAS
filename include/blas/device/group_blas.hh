@@ -603,15 +603,15 @@ inline constexpr void gemm(const Item& item,
     const int row_extent = detail::output_size(a, transform.trans_a);
     const int col_extent = detail::input_size(operand.b, transform.trans_b);
     const int contract_extent = detail::input_size(a, transform.trans_a);
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
     if constexpr (std::is_same_v<T, float>) {
-        auto* gemm_workspace =
-            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GemmWorkspace<T>>(item.get_group()).get();
         if (detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(item, a, operand, transform, policy)) {
-            detail::subgroup::gemm_aligned_nn_large(item, a, operand, gemm_workspace);
+            detail::subgroup::gemm_aligned_nn_large(item, a, operand, &workspace->gemm_workspace);
             return;
         }
         if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
-            detail::subgroup::gemm_register_tiled(item, a, operand, transform, gemm_workspace);
+            detail::subgroup::gemm_register_tiled(item, a, operand, transform, &workspace->gemm_workspace);
             return;
         }
     }
@@ -964,16 +964,18 @@ inline constexpr void gemxv(const Item& item,
                             const Ops&... ops) {
     const auto operands = std::forward_as_tuple(ops...);
     detail::validate_operands(a, operands, transform.trans);
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
     if constexpr (sizeof...(Ops) == 1) {
         const auto& operand = std::get<0>(operands);
         if (transform.trans == Transpose::NoTrans &&
             detail::subgroup::can_use_dense_gemv_no_trans_fast_path<T>(item, a, policy)) {
-            detail::subgroup::gemv_dense_no_trans(item, a, operand);
+            detail::subgroup::gemv_dense_no_trans(item, a, operand, &workspace->dense_gemv_workspace);
             return;
         }
     }
     if (detail::subgroup::can_use_vector_fast_path<T, Ops...>(item, a, transform, policy)) {
-        detail::subgroup::gemxv(item, a, transform, operands);
+        detail::subgroup::gemxv(item, a, transform, operands, &workspace->vector_workspace);
         return;
     }
     detail::generic::gemxv(item.get_group(), a, transform, operands);
@@ -1084,10 +1086,12 @@ inline constexpr void trmxv(const Item& item,
                             const Ops&... ops) {
     const auto operands = std::forward_as_tuple(ops...);
     detail::validate_triangular_operands(a, operands, transform);
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
     if constexpr (sizeof...(Ops) == 1) {
         const auto& operand = std::get<0>(operands);
         if (detail::subgroup::can_use_trmv_no_trans_column_sweep_fast_path<T>(item, a, transform, policy)) {
-            detail::subgroup::trmv_no_trans_column_sweep(item, a, operand, transform);
+            detail::subgroup::trmv_no_trans_column_sweep(item, a, operand, transform, &workspace->column_sweep_workspace);
             return;
         }
         if (detail::subgroup::can_use_trmv_transpose_subgroup_dot_fast_path<T>(item, a, transform, policy)) {
@@ -1096,7 +1100,7 @@ inline constexpr void trmxv(const Item& item,
         }
     }
     if (detail::subgroup::can_use_vector_fast_path<T, Ops...>(item, a, MatrixVectorTransform{.trans = transform.trans}, policy)) {
-        detail::subgroup::trmxv(item, a, transform, operands);
+        detail::subgroup::trmxv(item, a, transform, operands, &workspace->vector_workspace);
         return;
     }
     detail::generic::trmxv(item.get_group(), a, transform, operands);
@@ -1194,6 +1198,8 @@ inline constexpr void symxv(const Item& item,
                             const Ops&... ops) {
     const auto operands = std::forward_as_tuple(ops...);
     detail::validate_symmetric_operands(a, operands, transform);
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
     if constexpr (sizeof...(Ops) == 1) {
         const auto& operand = std::get<0>(operands);
         if (detail::subgroup::can_use_symv_no_trans_row_sweep_fast_path<T>(item, a, policy)) {
@@ -1201,12 +1207,12 @@ inline constexpr void symxv(const Item& item,
             return;
         }
         if (detail::subgroup::can_use_symv_no_trans_column_sweep_fast_path<T>(item, a, policy)) {
-            detail::subgroup::symv_no_trans_column_sweep(item, a, operand, transform);
+            detail::subgroup::symv_no_trans_column_sweep(item, a, operand, transform, &workspace->column_sweep_workspace);
             return;
         }
     }
     if (detail::subgroup::can_use_vector_fast_path<T, Ops...>(item, a, MatrixVectorTransform{.trans = Transpose::NoTrans}, policy)) {
-        detail::subgroup::symxv(item, a, transform, operands);
+        detail::subgroup::symxv(item, a, transform, operands, &workspace->vector_workspace);
         return;
     }
     detail::generic::symxv(item.get_group(), a, transform, operands);
@@ -1361,23 +1367,21 @@ inline constexpr void her2k_impl(const Item& item,
                                  DeviceBlasPolicy policy) {
     const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
     detail::validate_rank2k_operand(a, operand, canonical_transform);
-    if (detail::subgroup::can_use_complex_rank2k_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-        auto* workspace =
-            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kInKernelWorkspace<T>>(item.get_group()).get();
-        detail::subgroup::rank2k_complex_in_kernel_tiled(item, a, operand, canonical_transform, workspace);
-        return;
-    }
-    if (detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-        auto* workspace =
-            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(item.get_group()).get();
-        detail::subgroup::rank2k_complex_tiled(item, a, operand, canonical_transform, workspace);
-        return;
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        if (detail::subgroup::can_use_complex_rank2k_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            detail::subgroup::rank2k_complex_in_kernel_tiled(item, a, operand, canonical_transform, &workspace->complex_rank2k_in_kernel_workspace);
+            return;
+        }
+        if (detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            detail::subgroup::rank2k_complex_tiled(item, a, operand, canonical_transform, &workspace->complex_rank2k_workspace);
+            return;
+        }
     }
     if constexpr (std::is_same_v<T, float>) {
         if (detail::subgroup::can_use_rank2k_register_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-            auto* workspace =
-                sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(item.get_group()).get();
-            detail::subgroup::rank2k_register_tiled(item, a, operand, canonical_transform, workspace);
+            detail::subgroup::rank2k_register_tiled(item, a, operand, canonical_transform, &workspace->gemm_workspace.register_workspace);
             return;
         }
     }
@@ -1406,23 +1410,21 @@ inline constexpr void herk_impl(const Item& item,
                                 DeviceBlasPolicy policy) {
     const auto canonical_transform = detail::canonical_hermitian_transform<T>(transform);
     detail::validate_rankk_operand(a, operand, canonical_transform);
-    if (detail::subgroup::can_use_complex_rankk_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-        auto* workspace =
-            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kInKernelWorkspace<T>>(item.get_group()).get();
-        detail::subgroup::rankk_complex_in_kernel_tiled(item, a, operand, canonical_transform, workspace);
-        return;
-    }
-    if (detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-        auto* workspace =
-            sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(item.get_group()).get();
-        detail::subgroup::rankk_complex_tiled(item, a, operand, canonical_transform, workspace);
-        return;
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        if (detail::subgroup::can_use_complex_rankk_in_kernel_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            detail::subgroup::rankk_complex_in_kernel_tiled(item, a, operand, canonical_transform, &workspace->complex_rank2k_in_kernel_workspace);
+            return;
+        }
+        if (detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(item, a, operand, canonical_transform, policy)) {
+            detail::subgroup::rankk_complex_tiled(item, a, operand, canonical_transform, &workspace->complex_rank2k_workspace);
+            return;
+        }
     }
     if constexpr (std::is_same_v<T, float>) {
         if (detail::subgroup::can_use_rankk_register_fast_path<T>(item, a, operand, canonical_transform, policy)) {
-            auto* workspace =
-                sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(item.get_group()).get();
-            detail::subgroup::rankk_register_tiled(item, a, operand, canonical_transform, workspace);
+            detail::subgroup::rankk_register_tiled(item, a, operand, canonical_transform, &workspace->gemm_workspace.register_workspace);
             return;
         }
     }
@@ -1665,9 +1667,13 @@ inline constexpr void trmm(const Item& item,
     const int row_extent = operand.c.rows();
     const int col_extent = operand.c.cols();
     const int contract_extent = transform.side == Side::Left ? operand.b.rows() : operand.b.cols();
-    if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
-        detail::subgroup::trmm_register_tiled(item, a, operand, transform);
-        return;
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
+    if constexpr (std::is_same_v<T, float>) {
+        if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
+            detail::subgroup::trmm_register_tiled(item, a, operand, transform, &workspace->gemm_workspace.register_workspace);
+            return;
+        }
     }
     if (detail::subgroup::can_use_matrix_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
         detail::subgroup::trmm(item, a, operand, transform);
@@ -1754,9 +1760,13 @@ inline constexpr void symm(const Item& item,
     const int row_extent = operand.c.rows();
     const int col_extent = operand.c.cols();
     const int contract_extent = transform.side == Side::Left ? operand.b.rows() : operand.b.cols();
-    if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
-        detail::subgroup::symm_register_tiled(item, a, operand, transform);
-        return;
+    auto* workspace =
+        sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GroupBlasWorkspace<T>>(item.get_group()).get();
+    if constexpr (std::is_same_v<T, float>) {
+        if (detail::subgroup::can_use_matrix_register_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
+            detail::subgroup::symm_register_tiled(item, a, operand, transform, &workspace->gemm_workspace.register_workspace);
+            return;
+        }
     }
     if (detail::subgroup::can_use_matrix_fast_path<T>(item, row_extent, col_extent, contract_extent, policy)) {
         detail::subgroup::symm(item, a, operand, transform);

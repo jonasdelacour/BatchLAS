@@ -144,6 +144,43 @@ struct GemmWorkspace {
     };
 };
 
+// GroupBlasWorkspace: a single union type that holds the local-memory workspace
+// needed by any group-blas kernel function, so that all functions in a kernel
+// share a single local-memory allocation rather than accumulating separate ones.
+//
+// The primary template covers types that do not have large fast-path kernels
+// (e.g. double).  Specialisations for float and complex<float> add the larger
+// workspace variants that are actually used for those element types.
+template <typename T>
+struct GroupBlasWorkspace {
+    union {
+        VectorWorkspace<T> vector_workspace;
+        DenseGemvWorkspace<T> dense_gemv_workspace;
+        ColumnSweepVectorWorkspace<T> column_sweep_workspace;
+    };
+};
+
+template <>
+struct GroupBlasWorkspace<float> {
+    union {
+        VectorWorkspace<float> vector_workspace;
+        DenseGemvWorkspace<float> dense_gemv_workspace;
+        ColumnSweepVectorWorkspace<float> column_sweep_workspace;
+        GemmWorkspace<float> gemm_workspace;
+    };
+};
+
+template <>
+struct GroupBlasWorkspace<std::complex<float>> {
+    union {
+        VectorWorkspace<std::complex<float>> vector_workspace;
+        DenseGemvWorkspace<std::complex<float>> dense_gemv_workspace;
+        ColumnSweepVectorWorkspace<std::complex<float>> column_sweep_workspace;
+        ComplexRank2kWorkspace<std::complex<float>> complex_rank2k_workspace;
+        ComplexRank2kInKernelWorkspace<std::complex<float>> complex_rank2k_in_kernel_workspace;
+    };
+};
+
 template <typename T>
 inline constexpr bool supports_packet4_v = std::is_same_v<T, float>;
 
@@ -1233,7 +1270,8 @@ template <typename Item, typename T, typename... Ops>
 inline constexpr void gemxv(const Item& item,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
                             MatrixVectorTransform transform,
-                            const std::tuple<Ops...>& operands) {
+                            const std::tuple<Ops...>& operands,
+                            VectorWorkspace<T>* workspace) {
     const auto sg = item.get_sub_group();
     const int sg_size = subgroup_size(item);
     const int lane = subgroup_local_id(item);
@@ -1242,7 +1280,6 @@ inline constexpr void gemxv(const Item& item,
     const int inner_extent = detail::input_size(a, transform.trans);
     const int outer_extent = detail::output_size(a, transform.trans);
     const int rows_per_sg = rows_per_subgroup(outer_extent, total_sg, kMaxVectorRowsPerSubgroup);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<VectorWorkspace<T>>(item.get_group()).get();
     T* x0_tile = workspace->operand_tiles[0] + sg_id * kVectorTileK;
     T* x1_tile = workspace->operand_tiles[1] + sg_id * kVectorTileK;
 
@@ -1292,7 +1329,8 @@ inline constexpr void gemxv(const Item& item,
 template <typename Item, typename T>
 inline constexpr void gemv_dense_no_trans(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                          const MatrixVectorOperand<T>& operand) {
+                                          const MatrixVectorOperand<T>& operand,
+                                          DenseGemvWorkspace<T>* workspace) {
     constexpr int rows_per_lane = 2;
     const int linear_tid = detail::item_local_linear_id(item);
     const int local_size = detail::item_local_linear_range(item);
@@ -1303,7 +1341,6 @@ inline constexpr void gemv_dense_no_trans(const Item& item,
     const int row_stride = total_sg * row_tile;
     const int row_extent = a.rows();
     const int col_extent = a.cols();
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<DenseGemvWorkspace<T>>(item.get_group()).get();
     T* x_tile = workspace->x_tile;
 
     for (int row_base = sg_id * row_tile; row_base < row_extent; row_base += row_stride) {
@@ -1346,11 +1383,11 @@ template <typename Item, typename T>
 inline constexpr void trmv_no_trans_column_sweep(const Item& item,
                                                  const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                  const MatrixVectorOperand<T>& operand,
-                                                 TriangularTransform transform) {
+                                                 TriangularTransform transform,
+                                                 ColumnSweepVectorWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int local_size = detail::item_local_linear_range(item);
     const int extent = a.rows();
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<ColumnSweepVectorWorkspace<T>>(item.get_group()).get();
     T* x_tile = workspace->x_tile;
     if (extent <= 2 * local_size) {
         const int row0 = linear_tid;
@@ -1476,11 +1513,11 @@ template <typename Item, typename T>
 inline constexpr void symv_no_trans_column_sweep(const Item& item,
                                                  const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                  const MatrixVectorOperand<T>& operand,
-                                                 SymmetricTransform transform) {
+                                                 SymmetricTransform transform,
+                                                 ColumnSweepVectorWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int local_size = detail::item_local_linear_range(item);
     const int extent = a.rows();
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<ColumnSweepVectorWorkspace<T>>(item.get_group()).get();
     T* x_tile = workspace->x_tile;
     T* accum = workspace->accum;
 
@@ -1531,7 +1568,8 @@ template <typename Item, typename T, typename... Ops>
 inline constexpr void trmxv(const Item& item,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
                             TriangularTransform transform,
-                            const std::tuple<Ops...>& operands) {
+                            const std::tuple<Ops...>& operands,
+                            VectorWorkspace<T>* workspace) {
     const auto sg = item.get_sub_group();
     const int sg_size = subgroup_size(item);
     const int lane = subgroup_local_id(item);
@@ -1539,7 +1577,6 @@ inline constexpr void trmxv(const Item& item,
     const int total_sg = subgroup_count(item);
     const int extent = a.rows();
     const int rows_per_sg = rows_per_subgroup(extent, total_sg, kMaxVectorRowsPerSubgroup);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<VectorWorkspace<T>>(item.get_group()).get();
     T* x0_tile = workspace->operand_tiles[0] + sg_id * kVectorTileK;
     T* x1_tile = workspace->operand_tiles[1] + sg_id * kVectorTileK;
 
@@ -1605,7 +1642,8 @@ template <typename Item, typename T, typename... Ops>
 inline constexpr void symxv(const Item& item,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
                             SymmetricTransform transform,
-                            const std::tuple<Ops...>& operands) {
+                            const std::tuple<Ops...>& operands,
+                            VectorWorkspace<T>* workspace) {
     const auto sg = item.get_sub_group();
     const int sg_size = subgroup_size(item);
     const int lane = subgroup_local_id(item);
@@ -1613,7 +1651,6 @@ inline constexpr void symxv(const Item& item,
     const int total_sg = subgroup_count(item);
     const int extent = a.rows();
     const int rows_per_sg = rows_per_subgroup(extent, total_sg, kMaxVectorRowsPerSubgroup);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<VectorWorkspace<T>>(item.get_group()).get();
     T* x0_tile = workspace->operand_tiles[0] + sg_id * kVectorTileK;
     T* x1_tile = workspace->operand_tiles[1] + sg_id * kVectorTileK;
 
@@ -2755,7 +2792,8 @@ template <typename Item, typename T>
 inline constexpr void trmm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                           MatrixMatrixOperand<T> operand,
-                                          TriangularTransform transform) {
+                                          TriangularTransform transform,
+                                          RegisterMatrixWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int subgroup_id = subgroup_group_id(item);
     const int local_row = linear_tid / kRegisterMatrixLocalCols;
@@ -2769,7 +2807,6 @@ inline constexpr void trmm_register_tiled(const Item& item,
     const int tile_col_start = matrix_tile_group_col(item);
     const int tile_row_stride = matrix_tile_group_row_stride(item);
     const int tile_col_stride = matrix_tile_group_col_stride(item);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<RegisterMatrixWorkspace<T>>(item.get_group()).get();
 
     for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
         for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
@@ -2966,7 +3003,8 @@ template <typename Item, typename T>
 inline constexpr void symm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                           MatrixMatrixOperand<T> operand,
-                                          SymmetricTransform transform) {
+                                          SymmetricTransform transform,
+                                          RegisterMatrixWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int subgroup_id = subgroup_group_id(item);
     const int local_row = linear_tid / kRegisterMatrixLocalCols;
@@ -2980,7 +3018,6 @@ inline constexpr void symm_register_tiled(const Item& item,
     const int tile_col_start = matrix_tile_group_col(item);
     const int tile_row_stride = matrix_tile_group_row_stride(item);
     const int tile_col_stride = matrix_tile_group_col_stride(item);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<RegisterMatrixWorkspace<T>>(item.get_group()).get();
 
     for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
         for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
