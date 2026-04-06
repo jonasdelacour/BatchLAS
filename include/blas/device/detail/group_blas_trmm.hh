@@ -16,16 +16,31 @@ inline constexpr void trmm(const Group& group,
     const int row_extent = operand.c.rows();
     const int col_extent = operand.c.cols();
     const int contract_extent = Tag::side == Side::Left ? operand.b.rows() : operand.b.cols();
+    constexpr bool effective_lower = Tag::trans == Transpose::NoTrans ? Tag::uplo == Uplo::Lower : Tag::uplo == Uplo::Upper;
 
-    for (int col = 0; col < col_extent; ++col) {
+    if constexpr (Tag::side == Side::Left) {
+        for (int row_step = 0; row_step < row_extent; ++row_step) {
+            const int row = effective_lower ? (row_extent - 1 - row_step) : row_step;
+            for (int col = 0; col < col_extent; ++col) {
+                T partial{};
+                for (int k = local_id; k < contract_extent; k += local_size) {
+                    partial += detail::triangular_matrix_entry<Tag>(a, row, k) * operand.b(k, col);
+                }
+                partial = detail::reduce_sum_group(group, partial);
+                if (detail::group_is_leader(group)) {
+                    detail::write_matrix_output(operand, row, col, partial);
+                }
+            }
+        }
+        return;
+    }
+
+    for (int col_step = 0; col_step < col_extent; ++col_step) {
+        const int col = effective_lower ? col_step : (col_extent - 1 - col_step);
         for (int row = 0; row < row_extent; ++row) {
             T partial{};
             for (int k = local_id; k < contract_extent; k += local_size) {
-                if constexpr (Tag::side == Side::Left) {
-                    partial += detail::triangular_matrix_entry<Tag>(a, row, k) * operand.b(k, col);
-                } else {
-                    partial += operand.b(row, k) * detail::triangular_matrix_entry<Tag>(a, k, col);
-                }
+                partial += operand.b(row, k) * detail::triangular_matrix_entry<Tag>(a, k, col);
             }
             partial = detail::reduce_sum_group(group, partial);
             if (detail::group_is_leader(group)) {
@@ -285,17 +300,18 @@ inline constexpr void dispatch_trmm(const Exec& exec,
                                     MatrixMatrixOperand<T> operand) {
     const TriangularTransform transform{.side = Tag::side, .uplo = Tag::uplo, .trans = Tag::trans, .diag = Tag::diag};
     validate_triangular_operand(a, operand, transform);
+    const bool aliased = detail::views_overlap(operand.b, operand.c);
 
     if constexpr (detail::NdItemLike<Exec>) {
         const int row_extent = operand.c.rows();
         const int col_extent = operand.c.cols();
         const int contract_extent = transform.side == Side::Left ? operand.b.rows() : operand.b.cols();
-        if (detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
+        if (!aliased && detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
             std::same_as<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
             detail::subgroup::trmm_register_tiled(exec, a, operand, transform);
             return;
         }
-        if (detail::subgroup::can_use_matrix_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy)) {
+        if (!aliased && detail::subgroup::can_use_matrix_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy)) {
             detail::subgroup::trmm(exec, a, operand, transform);
             return;
         }

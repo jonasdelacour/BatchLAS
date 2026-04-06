@@ -631,6 +631,69 @@ TEST(DeviceBlasTest, TrmvUpperTransposeUnitDiagonalMatchesReference) {
     expect_vector_near(VectorView<float>(y), expected, 3);
 }
 
+TEST(DeviceBlasTest, FillVectorAndMatrixSetConstantValues) {
+    Queue ctx(Device::default_device());
+
+    Vector<float> x(5);
+    Matrix<float, MatrixFormat::Dense> a(3, 2);
+    auto x_view = VectorView<float>(x);
+    auto a_view = a.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](const auto& group) {
+        batchlas::device::fill(group, x_view, -2.5f);
+    });
+    run_group_kernel(ctx, local_size, [=](const auto& group) {
+        batchlas::device::fill(group, a_view, 4.0f);
+    });
+
+    for (int i = 0; i < 5; ++i) {
+        EXPECT_FLOAT_EQ(x(i), -2.5f) << "Mismatch at vector index " << i;
+    }
+
+    auto a_host = a.view();
+    for (int col = 0; col < a_host.cols(); ++col) {
+        for (int row = 0; row < a_host.rows(); ++row) {
+            EXPECT_FLOAT_EQ(a_host.at<MatrixFormat::Dense>(row, col), 4.0f)
+                << "Mismatch at (" << row << ", " << col << ")";
+        }
+    }
+}
+
+TEST(DeviceBlasTest, TrmvUpperNoTransSupportsInPlaceOutput) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 3);
+    Vector<float> x(3);
+    auto a_host = a.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = 4.0f;
+    a_host.at<MatrixFormat::Dense>(1, 0) = -8.0f;
+    a_host.at<MatrixFormat::Dense>(2, 0) = 6.0f;
+    a_host.at<MatrixFormat::Dense>(0, 1) = 2.0f;
+    a_host.at<MatrixFormat::Dense>(1, 1) = -3.0f;
+    a_host.at<MatrixFormat::Dense>(2, 1) = 9.0f;
+    a_host.at<MatrixFormat::Dense>(0, 2) = -1.0f;
+    a_host.at<MatrixFormat::Dense>(1, 2) = 5.0f;
+    a_host.at<MatrixFormat::Dense>(2, 2) = 7.0f;
+
+    x(0) = 2.0f;
+    x(1) = -1.0f;
+    x(2) = 3.0f;
+
+    auto a_view = a.view().kernel_view();
+    auto x_view = VectorView<float>(x);
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](const auto& group) {
+        batchlas::device::trmv<Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
+            group, a_view, x_view, x_view, 1.0f, 0.5f);
+    });
+
+    const std::array<float, 4> expected{4.0f, 17.5f, 22.5f, 0.0f};
+    expect_vector_near(VectorView<float>(x), expected, 3);
+}
+
 TEST(DeviceBlasTest, SymvLowerMatchesReferenceUsingOnlyStoredTriangle) {
     Queue ctx(Device::default_device());
 
@@ -1892,6 +1955,82 @@ TEST(DeviceBlasTest, TrmmRightUpperTransposeUnitDiagonalMatchesReference) {
     expect_matrix_near(c.view(), expected);
 }
 
+TEST(DeviceBlasTest, TrmmLeftUpperNoTransSupportsInPlaceOutput) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 3);
+    Matrix<float, MatrixFormat::Dense> b(3, 2);
+    auto a_host = a.view();
+    auto b_host = b.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = 2.0f;
+    a_host.at<MatrixFormat::Dense>(1, 0) = -8.0f;
+    a_host.at<MatrixFormat::Dense>(2, 0) = 6.0f;
+    a_host.at<MatrixFormat::Dense>(0, 1) = 3.0f;
+    a_host.at<MatrixFormat::Dense>(1, 1) = 4.0f;
+    a_host.at<MatrixFormat::Dense>(2, 1) = 9.0f;
+    a_host.at<MatrixFormat::Dense>(0, 2) = -1.0f;
+    a_host.at<MatrixFormat::Dense>(1, 2) = 5.0f;
+    a_host.at<MatrixFormat::Dense>(2, 2) = 6.0f;
+
+    b_host.at<MatrixFormat::Dense>(0, 0) = 1.0f;
+    b_host.at<MatrixFormat::Dense>(1, 0) = -2.0f;
+    b_host.at<MatrixFormat::Dense>(2, 0) = 0.5f;
+    b_host.at<MatrixFormat::Dense>(0, 1) = 3.0f;
+    b_host.at<MatrixFormat::Dense>(1, 1) = 1.0f;
+    b_host.at<MatrixFormat::Dense>(2, 1) = -1.0f;
+
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](const auto& group) {
+        batchlas::device::trmm<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
+            group, a_view, b_view, b_view, 1.0f, 0.5f);
+    });
+
+    const std::array<float, 6> expected{-4.0f, -6.5f, 3.25f, 11.5f, -0.5f, -6.5f};
+    expect_matrix_near(b.view(), expected);
+}
+
+TEST(DeviceBlasTest, TrmmRightUpperNoTransSupportsInPlaceOutput) {
+    Queue ctx(Device::default_device());
+
+    Matrix<float, MatrixFormat::Dense> a(3, 3);
+    Matrix<float, MatrixFormat::Dense> b(2, 3);
+    auto a_host = a.view();
+    auto b_host = b.view();
+
+    a_host.at<MatrixFormat::Dense>(0, 0) = 2.0f;
+    a_host.at<MatrixFormat::Dense>(1, 0) = -8.0f;
+    a_host.at<MatrixFormat::Dense>(2, 0) = 6.0f;
+    a_host.at<MatrixFormat::Dense>(0, 1) = 3.0f;
+    a_host.at<MatrixFormat::Dense>(1, 1) = 4.0f;
+    a_host.at<MatrixFormat::Dense>(2, 1) = 9.0f;
+    a_host.at<MatrixFormat::Dense>(0, 2) = -1.0f;
+    a_host.at<MatrixFormat::Dense>(1, 2) = 5.0f;
+    a_host.at<MatrixFormat::Dense>(2, 2) = 6.0f;
+
+    b_host.at<MatrixFormat::Dense>(0, 0) = 1.0f;
+    b_host.at<MatrixFormat::Dense>(1, 0) = 3.0f;
+    b_host.at<MatrixFormat::Dense>(0, 1) = -2.0f;
+    b_host.at<MatrixFormat::Dense>(1, 1) = 1.0f;
+    b_host.at<MatrixFormat::Dense>(0, 2) = 0.5f;
+    b_host.at<MatrixFormat::Dense>(1, 2) = -1.0f;
+
+    auto a_view = a.view().kernel_view();
+    auto b_view = b.view().kernel_view();
+    const size_t local_size = device_test_work_group_size(ctx);
+
+    run_group_kernel(ctx, local_size, [=](const auto& group) {
+        batchlas::device::trmm<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
+            group, a_view, b_view, b_view, 1.0f, 0.5f);
+    });
+
+    const std::array<float, 6> expected{2.5f, 7.5f, -6.0f, 13.5f, -7.75f, -4.5f};
+    expect_matrix_near(b.view(), expected);
+}
+
 TEST(DeviceBlasTest, GemvNdItemGenericAndAutoMatch) {
     Queue ctx(Device::default_device());
 
@@ -1924,6 +2063,55 @@ TEST(DeviceBlasTest, GemvNdItemGenericAndAutoMatch) {
 
     for (int i = 0; i < 8; ++i) {
         EXPECT_NEAR(y_auto(i), y_generic(i), 1e-5f) << "Mismatch at index " << i;
+    }
+}
+
+TEST(DeviceBlasTest, GemvNdItemTiledAutoMatchesGeneric) {
+    Queue ctx(Device::default_device());
+
+    const size_t local_size = device_test_work_group_size(ctx);
+    if (local_size < 16) {
+        GTEST_SKIP() << "Device work-group size is too small to exercise tiled GEMV";
+    }
+
+    constexpr int rows = 32;
+    constexpr int cols = 32;
+    Matrix<float, MatrixFormat::Dense> a(rows, cols);
+    Vector<float> x(cols);
+    Vector<float> y_auto(rows);
+    Vector<float> y_generic(rows);
+
+    auto a_host = a.view();
+    for (int col = 0; col < cols; ++col) {
+        for (int row = 0; row < rows; ++row) {
+            a_host.at<MatrixFormat::Dense>(row, col) = static_cast<float>((row % 7) - 0.25f * (col % 5) + 0.1f * (row - col));
+        }
+    }
+    for (int i = 0; i < cols; ++i) {
+        x(i) = static_cast<float>((i % 9) - 4);
+    }
+    for (int i = 0; i < rows; ++i) {
+        const float initial = static_cast<float>(0.5f * i - 3.0f);
+        y_auto(i) = initial;
+        y_generic(i) = initial;
+    }
+
+    auto a_view = a.view().kernel_view();
+    auto x_view = VectorView<float>(x);
+    auto y_auto_view = VectorView<float>(y_auto);
+    auto y_generic_view = VectorView<float>(y_generic);
+
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans>(
+            item, a_view, x_view, y_auto_view, -0.75f, 1.25f);
+    });
+    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+        batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Generic, Transpose::NoTrans>(
+            item, a_view, x_view, y_generic_view, -0.75f, 1.25f);
+    });
+
+    for (int i = 0; i < rows; ++i) {
+        EXPECT_NEAR(y_auto(i), y_generic(i), 1e-4f) << "Mismatch at index " << i;
     }
 }
 

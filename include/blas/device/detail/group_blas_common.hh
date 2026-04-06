@@ -238,6 +238,50 @@ inline constexpr T maybe_conjugate(const T& value, bool conjugate) {
 }
 
 template <typename T>
+inline constexpr bool views_overlap(const VectorView<T>& lhs,
+                                    const VectorView<T>& rhs) {
+    if (lhs.size() <= 0 || rhs.size() <= 0) {
+        return false;
+    }
+
+    auto* lhs_begin = lhs.data_ptr();
+    auto* lhs_end = lhs_begin + (lhs.size() - 1) * lhs.inc();
+    if (lhs_end < lhs_begin) {
+        std::swap(lhs_begin, lhs_end);
+    }
+
+    auto* rhs_begin = rhs.data_ptr();
+    auto* rhs_end = rhs_begin + (rhs.size() - 1) * rhs.inc();
+    if (rhs_end < rhs_begin) {
+        std::swap(rhs_begin, rhs_end);
+    }
+
+    return !(lhs_end < rhs_begin || rhs_end < lhs_begin);
+}
+
+template <typename T>
+inline constexpr bool views_overlap(const KernelMatrixView<T, MatrixFormat::Dense>& lhs,
+                                    const KernelMatrixView<T, MatrixFormat::Dense>& rhs) {
+    if (lhs.rows() <= 0 || lhs.cols() <= 0 || rhs.rows() <= 0 || rhs.cols() <= 0) {
+        return false;
+    }
+
+    auto* lhs_begin = lhs.data();
+    auto* lhs_end = lhs_begin + (lhs.cols() - 1) * lhs.ld() + (lhs.rows() - 1);
+    if (lhs_end < lhs_begin) {
+        std::swap(lhs_begin, lhs_end);
+    }
+
+    auto* rhs_begin = rhs.data();
+    auto* rhs_end = rhs_begin + (rhs.cols() - 1) * rhs.ld() + (rhs.rows() - 1);
+    if (rhs_end < rhs_begin) {
+        std::swap(rhs_begin, rhs_end);
+    }
+
+    return !(lhs_end < rhs_begin || rhs_end < lhs_begin);
+}
+
+template <typename T>
 inline constexpr T matrix_entry(const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                 int row,
                                 int col,

@@ -208,7 +208,7 @@ inline constexpr void symv(const Group& group,
         sycl::group_barrier(group);
     }
 }
-
+            
 } // namespace detail::generic
 
 namespace detail {
@@ -220,8 +220,9 @@ inline void dispatch_symv(const Group& group,
     validate_symmetric_operand(a,
                                operand,
                                SymmetricTransform{.side = Tag::side, .uplo = Tag::uplo, .hermitian = Tag::hermitian});
-    if (generic::can_use_tiled_symv<Tag>(group, a, Policy)) {
+    if (generic::can_use_tiled_symv<Tag>(group, a, Policy) && a.cols() >= 4) {
         generic::symv_tiled<Tag>(group, a, operand);
+        //generic::symv_chunked<Tag, Group, T, 16>(group, a, operand);
         return;
     }
     generic::symv<Tag>(group, a, operand);

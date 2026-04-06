@@ -6,6 +6,109 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+template <typename Group>
+inline constexpr auto gemv_work_group(const Group& group) {
+    if constexpr (detail::NdItemLike<Group>) {
+        return group.get_group();
+    } else {
+        return group;
+    }
+}
+
+template <typename T>
+struct GemvTransposeWorkspace {
+    static constexpr int kMaxTile = 32;
+    T matrix[kMaxTile * (kMaxTile + 1)];
+    T x[kMaxTile];
+};
+
+template <typename T>
+inline constexpr int gemv_transpose_tile_index(int row, int col) {
+    return row * (GemvTransposeWorkspace<T>::kMaxTile + 1) + col;
+}
+
+template <typename Group>
+inline constexpr int gemv_tiled_tile_size(const Group& group, DeviceBlasPolicy policy) {
+    const int local_size = detail::group_local_linear_range(group);
+    if (policy == DeviceBlasPolicy::Generic) {
+        return 0;
+    }
+    if (policy == DeviceBlasPolicy::Subgroup32) {
+        return local_size >= 32 ? 32 : 0;
+    }
+    if (policy == DeviceBlasPolicy::Subgroup16) {
+        return local_size >= 16 ? 16 : 0;
+    }
+    if (local_size >= 32) {
+        return 32;
+    }
+    if (local_size >= 16) {
+        return 16;
+    }
+    return 0;
+}
+
+template <typename Tag, typename Group, typename T>
+inline constexpr bool can_use_tiled_gemv(const Group& group,
+                                         const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                         DeviceBlasPolicy policy) {
+    if constexpr (Tag::trans != Transpose::NoTrans) {
+        (void)group;
+        (void)a;
+        (void)policy;
+        return false;
+    } else {
+        const int tile = gemv_tiled_tile_size(group, policy);
+        return tile > 0 && a.rows() >= tile && a.cols() >= tile;
+    }
+}
+
+template <typename Group, typename T>
+inline void gemv_tiled(const Group& group,
+                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                       MatrixVectorOperand<T> operand,
+                       int tile) {
+    auto work_group = gemv_work_group(group);
+    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<GemvTransposeWorkspace<T>>(work_group).get();
+    T* matrix_tile = workspace->matrix;
+    T* x_tile = workspace->x;
+    const int local_id = detail::group_local_linear_id(group);
+    const int local_size = detail::group_local_linear_range(group);
+    const int row_extent = a.rows();
+    const int col_extent = a.cols();
+
+    for (int row_base = 0; row_base < row_extent; row_base += tile) {
+        const int row_tile_extent = std::min(tile, row_extent - row_base);
+
+        for (int row = local_id; row < row_tile_extent; row += local_size) {
+            operand.y(row_base + row) *= operand.beta;
+        }
+
+        for (int col_base = 0; col_base < col_extent; col_base += tile) {
+            const int col_tile_extent = std::min(tile, col_extent - col_base);
+
+            for (int col = local_id; col < col_tile_extent; col += local_size) {
+                x_tile[col] = operand.x(col_base + col);
+            }
+            for (int linear_index = local_id; linear_index < row_tile_extent * col_tile_extent; linear_index += local_size) {
+                const int row = linear_index % row_tile_extent;
+                const int col = linear_index / row_tile_extent;
+                matrix_tile[gemv_transpose_tile_index<T>(row, col)] = a(row_base + row, col_base + col);
+            }
+            sycl::group_barrier(work_group);
+
+            for (int row = local_id; row < row_tile_extent; row += local_size) {
+                T partial{};
+                for (int col = 0; col < col_tile_extent; ++col) {
+                    partial += matrix_tile[gemv_transpose_tile_index<T>(row, col)] * x_tile[col];
+                }
+                operand.y(row_base + row) += operand.alpha * partial;
+            }
+            sycl::group_barrier(work_group);
+        }
+    }
+}
+
 template <typename Tag, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -42,11 +145,15 @@ inline constexpr void gemv(const Group& group,
 
 namespace detail {
 
-template <typename Tag, typename Group, typename T>
-inline constexpr void dispatch_gemv(const Group& group,
-                                    const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                    MatrixVectorOperand<T> operand) {
+template <typename Tag, DeviceBlasPolicy Policy, typename Group, typename T>
+inline void dispatch_gemv(const Group& group,
+                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                          MatrixVectorOperand<T> operand) {
     validate_operand(a, operand, Tag::trans);
+    if (generic::can_use_tiled_gemv<Tag>(group, a, Policy)) {
+        generic::gemv_tiled(group, a, operand, generic::gemv_tiled_tile_size(group, Policy));
+        return;
+    }
     generic::gemv<Tag>(group, a, operand);
 }
 
@@ -56,7 +163,7 @@ template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            MatrixVectorOperand<T> operand) {
-    detail::dispatch_gemv<MatrixVectorTransformTag<TransV>>(group, a, operand);
+    detail::dispatch_gemv<MatrixVectorTransformTag<TransV>, DeviceBlasPolicy::Auto>(group, a, operand);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -66,8 +173,7 @@ template <DeviceBlasPolicy Policy,
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            MatrixVectorOperand<T> operand) {
-    (void)Policy;
-    gemv<TransV>(group, a, operand);
+    detail::dispatch_gemv<MatrixVectorTransformTag<TransV>, Policy>(group, a, operand);
 }
 
 template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>

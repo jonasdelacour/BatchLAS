@@ -13,8 +13,10 @@ inline constexpr void trmv(const Group& group,
     const int local_id = detail::group_local_linear_id(group);
     const int local_size = detail::group_local_linear_range(group);
     const int extent = a.rows();
+    constexpr bool effective_lower = Tag::trans == Transpose::NoTrans ? Tag::uplo == Uplo::Lower : Tag::uplo == Uplo::Upper;
 
-    for (int output_index = 0; output_index < extent; ++output_index) {
+    for (int output_step = 0; output_step < extent; ++output_step) {
+        const int output_index = effective_lower ? (extent - 1 - output_step) : output_step;
         T partial{};
         for (int input_index = local_id; input_index < extent; input_index += local_size) {
             partial += detail::triangular_matrix_entry<Tag>(a, output_index, input_index) * operand.x(input_index);
