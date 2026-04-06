@@ -161,18 +161,6 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         wcol_tail,
                         T(1),
                         T(0));
-                    /* for (int r = lid; r < tail; r += wg) {
-                        T sum = T(0);
-                        // Lower triangle (including diagonal): A(r,c) where c <= r
-                        for (int c = 0; c <= r; ++c) {
-                            sum += trailing_view(r, c) * v_tail(c);
-                        }
-                        // Upper triangle: use conjugate symmetry A(r,c) = conj(A(c,r)) for c > r
-                        for (int c = r + 1; c < tail; ++c) {
-                            sum += batchlas::device::detail::conj(trailing_view(c, r)) * v_tail(c);
-                        }
-                        wcol_tail(r) = sum;
-                    } */
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // Apply intra-panel corrections from previously computed reflectors.
@@ -261,13 +249,14 @@ Event latrd_lower_panel_batched(Queue& q,
     }
     // For small panels, a smaller work-group reduces wasted lanes, barrier overhead,
     // and register pressure in the reduction-heavy panel kernel.
-    if (n <= 128) {
+    if (n <= 64) {
         return call(std::integral_constant<int, 64>{});
-    }
-    if (n <= 256) {
+    }if (n <= 128) {
         return call(std::integral_constant<int, 128>{});
+    }if (n <= 256) {
+        return call(std::integral_constant<int, 256>{});
     }
-    return call(std::integral_constant<int, 256>{});
+    return call(std::integral_constant<int, 512>{});
 }
 
 template <typename T>

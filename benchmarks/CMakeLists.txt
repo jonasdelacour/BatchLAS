@@ -49,7 +49,6 @@ set(BENCHMARK_TARGETS
     stehr_benchmark
     stedc_benchmark
     latrd_lower_panel_benchmark
-    latrd_lower_panel_tuning_benchmark
     sytrd_cta_benchmark
     sytrd_blocked_benchmark
     sytrd_sy2sb_benchmark
