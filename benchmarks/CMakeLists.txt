@@ -55,6 +55,7 @@ set(BENCHMARK_TARGETS
     sytrd_sb2st_benchmark
     cusolverdx_heev_benchmark
     cusolverdx_htev_benchmark
+    htev_compare_benchmark
 )
 
 function(batchlas_add_benchmark_target target_name)

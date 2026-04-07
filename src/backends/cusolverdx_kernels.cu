@@ -11,6 +11,10 @@
 
 namespace batchlas::backend::cusolverdx::cuda_kernels {
 
+constexpr int kMinHeevN = 1;
+constexpr int kMinHtevN = 2;
+constexpr int kMaxSupportedN = 512;
+
 #if BATCHLAS_HAS_CUSOLVERDX_HEADER
 namespace {
 
@@ -231,6 +235,41 @@ cudaError_t htev_launch_n(T* d,
     return cudaGetLastError();
 }
 
+template <int Sm, typename T, bool ComputeVectors, bool Lower, int N, int MaxN>
+cudaError_t heev_dispatch_n_range(T* A,
+                                  int n,
+                                  int lda,
+                                  T* lambda,
+                                  int* info,
+                                  int batches,
+                                  cudaStream_t stream) {
+    if (n == N) {
+        return heev_launch_n<Sm, N, T, ComputeVectors, Lower>(A, lda, lambda, info, batches, stream);
+    }
+    if constexpr (N < MaxN) {
+        return heev_dispatch_n_range<Sm, T, ComputeVectors, Lower, N + 1, MaxN>(A, n, lda, lambda, info, batches, stream);
+    }
+    return cudaErrorNotSupported;
+}
+
+template <int Sm, typename T, bool ComputeVectors, int N, int MaxN>
+cudaError_t htev_dispatch_n_range(T* d,
+                                  int n,
+                                  T* e,
+                                  T* V,
+                                  int ldv,
+                                  int* info,
+                                  int batches,
+                                  cudaStream_t stream) {
+    if (n == N) {
+        return htev_launch_n<Sm, N, T, ComputeVectors>(d, e, V, ldv, info, batches, stream);
+    }
+    if constexpr (N < MaxN) {
+        return htev_dispatch_n_range<Sm, T, ComputeVectors, N + 1, MaxN>(d, n, e, V, ldv, info, batches, stream);
+    }
+    return cudaErrorNotSupported;
+}
+
 template <int Sm, typename T>
 cudaError_t heev_dispatch_for_sm(T* A,
                                  int n,
@@ -241,35 +280,20 @@ cudaError_t heev_dispatch_for_sm(T* A,
                                  bool compute_vectors,
                                  bool lower,
                                  cudaStream_t stream) {
-    auto launch = [&](auto n_const, auto vec_const, auto low_const) {
-        constexpr int N = decltype(n_const)::value;
-        constexpr bool V = decltype(vec_const)::value;
-        constexpr bool L = decltype(low_const)::value;
-        return heev_launch_n<Sm, N, T, V, L>(A, lda, lambda, info, batches, stream);
-    };
-
-    switch (n) {
-        case 16:
-            return compute_vectors
-                ? (lower ? launch(std::integral_constant<int, 16>{}, std::true_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 16>{}, std::true_type{}, std::false_type{}))
-                : (lower ? launch(std::integral_constant<int, 16>{}, std::false_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 16>{}, std::false_type{}, std::false_type{}));
-        case 32:
-            return compute_vectors
-                ? (lower ? launch(std::integral_constant<int, 32>{}, std::true_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 32>{}, std::true_type{}, std::false_type{}))
-                : (lower ? launch(std::integral_constant<int, 32>{}, std::false_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 32>{}, std::false_type{}, std::false_type{}));
-        case 64:
-            return compute_vectors
-                ? (lower ? launch(std::integral_constant<int, 64>{}, std::true_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 64>{}, std::true_type{}, std::false_type{}))
-                : (lower ? launch(std::integral_constant<int, 64>{}, std::false_type{}, std::true_type{})
-                         : launch(std::integral_constant<int, 64>{}, std::false_type{}, std::false_type{}));
-        default:
-            return cudaErrorNotSupported;
+    if (n < kMinHeevN || n > kMaxSupportedN) {
+        return cudaErrorNotSupported;
     }
+
+    if (compute_vectors) {
+        if (lower) {
+            return heev_dispatch_n_range<Sm, T, true, true, kMinHeevN, kMaxSupportedN>(A, n, lda, lambda, info, batches, stream);
+        }
+        return heev_dispatch_n_range<Sm, T, true, false, kMinHeevN, kMaxSupportedN>(A, n, lda, lambda, info, batches, stream);
+    }
+    if (lower) {
+        return heev_dispatch_n_range<Sm, T, false, true, kMinHeevN, kMaxSupportedN>(A, n, lda, lambda, info, batches, stream);
+    }
+    return heev_dispatch_n_range<Sm, T, false, false, kMinHeevN, kMaxSupportedN>(A, n, lda, lambda, info, batches, stream);
 }
 
 template <int Sm, typename T>
@@ -282,28 +306,14 @@ cudaError_t htev_dispatch_for_sm(T* d,
                                  int batches,
                                  bool compute_vectors,
                                  cudaStream_t stream) {
-    auto launch = [&](auto n_const, auto vec_const) {
-        constexpr int N = decltype(n_const)::value;
-        constexpr bool Vectors = decltype(vec_const)::value;
-        return htev_launch_n<Sm, N, T, Vectors>(d, e, V, ldv, info, batches, stream);
-    };
-
-    switch (n) {
-        case 16:
-            return compute_vectors
-                ? launch(std::integral_constant<int, 16>{}, std::true_type{})
-                : launch(std::integral_constant<int, 16>{}, std::false_type{});
-        case 32:
-            return compute_vectors
-                ? launch(std::integral_constant<int, 32>{}, std::true_type{})
-                : launch(std::integral_constant<int, 32>{}, std::false_type{});
-        case 64:
-            return compute_vectors
-                ? launch(std::integral_constant<int, 64>{}, std::true_type{})
-                : launch(std::integral_constant<int, 64>{}, std::false_type{});
-        default:
-            return cudaErrorNotSupported;
+    if (n < kMinHtevN || n > kMaxSupportedN) {
+        return cudaErrorNotSupported;
     }
+
+    if (compute_vectors) {
+        return htev_dispatch_n_range<Sm, T, true, kMinHtevN, kMaxSupportedN>(d, n, e, V, ldv, info, batches, stream);
+    }
+    return htev_dispatch_n_range<Sm, T, false, kMinHtevN, kMaxSupportedN>(d, n, e, V, ldv, info, batches, stream);
 }
 
 template <typename T>
@@ -358,11 +368,11 @@ bool available() {
 }
 
 bool heev_supported_n(int n) {
-    return n == 16 || n == 32 || n == 64;
+    return n >= kMinHeevN && n <= kMaxSupportedN;
 }
 
 bool htev_supported_n(int n) {
-    return n == 16 || n == 32 || n == 64;
+    return n >= kMinHtevN && n <= kMaxSupportedN;
 }
 
 cudaError_t heev_launch_float(float* A,

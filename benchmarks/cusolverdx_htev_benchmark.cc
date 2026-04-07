@@ -6,6 +6,20 @@
 
 using namespace batchlas;
 
+namespace {
+
+template <typename Benchmark>
+inline void CusolverdxHtevBenchSizes(Benchmark* b) {
+    // Dense size grid so intermediate N values are benchmarked too.
+    for (int n = 8; n <= 64; ++n) {
+        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
+            b->Args({n, bs});
+        }
+    }
+}
+
+} // namespace
+
 template <typename T, Backend B>
 static void BM_CUSOLVERDX_HTEV(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
@@ -47,8 +61,8 @@ static void BM_CUSOLVERDX_HTEV(minibench::State& state) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-MINI_BENCHMARK_REGISTER_SIZES((BM_CUSOLVERDX_HTEV<float, batchlas::Backend::CUDA>), SteqrBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_CUSOLVERDX_HTEV<double, batchlas::Backend::CUDA>), SteqrBenchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_CUSOLVERDX_HTEV<float, batchlas::Backend::CUDA>), CusolverdxHtevBenchSizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_CUSOLVERDX_HTEV<double, batchlas::Backend::CUDA>), CusolverdxHtevBenchSizes);
 #endif
 
 MINI_BENCHMARK_MAIN();
