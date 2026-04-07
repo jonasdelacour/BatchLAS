@@ -40,6 +40,34 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                                   const VectorView<T>& tau,
                                   const MatrixView<T, MatrixFormat::Dense>& w) {
     constexpr int wg = WG;
+    const int n = a.rows();
+    const int batch = a.batch_size();
+    const int ib = w.cols();
+    const auto launch = batchlas::device::make_group_launch_info(wg);
+    std::size_t workspace_elements = 0;
+
+    if (batch > 0 && n > 1) {
+        const int extent = n - 1;
+        workspace_elements = std::max(
+            workspace_elements,
+                batchlas::device::hemv_workspace_elements<T, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+                launch, extent));
+
+        if constexpr (FuseTrailingUpdate) {
+            if (n > ib) {
+                const int trailing_extent = n - ib;
+                workspace_elements = std::max(
+                    workspace_elements,
+                    batchlas::device::her2k_workspace_elements<T,
+                                                               batchlas::device::DeviceBlasPolicy::Subgroup16,
+                                                               Uplo::Lower,
+                                                               Transpose::NoTrans>(
+                        launch,
+                        trailing_extent,
+                        ib));
+            }
+        }
+    }
 
     (void)q->submit([&](sycl::handler& h) {
         // Create kernel-passable views inside submit (MatrixView is not trivially copyable).
@@ -50,10 +78,6 @@ Event latrd_lower_panel_batched_wg(Queue& q,
         VectorView<T> E_view = e;
         VectorView<T> TAU_view = tau;
 
-        const int n = A_view.rows();
-        const int batch = A_view.batch_size();
-        const int ib = W_view.cols();
-
         // Cache the current reflector vector v and the current W column in local memory
         // to reduce repeated global loads/stores.
         auto v_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
@@ -63,6 +87,7 @@ Event latrd_lower_panel_batched_wg(Queue& q,
         auto vip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
         h.parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -75,6 +100,7 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                 T* wcol_ptr = util::get_raw_ptr(wcol_local);
                 T* vip_ptr = util::get_raw_ptr(vip_local);
                 T* wip_ptr = util::get_raw_ptr(wip_local);
+                T* workspace_ptr = workspace_elements == 0 ? static_cast<T*>(nullptr) : util::get_raw_ptr(workspace);
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
@@ -160,7 +186,8 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                         v_tail,
                         wcol_tail,
                         T(1),
-                        T(0));
+                        T(0),
+                        static_cast<T*>(nullptr));
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // Apply intra-panel corrections from previously computed reflectors.
@@ -212,7 +239,8 @@ Event latrd_lower_panel_batched_wg(Queue& q,
                             Wb(Slice(j2), Slice(0, ib)),
                             Ab(Slice(j2), Slice(j2)),
                             T(-1),
-                            T(1));
+                            T(1),
+                            workspace_ptr);
                     }
                 }
             });

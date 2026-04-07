@@ -155,7 +155,8 @@ template <typename Item, typename T>
 inline constexpr void trmm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                           MatrixMatrixOperand<T> operand,
-                                          TriangularTransform transform) {
+                                          TriangularTransform transform,
+                                          RegisterMatrixWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int subgroup_id = subgroup_group_id(item);
     const int local_row = linear_tid / kRegisterMatrixLocalCols;
@@ -169,8 +170,6 @@ inline constexpr void trmm_register_tiled(const Item& item,
     const int tile_col_start = matrix_tile_group_col(item);
     const int tile_row_stride = matrix_tile_group_row_stride(item);
     const int tile_col_stride = matrix_tile_group_col_stride(item);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<RegisterMatrixWorkspace<T>>(item.get_group()).get();
-
     for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
         for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
             const int row_base = tile_row * kRegisterMatrixTileM + local_row * kRegisterMatrixThreadTileRows;
@@ -294,10 +293,28 @@ inline constexpr void trmm_register_tiled(const Item& item,
 
 namespace detail {
 
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     bool aliased = false) {
+    assert(row_extent >= 0 && col_extent >= 0 && "device::trmm workspace query expects non-negative matrix extents");
+    if (aliased || !detail::subgroup::is_nd_item_3d_launch(launch)) {
+        return 0;
+    }
+
+    const int contract_extent = Tag::side == Side::Left ? row_extent : col_extent;
+    if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy)) {
+        return detail::workspace_elements_v<T, detail::subgroup::RegisterMatrixWorkspace<T>>;
+    }
+    return 0;
+}
+
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_trmm(const Exec& exec,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                    MatrixMatrixOperand<T> operand) {
+                                    MatrixMatrixOperand<T> operand,
+                                    T* workspace = nullptr) {
     const TriangularTransform transform{.side = Tag::side, .uplo = Tag::uplo, .trans = Tag::trans, .diag = Tag::diag};
     validate_triangular_operand(a, operand, transform);
     const bool aliased = detail::views_overlap(operand.b, operand.c);
@@ -306,9 +323,11 @@ inline constexpr void dispatch_trmm(const Exec& exec,
         const int row_extent = operand.c.rows();
         const int col_extent = operand.c.cols();
         const int contract_extent = transform.side == Side::Left ? operand.b.rows() : operand.b.cols();
-        if (!aliased && detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
+        auto* register_workspace = workspace == nullptr ? nullptr : detail::workspace_ptr_cast<detail::subgroup::RegisterMatrixWorkspace<T>>(workspace);
+        if (!aliased && register_workspace != nullptr &&
+            detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
             std::same_as<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
-            detail::subgroup::trmm_register_tiled(exec, a, operand, transform);
+            detail::subgroup::trmm_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
         if (!aliased && detail::subgroup::can_use_matrix_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy)) {
@@ -330,8 +349,9 @@ template <Side SideV = Side::Left,
           typename T>
 inline constexpr void trmm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -343,8 +363,34 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void trmm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, Policy>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, Policy>(group, a, operand, workspace);
+}
+
+template <Side SideV = Side::Left,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans,
+          Diag DiagV = Diag::NonUnit,
+          typename T>
+inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     bool aliased = false) {
+    return detail::trmm_workspace_elements<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, DeviceBlasPolicy::Auto, T>(launch, row_extent, col_extent, aliased);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Side SideV = Side::Left,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans,
+          Diag DiagV = Diag::NonUnit>
+inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     bool aliased = false) {
+    return detail::trmm_workspace_elements<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, Policy, T>(launch, row_extent, col_extent, aliased);
 }
 
 template <Side SideV = Side::Left,
@@ -358,8 +404,9 @@ inline constexpr void trmm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    trmm<SideV, UploV, TransV, DiagV>(group, a, make_matmat_operand(b, c, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    trmm<SideV, UploV, TransV, DiagV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -374,9 +421,9 @@ inline constexpr void trmm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    trmm<SideV, UploV, TransV, DiagV>(group, a, b, c, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    trmm<Policy, SideV, UploV, TransV, DiagV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 } // namespace batchlas::device

@@ -4,6 +4,7 @@
 
 #include <blas/device.hh>
 #include <blas/matrix.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 #include "bench_utils.hh"
 
 #include "../src/queue.hh"
@@ -82,14 +83,35 @@ inline std::size_t device_blas_level2_local_size(const Queue& queue) {
     return std::min(preferred_local_size, max_work_group_size);
 }
 
-template <typename KernelName, typename KernelFunc>
-void launch_batched_level2_kernel(Queue& queue, int batch, std::size_t local_size, KernelFunc&& kernel) {
+inline device::DeviceBlasLaunchInfo device_blas_group_launch_info(const Queue& queue, std::size_t local_size) {
+    (void)queue;
+    return device::make_group_launch_info(static_cast<int>(local_size));
+}
+
+template <typename T, typename KernelName, typename KernelFunc>
+void launch_batched_level2_kernel_with_workspace(Queue& queue,
+                                                 int batch,
+                                                 std::size_t local_size,
+                                                 std::size_t workspace_elements,
+                                                 KernelFunc&& kernel) {
     auto kernel_fn = std::forward<KernelFunc>(kernel);
-    queue->parallel_for<KernelName>(
-        sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
-        [=](sycl::nd_item<1> item) {
-            kernel_fn(item, static_cast<int>(item.get_group(0)));
-        });
+    queue->submit([&](sycl::handler& h) {
+        if (workspace_elements == 0) {
+            h.parallel_for<KernelName>(
+                sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
+                [=](sycl::nd_item<1> item) {
+                    kernel_fn(item, static_cast<int>(item.get_group(0)), static_cast<T*>(nullptr));
+                });
+            return;
+        }
+
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
+        h.parallel_for<KernelName>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
+            [=](sycl::nd_item<1> item) {
+                kernel_fn(item, static_cast<int>(item.get_group(0)), batchlas::util::get_raw_ptr(workspace));
+            });
+    });
 }
 
 inline double dense_matrix_vector_bytes(int m, int n, int batch) {
@@ -144,14 +166,19 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                     std::move(y),
                     [local_size](Queue& queue, auto a, auto x, auto y) {
                         const auto a_view = a.kernel_view();
-                        launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 100 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
-                            queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
+                        const auto launch = device_blas_group_launch_info(queue, local_size);
+                        const auto workspace_elements = batchlas::device::gemv_workspace_elements<DeviceBlasLevel2Scalar, kPolicy, kLevel2Trans>(
+                            launch, a_view.rows(), a_view.cols());
+                        launch_batched_level2_kernel_with_workspace<DeviceBlasLevel2Scalar,
+                                                                    DeviceBlasLevel2Kernel<std::integral_constant<int, 100 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
+                            queue, a.batch_size(), local_size, workspace_elements, [=](sycl::nd_item<1> item, int bid, DeviceBlasLevel2Scalar* workspace) {
                                 batchlas::device::gemv<kPolicy, kLevel2Trans>(item.get_group(),
-                                                               a_view.batch_item(bid),
-                                                               x.batch_item(bid),
-                                                               y.batch_item(bid),
-                                                               DeviceBlasLevel2Scalar(1),
-                                                               DeviceBlasLevel2Scalar(0));
+                                                                              a_view.batch_item(bid),
+                                                                              x.batch_item(bid),
+                                                                              y.batch_item(bid),
+                                                                              DeviceBlasLevel2Scalar(1),
+                                                                              DeviceBlasLevel2Scalar(0),
+                                                                              workspace);
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasGemvFlopScale * m * n), minibench::Rate);
@@ -169,14 +196,32 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                     std::move(y),
                     [local_size](Queue& queue, auto a, auto x, auto y) {
                         const auto a_view = a.kernel_view();
-                        launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 200 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_COMPLEX>>>(
-                            queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
-                                batchlas::device::symv<kPolicy, Uplo::Lower>(item.get_group(),
-                                                              a_view.batch_item(bid),
-                                                              x.batch_item(bid),
-                                                              y.batch_item(bid),
-                                                              DeviceBlasLevel2Scalar(1),
-                                                              DeviceBlasLevel2Scalar(0));
+                        const auto launch = device_blas_group_launch_info(queue, local_size);
+                        const auto workspace_elements = std::is_same_v<DeviceBlasLevel2Scalar, std::complex<float>>
+                                ? batchlas::device::hemv_workspace_elements<DeviceBlasLevel2Scalar, kPolicy, Uplo::Lower>(
+                                launch, a_view.rows())
+                                : batchlas::device::symv_workspace_elements<DeviceBlasLevel2Scalar, kPolicy, Uplo::Lower>(
+                                launch, a_view.rows());
+                        launch_batched_level2_kernel_with_workspace<DeviceBlasLevel2Scalar,
+                                                                    DeviceBlasLevel2Kernel<std::integral_constant<int, 200 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_COMPLEX>>>(
+                            queue, a.batch_size(), local_size, workspace_elements, [=](sycl::nd_item<1> item, int bid, DeviceBlasLevel2Scalar* workspace) {
+                                if constexpr (std::is_same_v<DeviceBlasLevel2Scalar, std::complex<float>>) {
+                                    batchlas::device::hemv<kPolicy, Uplo::Lower>(item.get_group(),
+                                                                                 a_view.batch_item(bid),
+                                                                                 x.batch_item(bid),
+                                                                                 y.batch_item(bid),
+                                                                                 DeviceBlasLevel2Scalar(1),
+                                                                                 DeviceBlasLevel2Scalar(0),
+                                                                                 workspace);
+                                } else {
+                                    batchlas::device::symv<kPolicy, Uplo::Lower>(item.get_group(),
+                                                                                 a_view.batch_item(bid),
+                                                                                 x.batch_item(bid),
+                                                                                 y.batch_item(bid),
+                                                                                 DeviceBlasLevel2Scalar(1),
+                                                                                 DeviceBlasLevel2Scalar(0),
+                                                                                 workspace);
+                                }
                             });
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * kDeviceBlasHemvFlopScale * n * n), minibench::Rate);

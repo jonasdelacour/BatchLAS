@@ -25,6 +25,30 @@ enum class DeviceBlasPolicy {
     Subgroup32,
 };
 
+enum class DeviceBlasLaunchKind {
+    Group,
+    NdItem1D,
+    NdItem3D,
+};
+
+struct DeviceBlasLaunchInfo {
+    int local_size = 1;
+    int subgroup_size = 1;
+    DeviceBlasLaunchKind kind = DeviceBlasLaunchKind::Group;
+};
+
+inline constexpr DeviceBlasLaunchInfo make_group_launch_info(int local_size) {
+    return DeviceBlasLaunchInfo{std::max(1, local_size), 1, DeviceBlasLaunchKind::Group};
+}
+
+inline constexpr DeviceBlasLaunchInfo make_nd_item_1d_launch_info(int local_size, int subgroup_size) {
+    return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem1D};
+}
+
+inline constexpr DeviceBlasLaunchInfo make_nd_item_3d_launch_info(int local_size, int subgroup_size) {
+    return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem3D};
+}
+
 template <typename T>
 struct MatrixVectorOperand {
     VectorView<T> x{};
@@ -172,6 +196,15 @@ inline constexpr int item_local_linear_range(const Item& item) {
     return static_cast<int>(item.get_local_range().size());
 }
 
+template <typename T, typename Workspace>
+inline constexpr std::size_t workspace_elements_v = sizeof(Workspace) / sizeof(T);
+
+template <typename Workspace, typename T>
+inline constexpr Workspace* workspace_ptr_cast(T* workspace) {
+    static_assert(sizeof(Workspace) % sizeof(T) == 0);
+    return reinterpret_cast<Workspace*>(workspace);
+}
+
 template <typename Group, typename T>
 inline constexpr T reduce_sum_group(const Group& group, const T& value) {
     if constexpr (ComplexScalar<T>) {
@@ -216,6 +249,10 @@ inline constexpr int group_local_linear_range(const Group& group) {
 template <NdItemLike Item>
 inline constexpr int group_local_linear_range(const Item& item) {
     return item_local_linear_range(item);
+}
+
+inline constexpr int group_local_linear_range(const DeviceBlasLaunchInfo& launch) {
+    return std::max(1, launch.local_size);
 }
 
 template <typename Group>
@@ -313,6 +350,10 @@ inline constexpr int input_size(const KernelMatrixView<T, MatrixFormat::Dense>& 
     return trans == Transpose::NoTrans ? a.cols() : a.rows();
 }
 
+inline constexpr int input_size(int rows, int cols, Transpose trans) {
+    return trans == Transpose::NoTrans ? cols : rows;
+}
+
 template <Transpose TransV, typename T>
 inline constexpr int input_size(const KernelMatrixView<T, MatrixFormat::Dense>& a) {
     if constexpr (TransV == Transpose::NoTrans) {
@@ -325,6 +366,10 @@ inline constexpr int input_size(const KernelMatrixView<T, MatrixFormat::Dense>& 
 template <typename T>
 inline constexpr int output_size(const KernelMatrixView<T, MatrixFormat::Dense>& a, Transpose trans) {
     return trans == Transpose::NoTrans ? a.rows() : a.cols();
+}
+
+inline constexpr int output_size(int rows, int cols, Transpose trans) {
+    return trans == Transpose::NoTrans ? rows : cols;
 }
 
 template <Transpose TransV, typename T>

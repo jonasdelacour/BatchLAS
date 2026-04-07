@@ -340,20 +340,47 @@ inline constexpr void gemm_aligned_nn_large(const Item& item,
 
 namespace detail {
 
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     int contract_extent,
+                                                     bool aligned_a = false,
+                                                     bool aligned_b = false) {
+    assert(row_extent >= 0 && col_extent >= 0 && contract_extent >= 0 &&
+           "device::gemm workspace query expects non-negative matrix extents");
+
+    if (aligned_a && aligned_b &&
+        detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(launch,
+                                                                       row_extent,
+                                                                       col_extent,
+                                                                       contract_extent,
+                                                                       Tag::trans_a,
+                                                                       Tag::trans_b,
+                                                                       Policy) &&
+        detail::subgroup::gemm_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
+    }
+
+    if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy) &&
+        detail::subgroup::gemm_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
+    }
+    return 0;
+}
+
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_gemm(const Exec& exec,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                    MatrixMatrixOperand<T> operand) {
+                                    MatrixMatrixOperand<T> operand,
+                                    T* workspace = nullptr) {
     const GeneralMatrixTransform transform{.trans_a = Tag::trans_a, .trans_b = Tag::trans_b};
     validate_gemm_operand(a, operand, transform);
 
     if constexpr (detail::NdItemLike<Exec>) {
-        detail::subgroup::GemmWorkspace<T>* gemm_workspace = nullptr;
-        if constexpr (detail::subgroup::gemm_workspace_supported_v<T>) {
-            gemm_workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::GemmWorkspace<T>>(exec.get_group()).get();
-        }
+        auto* gemm_workspace = workspace == nullptr ? nullptr : detail::workspace_ptr_cast<detail::subgroup::GemmWorkspace<T>>(workspace);
 
-        if (detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(exec, a, operand, transform, Policy)) {
+        if (gemm_workspace != nullptr && detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(exec, a, operand, transform, Policy)) {
             detail::subgroup::gemm_aligned_nn_large(exec, a, operand, gemm_workspace);
             return;
         }
@@ -361,7 +388,7 @@ inline constexpr void dispatch_gemm(const Exec& exec,
         const int row_extent = detail::output_size(a, transform.trans_a);
         const int col_extent = detail::input_size(operand.b, transform.trans_b);
         const int contract_extent = detail::input_size(a, transform.trans_a);
-        if (detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
+        if (gemm_workspace != nullptr && detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
             detail::subgroup::gemm_workspace_supported_v<T>) {
             detail::subgroup::gemm_register_tiled(exec, a, operand, transform, gemm_workspace);
             return;
@@ -380,8 +407,9 @@ inline constexpr void dispatch_gemm(const Exec& exec,
 template <Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -391,8 +419,34 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, Policy>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans>
+inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     int contract_extent,
+                                                     bool aligned_a = false,
+                                                     bool aligned_b = false) {
+    return detail::gemm_workspace_elements<GeneralMatrixTransformTag<TransAV, TransBV>, DeviceBlasPolicy::Auto, T>(
+        launch, row_extent, col_extent, contract_extent, aligned_a, aligned_b);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Transpose TransAV = Transpose::NoTrans,
+          Transpose TransBV = Transpose::NoTrans>
+inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent,
+                                                     int contract_extent,
+                                                     bool aligned_a = false,
+                                                     bool aligned_b = false) {
+    return detail::gemm_workspace_elements<GeneralMatrixTransformTag<TransAV, TransBV>, Policy, T>(
+        launch, row_extent, col_extent, contract_extent, aligned_a, aligned_b);
 }
 
 template <Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans, typename Group, typename T>
@@ -401,8 +455,9 @@ inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    gemm<TransAV, TransBV>(group, a, make_matmat_operand(b, c, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    gemm<TransAV, TransBV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -415,9 +470,9 @@ inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    gemm<TransAV, TransBV>(group, a, b, c, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    gemm<Policy, TransAV, TransBV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 } // namespace batchlas::device

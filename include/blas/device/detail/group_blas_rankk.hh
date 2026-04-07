@@ -358,24 +358,57 @@ inline constexpr void rankk_register_tiled(const Item& item,
 
 namespace detail {
 
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t rank2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                       int extent,
+                                                       int contract_extent) {
+    assert(extent >= 0 && contract_extent >= 0 && "device::rank2k workspace query expects non-negative extents");
+    if (detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(launch, extent, contract_extent, Policy) &&
+        detail::subgroup::complex_rank2k_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::ComplexRank2kWorkspace<T>>;
+    }
+    if (detail::subgroup::can_use_rank2k_register_fast_path<T>(launch, extent, contract_extent, Policy) &&
+        detail::subgroup::register_matrix_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::RegisterMatrixWorkspace<T>>;
+    }
+    return 0;
+}
+
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t rankk_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                      int extent,
+                                                      int contract_extent) {
+    assert(extent >= 0 && contract_extent >= 0 && "device::rankk workspace query expects non-negative extents");
+    if (detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(launch, extent, contract_extent, Policy) &&
+        detail::subgroup::complex_rank2k_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::ComplexRank2kWorkspace<T>>;
+    }
+    if (detail::subgroup::can_use_rankk_register_fast_path<T>(launch, extent, contract_extent, Policy) &&
+        detail::subgroup::register_matrix_workspace_supported_v<T>) {
+        return detail::workspace_elements_v<T, detail::subgroup::RegisterMatrixWorkspace<T>>;
+    }
+    return 0;
+}
+
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_rank2k(const Exec& exec,
                                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                      MatrixMatrixOperand<T> operand) {
+                                      MatrixMatrixOperand<T> operand,
+                                      T* workspace = nullptr) {
     const SymmetricRank2kTransform transform{.uplo = Tag::uplo, .trans = Tag::trans, .hermitian = Tag::hermitian};
     validate_rank2k_operand(a, operand, transform);
 
     if constexpr (detail::NdItemLike<Exec>) {
-        if (detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(exec, a, operand, transform, Policy) &&
+        if (workspace != nullptr && detail::subgroup::can_use_complex_rank2k_tiled_fast_path<T>(exec, a, operand, transform, Policy) &&
             detail::subgroup::complex_rank2k_workspace_supported_v<T>) {
-            auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(exec.get_group()).get();
-            detail::subgroup::rank2k_complex_tiled(exec, a, operand, transform, workspace);
+            auto* complex_workspace = detail::workspace_ptr_cast<detail::subgroup::ComplexRank2kWorkspace<T>>(workspace);
+            detail::subgroup::rank2k_complex_tiled(exec, a, operand, transform, complex_workspace);
             return;
         }
-        if (detail::subgroup::can_use_rank2k_register_fast_path<T>(exec, a, operand, transform, Policy) &&
+        if (workspace != nullptr && detail::subgroup::can_use_rank2k_register_fast_path<T>(exec, a, operand, transform, Policy) &&
             detail::subgroup::register_matrix_workspace_supported_v<T>) {
-            auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(exec.get_group()).get();
-            detail::subgroup::rank2k_register_tiled(exec, a, operand, transform, workspace);
+            auto* register_workspace = detail::workspace_ptr_cast<detail::subgroup::RegisterMatrixWorkspace<T>>(workspace);
+            detail::subgroup::rank2k_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
     }
@@ -386,21 +419,22 @@ inline constexpr void dispatch_rank2k(const Exec& exec,
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_rankk(const Exec& exec,
                                      const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                     RankKOperand<T> operand) {
+                                     RankKOperand<T> operand,
+                                     T* workspace = nullptr) {
     const SymmetricRankKTransform transform{.uplo = Tag::uplo, .trans = Tag::trans, .hermitian = Tag::hermitian};
     validate_rankk_operand(a, operand, transform);
 
     if constexpr (detail::NdItemLike<Exec>) {
-        if (detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(exec, a, operand, transform, Policy) &&
+        if (workspace != nullptr && detail::subgroup::can_use_complex_rankk_tiled_fast_path<T>(exec, a, operand, transform, Policy) &&
             detail::subgroup::complex_rank2k_workspace_supported_v<T>) {
-            auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::ComplexRank2kWorkspace<T>>(exec.get_group()).get();
-            detail::subgroup::rankk_complex_tiled(exec, a, operand, transform, workspace);
+            auto* complex_workspace = detail::workspace_ptr_cast<detail::subgroup::ComplexRank2kWorkspace<T>>(workspace);
+            detail::subgroup::rankk_complex_tiled(exec, a, operand, transform, complex_workspace);
             return;
         }
-        if (detail::subgroup::can_use_rankk_register_fast_path<T>(exec, a, operand, transform, Policy) &&
+        if (workspace != nullptr && detail::subgroup::can_use_rankk_register_fast_path<T>(exec, a, operand, transform, Policy) &&
             detail::subgroup::register_matrix_workspace_supported_v<T>) {
-            auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<detail::subgroup::RegisterMatrixWorkspace<T>>(exec.get_group()).get();
-            detail::subgroup::rankk_register_tiled(exec, a, operand, transform, workspace);
+            auto* register_workspace = detail::workspace_ptr_cast<detail::subgroup::RegisterMatrixWorkspace<T>>(workspace);
+            detail::subgroup::rankk_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
     }
@@ -413,8 +447,9 @@ inline constexpr void dispatch_rankk(const Exec& exec,
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           RankKOperand<T> operand) {
-    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           RankKOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -424,8 +459,26 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           RankKOperand<T> operand) {
-    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand);
+                           RankKOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent,
+                                                     int contract_extent) {
+    return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent,
+                                                     int contract_extent) {
+    return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy, T>(launch, extent, contract_extent);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -433,8 +486,9 @@ inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    syrk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    syrk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -446,16 +500,17 @@ inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    syrk<UploV, TransV>(group, a, c, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    syrk<Policy, UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           RankKOperand<T> operand) {
-    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           RankKOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -465,8 +520,26 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           RankKOperand<T> operand) {
-    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand);
+                           RankKOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent,
+                                                     int contract_extent) {
+    return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent,
+                                                     int contract_extent) {
+    return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy, T>(launch, extent, contract_extent);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -474,8 +547,9 @@ inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    herk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    herk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -487,16 +561,17 @@ inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    herk<UploV, TransV>(group, a, c, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    herk<Policy, UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                            MatrixMatrixOperand<T> operand) {
-    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand);
+                            MatrixMatrixOperand<T> operand,
+                            T* workspace = nullptr) {
+    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -506,8 +581,26 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                            MatrixMatrixOperand<T> operand) {
-    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand);
+                            MatrixMatrixOperand<T> operand,
+                            T* workspace = nullptr) {
+    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                      int extent,
+                                                      int contract_extent) {
+    return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                      int extent,
+                                                      int contract_extent) {
+    return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy, T>(launch, extent, contract_extent);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -516,8 +609,9 @@ inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& b,
                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
                             T alpha = T(1),
-                            T beta = T(0)) {
-    syr2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta));
+                            T beta = T(0),
+                            T* workspace = nullptr) {
+    syr2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -530,16 +624,17 @@ inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& b,
                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
                             T alpha = T(1),
-                            T beta = T(0)) {
-    (void)Policy;
-    syr2k<UploV, TransV>(group, a, b, c, alpha, beta);
+                            T beta = T(0),
+                            T* workspace = nullptr) {
+    syr2k<Policy, UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                            MatrixMatrixOperand<T> operand) {
-    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand);
+                            MatrixMatrixOperand<T> operand,
+                            T* workspace = nullptr) {
+    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -549,8 +644,26 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                            MatrixMatrixOperand<T> operand) {
-    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand);
+                            MatrixMatrixOperand<T> operand,
+                            T* workspace = nullptr) {
+    detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                      int extent,
+                                                      int contract_extent) {
+    return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
+}
+
+template <typename T,
+          DeviceBlasPolicy Policy,
+          Uplo UploV = Uplo::Upper,
+          Transpose TransV = Transpose::NoTrans>
+inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                      int extent,
+                                                      int contract_extent) {
+    return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy, T>(launch, extent, contract_extent);
 }
 
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -559,8 +672,9 @@ inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& b,
                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
                             T alpha = T(1),
-                            T beta = T(0)) {
-    her2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta));
+                            T beta = T(0),
+                            T* workspace = nullptr) {
+    her2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -573,9 +687,9 @@ inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& b,
                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
                             T alpha = T(1),
-                            T beta = T(0)) {
-    (void)Policy;
-    her2k<UploV, TransV>(group, a, b, c, alpha, beta);
+                            T beta = T(0),
+                            T* workspace = nullptr) {
+    her2k<Policy, UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 } // namespace batchlas::device

@@ -287,6 +287,10 @@ inline constexpr int subgroup_size(const Item& item) {
     return static_cast<int>(item.get_sub_group().get_local_range().size());
 }
 
+inline constexpr int subgroup_size(const DeviceBlasLaunchInfo& launch) {
+    return std::max(1, launch.subgroup_size);
+}
+
 template <typename Item>
 inline constexpr int subgroup_local_id(const Item& item) {
     return static_cast<int>(item.get_sub_group().get_local_linear_id());
@@ -300,7 +304,30 @@ inline constexpr int subgroup_group_id(const Item& item) {
 template <typename Item>
 inline constexpr int subgroup_count(const Item& item) {
     const int sg_size = subgroup_size(item);
-    return std::max(1, detail::item_local_linear_range(item) / std::max(1, sg_size));
+    return std::max(1, detail::group_local_linear_range(item) / std::max(1, sg_size));
+}
+
+inline constexpr int subgroup_count(const DeviceBlasLaunchInfo& launch) {
+    const int sg_size = subgroup_size(launch);
+    return std::max(1, detail::group_local_linear_range(launch) / std::max(1, sg_size));
+}
+
+template <typename Exec>
+inline constexpr bool is_nd_item_1d_launch(const Exec&) {
+    return std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<1>>;
+}
+
+inline constexpr bool is_nd_item_1d_launch(const DeviceBlasLaunchInfo& launch) {
+    return launch.kind == DeviceBlasLaunchKind::NdItem1D;
+}
+
+template <typename Exec>
+inline constexpr bool is_nd_item_3d_launch(const Exec&) {
+    return std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>;
+}
+
+inline constexpr bool is_nd_item_3d_launch(const DeviceBlasLaunchInfo& launch) {
+    return launch.kind == DeviceBlasLaunchKind::NdItem3D;
 }
 
 template <typename Item, typename Fn>
@@ -433,7 +460,7 @@ inline constexpr bool can_use_matrix_register_fast_path(const Item& item,
     if (policy == DeviceBlasPolicy::Generic) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
         return false;
     }
 
@@ -478,6 +505,15 @@ inline constexpr bool can_use_rankk_fast_path(const Item& item,
 
 template <typename T, typename Item>
 inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item,
+                                                                int row_extent,
+                                                                int col_extent,
+                                                                int contract_extent,
+                                                                Transpose trans_a,
+                                                                Transpose trans_b,
+                                                                DeviceBlasPolicy policy);
+
+template <typename T, typename Item>
+inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item,
                                                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                                 const MatrixMatrixOperand<T>& operand,
                                                                 GeneralMatrixTransform transform,
@@ -492,7 +528,7 @@ inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item
     if (transform.trans_a != Transpose::NoTrans || transform.trans_b != Transpose::NoTrans) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kOptimizedGemmThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kOptimizedGemmThreadsPerGroup) {
         return false;
     }
 
@@ -513,6 +549,40 @@ inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item
 }
 
 template <typename T, typename Item>
+inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item,
+                                                                int row_extent,
+                                                                int col_extent,
+                                                                int contract_extent,
+                                                                Transpose trans_a,
+                                                                Transpose trans_b,
+                                                                DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (policy == DeviceBlasPolicy::Generic) {
+        return false;
+    }
+    if (trans_a != Transpose::NoTrans || trans_b != Transpose::NoTrans) {
+        return false;
+    }
+    if (detail::group_local_linear_range(item) != kOptimizedGemmThreadsPerGroup) {
+        return false;
+    }
+
+    if (row_extent < kOptimizedGemmTileM || col_extent < kOptimizedGemmTileN || contract_extent < kOptimizedGemmTileK) {
+        return false;
+    }
+    if ((row_extent % kOptimizedGemmTileM) != 0 ||
+        (col_extent % kRegisterMatrixTileN) != 0 ||
+        (contract_extent % kOptimizedGemmTileK) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
+template <typename T, typename Item>
 inline constexpr bool can_use_complex_rankk_in_kernel_fast_path(const Item& item,
                                                                 const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                                 const RankKOperand<T>& operand,
@@ -522,19 +592,14 @@ inline constexpr bool can_use_complex_rankk_in_kernel_fast_path(const Item& item
         return false;
     }
 
-    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<1>>) {
-        static_cast<void>(item);
-        static_cast<void>(a);
-        static_cast<void>(operand);
-        static_cast<void>(transform);
-        static_cast<void>(policy);
+    if (!is_nd_item_1d_launch(item)) {
         return false;
     }
 
     if (policy != DeviceBlasPolicy::Auto) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
         return false;
     }
 
@@ -554,6 +619,12 @@ inline constexpr bool can_use_complex_rankk_in_kernel_fast_path(const Item& item
 
 template <typename T, typename Item>
 inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
+                                                             int extent,
+                                                             int contract_extent,
+                                                             DeviceBlasPolicy policy);
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
                                                              const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                              const MatrixMatrixOperand<T>& operand,
                                                              SymmetricRank2kTransform transform,
@@ -562,19 +633,86 @@ inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
         return false;
     }
 
-    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
-        static_cast<void>(item);
-        static_cast<void>(a);
-        static_cast<void>(operand);
-        static_cast<void>(transform);
-        static_cast<void>(policy);
+    if (!is_nd_item_3d_launch(item)) {
         return false;
     }
 
     if (policy != DeviceBlasPolicy::Auto) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
+                                                             int extent,
+                                                             int contract_extent,
+                                                             DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if (!is_nd_item_3d_launch(item)) {
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    return extent >= kComplexRank2kTileN &&
+        contract_extent >= 16 &&
+        extent > 0;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
+                                                            int extent,
+                                                            int contract_extent,
+                                                            DeviceBlasPolicy policy);
+
+template <typename T, typename Item>
+inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
+                                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                            const RankKOperand<T>& operand,
+                                                            SymmetricRankKTransform transform,
+                                                            DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        return false;
+    }
+
+    if (!is_nd_item_3d_launch(item)) {
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
         return false;
     }
 
@@ -594,27 +732,21 @@ inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
 
 template <typename T, typename Item>
 inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
-                                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                            const RankKOperand<T>& operand,
-                                                            SymmetricRankKTransform transform,
+                                                            int extent,
+                                                            int contract_extent,
                                                             DeviceBlasPolicy policy) {
     if constexpr (!std::is_same_v<T, std::complex<float>>) {
         return false;
     }
 
-    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
-        static_cast<void>(item);
-        static_cast<void>(a);
-        static_cast<void>(operand);
-        static_cast<void>(transform);
-        static_cast<void>(policy);
+    if (!is_nd_item_3d_launch(item)) {
         return false;
     }
 
     if (policy != DeviceBlasPolicy::Auto) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
         return false;
     }
 
@@ -624,13 +756,16 @@ inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
         return false;
     }
 
-    const int extent = detail::output_size(a, transform.trans);
-    const int contract_extent = detail::input_size(a, transform.trans);
     return extent >= kComplexRank2kTileN &&
         contract_extent >= 16 &&
-        operand.c.rows() == extent &&
-        operand.c.cols() == extent;
+        extent > 0;
 }
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
+                                                        int extent,
+                                                        int contract_extent,
+                                                        DeviceBlasPolicy policy);
 
 template <typename T, typename Item>
 inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
@@ -642,19 +777,86 @@ inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
         return false;
     }
 
-    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
-        static_cast<void>(item);
-        static_cast<void>(a);
-        static_cast<void>(operand);
-        static_cast<void>(transform);
-        static_cast<void>(policy);
+    if (!is_nd_item_3d_launch(item)) {
         return false;
     }
 
     if (policy != DeviceBlasPolicy::Auto) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    const int extent = detail::output_size(a, transform.trans);
+    const int contract_extent = detail::input_size(a, transform.trans);
+    return extent >= kRegisterMatrixTileN &&
+        contract_extent >= 16 &&
+        operand.c.rows() == extent &&
+        operand.c.cols() == extent;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
+                                                        int extent,
+                                                        int contract_extent,
+                                                        DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (!is_nd_item_3d_launch(item)) {
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::group_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+        return false;
+    }
+
+    const int sg_size = subgroup_size(item);
+    const int sg_count = subgroup_count(item);
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+        return false;
+    }
+
+    return extent >= kRegisterMatrixTileN &&
+        contract_extent >= 16 &&
+        extent > 0;
+}
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rankk_register_fast_path(const Item& item,
+                                                       int extent,
+                                                       int contract_extent,
+                                                       DeviceBlasPolicy policy);
+
+template <typename T, typename Item>
+inline constexpr bool can_use_rankk_register_fast_path(const Item& item,
+                                                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
+                                                       const RankKOperand<T>& operand,
+                                                       SymmetricRankKTransform transform,
+                                                       DeviceBlasPolicy policy) {
+    if constexpr (!std::is_same_v<T, float>) {
+        return false;
+    }
+
+    if (!is_nd_item_3d_launch(item)) {
+        return false;
+    }
+
+    if (policy != DeviceBlasPolicy::Auto) {
+        return false;
+    }
+    if (detail::group_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
         return false;
     }
 
@@ -674,27 +876,21 @@ inline constexpr bool can_use_rank2k_register_fast_path(const Item& item,
 
 template <typename T, typename Item>
 inline constexpr bool can_use_rankk_register_fast_path(const Item& item,
-                                                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                       const RankKOperand<T>& operand,
-                                                       SymmetricRankKTransform transform,
+                                                       int extent,
+                                                       int contract_extent,
                                                        DeviceBlasPolicy policy) {
     if constexpr (!std::is_same_v<T, float>) {
         return false;
     }
 
-    if constexpr (!std::is_same_v<std::remove_cvref_t<Item>, sycl::nd_item<3>>) {
-        static_cast<void>(item);
-        static_cast<void>(a);
-        static_cast<void>(operand);
-        static_cast<void>(transform);
-        static_cast<void>(policy);
+    if (!is_nd_item_3d_launch(item)) {
         return false;
     }
 
     if (policy != DeviceBlasPolicy::Auto) {
         return false;
     }
-    if (detail::item_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
+    if (detail::group_local_linear_range(item) != kRegisterMatrixThreadsPerGroup) {
         return false;
     }
 
@@ -704,12 +900,9 @@ inline constexpr bool can_use_rankk_register_fast_path(const Item& item,
         return false;
     }
 
-    const int extent = detail::output_size(a, transform.trans);
-    const int contract_extent = detail::input_size(a, transform.trans);
     return extent >= kRegisterMatrixTileN &&
         contract_extent >= 16 &&
-        operand.c.rows() == extent &&
-        operand.c.cols() == extent;
+        extent > 0;
 }
 
 inline constexpr int triangular_begin(int index, int extent, TriangularTransform transform, Side side) {

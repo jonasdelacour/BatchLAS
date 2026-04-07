@@ -4,6 +4,7 @@
 #include <blas/matrix.hh>
 #include <internal/sytrd_blocked.hh>
 #include <util/mempool.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
@@ -96,12 +97,24 @@ Event update_vw_lower_small(Queue& q,
                             const MatrixView<T, MatrixFormat::Dense>& a22) {
     const int batch = a22.batch_size();
     const std::size_t local_size = sytrd_rank2k_local_size<T>(q);
+    const auto launch = batchlas::device::make_group_launch_info(static_cast<int>(local_size));
+    std::size_t workspace_elements = 0;
+
+    if (batch > 0) {
+        const int extent = a22.rows();
+        const int contract_extent = v2.cols();
+        workspace_elements = batchlas::device::her2k_workspace_elements<T, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+            launch,
+            extent,
+            contract_extent);
+    }
 
     (void)q->submit([&](sycl::handler& h) {
         const auto v_view = v2.kernel_view();
         const auto w_view = w2.kernel_view();
         const auto a_view = a22.kernel_view();
 
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
         h.parallel_for<UpdateVWLowerSmallKernel<T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
             [=](sycl::nd_item<1> item) {
@@ -113,8 +126,9 @@ Event update_vw_lower_small(Queue& q,
                 const auto vb = v_view.batch_item(b);
                 const auto wb = w_view.batch_item(b);
                 const auto ab = a_view.batch_item(b);
+                T* workspace_ptr = workspace_elements == 0 ? static_cast<T*>(nullptr) : batchlas::util::get_raw_ptr(workspace);
                 batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-                    item.get_group(), vb, wb, ab, T(-1), T(1));
+                    item.get_group(), vb, wb, ab, T(-1), T(1), workspace_ptr);
             });
     });
 
@@ -136,12 +150,29 @@ Event sytrd_lower_local_small(Queue& q,
     const int stride_e = e.stride();
     const int stride_tau = tau.stride();
     const int batch = a.batch_size();
+    const auto launch = batchlas::device::make_group_launch_info(WG);
+    std::size_t workspace_elements = 0;
+
+    if (batch > 0 && n > 1) {
+        const int extent = n - 1;
+        workspace_elements = std::max(
+            workspace_elements,
+            batchlas::device::hemv_workspace_elements<T, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+                launch, extent));
+        workspace_elements = std::max(
+            workspace_elements,
+            batchlas::device::her2k_workspace_elements<T, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+                launch,
+                extent,
+                1));
+    }
 
     (void)q->submit([&](sycl::handler& h) {
         // Allocate just enough local memory for the active n x n tile (plus w vector).
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(n)), h);
         auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
 
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
         h.parallel_for<SytrdLowerLocalSmallKernel<T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
             [=](sycl::nd_item<1> it) {
@@ -152,6 +183,7 @@ Event sytrd_lower_local_small(Queue& q,
                 const sycl::group<1> g = it.get_group();
                 T* Al_ptr = A_local.template get_multi_ptr<sycl::access::decorated::no>().get();
                 T* W_ptr = W_local.template get_multi_ptr<sycl::access::decorated::no>().get();
+                T* workspace_ptr = workspace_elements == 0 ? static_cast<T*>(nullptr) : batchlas::util::get_raw_ptr(workspace);
 
                 T* A = a_ptr + b * stride_a;
                 T* Eb = e_ptr + b * stride_e;
@@ -194,7 +226,8 @@ Event sytrd_lower_local_small(Queue& q,
                         v_view,
                         w_view,
                         tau_k,
-                        T(0));
+                        T(0),
+                        workspace_ptr);
                     it.barrier(sycl::access::fence_space::local_space);
 
                     auto v_vec = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
@@ -225,7 +258,8 @@ Event sytrd_lower_local_small(Queue& q,
                         w_matrix,
                         trailing_view,
                         T(-1),
-                        T(1));
+                        T(1),
+                        workspace_ptr);
                     if constexpr (internal::is_complex<T>::value) {
                         it.barrier(sycl::access::fence_space::local_space);
                         if (lane_in_tail) {

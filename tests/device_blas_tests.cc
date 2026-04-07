@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <blas/linalg.hh>
+#include <util/sycl-local-accessor-helpers.hh>
 
 #include "../src/queue.hh"
 
@@ -63,6 +64,24 @@ bool device_supports_matrix_register_tiles(const Queue& ctx) {
         static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixThreadsPerGroup);
 }
 
+size_t device_test_subgroup_size(const Queue& ctx) {
+    return std::max<size_t>(1, ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+}
+
+batchlas::device::DeviceBlasLaunchInfo device_test_group_launch_info(size_t local_size) {
+    return batchlas::device::make_group_launch_info(static_cast<int>(local_size));
+}
+
+batchlas::device::DeviceBlasLaunchInfo device_test_nd_item_1d_launch_info(const Queue& ctx, size_t local_size) {
+    return batchlas::device::make_nd_item_1d_launch_info(static_cast<int>(local_size), static_cast<int>(device_test_subgroup_size(ctx)));
+}
+
+batchlas::device::DeviceBlasLaunchInfo device_test_nd_item_3d_launch_info(const Queue& ctx) {
+    return batchlas::device::make_nd_item_3d_launch_info(
+        batchlas::device::detail::subgroup::kRegisterMatrixThreadsPerGroup,
+        static_cast<int>(device_test_subgroup_size(ctx)));
+}
+
 template <typename KernelFunc>
 void run_group_kernel(Queue& ctx, size_t local_size, KernelFunc&& kernel) {
     ctx->submit([&](sycl::handler& h) {
@@ -74,12 +93,58 @@ void run_group_kernel(Queue& ctx, size_t local_size, KernelFunc&& kernel) {
     ctx.wait_and_throw();
 }
 
+template <typename T, typename KernelFunc>
+void run_group_kernel_with_workspace(Queue& ctx,
+                                     size_t local_size,
+                                     size_t workspace_elements,
+                                     KernelFunc&& kernel) {
+    ctx->submit([&](sycl::handler& h) {
+        if (workspace_elements == 0) {
+            h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
+                           [=](sycl::nd_item<1> item) {
+                               kernel(item.get_group(), static_cast<T*>(nullptr));
+                           });
+            return;
+        }
+
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
+        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
+                       [=](sycl::nd_item<1> item) {
+                           kernel(item.get_group(), batchlas::util::get_raw_ptr(workspace));
+                       });
+    });
+    ctx.wait_and_throw();
+}
+
 template <typename KernelFunc>
 void run_nd_item_kernel(Queue& ctx, size_t local_size, KernelFunc&& kernel) {
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
                        [=](sycl::nd_item<1> item) {
                            kernel(item);
+                       });
+    });
+    ctx.wait_and_throw();
+}
+
+template <typename T, typename KernelFunc>
+void run_nd_item_kernel_with_workspace(Queue& ctx,
+                                       size_t local_size,
+                                       size_t workspace_elements,
+                                       KernelFunc&& kernel) {
+    ctx->submit([&](sycl::handler& h) {
+        if (workspace_elements == 0) {
+            h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
+                           [=](sycl::nd_item<1> item) {
+                               kernel(item, static_cast<T*>(nullptr));
+                           });
+            return;
+        }
+
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
+        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
+                       [=](sycl::nd_item<1> item) {
+                           kernel(item, batchlas::util::get_raw_ptr(workspace));
                        });
     });
     ctx.wait_and_throw();
@@ -99,6 +164,39 @@ void run_nd_item_kernel_3d(Queue& ctx, int rows, int cols, KernelFunc&& kernel) 
                                          sycl::range<3>(1, local_rows, local_cols)),
                        [=](sycl::nd_item<3> item) {
                            kernel(item);
+                       });
+    });
+    ctx.wait_and_throw();
+}
+
+template <typename T, typename KernelFunc>
+void run_nd_item_kernel_3d_with_workspace(Queue& ctx,
+                                          int rows,
+                                          int cols,
+                                          size_t workspace_elements,
+                                          KernelFunc&& kernel) {
+    constexpr size_t local_rows = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixLocalRows);
+    constexpr size_t local_cols = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixLocalCols);
+    constexpr size_t tile_rows = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixTileM);
+    constexpr size_t tile_cols = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixTileN);
+    const size_t group_rows = (static_cast<size_t>(rows) + tile_rows - 1) / tile_rows;
+    const size_t group_cols = (static_cast<size_t>(cols) + tile_cols - 1) / tile_cols;
+
+    ctx->submit([&](sycl::handler& h) {
+        if (workspace_elements == 0) {
+            h.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, group_rows * local_rows, group_cols * local_cols),
+                                             sycl::range<3>(1, local_rows, local_cols)),
+                           [=](sycl::nd_item<3> item) {
+                               kernel(item, static_cast<T*>(nullptr));
+                           });
+            return;
+        }
+
+        sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
+        h.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, group_rows * local_rows, group_cols * local_cols),
+                                         sycl::range<3>(1, local_rows, local_cols)),
+                       [=](sycl::nd_item<3> item) {
+                           kernel(item, batchlas::util::get_raw_ptr(workspace));
                        });
     });
     ctx.wait_and_throw();
@@ -145,10 +243,18 @@ void run_trmm_nd_item_case(Queue& ctx, size_t local_size) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<float,
+                                                                               batchlas::device::DeviceBlasPolicy::Auto,
+                                                                               SideValue,
+                                                                               UploValue,
+                                                                               TransValue,
+                                                                               DiagValue>(
+        launch, c_view.rows(), c_view.cols(), false);
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::trmm<batchlas::device::DeviceBlasPolicy::Auto, SideValue, UploValue, TransValue, DiagValue>(
-            item, a_view, b_view, c_view, 0.9f, -0.2f);
+            item, a_view, b_view, c_view, 0.9f, -0.2f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected);
@@ -402,14 +508,12 @@ TEST(DeviceBlasTest, GemvNoTransposeMatchesReference) {
     const float alpha = 1.5f;
     const float beta = -0.25f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::gemv_workspace_elements<float, Transpose::NoTrans>(launch, a_view.rows(), a_view.cols());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::gemv<Transpose::NoTrans>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::gemv<Transpose::NoTrans>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 4> expected{
         alpha * (11.0f * 1.0f + 21.0f * -2.0f + 31.0f * 0.5f + 41.0f * 3.0f) + beta * 2.0f,
@@ -443,14 +547,12 @@ TEST(DeviceBlasTest, GemvTransposeMatchesReference) {
     const float alpha = -2.0f;
     const float beta = 0.75f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::gemv_workspace_elements<float, Transpose::Trans>(launch, a_view.rows(), a_view.cols());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::gemv<Transpose::Trans>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::gemv<Transpose::Trans>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 4> expected{
         alpha * (11.0f * -1.0f + 12.0f * 2.0f + 13.0f * 0.25f) + beta * 0.5f,
@@ -501,16 +603,13 @@ TEST(DeviceBlasTest, GemxvComputesMultipleVectorsInOnePass) {
     const float alpha1 = -0.5f;
     const float beta1 = 0.25f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::gemv_workspace_elements<float, Transpose::NoTrans>(launch, a_view.rows(), a_view.cols());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           const auto g = item.get_group();
-                           batchlas::device::gemv<Transpose::NoTrans>(g, a_view, x0, y0, alpha0, beta0);
-                           batchlas::device::gemv<Transpose::NoTrans>(g, a_view, x1, y1, alpha1, beta1);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto g, float* workspace) {
+        batchlas::device::gemv<Transpose::NoTrans>(g, a_view, x0, y0, alpha0, beta0, workspace);
+        batchlas::device::gemv<Transpose::NoTrans>(g, a_view, x1, y1, alpha1, beta1, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 4> expected_y0{
         alpha0 * (111.0f * 1.0f + 121.0f * 0.0f + 131.0f * -1.0f) + beta0 * 4.0f,
@@ -725,14 +824,12 @@ TEST(DeviceBlasTest, SymvLowerMatchesReferenceUsingOnlyStoredTriangle) {
     const float alpha = 0.75f;
     const float beta = -0.5f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::symv_workspace_elements<float, Uplo::Lower>(launch, a_view.rows());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::symv<Uplo::Lower>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::symv<Uplo::Lower>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 4> expected{
         alpha * (2.0f * 1.5f + -1.0f * -2.0f + 4.0f * 0.5f) + beta * 4.0f,
@@ -775,14 +872,12 @@ TEST(DeviceBlasTest, SymvUpperMatchesReferenceUsingOnlyStoredTriangle) {
     const float alpha = -1.25f;
     const float beta = 0.25f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::symv_workspace_elements<float, Uplo::Upper>(launch, a_view.rows());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::symv<Uplo::Upper>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::symv<Uplo::Upper>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 4> expected{
         alpha * (2.0f * 1.5f + -1.0f * -2.0f + 4.0f * 0.5f) + beta * 1.0f,
@@ -836,14 +931,12 @@ TEST(DeviceBlasTest, HemvLowerMatchesReferenceUsingStoredTriangle) {
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::hemv_workspace_elements<Complex, Uplo::Lower>(launch, a_view.rows());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::hemv<Uplo::Lower>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](auto group, Complex* workspace) {
+        batchlas::device::hemv<Uplo::Lower>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     for (int i = 0; i < 3; ++i) {
         EXPECT_NEAR(std::abs(y(i) - expected[static_cast<std::size_t>(i)]), 0.0f, 1e-5f)
@@ -893,14 +986,12 @@ TEST(DeviceBlasTest, HemvUpperMatchesReferenceUsingStoredTriangle) {
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::hemv_workspace_elements<Complex, Uplo::Upper>(launch, a_view.rows());
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::hemv<Uplo::Upper>(item.get_group(), a_view, x_view, y_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](auto group, Complex* workspace) {
+        batchlas::device::hemv<Uplo::Upper>(group, a_view, x_view, y_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     for (int i = 0; i < 3; ++i) {
         EXPECT_NEAR(std::abs(y(i) - expected[static_cast<std::size_t>(i)]), 0.0f, 1e-5f)
@@ -950,14 +1041,18 @@ TEST(DeviceBlasTest, HemvLowerNdItemMatchesReferenceUsingStoredTriangle) {
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto workspace_elements = batchlas::device::hemv_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+        launch, a_view.rows());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](sycl::nd_item<1> item, Complex* workspace) {
         batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(item.get_group(),
                                                     a_view,
                                                     x_view,
                                                     y_view,
                                                     alpha,
-                                                    beta);
+                                                    beta,
+                                                    workspace);
     });
 
     for (int i = 0; i < 3; ++i) {
@@ -1000,22 +1095,29 @@ TEST(DeviceBlasTest, SymvLowerAutoMatchesGenericOnTiledCase) {
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto auto_workspace = batchlas::device::symv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
+        launch, a_view.rows());
+    const auto generic_workspace = batchlas::device::symv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, Uplo::Lower>(
+        launch, a_view.rows());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
-        batchlas::device::symv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(item.get_group(),
+    run_group_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](auto group, float* workspace) {
+        batchlas::device::symv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(group,
                                                                                         a_view,
                                                                                         x_view,
                                                                                         y_auto_view,
                                                                                         alpha,
-                                                                                        beta);
+                                                                                        beta,
+                                                                                        workspace);
     });
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
-        batchlas::device::symv<batchlas::device::DeviceBlasPolicy::Generic, Uplo::Lower>(item.get_group(),
+    run_group_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](auto group, float* workspace) {
+        batchlas::device::symv<batchlas::device::DeviceBlasPolicy::Generic, Uplo::Lower>(group,
                                                                                            a_view,
                                                                                            x_view,
                                                                                            y_generic_view,
                                                                                            alpha,
-                                                                                           beta);
+                                                                                           beta,
+                                                                                           workspace);
     });
 
     for (int i = 0; i < n; ++i) {
@@ -1340,9 +1442,12 @@ TEST(DeviceBlasTest, Syr2kGroupMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::syr2k_workspace_elements<float, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_group_kernel(ctx, local_size, [=](auto group) {
-        batchlas::device::syr2k<Uplo::Lower, Transpose::NoTrans>(group, a_view, b_view, c_view, -0.75f, 0.5f);
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::syr2k<Uplo::Lower, Transpose::NoTrans>(group, a_view, b_view, c_view, -0.75f, 0.5f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected);
@@ -1371,9 +1476,11 @@ TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::syrk_workspace_elements<float, Uplo::Lower, Transpose::NoTrans>(launch, c_view.rows(), a_view.cols());
 
-    run_group_kernel(ctx, local_size, [=](auto group) {
-        batchlas::device::syrk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, -0.75f, 0.5f);
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::syrk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, -0.75f, 0.5f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected);
@@ -1417,10 +1524,13 @@ TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_group_kernel(ctx, local_size, [=](auto group) {
+    run_group_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](auto group, Complex* workspace) {
         batchlas::device::her2k<Uplo::Lower, Transpose::NoTrans>(
-            group, a_view, b_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f));
+            group, a_view, b_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected);
@@ -1454,9 +1564,12 @@ TEST(DeviceBlasTest, HerkGroupMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::herk_workspace_elements<Complex, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_group_kernel(ctx, local_size, [=](auto group) {
-        batchlas::device::herk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f));
+    run_group_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](auto group, Complex* workspace) {
+        batchlas::device::herk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected);
@@ -1493,14 +1606,19 @@ TEST(DeviceBlasTest, Syr2kNdItemAutoMatchesGeneric) {
     auto c_auto_view = c_auto.view().kernel_view();
     auto c_generic_view = c_generic.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto auto_workspace = batchlas::device::syr2k_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_auto_view.rows(), a_view.cols());
+    const auto generic_workspace = batchlas::device::syr2k_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_generic_view.rows(), a_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::syr2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, b_view, c_auto_view, -0.5f, 0.75f);
+            item, a_view, b_view, c_auto_view, -0.5f, 0.75f, workspace);
     });
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::syr2k<batchlas::device::DeviceBlasPolicy::Generic, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, b_view, c_generic_view, -0.5f, 0.75f);
+            item, a_view, b_view, c_generic_view, -0.5f, 0.75f, workspace);
     });
 
     for (int j = 0; j < c_auto.cols(); ++j) {
@@ -1538,10 +1656,13 @@ TEST(DeviceBlasTest, SyrkNdItem3DTiledTransposeMatchesReference) {
     const auto expected = reference_rankk(a.view(), c.view(), -0.6f, 0.8f, Uplo::Lower, Transpose::Trans, false);
     auto a_view = a.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::syrk_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
+        launch, c_view.rows(), a_view.rows());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::syrk<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
-            item, a_view, c_view, -0.6f, 0.8f);
+            item, a_view, c_view, -0.6f, 0.8f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);
@@ -1576,10 +1697,13 @@ TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::syr2k_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
+        launch, c_view.rows(), a_view.rows());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::syr2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
-            item, a_view, b_view, c_view, -0.6f, 0.8f);
+            item, a_view, b_view, c_view, -0.6f, 0.8f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);
@@ -1617,10 +1741,13 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<Complex>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, Complex* workspace) {
         batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f));
+            item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -1654,10 +1781,13 @@ TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
     const auto expected = reference_rankk(a.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
     auto a_view = a.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::herk_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<Complex>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, Complex* workspace) {
         batchlas::device::herk<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f));
+            item, a_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -1695,10 +1825,13 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
+        launch, c_view.rows(), a_view.rows());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<Complex>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, Complex* workspace) {
         batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
-            item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f));
+            item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -1737,10 +1870,13 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](sycl::nd_item<1> item, Complex* workspace) {
         batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f));
+            item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -1779,10 +1915,13 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
+        launch, c_view.rows(), a_view.rows());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](sycl::nd_item<1> item, Complex* workspace) {
         batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
-            item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f));
+            item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -1822,10 +1961,13 @@ TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
+        launch, c_view.rows(), a_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<Complex>(ctx, local_size, workspace_elements, [=](sycl::nd_item<1> item, Complex* workspace) {
         batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            item, a_view, b_view, c_view, Complex(-0.4, 0.3), Complex(0.9, 0.0));
+            item, a_view, b_view, c_view, Complex(-0.4, 0.3), Complex(0.9, 0.0), workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-10);
@@ -1871,15 +2013,14 @@ TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
     const float alpha = 1.5f;
     const float beta = -0.25f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, float>(
+        launch, c_view.rows(), c_view.cols(), false);
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::trmm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit>(
-                               item.get_group(), a_view, b_view, c_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::trmm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit>(
+            group, a_view, b_view, c_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 6> expected{
         2.5f,
@@ -1933,15 +2074,14 @@ TEST(DeviceBlasTest, TrmmRightUpperTransposeUnitDiagonalMatchesReference) {
     const float alpha = -1.25f;
     const float beta = 0.5f;
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Right, Uplo::Upper, Transpose::Trans, Diag::Unit, float>(
+        launch, c_view.rows(), c_view.cols(), false);
 
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<1>(sycl::range<1>(local_size), sycl::range<1>(local_size)),
-                       [=](sycl::nd_item<1> item) {
-                           batchlas::device::trmm<Side::Right, Uplo::Upper, Transpose::Trans, Diag::Unit>(
-                               item.get_group(), a_view, b_view, c_view, alpha, beta);
-                       });
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::trmm<Side::Right, Uplo::Upper, Transpose::Trans, Diag::Unit>(
+            group, a_view, b_view, c_view, alpha, beta, workspace);
     });
-    ctx.wait_and_throw();
 
     const std::array<float, 6> expected{
         5.375f,
@@ -1983,10 +2123,13 @@ TEST(DeviceBlasTest, TrmmLeftUpperNoTransSupportsInPlaceOutput) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, float>(
+        launch, b_view.rows(), b_view.cols(), true);
 
-    run_group_kernel(ctx, local_size, [=](const auto& group) {
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](const auto& group, float* workspace) {
         batchlas::device::trmm<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
-            group, a_view, b_view, b_view, 1.0f, 0.5f);
+            group, a_view, b_view, b_view, 1.0f, 0.5f, workspace);
     });
 
     const std::array<float, 6> expected{-4.0f, -6.5f, 3.25f, 11.5f, -0.5f, -6.5f};
@@ -2021,10 +2164,13 @@ TEST(DeviceBlasTest, TrmmRightUpperNoTransSupportsInPlaceOutput) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, float>(
+        launch, b_view.rows(), b_view.cols(), true);
 
-    run_group_kernel(ctx, local_size, [=](const auto& group) {
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](const auto& group, float* workspace) {
         batchlas::device::trmm<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
-            group, a_view, b_view, b_view, 1.0f, 0.5f);
+            group, a_view, b_view, b_view, 1.0f, 0.5f, workspace);
     });
 
     const std::array<float, 6> expected{2.5f, 7.5f, -6.0f, 13.5f, -7.75f, -4.5f};
@@ -2051,14 +2197,19 @@ TEST(DeviceBlasTest, GemvNdItemGenericAndAutoMatch) {
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto auto_workspace = batchlas::device::gemv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans>(
+        launch, a_view.rows(), a_view.cols());
+    const auto generic_workspace = batchlas::device::gemv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, Transpose::NoTrans>(
+        launch, a_view.rows(), a_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans>(
-            item, a_view, x_view, y_auto_view, 1.25f, -0.5f);
+            item, a_view, x_view, y_auto_view, 1.25f, -0.5f, workspace);
     });
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Generic, Transpose::NoTrans>(
-            item, a_view, x_view, y_generic_view, 1.25f, -0.5f);
+            item, a_view, x_view, y_generic_view, 1.25f, -0.5f, workspace);
     });
 
     for (int i = 0; i < 8; ++i) {
@@ -2100,14 +2251,19 @@ TEST(DeviceBlasTest, GemvNdItemTiledAutoMatchesGeneric) {
     auto x_view = VectorView<float>(x);
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto auto_workspace = batchlas::device::gemv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans>(
+        launch, a_view.rows(), a_view.cols());
+    const auto generic_workspace = batchlas::device::gemv_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, Transpose::NoTrans>(
+        launch, a_view.rows(), a_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans>(
-            item, a_view, x_view, y_auto_view, -0.75f, 1.25f);
+            item, a_view, x_view, y_auto_view, -0.75f, 1.25f, workspace);
     });
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::gemv<batchlas::device::DeviceBlasPolicy::Generic, Transpose::NoTrans>(
-            item, a_view, x_view, y_generic_view, -0.75f, 1.25f);
+            item, a_view, x_view, y_generic_view, -0.75f, 1.25f, workspace);
     });
 
     for (int i = 0; i < rows; ++i) {
@@ -2232,9 +2388,11 @@ TEST(DeviceBlasTest, SymmGroupMatchesReference) {
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_group_launch_info(local_size);
+    const auto workspace_elements = batchlas::device::symm_workspace_elements<float, Side::Left, Uplo::Lower>(launch, c_view.rows(), c_view.cols());
 
-    run_group_kernel(ctx, local_size, [=](auto group) {
-        batchlas::device::symm<Side::Left, Uplo::Lower>(group, a_view, b_view, c_view, 1.5f, -0.25f);
+    run_group_kernel_with_workspace<float>(ctx, local_size, workspace_elements, [=](auto group, float* workspace) {
+        batchlas::device::symm<Side::Left, Uplo::Lower>(group, a_view, b_view, c_view, 1.5f, -0.25f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);
@@ -2272,14 +2430,19 @@ TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
     auto c_auto_view = c_auto.view().kernel_view();
     auto c_generic_view = c_generic.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
+    const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+    const auto auto_workspace = batchlas::device::symm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Side::Right, Uplo::Upper>(
+        launch, c_auto_view.rows(), c_auto_view.cols());
+    const auto generic_workspace = batchlas::device::symm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, Side::Right, Uplo::Upper>(
+        launch, c_generic_view.rows(), c_generic_view.cols());
 
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::symm<batchlas::device::DeviceBlasPolicy::Auto, Side::Right, Uplo::Upper>(
-            item, a_view, b_view, c_auto_view, 0.8f, 0.3f);
+            item, a_view, b_view, c_auto_view, 0.8f, 0.3f, workspace);
     });
-    run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+    run_nd_item_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](sycl::nd_item<1> item, float* workspace) {
         batchlas::device::symm<batchlas::device::DeviceBlasPolicy::Generic, Side::Right, Uplo::Upper>(
-            item, a_view, b_view, c_generic_view, 0.8f, 0.3f);
+            item, a_view, b_view, c_generic_view, 0.8f, 0.3f, workspace);
     });
 
     expect_matrix_matches_vector(c_auto.view(), expected);
@@ -2333,13 +2496,28 @@ TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
             auto run_case = [&](auto trans_a_tag, auto trans_b_tag) {
                 constexpr auto TransAValue = decltype(trans_a_tag)::value;
                 constexpr auto TransBValue = decltype(trans_b_tag)::value;
-                run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+                const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
+                const auto auto_workspace = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, TransAValue, TransBValue>(
+                    launch,
+                    c_auto_view.rows(),
+                    c_auto_view.cols(),
+                    TransAValue == Transpose::NoTrans ? a_view.cols() : a_view.rows(),
+                    false,
+                    false);
+                const auto generic_workspace = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Generic, TransAValue, TransBValue>(
+                    launch,
+                    c_generic_view.rows(),
+                    c_generic_view.cols(),
+                    TransAValue == Transpose::NoTrans ? a_view.cols() : a_view.rows(),
+                    false,
+                    false);
+                run_nd_item_kernel_with_workspace<float>(ctx, local_size, auto_workspace, [=](sycl::nd_item<1> item, float* workspace) {
                     batchlas::device::gemm<batchlas::device::DeviceBlasPolicy::Auto, TransAValue, TransBValue>(
-                        item, a_view, b_view, c_auto_view, 1.25f, -0.35f);
+                        item, a_view, b_view, c_auto_view, 1.25f, -0.35f, workspace);
                 });
-                run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
+                run_nd_item_kernel_with_workspace<float>(ctx, local_size, generic_workspace, [=](sycl::nd_item<1> item, float* workspace) {
                     batchlas::device::gemm<batchlas::device::DeviceBlasPolicy::Generic, TransAValue, TransBValue>(
-                        item, a_view, b_view, c_generic_view, 1.25f, -0.35f);
+                        item, a_view, b_view, c_generic_view, 1.25f, -0.35f, workspace);
                 });
             };
 
@@ -2414,8 +2592,16 @@ TEST(DeviceBlasTest, TrmmNdItem3DTiledMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::trmm_workspace_elements<float,
+                                                                               batchlas::device::DeviceBlasPolicy::Auto,
+                                                                               Side::Left,
+                                                                               Uplo::Lower,
+                                                                               Transpose::NoTrans,
+                                                                               Diag::NonUnit>(
+        launch, c_view.rows(), c_view.cols(), false);
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::trmm<batchlas::device::DeviceBlasPolicy::Auto,
                            Side::Left,
                            Uplo::Lower,
@@ -2425,7 +2611,8 @@ TEST(DeviceBlasTest, TrmmNdItem3DTiledMatchesReference) {
                                   b_view,
                                   c_view,
                                   0.9f,
-                                  -0.2f);
+                                  -0.2f,
+                                  workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);
@@ -2460,10 +2647,13 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
+        launch, c_view.rows(), c_view.cols(), a_view.cols(), false, false);
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::gemm<batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
-            item, a_view, b_view, c_view, 0.95f, -0.2f);
+            item, a_view, b_view, c_view, 0.95f, -0.2f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);
@@ -2498,10 +2688,13 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
+        launch, c_view.rows(), c_view.cols(), a_view.cols(), false, false);
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::gemm<batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
-            item, a_view, b_view, c_view, 1.1f, -0.25f);
+            item, a_view, b_view, c_view, 1.1f, -0.25f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 1e-3);
@@ -2540,10 +2733,13 @@ TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
+    const auto launch = device_test_nd_item_3d_launch_info(ctx);
+    const auto workspace_elements = batchlas::device::symm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Side::Left, Uplo::Lower>(
+        launch, c_view.rows(), c_view.cols());
 
-    run_nd_item_kernel_3d(ctx, c.rows(), c.cols(), [=](sycl::nd_item<3> item) {
+    run_nd_item_kernel_3d_with_workspace<float>(ctx, c.rows(), c.cols(), workspace_elements, [=](sycl::nd_item<3> item, float* workspace) {
         batchlas::device::symm<batchlas::device::DeviceBlasPolicy::Auto, Side::Left, Uplo::Lower>(
-            item, a_view, b_view, c_view, 1.1f, -0.15f);
+            item, a_view, b_view, c_view, 1.1f, -0.15f, workspace);
     });
 
     expect_matrix_matches_vector(c.view(), expected, 5e-4);

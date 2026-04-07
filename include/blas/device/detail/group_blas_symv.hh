@@ -52,12 +52,21 @@ inline constexpr bool can_use_tiled_symv(const Group& group,
         a.cols() >= SymvTransposeWorkspace<T>::kTile;
 }
 
+template <typename T, typename Group>
+inline constexpr bool can_use_tiled_symv(const Group& group,
+                                         int extent,
+                                         DeviceBlasPolicy policy) {
+    return symv_tiled_policy_matches(group, policy) &&
+        extent >= SymvTransposeWorkspace<T>::kTile;
+}
+
 template <typename Tag, typename Group, typename T>
 inline void symv_tiled(const Group& group,
                        const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                       MatrixVectorOperand<T> operand) {
+                       MatrixVectorOperand<T> operand,
+                       T* workspace_ptr) {
     constexpr int Tile = SymvTransposeWorkspace<T>::kTile;
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<SymvTransposeWorkspace<T>>(group).get();
+    auto* workspace = detail::workspace_ptr_cast<SymvTransposeWorkspace<T>>(workspace_ptr);
     T* matrix_tile = workspace->matrix;
     T* x_col_tile = workspace->x_col;
     T* x_row_tile = workspace->x_row;
@@ -213,16 +222,26 @@ inline constexpr void symv(const Group& group,
 
 namespace detail {
 
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent) {
+    assert(extent >= 0 && "device::symv workspace query expects a non-negative matrix extent");
+    if (generic::can_use_tiled_symv<T>(launch, extent, Policy) && extent >= 4) {
+        return detail::workspace_elements_v<T, generic::SymvTransposeWorkspace<T>>;
+    }
+    return 0;
+}
+
 template <typename Tag, DeviceBlasPolicy Policy, typename Group, typename T>
 inline void dispatch_symv(const Group& group,
                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                          MatrixVectorOperand<T> operand) {
+                          MatrixVectorOperand<T> operand,
+                          T* workspace = nullptr) {
     validate_symmetric_operand(a,
                                operand,
                                SymmetricTransform{.side = Tag::side, .uplo = Tag::uplo, .hermitian = Tag::hermitian});
-    if (generic::can_use_tiled_symv<Tag>(group, a, Policy) && a.cols() >= 4) {
-        generic::symv_tiled<Tag>(group, a, operand);
-        //generic::symv_chunked<Tag, Group, T, 16>(group, a, operand);
+    if (workspace != nullptr && generic::can_use_tiled_symv<Tag>(group, a, Policy) && a.cols() >= 4) {
+        generic::symv_tiled<Tag>(group, a, operand, workspace);
         return;
     }
     generic::symv<Tag>(group, a, operand);
@@ -233,15 +252,29 @@ inline void dispatch_symv(const Group& group,
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixVectorOperand<T> operand) {
-    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           MatrixVectorOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixVectorOperand<T> operand) {
-    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, Policy>(group, a, operand);
+                           MatrixVectorOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent) {
+    return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, false>, DeviceBlasPolicy::Auto, T>(launch, extent);
+}
+
+template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent) {
+    return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, false>, Policy, T>(launch, extent);
 }
 
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -250,8 +283,9 @@ inline constexpr void symv(const Group& group,
                            const VectorView<T>& x,
                            const VectorView<T>& y,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    symv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    symv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -260,23 +294,37 @@ inline constexpr void symv(const Group& group,
                            const VectorView<T>& x,
                            const VectorView<T>& y,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    symv<UploV>(group, a, x, y, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    symv<Policy, UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixVectorOperand<T> operand) {
-    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           MatrixVectorOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixVectorOperand<T> operand) {
-    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, Policy>(group, a, operand);
+                           MatrixVectorOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent) {
+    return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent);
+}
+
+template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int extent) {
+    return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, Policy, T>(launch, extent);
 }
 
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -285,8 +333,9 @@ inline constexpr void hemv(const Group& group,
                            const VectorView<T>& x,
                            const VectorView<T>& y,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    hemv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    hemv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -295,9 +344,9 @@ inline constexpr void hemv(const Group& group,
                            const VectorView<T>& x,
                            const VectorView<T>& y,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    hemv<UploV>(group, a, x, y, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    hemv<Policy, UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
 } // namespace batchlas::device

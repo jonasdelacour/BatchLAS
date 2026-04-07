@@ -115,7 +115,8 @@ template <typename Item, typename T>
 inline constexpr void symm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                           MatrixMatrixOperand<T> operand,
-                                          SymmetricTransform transform) {
+                                          SymmetricTransform transform,
+                                          RegisterMatrixWorkspace<T>* workspace) {
     const int linear_tid = detail::item_local_linear_id(item);
     const int subgroup_id = subgroup_group_id(item);
     const int local_row = linear_tid / kRegisterMatrixLocalCols;
@@ -129,8 +130,6 @@ inline constexpr void symm_register_tiled(const Item& item,
     const int tile_col_start = matrix_tile_group_col(item);
     const int tile_row_stride = matrix_tile_group_row_stride(item);
     const int tile_col_stride = matrix_tile_group_col_stride(item);
-    auto* workspace = sycl::ext::oneapi::group_local_memory_for_overwrite<RegisterMatrixWorkspace<T>>(item.get_group()).get();
-
     for (int tile_row = tile_row_start; tile_row < row_tiles; tile_row += tile_row_stride) {
         for (int tile_col = tile_col_start; tile_col < col_tiles; tile_col += tile_col_stride) {
             const int row_base = tile_row * kRegisterMatrixTileM + local_row * kRegisterMatrixThreadTileRows;
@@ -242,10 +241,27 @@ inline constexpr void symm_register_tiled(const Item& item,
 
 namespace detail {
 
+template <typename Tag, DeviceBlasPolicy Policy, typename T>
+inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent) {
+    assert(row_extent >= 0 && col_extent >= 0 && "device::symm workspace query expects non-negative matrix extents");
+    if (!detail::subgroup::is_nd_item_3d_launch(launch)) {
+        return 0;
+    }
+
+    const int contract_extent = Tag::side == Side::Left ? row_extent : col_extent;
+    if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy)) {
+        return detail::workspace_elements_v<T, detail::subgroup::RegisterMatrixWorkspace<T>>;
+    }
+    return 0;
+}
+
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_symm(const Exec& exec,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                    MatrixMatrixOperand<T> operand) {
+                                    MatrixMatrixOperand<T> operand,
+                                    T* workspace = nullptr) {
     const SymmetricTransform transform{.side = Tag::side, .uplo = Tag::uplo, .hermitian = Tag::hermitian};
     validate_symmetric_operand(a, operand, transform);
 
@@ -253,9 +269,11 @@ inline constexpr void dispatch_symm(const Exec& exec,
         const int row_extent = operand.c.rows();
         const int col_extent = operand.c.cols();
         const int contract_extent = transform.side == Side::Left ? operand.b.rows() : operand.b.cols();
-        if (detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
+        auto* register_workspace = workspace == nullptr ? nullptr : detail::workspace_ptr_cast<detail::subgroup::RegisterMatrixWorkspace<T>>(workspace);
+        if (register_workspace != nullptr &&
+            detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
             std::same_as<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
-            detail::subgroup::symm_register_tiled(exec, a, operand, transform);
+            detail::subgroup::symm_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
         if (detail::subgroup::can_use_matrix_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy)) {
@@ -272,8 +290,9 @@ inline constexpr void dispatch_symm(const Exec& exec,
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -283,8 +302,23 @@ template <DeviceBlasPolicy Policy,
           typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                           MatrixMatrixOperand<T> operand) {
-    detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, Policy>(group, a, operand);
+                           MatrixMatrixOperand<T> operand,
+                           T* workspace = nullptr) {
+    detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, Policy>(group, a, operand, workspace);
+}
+
+template <typename T, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent) {
+    return detail::symm_workspace_elements<detail::SymmetricTransformTag<SideV, UploV, false>, DeviceBlasPolicy::Auto, T>(launch, row_extent, col_extent);
+}
+
+template <typename T, DeviceBlasPolicy Policy, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
+inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
+                                                     int row_extent,
+                                                     int col_extent) {
+    return detail::symm_workspace_elements<detail::SymmetricTransformTag<SideV, UploV, false>, Policy, T>(launch, row_extent, col_extent);
 }
 
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -293,8 +327,9 @@ inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    symm<SideV, UploV>(group, a, make_matmat_operand(b, c, alpha, beta));
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    symm<SideV, UploV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 template <DeviceBlasPolicy Policy,
@@ -307,9 +342,9 @@ inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& b,
                            const KernelMatrixView<T, MatrixFormat::Dense>& c,
                            T alpha = T(1),
-                           T beta = T(0)) {
-    (void)Policy;
-    symm<SideV, UploV>(group, a, b, c, alpha, beta);
+                           T beta = T(0),
+                           T* workspace = nullptr) {
+    symm<Policy, SideV, UploV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
 } // namespace batchlas::device

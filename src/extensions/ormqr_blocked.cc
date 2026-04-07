@@ -110,7 +110,7 @@ sycl::event larft_forward_columnwise_batched_wg(Queue& q,
                         auto v_prev = v_mat(Slice(j, m), Slice(0, j));
                         auto v_col = v_mat(Slice(j, m), j);
 
-                        batchlas::device::gemv<Transpose::ConjTrans>(g, v_prev, v_col, t_col, T(1), T(0));
+                        batchlas::device::gemv<Transpose::ConjTrans>(g, v_prev, v_col, t_col, T(1), T(0), static_cast<T*>(nullptr));
                         sycl::group_barrier(g);
                         batchlas::device::scal(g, t_col, -tauj);
                         sycl::group_barrier(g);
