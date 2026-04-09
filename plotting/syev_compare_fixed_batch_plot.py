@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Sequence
 
 import pandas as pd
 
-from bench_common import load_results, plot_metric, run_benchmark, save_figure
+from bench_common import load_results, plot_metric, run_benchmark, save_figure, with_device_title
 
 
 def _here() -> str:
@@ -190,7 +190,7 @@ def plot_time_vs_n_fixed_batch(
         label_fmt="{group}",
         xlabel="Matrix Size (N)",
         ylabel=ylabel,
-        title=title,
+        title=with_device_title(title),
         logy=logy,
         logx=False,
         show_errorbars=True,

@@ -3,7 +3,7 @@ import argparse
 import os
 from typing import Optional, Sequence
 import pandas as pd
-from bench_common import load_results, plot_metric, run_benchmark, save_figure
+from bench_common import load_results, plot_metric, run_benchmark, save_figure, with_device_title
 
 
 def _default_bench_path() -> str:
@@ -42,7 +42,7 @@ def plot_steqr_benchmark(df: pd.DataFrame, savepath: Optional[str] = None) -> No
         label_fmt="batch={group}",
         xlabel="Matrix Size (N)",
         ylabel=metric,
-        title="STEQR Benchmark",
+        title=with_device_title("STEQR Benchmark"),
         logy=True,
     )
 
@@ -64,7 +64,7 @@ def plot_time_vs_batch(df: pd.DataFrame, n_values: Optional[Sequence[int]], save
         label_fmt="N={group}",
         xlabel="Batch Size",
         ylabel=metric,
-        title="STEQR Benchmark (fixed N)",
+        title=with_device_title("STEQR Benchmark (fixed N)"),
         logy=True,
     )
 

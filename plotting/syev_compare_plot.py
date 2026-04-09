@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 
-from bench_common import load_results, plot_metric, run_benchmark, save_figure
+from bench_common import load_results, plot_metric, run_benchmark, save_figure, with_device_title
 
 
 def _here() -> str:
@@ -470,7 +470,7 @@ def plot_provider_compare_vs_n(
         ax_bottom.tick_params(axis="x", labelrotation=30)
 
         dtype_label = _dtype_to_label(dtype)
-        fig.suptitle(f"SYEV Performance Comparison ({dtype_label})", fontsize=13)
+        fig.suptitle(with_device_title(f"SYEV Performance Comparison ({dtype_label})"), fontsize=13)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     target_path = savepath or _default_plot_path()

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm
 
-from bench_common import save_figure
+from bench_common import save_figure, with_device_title
 import stylesheet
 
 
@@ -251,9 +251,9 @@ def plot_multi_heatmap(
     dtype = _unique_or_none(df, "dtype")
     subtitle = ", ".join([v for v in [backend, dtype] if v])
     if subtitle:
-        fig.suptitle(f"Orthogonality heatmaps ({subtitle})")
+        fig.suptitle(with_device_title(f"Orthogonality heatmaps ({subtitle})"))
     else:
-        fig.suptitle("Orthogonality heatmaps")
+        fig.suptitle(with_device_title("Orthogonality heatmaps"))
     save_figure(fig, output or _default_plot_path())
 
 
@@ -347,6 +347,13 @@ def plot_mean_lines_by_n(
 
     if handles:
         fig.legend(handles, labels, loc="lower center", ncol=len(impls), frameon=False, fontsize=10, bbox_to_anchor=(0.5, 1.02))
+    backend = _unique_or_none(df, "backend")
+    dtype = _unique_or_none(df, "dtype")
+    subtitle = ", ".join([v for v in [backend, dtype] if v])
+    title = "Orthogonality mean lines"
+    if subtitle:
+        title = f"{title} ({subtitle})"
+    fig.suptitle(with_device_title(title))
     plt.subplots_adjust(top=0.88)
     save_figure(fig, output or _default_mean_plot_path())
 

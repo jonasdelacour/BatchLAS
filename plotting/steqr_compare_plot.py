@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 
-from bench_common import load_results, plot_metric, run_benchmark, save_figure
+from bench_common import load_results, plot_metric, run_benchmark, save_figure, with_device_title
 
 
 def _here() -> str:
@@ -107,7 +107,7 @@ def plot_compare_time_vs_batch(
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{int(v)}" if v >= 1 else f"{v:g}"))
         ax.tick_params(axis="x", labelrotation=45)
 
-    fig.suptitle("STEQR default vs tuned (time per batch)", fontsize=22)
+    fig.suptitle(with_device_title("STEQR default vs tuned (time per batch)"), fontsize=22)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     target_path = savepath or _default_plot_path()
     save_figure(fig, target_path)

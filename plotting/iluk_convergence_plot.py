@@ -6,6 +6,8 @@ import os
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from bench_common import with_device_title
+
 
 def _default_csv() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +98,7 @@ def main() -> None:
     if handles:
         fig.legend(handles, labels, loc="upper center", ncol=min(4, len(handles)), frameon=False)
 
+    fig.suptitle(with_device_title(f"ILU(k) LOBPCG convergence traces ({case_label})"))
     fig.tight_layout(rect=[0, 0, 1, 0.94])
 
     trace_out = os.path.abspath(args.output)
@@ -129,7 +132,7 @@ def main() -> None:
     ax2.set_yscale("log")
     ax2.set_ylabel("Average final best residual (log)")
     ax2.set_xlabel("Sweep case")
-    ax2.set_title("ILU(k) sweep summary across density/conditioning cases")
+    ax2.set_title(with_device_title("ILU(k) sweep summary across density/conditioning cases"))
     ax2.grid(True, alpha=0.3)
     ax2.tick_params(axis="x", rotation=45)
     ax2.legend(frameon=False)

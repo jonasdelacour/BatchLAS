@@ -2,6 +2,7 @@ from __future__ import annotations
 import stylesheet
 import os
 import subprocess
+from functools import lru_cache
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
@@ -46,6 +47,51 @@ def save_figure(fig: plt.Figure, path: str) -> None:
     # Using a tight bounding box prevents them from being clipped.
     fig.savefig(path, bbox_inches="tight")
     print(f"Saved plot to {path}")
+
+
+@lru_cache(maxsize=1)
+def detect_device_label() -> str:
+    """Best-effort hardware label for plot titles.
+
+    Preference order:
+    1) NVIDIA GPU via nvidia-smi
+    2) ROCm GPU via rocminfo
+    3) CPU hostname fallback
+    """
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        )
+        names = [line.strip() for line in out.splitlines() if line.strip()]
+        if names:
+            return names[0]
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["rocminfo"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        )
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("Marketing Name:"):
+                name = s.split(":", 1)[1].strip()
+                if name:
+                    return name
+    except Exception:
+        pass
+
+    return f"CPU:{os.uname().nodename}"
+
+
+def with_device_title(title: str) -> str:
+    return f"{title} ({detect_device_label()})"
 
 
 def plot_metric(

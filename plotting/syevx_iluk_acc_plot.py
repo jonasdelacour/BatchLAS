@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from bench_common import load_results, run_benchmark, save_figure
+from bench_common import load_results, run_benchmark, save_figure, with_device_title
 
 
 def _here() -> str:
@@ -125,7 +125,8 @@ def plot_summary(df: pd.DataFrame, output: str) -> None:
     ax_conv.set_ylabel("Fraction")
     ax_conv.set_xticks(x, labels, rotation=20)
 
-    fig.tight_layout()
+    fig.suptitle(with_device_title("Sparse SYEVX + ILUK summary"))
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     save_figure(fig, output)
 
 
@@ -166,6 +167,7 @@ def plot_heatmaps(df: pd.DataFrame, output: str, metric: str = "iter_ratio_vs_ba
 
     if image is not None:
         fig.colorbar(image, ax=axes.ravel().tolist(), shrink=0.9, label=f"Median {metric}")
+    fig.suptitle(with_device_title(f"Sparse SYEVX + ILUK heatmaps ({metric})"))
     save_figure(fig, output)
 
 

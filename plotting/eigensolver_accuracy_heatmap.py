@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm
 
-from bench_common import save_figure
+from bench_common import save_figure, with_device_title
 import stylesheet
 
 
@@ -366,9 +366,9 @@ def plot_multi_heatmap(
     subtitle = ", ".join([v for v in [backend, dtype] if v])
     title = f"Eigensolver accuracy heatmaps ({METRIC_INFO[metric]['name']})"
     if subtitle:
-        fig.suptitle(f"{title} ({subtitle})")
+        fig.suptitle(with_device_title(f"{title} ({subtitle})"))
     else:
-        fig.suptitle(title)
+        fig.suptitle(with_device_title(title))
     save_figure(fig, output or _default_plot_path(metric))
 
 
@@ -440,6 +440,13 @@ def plot_mean_lines_by_n(
 
     if handles:
         fig.legend(handles, labels, loc="lower center", ncol=max(1, len(impls)), frameon=False, fontsize=10, bbox_to_anchor=(0.5, 1.02))
+    backend = _unique_or_none(df, "backend")
+    dtype = _unique_or_none(df, "dtype")
+    subtitle = ", ".join([v for v in [backend, dtype] if v])
+    title = f"Eigensolver mean {METRIC_INFO[metric]['name']} vs conditioning"
+    if subtitle:
+        title = f"{title} ({subtitle})"
+    fig.suptitle(with_device_title(title))
     plt.subplots_adjust(top=0.88)
     save_figure(fig, output or _default_mean_plot_path(metric))
 

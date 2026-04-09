@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter
 
-from bench_common import load_results, plot_metric, run_benchmark, save_figure
+from bench_common import load_results, plot_metric, run_benchmark, save_figure, with_device_title
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -421,7 +421,7 @@ def plot_htev_compare(
         ax_bottom.tick_params(axis="x", labelrotation=30)
 
     dtype_label = dtype.replace("complex<float>", "cfloat").replace("complex<double>", "cdouble")
-    fig.suptitle(f"HTEV Performance Comparison ({dtype_label})", fontsize=13)
+    fig.suptitle(with_device_title(f"HTEV Performance Comparison ({dtype_label})"), fontsize=13)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     target = savepath or _default_plot_path(dtype)

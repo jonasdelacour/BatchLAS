@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm
 
-from bench_common import save_figure
+from bench_common import save_figure, with_device_title
 import stylesheet
 
 
@@ -207,7 +207,7 @@ def plot_heatmap(
     subtitle = ", ".join([v for v in [impl, backend, dtype] if v])
     if subtitle:
         title = f"{title} ({subtitle})"
-    ax.set_title(title)
+    ax.set_title(with_device_title(title))
     ax.grid(True, alpha=0.2)
 
     save_figure(fig, output or _default_plot_path())
@@ -326,6 +326,14 @@ def plot_multi_heatmap(
 
     if mesh is not None:
         fig.colorbar(mesh, ax=axes.ravel().tolist(), label="Probability density", fraction=0.046, pad=0.04)
+    backend = _unique_or_none(df, "backend")
+    dtype = _unique_or_none(df, "dtype")
+    subtitle = ", ".join([v for v in [backend, dtype] if v])
+    title = "STEQR accuracy heatmaps"
+    if subtitle:
+        title = f"{title} ({subtitle})"
+    fig.suptitle(with_device_title(title))
+    plt.subplots_adjust(top=0.9)
     save_figure(fig, output or _default_plot_path())
 
 
@@ -419,6 +427,13 @@ def plot_mean_lines_by_n(
 
     if handles:
         fig.legend(handles, labels, loc="lower center", ncol=len(impls), frameon=False, fontsize=10, bbox_to_anchor=(0.5, 1.02))
+    backend = _unique_or_none(df, "backend")
+    dtype = _unique_or_none(df, "dtype")
+    subtitle = ", ".join([v for v in [backend, dtype] if v])
+    title = "STEQR mean relative error vs conditioning"
+    if subtitle:
+        title = f"{title} ({subtitle})"
+    fig.suptitle(with_device_title(title))
     plt.subplots_adjust(top=0.88)
     save_figure(fig, output or _default_mean_plot_path())
 

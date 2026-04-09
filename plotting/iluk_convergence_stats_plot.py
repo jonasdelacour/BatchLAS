@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from bench_common import with_device_title
+
 
 def _default_summary_csv() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -138,6 +140,7 @@ def main() -> None:
     handles, labels = ax_final.get_legend_handles_labels()
     if handles:
         fig.legend(handles, labels, loc="upper center", ncol=min(5, len(handles)), frameon=False)
+    fig.suptitle(with_device_title("ILU(k) convergence statistics"))
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     hist_out = os.path.abspath(args.hist_output)
@@ -168,7 +171,8 @@ def main() -> None:
                     if np.isfinite(value):
                         ax.text(j, i, f"{value:.2f}", ha="center", va="center", fontsize=9, color="black")
         fig2.colorbar(im, ax=axes2.ravel().tolist(), shrink=0.9, label="Median log10 ratio vs baseline")
-        fig2.tight_layout()
+        fig2.suptitle(with_device_title("ILU(k) convergence bucket heatmaps"))
+        fig2.tight_layout(rect=[0, 0, 1, 0.95])
 
         heatmap_out = os.path.abspath(args.heatmap_output)
         os.makedirs(os.path.dirname(heatmap_out), exist_ok=True)
