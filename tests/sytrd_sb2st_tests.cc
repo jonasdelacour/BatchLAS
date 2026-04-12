@@ -13,7 +13,9 @@
 #include <random>
 #include <string>
 #include <cstring>
+#if BATCHLAS_HAS_HOST_BACKEND
 #include <lapacke.h>
+#endif
 #include <limits>
 #include <type_traits>
 
@@ -164,6 +166,7 @@ struct SytrdSb2stConfig {
     static constexpr Backend BackendVal = B;
 };
 
+#if BATCHLAS_HAS_HOST_BACKEND
 template <typename Real>
 int lapack_sterf(int n, Real* d, Real* e);
 
@@ -176,6 +179,7 @@ template <>
 int lapack_sterf<double>(int n, double* d, double* e) {
     return LAPACKE_dsterf(static_cast<lapack_int>(n), d, e);
 }
+#endif
 
 } // namespace
 
@@ -185,8 +189,14 @@ using SytrdSb2stTestTypes = ::testing::Types<
     SytrdSb2stConfig<double, Backend::CUDA>,
     SytrdSb2stConfig<std::complex<float>, Backend::CUDA>,
     SytrdSb2stConfig<std::complex<double>, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using SytrdSb2stTestTypes = ::testing::Types<
+    SytrdSb2stConfig<float, Backend::ROCM>,
+    SytrdSb2stConfig<double, Backend::ROCM>,
+    SytrdSb2stConfig<std::complex<float>, Backend::ROCM>,
+    SytrdSb2stConfig<std::complex<double>, Backend::ROCM>>;
 #else
-using SytrdSb2stTestTypes = ::testing::Types<>;
+using SytrdSb2stTestTypes = ::testing::Types<SytrdSb2stConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>
@@ -194,7 +204,7 @@ class SytrdSb2stTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SytrdSb2stTest, SytrdSb2stTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -263,6 +273,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
 
     // SB2ST outputs tridiagonal (d,e). Use host LAPACK STERF to compute its eigenvalues.
     // Note: STERF overwrites (d,e), so copy into scratch buffers.
+#if BATCHLAS_HAS_HOST_BACKEND
     UnifiedVector<Real> d_tri(static_cast<size_t>(n));
     UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
@@ -279,6 +290,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;
         }
     }
+#endif
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
@@ -364,6 +376,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     sytrd_band_reduction<B, T>(ctx, AB, d_out2, e_out2, tau_out2, Uplo::Lower, kd, ws2.to_span(), params).wait();
 
     // Compute eigenvalues of returned tridiagonal (d,e) via host LAPACK STERF.
+#if BATCHLAS_HAS_HOST_BACKEND
     UnifiedVector<Real> d_tri(static_cast<size_t>(n));
     UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
@@ -395,6 +408,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
 
     ASSERT_TRUE(check_spectrum(d_out, e_out, "default"));
     ASSERT_TRUE(check_spectrum(d_out2, e_out2, "d=2"));
+#endif
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
@@ -446,6 +460,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
             UnifiedVector<Real> d_tri(static_cast<size_t>(n));
             UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
+#if BATCHLAS_HAS_HOST_BACKEND
             for (int b = 0; b < batch; ++b) {
                 for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
                 for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);
@@ -462,6 +477,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
                         << ", batch=" << b;
                 }
             }
+#endif
         }
     }
 }

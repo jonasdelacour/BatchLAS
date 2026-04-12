@@ -156,19 +156,26 @@ struct ComplexRank2kAccumTile {
 
 template <typename T>
 struct RegisterMatrixWorkspace {
-    T lhs[kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup<T>][kRegisterMatrixLhsStages][kRegisterMatrixSubgroupTileM * kRegisterMatrixTileAStride];
+    // clang-format off
+    // Array dimensions use max(1,...) to avoid zero-length arrays on AMD SYCL targets.
+    // If MaxSubgroups==0 the kernel must not be launched for this type (insufficient local memory).
+    static constexpr int kMaxSubgroups = kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup<T> > 0 ? kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup<T> : 1;
+    T lhs[kMaxSubgroups][kRegisterMatrixLhsStages][kRegisterMatrixSubgroupTileM * kRegisterMatrixTileAStride];
     T rhs[kRegisterMatrixRhsStages][kRegisterMatrixTileK * kRegisterMatrixTileBStride];
+    // clang-format on
 };
 
 template <typename T>
 struct ComplexRank2kWorkspace {
-    T lhs[kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T>][kComplexRank2kSubgroupTileM * kComplexRank2kTileAStride];
+    static constexpr int kMaxSubgroups = kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T> > 0 ? kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T> : 1;
+    T lhs[kMaxSubgroups][kComplexRank2kSubgroupTileM * kComplexRank2kTileAStride];
     T rhs[kComplexRank2kTileK * kComplexRank2kTileBStride];
 };
 
 template <typename T>
 struct ComplexRank2kInKernelWorkspace {
-    T lhs[kComplexRank2kInKernelWorkspaceMaxSubgroupsPerWorkGroup<T>][kComplexRank2kSubgroupTileM * kComplexRank2kInKernelTileAStride];
+    static constexpr int kMaxSubgroups = kComplexRank2kInKernelWorkspaceMaxSubgroupsPerWorkGroup<T> > 0 ? kComplexRank2kInKernelWorkspaceMaxSubgroupsPerWorkGroup<T> : 1;
+    T lhs[kMaxSubgroups][kComplexRank2kSubgroupTileM * kComplexRank2kInKernelTileAStride];
     T rhs[kComplexRank2kInKernelTileK * kComplexRank2kTileBStride];
 };
 
@@ -646,7 +653,7 @@ inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
 
     const int sg_size = subgroup_size(item);
     const int sg_count = subgroup_count(item);
-    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T>) {
         return false;
     }
 
@@ -680,7 +687,7 @@ inline constexpr bool can_use_complex_rank2k_tiled_fast_path(const Item& item,
 
     const int sg_size = subgroup_size(item);
     const int sg_count = subgroup_count(item);
-    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T>) {
         return false;
     }
 
@@ -718,7 +725,7 @@ inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
 
     const int sg_size = subgroup_size(item);
     const int sg_count = subgroup_count(item);
-    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T>) {
         return false;
     }
 
@@ -752,7 +759,7 @@ inline constexpr bool can_use_complex_rankk_tiled_fast_path(const Item& item,
 
     const int sg_size = subgroup_size(item);
     const int sg_count = subgroup_count(item);
-    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
+    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kComplexRank2kWorkspaceMaxSubgroupsPerWorkGroup<T>) {
         return false;
     }
 

@@ -20,7 +20,10 @@ inline int32_t device_max_sub_group_size(const Queue& ctx) {
 
 template <typename T>
 inline bool should_use_cta(const Queue& ctx, int64_t n) {
-    return n > 0 && n <= static_cast<int64_t>(device_max_sub_group_size(ctx));
+    // Temporarily disabled: steqr_cta produces incorrect eigenvalues on AMD gfx1200.
+    // Use steqr_wg for all sizes until the CTA algorithm is fixed.
+    (void)ctx; (void)n;
+    return false;
 }
 
 } // namespace
@@ -63,6 +66,10 @@ template Event steqr<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLA
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 STEQR_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+STEQR_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

@@ -9,7 +9,9 @@
 
 #include "test_utils.hh"
 
+#if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/trmm_cublasdx_fused.hh"
+#endif
 
 using namespace batchlas;
 

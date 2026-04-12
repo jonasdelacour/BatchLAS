@@ -176,6 +176,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
 
     auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
 
+#if BATCHLAS_HAS_HOST_BACKEND
     const auto ref_eigs = netlib_ref_eigs_dense(dense_A.view());
     auto eps = test_utils::tolerance<float_type>();
 
@@ -185,6 +186,14 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
             ASSERT_NEAR(eigenvalues(i, j), ref_eigs[i + j * n], std::numeric_limits<float_type>::epsilon()*5e2) << "Eigenvalue value mismatch at index " << i << ", batch " << j;
         }
     }
+#else
+    // Without NETLIB/host backend, only validate Ritz values (no CPU reference).
+    for (int j = 0; j < batch; ++j) {
+        for (int i = 0; i < n; ++i) {
+            ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), std::numeric_limits<float_type>::epsilon()*5e2) << "Ritz value mismatch at index " << i << ", batch " << j;
+        }
+    }
+#endif
 }
 
 TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
@@ -405,6 +414,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
         this->ctx->wait();
 
         // Reference eigenvalues via NETLIB double
+#if BATCHLAS_HAS_HOST_BACKEND
         const auto ref_eigs = netlib_ref_eigs_dense(dense_A_copy.view());
 
         for (int j = 0; j < batch; ++j) {
@@ -414,6 +424,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
                     << "Eigenvalue value mismatch at index " << i << ", batch " << j << ", n " << n;
             }
         }
+#endif
 
         for (int j = 0; j < batch; ++j) {
             for (int i = 0; i < n; ++i) {
@@ -471,6 +482,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
                          ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
+#if BATCHLAS_HAS_HOST_BACKEND
     const auto ref_eigs = netlib_ref_eigs_tridiag(VectorView(diag), VectorView(sub));
     const bool use_rel_tol = std::is_same_v<float_type, float>;
     for (int b = 0; b < batch; ++b) {
@@ -483,6 +495,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
                 << "Eigenvalue mismatch at index " << i << ", batch " << b;
         }
     }
+#endif
 }
 
 namespace {

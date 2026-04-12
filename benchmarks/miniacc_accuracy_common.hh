@@ -7,7 +7,9 @@
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
 
+#if BATCHLAS_HAS_HOST_BACKEND
 #include <lapacke.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -193,6 +195,7 @@ inline void make_tridiag_reference(const VectorView<Real>& d,
     ref_eigs_sorted.assign(static_cast<size_t>(batch), std::vector<double>(static_cast<size_t>(n), std::numeric_limits<double>::quiet_NaN()));
     ref_ok.assign(static_cast<size_t>(batch), 0);
 
+#if BATCHLAS_HAS_HOST_BACKEND
     for (int b = 0; b < batch; ++b) {
         std::vector<double> d_work(static_cast<size_t>(n));
         std::vector<double> e_work(static_cast<size_t>(std::max(0, n - 1)));
@@ -207,6 +210,10 @@ inline void make_tridiag_reference(const VectorView<Real>& d,
             ref_ok[static_cast<size_t>(b)] = 1;
         }
     }
+#else
+    (void)d;
+    (void)e;
+#endif
 }
 
 template <typename Real>
@@ -220,6 +227,7 @@ inline void make_dense_reference(const Matrix<Real, MatrixFormat::Dense>& A,
     ref_eigs_sorted.assign(static_cast<size_t>(batch), std::vector<double>(static_cast<size_t>(n), std::numeric_limits<double>::quiet_NaN()));
     ref_ok.assign(static_cast<size_t>(batch), 0);
 
+#if BATCHLAS_HAS_HOST_BACKEND
     for (int b = 0; b < batch; ++b) {
         std::vector<double> a_work(static_cast<size_t>(n * n));
         std::vector<double> w_work(static_cast<size_t>(n));
@@ -235,6 +243,9 @@ inline void make_dense_reference(const Matrix<Real, MatrixFormat::Dense>& A,
             ref_ok[static_cast<size_t>(b)] = 1;
         }
     }
+#else
+    (void)A;
+#endif
 }
 
 template <Backend B, typename Real>

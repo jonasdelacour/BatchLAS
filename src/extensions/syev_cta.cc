@@ -284,8 +284,8 @@ Event syev_cta(Queue& ctx,
                                     /*inc=*/1, /*stride=*/n);
 
         auto steqr_ws = ws_remaining(ws_mut, ws_off);
-        steqr_cta<B, Real>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
-        cta_debug_sync(ctx, "syev_cta: after steqr_cta (real) ");
+        steqr<B, Real>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+        cta_debug_sync(ctx, "syev_cta: after steqr (real) ");
 
         if (jobz == JobType::EigenVectors) {
             // Lift real Z to complex and apply the diagonal phase scaling: Zc = S * Z.
@@ -451,8 +451,8 @@ Event syev_cta(Queue& ctx,
     VectorView<T> evals_view(reinterpret_cast<T*>(eigenvalues.data()), /*size=*/n, /*batch_size=*/batch,
                              /*inc=*/1, /*stride=*/n);
 
-    steqr_cta<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
-    cta_debug_sync(ctx, "syev_cta: after steqr_cta");
+    steqr<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+    cta_debug_sync(ctx, "syev_cta: after steqr");
 
     if (jobz == JobType::EigenVectors) {
         // Pack SYTRD Householder reflectors into a QR/QL-compatible layout for ormqx_cta.
@@ -570,6 +570,16 @@ size_t syev_cta_buffer_size(Queue& ctx,
     if constexpr (internal::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
 
+        // Apply the same robustness bump that syev_cta applies at computation time.
+        {
+            const SteqrParams<T> defaults{};
+            if (steqr_params.max_sweeps == defaults.max_sweeps &&
+                steqr_params.cta_shift_strategy == defaults.cta_shift_strategy) {
+                steqr_params.max_sweeps = 400;
+                steqr_params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+            }
+        }
+
         if (a.rows() != a.cols()) {
             throw std::invalid_argument("syev_cta_buffer_size: A must be square.");
         }
@@ -628,7 +638,7 @@ size_t syev_cta_buffer_size(Queue& ctx,
         steqr_params_local.cta_wg_size_multiplier = steqr_params.cta_wg_size_multiplier;
         steqr_params_local.cta_shift_strategy = steqr_params.cta_shift_strategy;
 
-        bytes += steqr_cta_buffer_size<Real>(ctx, d_dummy, e_dummy, evals_dummy, jobz, steqr_params_local);
+        bytes += steqr_buffer_size<Real>(ctx, d_dummy, e_dummy, evals_dummy, jobz, steqr_params_local);
 
         return bytes;
     }
@@ -670,7 +680,18 @@ size_t syev_cta_buffer_size(Queue& ctx,
     SteqrParams<T> steqr_params_local = steqr_params;
     steqr_params_local.back_transform = false;
 
-    bytes += steqr_cta_buffer_size<T>(ctx, d_dummy, e_dummy, evals_dummy, jobz, steqr_params_local);
+    // Apply the same robustness bump that syev_cta applies at computation time,
+    // so that the buffer size accounts for the actual max_sweeps used at runtime.
+    {
+        const SteqrParams<T> defaults{};
+        if (steqr_params_local.max_sweeps == defaults.max_sweeps &&
+            steqr_params_local.cta_shift_strategy == defaults.cta_shift_strategy) {
+            steqr_params_local.max_sweeps = 400;
+            steqr_params_local.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
+        }
+    }
+
+    bytes += steqr_buffer_size<T>(ctx, d_dummy, e_dummy, evals_dummy, jobz, steqr_params_local);
 
     return bytes;
 }
@@ -687,6 +708,10 @@ size_t syev_cta_buffer_size(Queue& ctx,
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     SYEV_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+    SYEV_CTA_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
