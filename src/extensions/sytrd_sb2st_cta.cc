@@ -8,6 +8,7 @@
 #include "sytrd_sb2st_cta_instantiations.hh"
 
 #include <util/group-invoke.hh>
+#include "sg_compat.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -398,7 +399,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const auto sg = it.get_sub_group();
-                const auto partition = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                const auto partition = make_partition<P>(sg);
 
                 // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
                 // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
@@ -435,7 +436,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     C[i] = Real(0);
                     WORK[i] = T(0);
                 }
-                sycl::group_barrier(partition);
+                group_barrier(partition);
 
                 if (use_local_ab) {
                     T* ABl_all = ab_local.template get_multi_ptr<sycl::access::decorated::no>().get();
@@ -448,7 +449,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                         const int rrow = t - ccol * ldab_l;
                         ABl_all[local_base + t] = ABg[rrow + ccol * ldab_g];
                     }
-                    sycl::group_barrier(partition);
+                    group_barrier(partition);
                     AB = ABl_all + local_base;
                     ldab = ldab_l;
                 }
@@ -474,7 +475,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     for (int j = lane; j < n; j += P) {
                         AB_at(0, j) = real_as_T(AB_at(0, j));
                     }
-                    sycl::group_barrier(partition);
+                    group_barrier(partition);
                 }
 
                 for (int i = 0; i < n - 2; ++i) {
@@ -497,7 +498,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                 WORK[j] = st;
                                 AB_at(kd, j - kd1) = rt;
                             }
-                            sycl::group_barrier(partition);
+                            group_barrier(partition);
 
                             if (nr > 2 * kd - 1) {
                                 // Keep the l-loop sequential, but parallelize across rotations within each l.
@@ -511,7 +512,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                                       WORK[j]);
                                     }
                                 }
-                                sycl::group_barrier(partition);
+                                group_barrier(partition);
                             } else {
                                 // Parallelize across rotations (t). Each lane owns a subset of j = j1 + t*kd1.
                                 if (kdm1 > 0) {
@@ -524,7 +525,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                                  WORK[j]);
                                     }
                                 }
-                                sycl::group_barrier(partition);
+                                group_barrier(partition);
                             }
                         }
 
@@ -572,7 +573,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                                C[j],
                                                WORK[j]);
                             }
-                            sycl::group_barrier(partition);
+                            group_barrier(partition);
 
                             // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                             if constexpr (internal::is_complex<T>::value) {
@@ -580,7 +581,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                     const int j = j1 + t * kd1;
                                     WORK[j] = conj_if_needed(WORK[j]);
                                 }
-                                sycl::group_barrier(partition);
+                                group_barrier(partition);
                             }
 
                             if (nr > 2 * kd - 1) {
@@ -596,7 +597,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                         }
                                     }
                                 }
-                                sycl::group_barrier(partition);
+                                group_barrier(partition);
                             } else {
                                 // Parallelize across rotations (t) for the main body (0..nr-2).
                                 const int main_nrot = nr - 1;
@@ -624,7 +625,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                                  WORK[last]);
                                     }
                                 }
-                                sycl::group_barrier(partition);
+                                group_barrier(partition);
                             }
                         }
 
@@ -647,21 +648,21 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                 WORK[j + kd] = WORK[j] * AB_at(kd, j);
                                 AB_at(kd, j) = T(C[j]) * AB_at(kd, j);
                             }
-                            sycl::group_barrier(partition);
+                            group_barrier(partition);
                         }
                     }
                 }
 
                 // Write back staged AB to global memory before finalization.
                 if (use_local_ab) {
-                    sycl::group_barrier(partition);
+                    group_barrier(partition);
                     const int ab_elems_l = ldab_l * n;
                     for (int t = lane; t < ab_elems_l; t += P) {
                         const int ccol = t / ldab_l;
                         const int rrow = t - ccol * ldab_l;
                         ABg[rrow + ccol * ldab_g] = AB[t];
                     }
-                    sycl::group_barrier(partition);
+                    group_barrier(partition);
                 }
 
                 invoke_one(partition, [&]() {

@@ -16,6 +16,7 @@ endif()
 
 # Define test executables
 set(TEST_TARGETS
+    sg_compat_tests
     util_span_tests
     util_vector_tests
     util_device_queue_tests
@@ -83,7 +84,16 @@ endif()
 
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
-    if(test_name STREQUAL "util_span_tests")
+    if(test_name STREQUAL "sg_compat_tests")
+        # sg_compat_tests uses sg_compat.hh directly — no full batchlas library
+        # needed, only the SYCL compiler and include paths.
+        batchlas_configure_binary_target(${test_name}
+            NO_FACADE
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+        )
+    elseif(test_name STREQUAL "util_span_tests")
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
             LIBRARIES

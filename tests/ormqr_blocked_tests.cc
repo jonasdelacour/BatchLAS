@@ -27,8 +27,17 @@ using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend
                                               OrmqrBlockedConfig<double, Backend::CUDA>,
                                               OrmqrBlockedConfig<std::complex<float>, Backend::CUDA>,
                                               OrmqrBlockedConfig<std::complex<double>, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend::ROCM>,
+                                              OrmqrBlockedConfig<double, Backend::ROCM>,
+                                              OrmqrBlockedConfig<std::complex<float>, Backend::ROCM>,
+                                              OrmqrBlockedConfig<std::complex<double>, Backend::ROCM>>;
+#elif BATCHLAS_HAS_HOST_BACKEND
+using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend::NETLIB>,
+                                              OrmqrBlockedConfig<double, Backend::NETLIB>>;
 #else
-using OrmqrBlockedTestTypes = ::testing::Types<>;
+// No valid GPU backend; provide a placeholder so TYPED_TEST_SUITE compiles.
+using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>

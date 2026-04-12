@@ -265,8 +265,10 @@ struct SytrdCtaConfig {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::CUDA>, SytrdCtaConfig<double, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::ROCM>, SytrdCtaConfig<double, Backend::ROCM>>;
 #else
-using SytrdCtaTestTypes = ::testing::Types<>;
+using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>
@@ -274,7 +276,7 @@ class SytrdCtaTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SytrdCtaTest, SytrdCtaTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	using Real = typename TestFixture::ScalarType;
 	constexpr Backend B = TestFixture::BackendType;

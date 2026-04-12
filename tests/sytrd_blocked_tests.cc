@@ -23,6 +23,7 @@ using namespace batchlas;
 
 namespace {
 
+#if BATCHLAS_HAS_HOST_BACKEND
 template <typename Real>
 UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A) {
     const int n = A.rows();
@@ -41,7 +42,9 @@ UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat:
 
     return ref_eigs;
 }
+#endif
 
+#if BATCHLAS_HAS_HOST_BACKEND
 template <typename Scalar>
 UnifiedVector<typename base_type<Scalar>::type> netlib_ref_eigs_dense_native(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     using Real = typename base_type<Scalar>::type;
@@ -57,6 +60,7 @@ UnifiedVector<typename base_type<Scalar>::type> netlib_ref_eigs_dense_native(con
 
     return ref_eigs;
 }
+#endif
 
 template <typename T, Backend B>
 struct SytrdBlockedConfig {
@@ -92,8 +96,10 @@ private:
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::CUDA>, SytrdBlockedConfig<double, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::ROCM>, SytrdBlockedConfig<double, Backend::ROCM>>;
 #else
-using SytrdBlockedTestTypes = ::testing::Types<>;
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>
@@ -101,7 +107,7 @@ class SytrdBlockedTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SytrdBlockedTest, SytrdBlockedTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
@@ -131,6 +137,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
     Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
 
+#if BATCHLAS_HAS_HOST_BACKEND
     const auto eig_ref = netlib_ref_eigs_dense(A0.view());
     const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
 
@@ -146,6 +153,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;
         }
     }
+#endif
 }
 
 TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
@@ -176,6 +184,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
     Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
 
+#if BATCHLAS_HAS_HOST_BACKEND
     const auto eig_ref = netlib_ref_eigs_dense(A0.view());
     const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
 
@@ -191,8 +200,11 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
                 << "eigenvalue mismatch at i=" << i << ", batch=" << b;
         }
     }
+#endif
 }
+#endif
 
+#if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
     using Real = float;
     constexpr Backend B = Backend::CUDA;
