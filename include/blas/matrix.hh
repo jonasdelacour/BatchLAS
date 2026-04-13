@@ -1354,6 +1354,10 @@ namespace batchlas {
             return data_.set_access_device(ctx);
         }
 
+        Event set_preferred_location(const Queue& ctx = Queue()) const {
+            return data_.set_preferred_location(ctx);
+        }
+
         Event prefetch(const Queue& ctx = Queue()) const {
             return data_.prefetch(ctx);
         }
