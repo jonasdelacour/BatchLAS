@@ -28,15 +28,29 @@
 
 namespace batchlas {
 
-template <size_t P>
-using NativeSubGroupPartition = decltype(
-    sycl::ext::oneapi::experimental::chunked_partition<P>(std::declval<sycl::sub_group>()));
-
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
 inline constexpr bool kUseNativeChunkedPartition = true;
 #else
 inline constexpr bool kUseNativeChunkedPartition = false;
 #endif
+
+template <size_t P, bool UseNative = kUseNativeChunkedPartition>
+struct NativePartitionHelper;
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+template <size_t P>
+struct NativePartitionHelper<P, true> {
+    using partition_type = decltype(
+        sycl::ext::oneapi::experimental::chunked_partition<P>(std::declval<sycl::sub_group>()));
+
+    static partition_type make(sycl::sub_group sg) {
+        return sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+    }
+};
+#endif
+
+template <size_t P>
+struct NativePartitionHelper<P, false> {};
 
 // ---------------------------------------------------------------------------
 // SubGroupPartition<P>
@@ -47,12 +61,10 @@ inline constexpr bool kUseNativeChunkedPartition = false;
 template <size_t P>
 struct SubGroupPartition {
     sycl::sub_group sg;
-        NativeSubGroupPartition<P> native;
     uint32_t base;  ///< absolute sub_group lane of this chunk's first lane
 
     explicit SubGroupPartition(sycl::sub_group sg_)
                 : sg(sg_),
-                    native(sycl::ext::oneapi::experimental::chunked_partition<P>(sg_)),
           base((static_cast<uint32_t>(sg_.get_local_linear_id()) / static_cast<uint32_t>(P))
                * static_cast<uint32_t>(P))
     {}
@@ -105,7 +117,7 @@ inline SubGroupPartition<P> make_partition(sycl::sub_group sg) {
 template <size_t P, typename T>
 inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
     if constexpr (kUseNativeChunkedPartition) {
-        return sycl::permute_group_by_xor(part.native, v, mask);
+        return sycl::permute_group_by_xor(NativePartitionHelper<P>::make(part.sg), v, mask);
     } else {
         return sycl::permute_group_by_xor(part.sg, v, mask);
     }
@@ -117,8 +129,9 @@ inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
 template <size_t P, typename T>
 inline T select_from_group(SubGroupPartition<P> part, T v, uint32_t local_id) {
     if constexpr (kUseNativeChunkedPartition) {
-        return sycl::select_from_group(part.native, v,
-                                       typename NativeSubGroupPartition<P>::id_type{local_id});
+        using native_partition_t = typename NativePartitionHelper<P>::partition_type;
+        return sycl::select_from_group(NativePartitionHelper<P>::make(part.sg), v,
+                                       typename native_partition_t::id_type{local_id});
     } else {
         return sycl::select_from_group(part.sg, v, part.base + local_id);
     }
@@ -135,7 +148,7 @@ inline T select_from_group(SubGroupPartition<P> part, T v, uint32_t local_id) {
 template <size_t P>
 inline void group_barrier(SubGroupPartition<P> part) noexcept {
     if constexpr (kUseNativeChunkedPartition) {
-        sycl::group_barrier(part.native);
+        sycl::group_barrier(NativePartitionHelper<P>::make(part.sg));
     }
 }
 
@@ -147,7 +160,7 @@ inline void group_barrier(SubGroupPartition<P> part) noexcept {
 template <size_t P, typename T>
 inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
     if constexpr (kUseNativeChunkedPartition) {
-        return sycl::shift_group_left(part.native, v, delta);
+        return sycl::shift_group_left(NativePartitionHelper<P>::make(part.sg), v, delta);
     } else {
         return sycl::shift_group_left(part.sg, v, delta);
     }
@@ -164,8 +177,9 @@ inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
 template <size_t P, typename T>
 inline T sg_leader_broadcast(SubGroupPartition<P> part, T value) {
     if constexpr (kUseNativeChunkedPartition) {
-        return sycl::select_from_group(part.native, value,
-                                       typename NativeSubGroupPartition<P>::id_type{});
+        using native_partition_t = typename NativePartitionHelper<P>::partition_type;
+        return sycl::select_from_group(NativePartitionHelper<P>::make(part.sg), value,
+                                       typename native_partition_t::id_type{});
     } else {
         return sycl::select_from_group(part.sg, value, part.base);
     }
