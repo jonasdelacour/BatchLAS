@@ -18,12 +18,15 @@ inline int32_t device_max_sub_group_size(const Queue& ctx) {
     return max_sg;
 }
 
-template <typename T>
+template <Backend B, typename T>
 inline bool should_use_cta(const Queue& ctx, int64_t n) {
-    // Temporarily disabled: steqr_cta produces incorrect eigenvalues on AMD gfx1200.
-    // Use steqr_wg for all sizes until the CTA algorithm is fixed.
-    (void)ctx; (void)n;
-    return false;
+    // steqr_cta uses chunked sub-group operations that produce incorrect
+    // eigenvalues on AMD gfx1200. Disable the CTA path only for ROCm.
+    if constexpr (B == Backend::ROCM) {
+        (void)ctx; (void)n;
+        return false;
+    }
+    return n > 0 && n <= static_cast<int64_t>(device_max_sub_group_size(ctx));
 }
 
 } // namespace
@@ -38,7 +41,7 @@ Event steqr(Queue& ctx,
             SteqrParams<T> params,
             const MatrixView<T, MatrixFormat::Dense>& eigvects) {
     const int64_t n = d_in.size();
-    if (should_use_cta<T>(ctx, n)) {
+    if (should_use_cta<B, T>(ctx, n)) {
         return steqr_cta<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects);
     }
     return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects);
@@ -52,10 +55,11 @@ size_t steqr_buffer_size(Queue& ctx,
                          JobType jobz,
                          SteqrParams<T> params) {
     const int64_t n = d.size();
-    if (should_use_cta<T>(ctx, n)) {
-        return steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
-    }
-    return steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
+    // Return the maximum of both paths so the buffer is sufficient regardless
+    // of which backend's dispatch is used at runtime.
+    const size_t cta_sz = n > 0 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params) : 0;
+    const size_t wg_sz  = steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
+    return std::max(cta_sz, wg_sz);
 }
 
 #define STEQR_INSTANTIATE(back, fp) \

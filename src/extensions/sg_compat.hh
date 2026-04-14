@@ -24,8 +24,19 @@
 
 #include <sycl/sycl.hpp>
 #include <cstdint>
+#include <utility>
 
 namespace batchlas {
+
+template <size_t P>
+using NativeSubGroupPartition = decltype(
+    sycl::ext::oneapi::experimental::chunked_partition<P>(std::declval<sycl::sub_group>()));
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+inline constexpr bool kUseNativeChunkedPartition = true;
+#else
+inline constexpr bool kUseNativeChunkedPartition = false;
+#endif
 
 // ---------------------------------------------------------------------------
 // SubGroupPartition<P>
@@ -36,10 +47,12 @@ namespace batchlas {
 template <size_t P>
 struct SubGroupPartition {
     sycl::sub_group sg;
+        NativeSubGroupPartition<P> native;
     uint32_t base;  ///< absolute sub_group lane of this chunk's first lane
 
     explicit SubGroupPartition(sycl::sub_group sg_)
-        : sg(sg_),
+                : sg(sg_),
+                    native(sycl::ext::oneapi::experimental::chunked_partition<P>(sg_)),
           base((static_cast<uint32_t>(sg_.get_local_linear_id()) / static_cast<uint32_t>(P))
                * static_cast<uint32_t>(P))
     {}
@@ -91,7 +104,11 @@ inline SubGroupPartition<P> make_partition(sycl::sub_group sg) {
 //   Route through the underlying sub_group (SubgroupShuffleXorINTEL).
 template <size_t P, typename T>
 inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
-    return sycl::permute_group_by_xor(part.sg, v, mask);
+    if constexpr (kUseNativeChunkedPartition) {
+        return sycl::permute_group_by_xor(part.native, v, mask);
+    } else {
+        return sycl::permute_group_by_xor(part.sg, v, mask);
+    }
 }
 
 // select_from_group:
@@ -99,15 +116,28 @@ inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
 //   Each lane supplies its own base, so every chunk reads its own member.
 template <size_t P, typename T>
 inline T select_from_group(SubGroupPartition<P> part, T v, uint32_t local_id) {
-    return sycl::select_from_group(part.sg, v, part.base + local_id);
+    if constexpr (kUseNativeChunkedPartition) {
+        return sycl::select_from_group(part.native, v,
+                                       typename NativeSubGroupPartition<P>::id_type{local_id});
+    } else {
+        return sycl::select_from_group(part.sg, v, part.base + local_id);
+    }
 }
 
 // group_barrier:
-//   GPU sub_group lanes execute in SIMD lockstep and are always convergent
-//   within non-divergent code.  A barrier within a fixed-size chunk of a
-//   sub_group is therefore a no-op.
+//   On NVIDIA Volta+ (sm_70+) Independent Thread Scheduling (ITS) means that
+//   threads within a warp can diverge and re-converge independently.  Without
+//   an explicit __syncwarp() (or its SYCL equivalent sycl::group_barrier on
+//   the sub_group), shared-memory writes made inside a divergent section may
+//   not be visible to other lanes after reconvergence.  Routing through
+//   sycl::group_barrier(sub_group) emits __syncwarp() on CUDA and is a
+//   cheap no-op on AMD (where wave lanes are always coherent after merge).
 template <size_t P>
-inline void group_barrier(SubGroupPartition<P>) noexcept { /* no-op */ }
+inline void group_barrier(SubGroupPartition<P> part) noexcept {
+    if constexpr (kUseNativeChunkedPartition) {
+        sycl::group_barrier(part.native);
+    }
+}
 
 // shift_group_left:
 //   Shift-down within the chunk.  Route through sub_group's shift
@@ -116,7 +146,11 @@ inline void group_barrier(SubGroupPartition<P>) noexcept { /* no-op */ }
 //   the fixed_size_group semantics; callers guard that case.
 template <size_t P, typename T>
 inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
-    return sycl::shift_group_left(part.sg, v, delta);
+    if constexpr (kUseNativeChunkedPartition) {
+        return sycl::shift_group_left(part.native, v, delta);
+    } else {
+        return sycl::shift_group_left(part.sg, v, delta);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +163,12 @@ inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
 // ---------------------------------------------------------------------------
 template <size_t P, typename T>
 inline T sg_leader_broadcast(SubGroupPartition<P> part, T value) {
-    return sycl::select_from_group(part.sg, value, part.base);
+    if constexpr (kUseNativeChunkedPartition) {
+        return sycl::select_from_group(part.native, value,
+                                       typename NativeSubGroupPartition<P>::id_type{});
+    } else {
+        return sycl::select_from_group(part.sg, value, part.base);
+    }
 }
 
 } // namespace batchlas
