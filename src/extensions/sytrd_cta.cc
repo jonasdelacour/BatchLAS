@@ -5,6 +5,7 @@
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
 #include <util/group-invoke.hh>
+#include "sg_compat.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -53,7 +54,7 @@ namespace batchlas {
         for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
              offset > 0;
              offset >>= 1) {
-            v += sycl::permute_group_by_xor(g, v, offset);
+            v += permute_group_by_xor(g, v, offset);
         }
         return v;
     }
@@ -63,7 +64,7 @@ namespace batchlas {
         for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
              offset > 0;
              offset >>= 1) {
-            const T other = sycl::permute_group_by_xor(g, v, offset);
+            const T other = permute_group_by_xor(g, v, offset);
             v = sycl::fmax(v, other);
         }
         return v;
@@ -83,13 +84,13 @@ namespace batchlas {
             Real re = v.real();
             Real im = v.imag();
             for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-                re += sycl::permute_group_by_xor(g, re, offset);
-                im += sycl::permute_group_by_xor(g, im, offset);
+                re += permute_group_by_xor(g, re, offset);
+                im += permute_group_by_xor(g, im, offset);
             }
             return T(re, im);
         } else {
             for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-                v += sycl::permute_group_by_xor(g, v, offset);
+                v += permute_group_by_xor(g, v, offset);
             }
             return v;
         }
@@ -126,7 +127,7 @@ namespace batchlas {
 
         // Ensure the leader sees the correct alpha value regardless of where
         // alpha lives inside the partition.
-        const T alpha_leader = sycl::select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
+        const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
         const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
             if (len <= 1) {
@@ -228,7 +229,7 @@ namespace batchlas {
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
                     const auto sg = it.get_sub_group();
-                    const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                    const auto part = make_partition<P>(sg);
 
                     // Make part_id unique across sub-groups in the work-group.
                     const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
@@ -263,7 +264,7 @@ namespace batchlas {
                             A_local[base_a + lane + c * static_cast<int32_t>(P)] = T(0);
                         }
                     }
-                    sycl::group_barrier(part);
+                    group_barrier(part);
 
                     if constexpr (Upper) {
                         // Reduce the upper triangle of A.
@@ -305,7 +306,7 @@ namespace batchlas {
 
                             // Offdiagonal element for T.
                             // NOTE: select_from_group is a collective; all lanes must participate.
-                            const T alpha_out = sycl::select_from_group(part, alpha, static_cast<uint32_t>(alpha_row));
+                            const T alpha_out = select_from_group(part, alpha, static_cast<uint32_t>(alpha_row));
                             if (lane == 0) {
                                 // E index is k-1.
                                 E_prob(k - 1) = alpha_out;
@@ -319,14 +320,14 @@ namespace batchlas {
                                                                            : A_local[base_a + lane + col * static_cast<int32_t>(P)])
                                                     : T(0);
                                 V_local[base_v + lane] = v_lane;
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Temporarily set A(alpha_row, col) = 1 (LAPACK convention) for the math.
                                 if (is_alpha) {
                                     A_local[base_a + alpha_row + col * static_cast<int32_t>(P)] = T(1);
                                     A_local[base_a + col + alpha_row * static_cast<int32_t>(P)] = T(1);
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Compute x := tau * A(0:m-1,0:m-1) * v, store in W_local.
                                 T y = T(0);
@@ -339,7 +340,7 @@ namespace batchlas {
                                     y *= taui;
                                 }
                                 W_local[base_w + lane] = y;
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // dot = v^H x
                                 const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
@@ -352,7 +353,7 @@ namespace batchlas {
                                 if (lane < m) {
                                     W_local[base_w + lane] = W_local[base_w + lane] + alpha2 * V_local[base_v + lane];
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Rank-2 update on the leading m x m block (Hermitian-safe):
                                 // A := A - v*w^H - w*v^H
@@ -366,14 +367,14 @@ namespace batchlas {
                                         A_local[idx] = A_local[idx] - (v_r * conj_if_complex(w_c) + w_r * conj_if_complex(v_c));
                                     }
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Restore superdiagonal element and keep symmetry consistent.
                                 if (is_alpha) {
                                     A_local[base_a + alpha_row + col * static_cast<int32_t>(P)] = alpha;
                                     A_local[base_a + col + alpha_row * static_cast<int32_t>(P)] = conj_if_complex(alpha);
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
                             } else {
                                 // If tau==0, ensure we don't leave a "1" in A.
                                 if (is_alpha) {
@@ -386,7 +387,7 @@ namespace batchlas {
                             if (lane == 0) {
                                 D_prob(k) = A_local[base_a + k + k * static_cast<int32_t>(P)];
                             }
-                            sycl::group_barrier(part);
+                            group_barrier(part);
                         }
                         if (lane == 0) {
                             D_prob(0) = A_local[base_a + 0 + 0 * static_cast<int32_t>(P)];
@@ -443,14 +444,14 @@ namespace batchlas {
                                                                             : A_local[base_a + (s + lane) + col * static_cast<int32_t>(P)])
                                                             : T(0);
                                 V_local[base_v + lane] = v_lane;
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Temporarily set A(s, col) = 1 (LAPACK convention).
                                 if (lane == 0) {
                                     A_local[base_a + s + col * static_cast<int32_t>(P)] = T(1);
                                     A_local[base_a + col + s * static_cast<int32_t>(P)] = T(1);
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Compute x := tau * A(s:s+m-1, s:s+m-1) * v, store in W_local.
                                 T y = T(0);
@@ -465,7 +466,7 @@ namespace batchlas {
                                     y *= taui;
                                 }
                                 W_local[base_w + lane] = y;
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // dot = v^H x
                                 const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
@@ -478,7 +479,7 @@ namespace batchlas {
                                 if (lane < m) {
                                     W_local[base_w + lane] = W_local[base_w + lane] + alpha2 * V_local[base_v + lane];
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Rank-2 update on trailing m x m block (Hermitian-safe):
                                 // A := A - v*w^H - w*v^H
@@ -494,14 +495,14 @@ namespace batchlas {
                                         A_local[idx] = A_local[idx] - (v_r * conj_if_complex(w_c) + w_r * conj_if_complex(v_c));
                                     }
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
 
                                 // Restore subdiagonal element.
                                 if (lane == 0) {
                                     A_local[base_a + s + col * static_cast<int32_t>(P)] = alpha;
                                     A_local[base_a + col + s * static_cast<int32_t>(P)] = conj_if_complex(alpha);
                                 }
-                                sycl::group_barrier(part);
+                                group_barrier(part);
                             }
                         }
                         if (lane == 0) {
@@ -509,7 +510,7 @@ namespace batchlas {
                         }
                     }
 
-                    sycl::group_barrier(part);
+                    group_barrier(part);
 
                     // Write back A.
                     if (lane < n) {
@@ -602,6 +603,10 @@ namespace batchlas {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     SYTRD_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+    SYTRD_CTA_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

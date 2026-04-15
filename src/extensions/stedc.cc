@@ -359,7 +359,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                 });
         });
     }
-    
+
     ctx -> submit([&](sycl::handler& h) {
         h.parallel_for<StedcAssignEigenvalues<B, T>>(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
@@ -380,7 +380,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     permuted_copy(ctx, Qprime, temp_Q, permutation);
     permuted_copy(ctx, eigvects, Qprime, perm_map);
     gemm<B>(ctx, Qprime, temp_Q, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-
     return ctx.get_event();
 }
 
@@ -462,9 +461,7 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
         auto d_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n), batch_size, 1, 0);
         auto e_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n - 1), batch_size, 1, 0);
         auto eigenvalues_leaf = VectorView<T>(nullptr, static_cast<int64_t>(n), batch_size, 1, 0);
-        return params.recursion_threshold <= 32
-                   ? steqr_cta_buffer_size<T>(ctx, d_leaf, e_leaf, eigenvalues_leaf, jobz)
-                   : steqr_buffer_size<T>(ctx, d_leaf, e_leaf, eigenvalues_leaf, jobz);
+        return steqr_buffer_size<T>(ctx, d_leaf, e_leaf, eigenvalues_leaf, jobz, params.leaf_steqr_params);
     }
 
     const size_t m = n / 2;
@@ -497,6 +494,10 @@ STEDC_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 STEDC_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+STEDC_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 

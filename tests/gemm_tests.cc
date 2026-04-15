@@ -9,7 +9,10 @@
 #include <cstdlib>
 #include <string>
 
+#include <batchlas/backend_config.h>
+#if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/gemm_cublasdx_dispatch.hh"
+#endif
 #include "../src/sycl/gemm_kernels.hh"
 #include "test_utils.hh"
 
@@ -315,6 +318,7 @@ TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
               batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
 }
 
+#if BATCHLAS_HAS_CUDA_BACKEND
 TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     Matrix<float> A(128, 128, 1);
     Matrix<float> B(128, 128, 1);
@@ -322,6 +326,7 @@ TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     EXPECT_EQ(batchlas::backend::cublasdx_gemm_select_variant(A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans),
               batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN);
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
@@ -927,6 +932,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1AlignedKernel) {
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
 
+#if BATCHLAS_HAS_CUDA_BACKEND
 TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxNNKernel) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
@@ -1060,6 +1066,7 @@ TYPED_TEST(GemmTest, BatchedGemmCuBLASDxLargeSquareDoesNotThrow) {
     auto tol = test_utils::tolerance<ScalarType>() * 200;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1GenericKernel) {
     using ScalarType = typename TestFixture::ScalarType;

@@ -8,6 +8,7 @@
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
 #include <util/group-invoke.hh>
+#include "sg_compat.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -58,13 +59,13 @@ inline T group_sum(const Group& g, T v) {
         Real re = v.real();
         Real im = v.imag();
         for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            re += sycl::permute_group_by_xor(g, re, offset);
-            im += sycl::permute_group_by_xor(g, im, offset);
+            re += permute_group_by_xor(g, re, offset);
+            im += permute_group_by_xor(g, im, offset);
         }
         return T(re, im);
     } else {
         for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            v += sycl::permute_group_by_xor(g, v, offset);
+            v += permute_group_by_xor(g, v, offset);
         }
         return v;
     }
@@ -115,7 +116,7 @@ inline void apply_reflector_small(const Partition& part,
             }
             Work_local[lane] = tau_eff * dot;
         }
-        sycl::group_barrier(part);
+        group_barrier(part);
 
         auto gamma_view = VectorView<T>(Work_local, n);
         auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset, len, n, P_i, P_i * n);
@@ -132,7 +133,7 @@ inline void apply_reflector_small(const Partition& part,
             }
             Work_local[lane] = tau_eff * dot;
         }
-        sycl::group_barrier(part);
+        group_barrier(part);
 
         auto gamma_view = VectorView<T>(Work_local, n);
         auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset * P_i, n, len, P_i, P_i * n);
@@ -212,7 +213,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
-                const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                const auto part = make_partition<P>(sg);
 
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
@@ -300,7 +301,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                         }
                     }
 
-                    sycl::group_barrier(part);
+                    group_barrier(part);
 
                     if (active_col && tau_eff != T(0) && len > 0) {
                         T dot = T(0);
@@ -316,7 +317,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                     }
 
                     // Ensure all lanes have finished consuming v before overwrite.
-                    sycl::group_barrier(part);
+                    group_barrier(part);
                 }
 
                 if (active_col) {
@@ -338,7 +339,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto sg = it.get_sub_group();
-                    const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                    const auto part = make_partition<P>(sg);
 
                     const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                     const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
@@ -373,7 +374,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                             C_local[base_c + lane + col * P_i] = T(0);
                         }
                     }
-                    sycl::group_barrier(part);
+                    group_barrier(part);
 
                     const bool descending = (Left ^ QL) ? (!TransposeOrConj) : TransposeOrConj;
 
@@ -417,7 +418,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                             }
                         }
 
-                        sycl::group_barrier(part);
+                        group_barrier(part);
 
                         apply_reflector_small<T>(
                             part,
@@ -434,7 +435,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                             TransposeOrConj
                         );
 
-                        sycl::group_barrier(part);
+                        group_barrier(part);
                     }
 
                     // Write back C.
@@ -553,6 +554,13 @@ Event ormqx_cta(Queue& ctx,
     template Event ormqx_cta<Backend::CUDA, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
     template Event ormqx_cta<Backend::CUDA, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
     template Event ormqx_cta<Backend::CUDA, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+    template Event ormqx_cta<Backend::ROCM, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const MatrixView<float, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
+    template Event ormqx_cta<Backend::ROCM, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
+    template Event ormqx_cta<Backend::ROCM, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
+    template Event ormqx_cta<Backend::ROCM, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

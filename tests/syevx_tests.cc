@@ -143,8 +143,14 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
 
     syevx<test_utils::gpu_backend>(
         *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params);
+#if BATCHLAS_HAS_HOST_BACKEND
     backend::syev_vendor<Backend::NETLIB>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
+#else
+    // No host (NETLIB) backend available; use GPU vendor solver as reference.
+    backend::syev_vendor<test_utils::gpu_backend>(
+        *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
+#endif
     ctx->wait();
 
     for (int b = 0; b < batch; ++b) {

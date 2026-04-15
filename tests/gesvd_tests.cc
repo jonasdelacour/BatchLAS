@@ -147,6 +147,7 @@ inline typename base_type<T>::type abs_squared_value(const T& value) {
     }
 }
 
+#if BATCHLAS_HAS_HOST_BACKEND
 template <typename Scalar>
 int lapacke_gesvd_values_only_any(int m,
                                   int n,
@@ -213,6 +214,7 @@ int lapacke_gesvd_values_only_any(int m,
                               superb);
     }
 }
+#endif // BATCHLAS_HAS_HOST_BACKEND
 
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
