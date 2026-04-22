@@ -18,19 +18,19 @@ METRIC_INFO = {
     "R": {
         "raw": "R",
         "log": "log10_R",
-        "ylabel": r"$\log_{10}(R)$",
+        "ylabel": r"$\log_{10}(\|AZ - Z\Lambda\|_F)$",
         "name": "residual",
     },
     "O": {
         "raw": "O",
         "log": "log10_O",
-        "ylabel": r"$\log_{10}(O)$",
+        "ylabel": r"$\log_{10}(\|Z^T Z - I\|_F)$",
         "name": "orthogonality",
     },
     "relerr": {
         "raw": "max_relerr",
         "log": "log10_relerr",
-        "ylabel": r"$\log_{10}(\mathrm{max\ relative\ error})$",
+        "ylabel": r"$\log_{10}\left(\max_i |\hat{\lambda}_i - \lambda_i^{\mathrm{ref}}|\right)$",
         "name": "relerr",
     },
     "res_num": {
@@ -171,6 +171,132 @@ def _prepare_dataframe(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     return df
 
 
+def _normalize_optional_str_series(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().str.lower().replace({"nan": ""})
+
+
+def _tag_benchmark_run(
+    df: pd.DataFrame,
+    *,
+    scheme: Optional[str] = None,
+    cta_shift: Optional[str] = None,
+) -> pd.DataFrame:
+    df = df.copy()
+
+    if "scheme" not in df.columns:
+        df["scheme"] = ""
+
+    if "cta_shift" not in df.columns:
+        df["cta_shift"] = ""
+
+    if scheme is None and cta_shift is None:
+        return df
+
+    impl_series = df["impl"].astype(str)
+    steqr_sensitive = (
+        (impl_series == "stedc")
+        | impl_series.str.startswith("steqr_cta_")
+        | impl_series.str.startswith("syev_cta_")
+        | (impl_series == "syev_cta_dispatch")
+    )
+
+    if scheme is not None:
+        missing = df["scheme"].isna() | (df["scheme"].astype(str).str.strip() == "")
+        df.loc[missing & steqr_sensitive, "scheme"] = scheme
+
+    if cta_shift is not None:
+        missing = df["cta_shift"].isna() | (df["cta_shift"].astype(str).str.strip() == "")
+        df.loc[missing & steqr_sensitive, "cta_shift"] = cta_shift
+
+    return df
+
+
+def _variant_impl_label(base_impl: str, scheme: str, cta_shift: str) -> str:
+    if base_impl == "stedc":
+        parts = [base_impl]
+        if scheme:
+            parts.append(scheme)
+        if cta_shift:
+            parts.append(cta_shift)
+        return "_".join(parts)
+
+    if base_impl.startswith("steqr_cta_") or base_impl.startswith("syev_cta_"):
+        if cta_shift:
+            return f"{base_impl}_{cta_shift}"
+
+    return base_impl
+
+
+def _annotate_impl_labels(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    impl_series = df["impl"].astype(str)
+    scheme_series = _normalize_optional_str_series(df["scheme"]) if "scheme" in df.columns else pd.Series("", index=df.index)
+    shift_series = _normalize_optional_str_series(df["cta_shift"]) if "cta_shift" in df.columns else pd.Series("", index=df.index)
+
+    df["impl_variant"] = [
+        _variant_impl_label(base_impl, scheme, cta_shift)
+        for base_impl, scheme, cta_shift in zip(impl_series, scheme_series, shift_series)
+    ]
+    df["impl_plot"] = impl_series
+
+    variant_counts = df.groupby("impl", dropna=False)["impl_variant"].nunique()
+    ambiguous_impls = {impl for impl, count in variant_counts.items() if count > 1}
+    if ambiguous_impls:
+        mask = df["impl"].astype(str).isin(ambiguous_impls)
+        df.loc[mask, "impl_plot"] = df.loc[mask, "impl_variant"]
+
+    return df
+
+
+def _impl_plot_sort_key(value: str) -> tuple[int, int, int, str]:
+    scheme_rank = 99
+    if "_exp" in value:
+        scheme_rank = 0
+    elif "_pg" in value:
+        scheme_rank = 1
+
+    shift_rank = 99
+    if value.endswith("_lapack"):
+        shift_rank = 0
+    elif value.endswith("_wilkinson"):
+        shift_rank = 1
+
+    family_rank = 1 if value.startswith("stedc") else 0
+    return (family_rank, scheme_rank, shift_rank, value)
+
+
+def _resolve_plot_impls(df: pd.DataFrame, explicit_impls: list[str]) -> list[str]:
+    available_impls = set(df["impl"].astype(str).tolist())
+    available_plot_impls = set(df["impl_plot"].astype(str).tolist())
+
+    requested_impls = explicit_impls if explicit_impls else _default_impls(df)
+    resolved_impls: list[str] = []
+    missing_impls: list[str] = []
+
+    for requested in requested_impls:
+        if requested in available_plot_impls:
+            if requested not in resolved_impls:
+                resolved_impls.append(requested)
+            continue
+
+        if requested not in available_impls:
+            missing_impls.append(requested)
+            continue
+
+        variants = sorted(
+            set(df.loc[df["impl"].astype(str) == requested, "impl_plot"].astype(str).tolist()),
+            key=_impl_plot_sort_key,
+        )
+        for variant in variants:
+            if variant not in resolved_impls:
+                resolved_impls.append(variant)
+
+    if missing_impls:
+        raise ValueError(f"No rows matched impl(s) {missing_impls}")
+
+    return resolved_impls
+
+
 def _parse_bench_schemes(value: str) -> list[str]:
     key = (value or "").strip().lower()
     if key in {"", "both"}:
@@ -263,18 +389,13 @@ def plot_multi_heatmap(
     y_label = info["ylabel"]
 
     df = _prepare_dataframe(df, metric)
+    df = _annotate_impl_labels(df)
     if "impl" not in df.columns:
         raise ValueError("multi-plot requires 'impl' column")
     if "n" not in df.columns:
         raise ValueError("multi-plot requires 'n' column")
 
-    impls = [imp for imp in impls if imp]
-    if not impls:
-        impls = _default_impls(df)
-    else:
-        missing_impls = [imp for imp in impls if imp not in set(df["impl"].astype(str).tolist())]
-        if missing_impls:
-            raise ValueError(f"No rows matched impl(s) {missing_impls}")
+    impls = _resolve_plot_impls(df, [imp for imp in impls if imp])
 
     ns = [int(n) for n in ns]
     available_ns = sorted(set(df["n"].astype(int).tolist()))
@@ -282,7 +403,7 @@ def plot_multi_heatmap(
     if not ns:
         raise ValueError("No rows matched requested N values")
 
-    df = df[df["impl"].astype(str).isin(impls) & df["n"].astype(int).isin(ns)].copy()
+    df = df[df["impl_plot"].astype(str).isin(impls) & df["n"].astype(int).isin(ns)].copy()
     if df.empty:
         raise ValueError("No rows matched impl/N filters")
 
@@ -299,7 +420,7 @@ def plot_multi_heatmap(
         row = []
         failure_row = []
         for impl in impls:
-            dfi = df[(df["impl"].astype(str) == impl) & (df["n"].astype(int) == n)].copy()
+            dfi = df[(df["impl_plot"].astype(str) == impl) & (df["n"].astype(int) == n)].copy()
             if dfi.empty:
                 raise ValueError(f"No rows matched impl='{impl}' with n={n}")
             dfi_success = dfi[np.isfinite(dfi[metric_log_col].to_numpy())].copy()
@@ -387,18 +508,13 @@ def plot_mean_lines_by_n(
     y_label = info["ylabel"]
 
     df = _prepare_dataframe(df, metric)
+    df = _annotate_impl_labels(df)
     if "impl" not in df.columns:
         raise ValueError("mean-lines plot requires 'impl' column")
     if "n" not in df.columns:
         raise ValueError("mean-lines plot requires 'n' column")
 
-    impls = [imp for imp in impls if imp]
-    if not impls:
-        impls = _default_impls(df)
-    else:
-        missing_impls = [imp for imp in impls if imp not in set(df["impl"].astype(str).tolist())]
-        if missing_impls:
-            raise ValueError(f"No rows matched impl(s) {missing_impls}")
+    impls = _resolve_plot_impls(df, [imp for imp in impls if imp])
 
     ns = [int(n) for n in ns]
     available_ns = sorted(set(df["n"].astype(int).tolist()))
@@ -406,7 +522,7 @@ def plot_mean_lines_by_n(
     if not ns:
         raise ValueError("No rows matched requested N values")
 
-    df = df[df["impl"].astype(str).isin(impls) & df["n"].astype(int).isin(ns)].copy()
+    df = df[df["impl_plot"].astype(str).isin(impls) & df["n"].astype(int).isin(ns)].copy()
     if df.empty:
         raise ValueError("No rows matched impl/N filters")
 
@@ -423,7 +539,7 @@ def plot_mean_lines_by_n(
     for ax, n in zip(axes, ns):
         dfn = df[df["n"].astype(int) == n]
         for impl in impls:
-            dfi = dfn[dfn["impl"].astype(str) == impl]
+            dfi = dfn[dfn["impl_plot"].astype(str) == impl]
             centers, means = _bin_means(dfi["log10_cond"].to_numpy(), dfi[metric_log_col].to_numpy(), xedges)
             mask = np.isfinite(means)
             line, = ax.plot(centers[mask], means[mask], label=impl, linewidth=1.6)
@@ -612,7 +728,16 @@ def main() -> None:
                 temp_paths.append(out_path)
 
         if temp_paths:
-            frames = [pd.read_csv(path) for path in temp_paths]
+            frames = []
+            for path in temp_paths:
+                frame = pd.read_csv(path)
+                scheme = None
+                if ".pg.tmp" in path:
+                    scheme = "pg"
+                elif ".exp.tmp" in path:
+                    scheme = "exp"
+                frame = _tag_benchmark_run(frame, scheme=scheme, cta_shift=args.bench_cta_shift)
+                frames.append(frame)
             df_concat = pd.concat(frames, ignore_index=True)
             df_concat.to_csv(args.csv, index=False)
             for path in temp_paths:
@@ -624,7 +749,7 @@ def main() -> None:
     if not os.path.isfile(args.csv):
         raise FileNotFoundError(f"CSV not found: {args.csv}")
 
-    df = pd.read_csv(args.csv)
+    df = pd.read_csv(args.csv, low_memory=False)
     ns = _parse_ns(args.ns)
 
     clamp_x = _resolve_clamp(args.clamp_x, args.clamp_x_min, args.clamp_x_max, name="clamp-x")
