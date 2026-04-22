@@ -4,6 +4,7 @@
 #include <blas/extra.hh>
 #include <util/kernel-heuristics.hh>
 #include <util/group-invoke.hh>
+#include "sg_compat.hh"
 #include <util/mempool.hh>
 #include <batchlas/backend_config.h>
 #include "steqr_internal.hh"
@@ -104,7 +105,7 @@ namespace batchlas {
         // We need d_{i+1} (neighbor lane's diagonal). A 1-lane shift is the most direct.
         // Note: for lanes without i+1 (last lane), the result is unspecified, but those
         // lanes never use d_ip1 due to lane_in_active_range.
-        const T d_ip1 = sycl::shift_group_left(partition, d, 1);
+        const T d_ip1 = shift_group_left(partition, d, 1);
 
         if (lane_in_active_range) {
             if (e != T(0)) {
@@ -139,7 +140,7 @@ namespace batchlas {
         } else if (lane < static_cast<int32_t>(P - 1)) {
             E_local[base_e + lane] = T(0);
         }
-        sycl::group_barrier(partition);
+        group_barrier(partition);
     }
 
     template <typename T, size_t P, typename Partition, typename LocalAcc>
@@ -150,7 +151,7 @@ namespace batchlas {
                                                      int32_t base_d,
                                                      int32_t base_e,
                                                      int32_t lane) {
-        sycl::group_barrier(partition);
+        group_barrier(partition);
         const T diag = (lane < n) ? D_local[base_d + lane] : T(0);
         const T offdiag = (lane < (n - 1)) ? E_local[base_e + lane] : T(0);
         return {diag, offdiag};
@@ -165,7 +166,7 @@ namespace batchlas {
         if (lane < static_cast<int32_t>(P)) {
             scratch[base + lane] = value;
         }
-        sycl::group_barrier(partition);
+        group_barrier(partition);
         if (lane == 0) {
             int32_t result = scratch[base];
             for (int32_t idx = 1; idx < static_cast<int32_t>(P); ++idx) {
@@ -173,7 +174,7 @@ namespace batchlas {
             }
             scratch[base] = result;
         }
-        sycl::group_barrier(partition);
+        group_barrier(partition);
         return scratch[base];
     }
 
@@ -186,7 +187,7 @@ namespace batchlas {
         if (lane < static_cast<int32_t>(P)) {
             scratch[base + lane] = value;
         }
-        sycl::group_barrier(partition);
+        group_barrier(partition);
         if (lane == 0) {
             int32_t result = scratch[base];
             for (int32_t idx = 1; idx < static_cast<int32_t>(P); ++idx) {
@@ -194,7 +195,7 @@ namespace batchlas {
             }
             scratch[base] = result;
         }
-        sycl::group_barrier(partition);
+        group_barrier(partition);
         return scratch[base];
     }
 
@@ -205,9 +206,9 @@ namespace batchlas {
                                      int32_t l0,
                                      bool ql,
                                      QCache& qcache) {
-        const T a = sycl::select_from_group(partition, diag, l0);
-        const T b = sycl::select_from_group(partition, offdiag, l0);
-        const T c2 = sycl::select_from_group(partition, diag, l0 + 1);
+        const T a = select_from_group(partition, diag, l0);
+        const T b = select_from_group(partition, offdiag, l0);
+        const T c2 = select_from_group(partition, diag, l0 + 1);
 
         const auto [rt1, rt2, cs, sn] = invoke_one_broadcast(partition, [&]() {
             return internal::laev2(a, b, c2);
@@ -247,9 +248,9 @@ namespace batchlas {
         // bulge chase in that virtual space.
         const auto explicit_ql_step_exp = [&]() {
             // Preload shift inputs.
-            const T p0  = sycl::select_from_group(partition, diag, l);
-            const T e0  = sycl::select_from_group(partition, offdiag, l);
-            const T dlp1 = sycl::select_from_group(partition, diag, l + 1);
+            const T p0  = select_from_group(partition, diag, l);
+            const T e0  = select_from_group(partition, offdiag, l);
+            const T dlp1 = select_from_group(partition, diag, l + 1);
 
             // Leader-only scalar state for the virtual QR bulge chase.
             T mu = T(0);
@@ -282,14 +283,14 @@ namespace batchlas {
                 const int32_t hi = m - v;
                 const int32_t lo = m - v - 1;
 
-                const T di = sycl::select_from_group(partition, diag, hi);
-                const T dj = sycl::select_from_group(partition, diag, lo);
-                const T ei = sycl::select_from_group(partition, offdiag, lo);
+                const T di = select_from_group(partition, diag, hi);
+                const T dj = select_from_group(partition, diag, lo);
+                const T ei = select_from_group(partition, offdiag, lo);
 
                 // Next virtual offdiag (toward physical l). It is safe to read outside the block because
                 // deflation boundaries force those couplings to zero.
                 const bool have_ej = (lo - 1) >= 0;
-                const T ej = have_ej ? sycl::select_from_group(partition, offdiag, lo - 1) : T(0);
+                const T ej = have_ej ? select_from_group(partition, offdiag, lo - 1) : T(0);
 
                 const auto upd = invoke_one_broadcast(partition, [&]() {
                     T x = T(0);
@@ -364,10 +365,10 @@ namespace batchlas {
         }
 
         // Broadcast values needed for the shift (all lanes participate).
-        const T p0 = sycl::select_from_group(partition, diag, l);
-        const T e0 = sycl::select_from_group(partition, offdiag, l);
-        const T dlp1 = sycl::select_from_group(partition, diag, l + 1);
-        const T dm = sycl::select_from_group(partition, diag, m);
+        const T p0 = select_from_group(partition, diag, l);
+        const T e0 = select_from_group(partition, offdiag, l);
+        const T dlp1 = select_from_group(partition, diag, l + 1);
+        const T dm = select_from_group(partition, diag, m);
 
         // Leader-lane scalar state.
         T g = T(0);
@@ -391,9 +392,9 @@ namespace batchlas {
 
         for (int32_t i = m; i-- > l;) {
             // Broadcast the tridiagonal entries needed for this step.
-            const T ei = sycl::select_from_group(partition, offdiag, i);
-            const T di = sycl::select_from_group(partition, diag, i);
-            const T dip1 = sycl::select_from_group(partition, diag, i + 1);
+            const T ei = select_from_group(partition, offdiag, i);
+            const T di = select_from_group(partition, diag, i);
+            const T dip1 = select_from_group(partition, diag, i + 1);
 
             // Whether E(i+1) should be updated is a pure function of (i, m, n).
             const bool do_e_upd = (i != (m - 1)) && ((i + 1) < (n - 1));
@@ -461,9 +462,9 @@ namespace batchlas {
         // EXP update scheme = explicit similarity update (bulge-chase), matching steqr.cc.
         const auto explicit_qr_step_exp = [&]() {
             // Shift from trailing 2x2 of the physical block (l-1,l).
-            const T p0  = sycl::select_from_group(partition, diag, l);
-            const T e0  = sycl::select_from_group(partition, offdiag, l - 1);
-            const T dlm1 = sycl::select_from_group(partition, diag, l - 1);
+            const T p0  = select_from_group(partition, diag, l);
+            const T e0  = select_from_group(partition, offdiag, l - 1);
+            const T dlm1 = select_from_group(partition, diag, l - 1);
 
             T mu = T(0);
             T bulge = T(0);
@@ -484,12 +485,12 @@ namespace batchlas {
             });
 
             for (int32_t i = m; i < l; ++i) {
-                const T di = sycl::select_from_group(partition, diag, i);
-                const T dj = sycl::select_from_group(partition, diag, i + 1);
-                const T ei = sycl::select_from_group(partition, offdiag, i);
+                const T di = select_from_group(partition, diag, i);
+                const T dj = select_from_group(partition, diag, i + 1);
+                const T ei = select_from_group(partition, offdiag, i);
 
                 const bool have_ej = (i + 1) < (n - 1);
-                const T ej = have_ej ? sycl::select_from_group(partition, offdiag, i + 1) : T(0);
+                const T ej = have_ej ? select_from_group(partition, offdiag, i + 1) : T(0);
 
                 const auto upd = invoke_one_broadcast(partition, [&]() {
                     T x = T(0);
@@ -554,10 +555,10 @@ namespace batchlas {
         }
 
         // Broadcast values needed for the shift (all lanes participate).
-        const T p0 = sycl::select_from_group(partition, diag, l);
-        const T e0 = sycl::select_from_group(partition, offdiag, l - 1);
-        const T dlm1 = sycl::select_from_group(partition, diag, l - 1);
-        const T dm = sycl::select_from_group(partition, diag, m);
+        const T p0 = select_from_group(partition, diag, l);
+        const T e0 = select_from_group(partition, offdiag, l - 1);
+        const T dlm1 = select_from_group(partition, diag, l - 1);
+        const T dm = select_from_group(partition, diag, m);
 
         // Leader-lane scalar state.
         T g = T(0);
@@ -579,9 +580,9 @@ namespace batchlas {
 
         for (int32_t i = m; i < l; ++i) {
             // Broadcast the tridiagonal entries needed for this step.
-            const T ei = sycl::select_from_group(partition, offdiag, i);
-            const T di = sycl::select_from_group(partition, diag, i);
-            const T dip1 = sycl::select_from_group(partition, diag, i + 1);
+            const T ei = select_from_group(partition, offdiag, i);
+            const T di = select_from_group(partition, diag, i);
+            const T dip1 = select_from_group(partition, diag, i + 1);
 
             // Whether E(i-1) should be updated is a pure function of (i, m).
             const bool do_e_upd = (i != m);
@@ -692,7 +693,7 @@ namespace batchlas {
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
                     const auto sg = it.get_sub_group();
-                    const auto partition = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                    const auto partition = make_partition<P>(sg);
                     // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
                     // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
                     // repeats for each sub-group. Make part_id unique within the whole work-group.
@@ -793,8 +794,8 @@ namespace batchlas {
                         // Choose between QL and QR (matches steqr.cc):
                         // - QR if |D(l)| <= |D(lend)|
                         // - QL otherwise
-                        const T d_first = std::abs(sycl::select_from_group(partition, diag, block_begin));
-                        const T d_last = std::abs(sycl::select_from_group(partition, diag, block_end));
+                        const T d_first = std::abs(select_from_group(partition, diag, block_begin));
+                        const T d_last = std::abs(select_from_group(partition, diag, block_end));
                         const bool use_ql = (d_last < d_first);
                         if (use_ql) {
                             // ---------------- QL iteration: converge from the top (l grows) ----------------
@@ -1099,6 +1100,10 @@ namespace batchlas {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     STEQR_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+    STEQR_CTA_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

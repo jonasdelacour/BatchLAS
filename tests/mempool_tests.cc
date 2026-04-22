@@ -323,9 +323,13 @@ TEST_F(BumpAllocatorTest, SyevxLikeUsagePattern) {
     total_size += BumpAllocator::allocation_size<std::byte>(device, 1024); // syev workspace
     total_size += BumpAllocator::allocation_size<std::byte>(device, 2048); // ortho workspace
     
-    // Create allocator with calculated size
-    auto large_buffer = std::make_unique<std::byte[]>(total_size);
-    BumpAllocator pool(large_buffer.get(), total_size);
+    // Create allocator with calculated size.
+    // Add (device_align - 1) padding bytes so the BumpAllocator can absorb any initial
+    // misalignment of the allocation returned by new[] (which only guarantees
+    // alignof(std::max_align_t), not the device's MEM_BASE_ADDR_ALIGN).
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto large_buffer = std::make_unique<std::byte[]>(total_size + device_align - 1);
+    BumpAllocator pool(large_buffer.get(), total_size + device_align - 1);
     
     // Perform allocations in the same order as syevx
     auto Sdata = pool.allocate<float>(device, n * block_vectors * 3 * batch_size);
@@ -389,9 +393,12 @@ TEST_F(BumpAllocatorTest, DisjointAllocationSizeAndAllocate) {
     size_t total_calculated_size = int_array_size + float_array_size + double_array_size + 
                                    complex_array_size + pointer_array_size + workspace_size;
     
-    // Phase 2: Create allocator with calculated size in different context
-    auto planned_buffer = std::make_unique<std::byte[]>(total_calculated_size);
-    BumpAllocator pool(planned_buffer.get(), total_calculated_size);
+    // Phase 2: Create allocator with calculated size in different context.
+    // Add (device_align - 1) padding bytes so the BumpAllocator can absorb any initial
+    // misalignment from new[] (which only guarantees alignof(std::max_align_t)).
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto planned_buffer = std::make_unique<std::byte[]>(total_calculated_size + device_align - 1);
+    BumpAllocator pool(planned_buffer.get(), total_calculated_size + device_align - 1);
     
     // Phase 3: Perform actual allocations in execution phase
     auto int_array = pool.allocate<int>(device, n * batch);
@@ -410,7 +417,6 @@ TEST_F(BumpAllocatorTest, DisjointAllocationSizeAndAllocate) {
     EXPECT_EQ(workspace.size(), 4096);
     
     // Verify proper alignment
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(int_array.data()) % 
               std::max(device_align, static_cast<std::uintptr_t>(alignof(int))), 0);
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(float_array.data()) % 
@@ -551,9 +557,11 @@ TEST_F(BumpAllocatorTest, RealisticBufferSizeCalculationAndUsage) {
     total_size += BumpAllocator::allocation_size<std::byte>(device, 16384);          // Workspace
     total_size += BumpAllocator::allocation_size<float*>(device, batch_size * 3);    // Pointer arrays
     
-    // Create allocator with calculated size
-    auto realistic_buffer = std::make_unique<std::byte[]>(total_size);
-    BumpAllocator pool(realistic_buffer.get(), total_size);
+    // Create allocator with calculated size.
+    // Add (device_align - 1) padding bytes to absorb initial alignment gap from new[].
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto realistic_buffer = std::make_unique<std::byte[]>(total_size + device_align - 1);
+    BumpAllocator pool(realistic_buffer.get(), total_size + device_align - 1);
     
     // Perform allocations in realistic order
     auto matrix_A = pool.allocate<float>(device, n * n * batch_size);

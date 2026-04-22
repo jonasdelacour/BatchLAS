@@ -306,7 +306,8 @@ Event launch_register_tiled(Queue& ctx,
                     T* tile_a_stage = &tile_a[stage * Policy::StageASize];
                     T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
 
-                    if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
+                    if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
+                                  && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
                         constexpr int APacketsPerCol = TileM / VecA;
                         constexpr int APacketCount = APacketsPerCol * TileK;
                         constexpr int APacketIterations = (APacketCount + Policy::ThreadsPerGroup - 1) / Policy::ThreadsPerGroup;

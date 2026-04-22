@@ -180,8 +180,14 @@ using SyevCtaTestTypes = ::testing::Types<
 	SyevCtaConfig<double, Backend::CUDA>,
 	SyevCtaConfig<std::complex<float>, Backend::CUDA>,
 	SyevCtaConfig<std::complex<double>, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using SyevCtaTestTypes = ::testing::Types<
+    SyevCtaConfig<float, Backend::ROCM>,
+    SyevCtaConfig<double, Backend::ROCM>,
+    SyevCtaConfig<std::complex<float>, Backend::ROCM>,
+    SyevCtaConfig<std::complex<double>, Backend::ROCM>>;
 #else
-using SyevCtaTestTypes = ::testing::Types<>;
+using SyevCtaTestTypes = ::testing::Types<SyevCtaConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>
@@ -189,7 +195,7 @@ class SyevCtaTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevCtaTest, SyevCtaTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
@@ -206,10 +212,12 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
 
 	// Reference (CPU LAPACKE)
+#if BATCHLAS_HAS_HOST_BACKEND
 	{
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
 		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
 	}
+#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -220,13 +228,17 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
 		const Real tol = test_utils::tolerance<Scalar>();
+#if BATCHLAS_HAS_HOST_BACKEND
 		for (int j = 0; j < batch; ++j) {
 			for (int i = 0; i < n; ++i) {
 				ASSERT_NEAR(W_cta[static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * static_cast<std::size_t>(n)],
-							W_ref[static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * static_cast<std::size_t>(n)],
-							tol) << "eigenvalue mismatch i=" << i << " batch=" << j;
+						W_ref[static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * static_cast<std::size_t>(n)],
+						tol) << "eigenvalue mismatch i=" << i << " batch=" << j;
 			}
 		}
+#else
+		(void)tol;
+#endif
 	}
 }
 
@@ -247,10 +259,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 
 	// Reference eigenvalues (CPU LAPACKE). We compute eigenvectors too just to ensure it runs,
 	// but we validate the CTA eigenvectors via residual + orthogonality.
+#if BATCHLAS_HAS_HOST_BACKEND
 	{
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
 		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
 	}
+#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -261,9 +275,13 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
 		const Real tol_w = test_utils::tolerance<Scalar>();
+#if BATCHLAS_HAS_HOST_BACKEND
 		for (int i = 0; i < n; ++i) {
 			ASSERT_NEAR(W_cta[static_cast<std::size_t>(i)], W_ref[static_cast<std::size_t>(i)], tol_w) << "eigenvalue mismatch i=" << i;
 		}
+#else
+		(void)tol_w;
+#endif
 
 		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
 		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
@@ -286,10 +304,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
 	// Reference (CPU LAPACKE)
+#if BATCHLAS_HAS_HOST_BACKEND
 	{
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper));
 		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
 	}
+#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -300,9 +320,13 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Upper, ws_cta.to_span(), p).wait();
 
 		const Real tol_w = test_utils::tolerance<Scalar>();
+#if BATCHLAS_HAS_HOST_BACKEND
 		for (int i = 0; i < n; ++i) {
 			ASSERT_NEAR(W_cta[static_cast<std::size_t>(i)], W_ref[static_cast<std::size_t>(i)], tol_w) << "eigenvalue mismatch i=" << i;
 		}
+#else
+		(void)tol_w;
+#endif
 
 		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
 		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
@@ -324,10 +348,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
 	// Reference (CPU LAPACKE)
+#if BATCHLAS_HAS_HOST_BACKEND
 	{
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
 		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
 	}
+#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -339,19 +365,25 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
 		std::vector<Real> w_cta_sorted(static_cast<std::size_t>(n));
-		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
 		for (int i = 0; i < n; ++i) {
 			w_cta_sorted[static_cast<std::size_t>(i)] = W_cta[static_cast<std::size_t>(i)];
-			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
 		}
 		std::sort(w_cta_sorted.begin(), w_cta_sorted.end());
-		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
 
 		const Real tol_w = test_utils::tolerance<Scalar>() * Real(5);
+#if BATCHLAS_HAS_HOST_BACKEND
+		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
+		for (int i = 0; i < n; ++i) {
+			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
+		}
+		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
 		for (int i = 0; i < n; ++i) {
 			ASSERT_NEAR(w_cta_sorted[static_cast<std::size_t>(i)], w_ref_sorted[static_cast<std::size_t>(i)], tol_w)
 				<< "eigenvalue mismatch (sorted) i=" << i;
 		}
+#else
+		(void)tol_w;
+#endif
 
 		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
 		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
@@ -381,10 +413,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
 	if (dbg) std::cerr << "[cta-test] running NETLIB reference" << std::endl;
+#if BATCHLAS_HAS_HOST_BACKEND
 	{
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
 		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
 	}
+#endif
 	if (dbg) std::cerr << "[cta-test] NETLIB done" << std::endl;
 
 	if (dbg) std::cerr << "[cta-test] running CTA" << std::endl;
@@ -400,19 +434,25 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
 		std::vector<Real> w_cta_sorted(static_cast<std::size_t>(n));
-		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
 		for (int i = 0; i < n; ++i) {
 			w_cta_sorted[static_cast<std::size_t>(i)] = W_cta[static_cast<std::size_t>(i)];
-			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
 		}
 		std::sort(w_cta_sorted.begin(), w_cta_sorted.end());
-		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
 
 		const Real tol_w = test_utils::tolerance<Scalar>() * Real(5);
+#if BATCHLAS_HAS_HOST_BACKEND
+		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
+		for (int i = 0; i < n; ++i) {
+			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
+		}
+		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
 		for (int i = 0; i < n; ++i) {
 			ASSERT_NEAR(w_cta_sorted[static_cast<std::size_t>(i)], w_ref_sorted[static_cast<std::size_t>(i)], tol_w)
 				<< "eigenvalue mismatch (sorted) i=" << i;
 		}
+#else
+		(void)tol_w;
+#endif
 
 		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
 		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));

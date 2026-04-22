@@ -15,7 +15,9 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#if BATCHLAS_HAS_HOST_BACKEND
 #include <lapacke.h>
+#endif
 #include <limits>
 #include <stdexcept>
 #include <string>

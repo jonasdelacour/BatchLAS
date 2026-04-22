@@ -4,10 +4,6 @@
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"
 
-#if BATCHLAS_HAS_HOST_BACKEND
-#include <lapacke.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -114,6 +110,7 @@ inline int lapacke_gesvd_values_only(int n,
                                      Scalar* a_col_major,
                                      typename base_type<Scalar>::type* s_out,
                                      typename base_type<Scalar>::type* superb) {
+#if BATCHLAS_HAS_HOST_BACKEND
     if constexpr (std::is_same_v<Scalar, float>) {
         return LAPACKE_sgesvd(LAPACK_COL_MAJOR,
                               'N',
@@ -172,6 +169,13 @@ inline int lapacke_gesvd_values_only(int n,
                               1,
                               superb);
     }
+#else
+    (void)n;
+    (void)a_col_major;
+    (void)s_out;
+    (void)superb;
+    return -1;
+#endif
 }
 
 template <typename Scalar, Backend B>
