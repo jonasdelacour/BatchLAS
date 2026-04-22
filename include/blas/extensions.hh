@@ -425,7 +425,7 @@ namespace batchlas {
         //Setting this number to 1 is equivalent to full serialization of givens rotation applications, i.e. rotations are applied 1 at a time in the order they were applied to the tridiagonal matrix.
         size_t block_size = 32;
         //Maximum number of sweeps in each Francis QR iteration on average 2-3 iteartions are sufficient to converge to an eigenvalue. 
-        size_t max_sweeps = 10; 
+        size_t max_sweeps = 50; 
         //Threshold for regarding off-diagonal elements as zero  
         T zero_threshold = std::numeric_limits<T>::epsilon(); 
         //Use this toggle to control whether rotations are applied to the eigenvectors matrix passed to STEQR. If false, the matrix will be set to Identity and have rotations applied to this.
