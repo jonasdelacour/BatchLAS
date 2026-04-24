@@ -163,7 +163,9 @@ function(find_rocm_libs)
             message(STATUS "Found rocSOLVER: ${ROCSOLVER_LIBRARY}")
         endif()
 
-        set(BATCHLAS_ROCM_LINK_LIBRARIES ${ROCBLAS_LIBRARY} ${HIPSPARSE_LIBRARY} ${ROCSOLVER_LIBRARY} PARENT_SCOPE)
+        set(_rocm_link_libs ${ROCBLAS_LIBRARY} ${HIPSPARSE_LIBRARY} ${ROCSOLVER_LIBRARY})
+
+        set(BATCHLAS_ROCM_LINK_LIBRARIES ${_rocm_link_libs} PARENT_SCOPE)
         set(BATCHLAS_HAS_ROCM_BACKEND TRUE PARENT_SCOPE)
         set(BATCHLAS_ROCM_INCLUDE_DIR "${ROCM_PATH}/include" PARENT_SCOPE)
         message(STATUS "ROCm backend will be enabled")
