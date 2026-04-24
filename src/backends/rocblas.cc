@@ -340,6 +340,9 @@ namespace batchlas {
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            // ROCm 6.3 changed rocblas_[sdcz]trmm to the 14-arg out-of-place form:
+            //   ..., A, lda, B, ldb, C, ldc   (B=input, C=output)
+            // The old 16-arg variant (with a duplicate output pair) was removed.
             if constexpr (std::is_same_v<T, float>) {
                 rocblas_strmm(handle,
                               roc_side,
@@ -353,8 +356,6 @@ namespace batchlas {
                               A_i.ld(),
                               B_i.data_ptr(),
                               B_i.ld(),
-                              C_i.data_ptr(),
-                              C_i.ld(),
                               C_i.data_ptr(),
                               C_i.ld());
             } else if constexpr (std::is_same_v<T, double>) {
@@ -371,8 +372,6 @@ namespace batchlas {
                               B_i.data_ptr(),
                               B_i.ld(),
                               C_i.data_ptr(),
-                              C_i.ld(),
-                              C_i.data_ptr(),
                               C_i.ld());
             } else if constexpr (std::is_same_v<T, std::complex<float>>) {
                 rocblas_ctrmm(handle,
@@ -388,8 +387,6 @@ namespace batchlas {
                               reinterpret_cast<const rocblas_float_complex*>(B_i.data_ptr()),
                               B_i.ld(),
                               reinterpret_cast<rocblas_float_complex*>(C_i.data_ptr()),
-                              C_i.ld(),
-                              reinterpret_cast<rocblas_float_complex*>(C_i.data_ptr()),
                               C_i.ld());
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 rocblas_ztrmm(handle,
@@ -404,8 +401,6 @@ namespace batchlas {
                               A_i.ld(),
                               reinterpret_cast<const rocblas_double_complex*>(B_i.data_ptr()),
                               B_i.ld(),
-                              reinterpret_cast<rocblas_double_complex*>(C_i.data_ptr()),
-                              C_i.ld(),
                               reinterpret_cast<rocblas_double_complex*>(C_i.data_ptr()),
                               C_i.ld());
             }
@@ -436,17 +431,19 @@ namespace batchlas {
     #define SYR2K_INSTANTIATE(fp) \
     template Event syr2k<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
 
+    // syrk is constrained to RealScalar T — only instantiate for real types.
     #define BLAS_INSTANTIATE(fp) \
         GEMM_INSTANTIATE(fp) \
         GEMV_INSTANTIATE(fp) \
         TRSM_INSTANTIATE(fp) \
-        TRMM_INSTANTIATE(fp) \
-        SYRK_INSTANTIATE(fp)
+        TRMM_INSTANTIATE(fp)
 
     BLAS_INSTANTIATE(float)
     BLAS_INSTANTIATE(double)
     BLAS_INSTANTIATE(std::complex<float>)
     BLAS_INSTANTIATE(std::complex<double>)
+    SYRK_INSTANTIATE(float)
+    SYRK_INSTANTIATE(double)
     SYR2K_INSTANTIATE(float)
     SYR2K_INSTANTIATE(double)
 

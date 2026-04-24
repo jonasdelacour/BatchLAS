@@ -24,6 +24,12 @@ template <typename Group, typename T>
 inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
     if constexpr (is_user_constructed_group_v<Group>) {
         return sycl::select_from_group(group, value, typename group_type_t<Group>::id_type{});
+    } else if constexpr (requires { sg_leader_broadcast(group, value); }) {
+        // Custom group type (e.g., SubGroupPartition<P>) that provides
+        // sg_leader_broadcast() in its associated namespace via ADL.
+        // This path avoids __spirv_GroupNonUniformShuffle which is absent
+        // from AMD's AMDGCN device library.
+        return sg_leader_broadcast(group, value);
     } else {
         return sycl::group_broadcast(group, value);
     }

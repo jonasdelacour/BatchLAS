@@ -1,6 +1,7 @@
 #include <blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <util/group-invoke.hh>
+#include "sg_compat.hh"
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -26,13 +27,13 @@ inline T group_reduce_sum_select_from_group(const Group& g, T v) {
         Real re = v.real();
         Real im = v.imag();
         for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            re += sycl::permute_group_by_xor(g, re, offset);
-            im += sycl::permute_group_by_xor(g, im, offset);
+            re += permute_group_by_xor(g, re, offset);
+            im += permute_group_by_xor(g, im, offset);
         }
         return T(re, im);
     } else {
         for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            v += sycl::permute_group_by_xor(g, v, offset);
+            v += permute_group_by_xor(g, v, offset);
         }
         return v;
     }
@@ -54,7 +55,7 @@ inline T larfg_small(const Partition& part,
         return sycl::sqrt(sumsq);
     });
 
-    const T alpha_leader = sycl::select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
+    const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
     const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
         if (len <= 1) {
@@ -141,7 +142,7 @@ inline void gebrd_cta_impl(Queue& ctx,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
-                const auto part = sycl::ext::oneapi::experimental::chunked_partition<P>(sg);
+                const auto part = make_partition<P>(sg);
 
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());

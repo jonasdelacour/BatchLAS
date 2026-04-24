@@ -362,9 +362,15 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
         return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
     }
 
-    if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy) &&
-        detail::subgroup::gemm_workspace_supported_v<T>) {
-        return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
+    if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy)) {
+        // can_use_matrix_register_fast_path already checks register_matrix_workspace_supported_v<T>.
+        // Allocate full GemmWorkspace if it fits (to allow aligned-nn-large fallback at runtime),
+        // otherwise allocate only the smaller RegisterMatrixWorkspace.
+        if constexpr (detail::subgroup::gemm_workspace_supported_v<T>) {
+            return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
+        } else {
+            return detail::workspace_elements_v<T, detail::subgroup::RegisterMatrixWorkspace<T>>;
+        }
     }
     return 0;
 }
@@ -380,7 +386,8 @@ inline constexpr void dispatch_gemm(const Exec& exec,
     if constexpr (detail::NdItemLike<Exec>) {
         auto* gemm_workspace = workspace == nullptr ? nullptr : detail::workspace_ptr_cast<detail::subgroup::GemmWorkspace<T>>(workspace);
 
-        if (gemm_workspace != nullptr && detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(exec, a, operand, transform, Policy)) {
+        if (gemm_workspace != nullptr && detail::subgroup::can_use_matrix_aligned_nn_large_fast_path<T>(exec, a, operand, transform, Policy) &&
+            detail::subgroup::optimized_gemm_workspace_supported_v<T>) {
             detail::subgroup::gemm_aligned_nn_large(exec, a, operand, gemm_workspace);
             return;
         }
@@ -389,12 +396,22 @@ inline constexpr void dispatch_gemm(const Exec& exec,
         const int col_extent = detail::input_size(operand.b, transform.trans_b);
         const int contract_extent = detail::input_size(a, transform.trans_a);
         if (gemm_workspace != nullptr && detail::subgroup::can_use_matrix_register_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy) &&
-            detail::subgroup::gemm_workspace_supported_v<T>) {
+            detail::subgroup::register_matrix_workspace_supported_v<T>) {
             detail::subgroup::gemm_register_tiled(exec, a, operand, transform, gemm_workspace);
             return;
         }
         if (detail::subgroup::can_use_matrix_fast_path<T>(exec, row_extent, col_extent, contract_extent, Policy)) {
             detail::subgroup::gemm(exec, a, operand, transform);
+            return;
+        }
+        // For 3D nd_item launches without a fast path, multiple work-groups would
+        // independently iterate over all output cells in the generic fallback, causing
+        // data races. Restrict the generic fallback to the primary work-group only.
+        if constexpr (std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
+            if (detail::subgroup::matrix_tile_group_row(exec) == 0 &&
+                detail::subgroup::matrix_tile_group_col(exec) == 0) {
+                generic::gemm<Tag>(exec, a, operand);
+            }
             return;
         }
     }

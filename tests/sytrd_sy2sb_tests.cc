@@ -50,7 +50,7 @@ void expect_lower_banded_matches_ab(const MatrixView<Real, MatrixFormat::Dense>&
     }
 }
 
-template <typename Real>
+template <typename Real, Backend B = test_utils::gpu_backend>
 void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
                                        const MatrixView<Real, MatrixFormat::Dense>& A_sy2sb,
                                        const VectorView<Real>& tau,
@@ -78,12 +78,12 @@ void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
         }
 
         UnifiedVector<std::byte> ws_l(
-            ormqr_buffer_size<Backend::CUDA>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data()));
-        ormqr<Backend::CUDA>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data(), ws_l.to_span()).wait();
+            ormqr_buffer_size<B>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data()));
+        ormqr<B>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data(), ws_l.to_span()).wait();
 
         UnifiedVector<std::byte> ws_r(
-            ormqr_buffer_size<Backend::CUDA>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data()));
-        ormqr<Backend::CUDA>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data(), ws_r.to_span()).wait();
+            ormqr_buffer_size<B>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data()));
+        ormqr<B>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data(), ws_r.to_span()).wait();
     }
 }
 
@@ -97,8 +97,10 @@ struct SytrdSy2sbConfig {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdSy2sbTestTypes = ::testing::Types<SytrdSy2sbConfig<float, Backend::CUDA>, SytrdSy2sbConfig<double, Backend::CUDA>>;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+using SytrdSy2sbTestTypes = ::testing::Types<SytrdSy2sbConfig<float, Backend::ROCM>, SytrdSy2sbConfig<double, Backend::ROCM>>;
 #else
-using SytrdSy2sbTestTypes = ::testing::Types<>;
+using SytrdSy2sbTestTypes = ::testing::Types<SytrdSy2sbConfig<float, Backend::NETLIB>>;
 #endif
 
 template <typename Config>
@@ -106,7 +108,7 @@ class SytrdSy2sbTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SytrdSy2sbTest, SytrdSy2sbTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
@@ -131,7 +133,7 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
 
     // Compute B = Q^T * A0 * Q by applying stored reflectors to the trailing blocks.
     Matrix<Real, MatrixFormat::Dense> Bwork = A0;
-    apply_sy2sb_reflectors_to_trailing<Real>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
+    apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
 
     // Validate AB matches the lower band of B.
     expect_lower_banded_matches_ab(Bwork.view(), AB.view(), n, kd, tol);

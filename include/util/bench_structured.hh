@@ -49,7 +49,7 @@ struct ManagedInputs {
         auto queue = q;
         prepare_once.emplace_back([queue, s]() mutable {
             (void)s.set_access_device(*queue);
-
+            (void)s.set_preferred_location(*queue);
             (void)s.prefetch(*queue);
         });
         return *this;
@@ -75,7 +75,7 @@ struct ManagedInputs {
         auto queue = q;
         prepare_once.emplace_back([queue, v]() mutable {
             (void)v.set_access_device(*queue);
-
+            (void)v.set_preferred_location(*queue);
             (void)v.prefetch(*queue);
         });
         return *this;
@@ -85,7 +85,6 @@ struct ManagedInputs {
     ManagedInputs& prepare(const batchlas::MatrixView<T, F>& m) {
         auto queue = q;
         prepare_once.emplace_back([queue, m]() mutable {
-
             (void)m.set_access_device(*queue);
             (void)m.prefetch(*queue);
         });

@@ -12,7 +12,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#if BATCHLAS_HAS_HOST_BACKEND
 #include <lapacke.h>
+#endif
 #include <limits>
 #include <random>
 #include <sstream>
@@ -170,6 +172,13 @@ int call_lapack_stedc(int n, Real* d, Real* e) {
     }
 }
 
+bool should_run_impl(const std::string& opt_impl, const char* impl_name, bool type_matches = true) {
+    const std::string name(impl_name);
+    return type_matches && (opt_impl == name || opt_impl == "both" || opt_impl == "all");
+}
+#endif
+
+#if !BATCHLAS_HAS_HOST_BACKEND
 bool should_run_impl(const std::string& opt_impl, const char* impl_name, bool type_matches = true) {
     const std::string name(impl_name);
     return type_matches && (opt_impl == name || opt_impl == "both" || opt_impl == "all");

@@ -73,14 +73,18 @@ struct Device{
 
     Device(std::string type) {
         std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+        auto pick = [](std::vector<Device> devs, const std::string& name) -> Device {
+            if (devs.empty()) throw std::runtime_error("No " + name + " device available");
+            return devs.at(0);
+        };
         if(type == "cpu") {
-            *this = get_devices(DeviceType::CPU).at(0);
+            *this = pick(get_devices(DeviceType::CPU), "cpu");
         } else if(type == "gpu") {
-            *this = get_devices(DeviceType::GPU).at(0);
+            *this = pick(get_devices(DeviceType::GPU), "gpu");
         } else if(type == "accelerator") {
-            *this = get_devices(DeviceType::ACCELERATOR).at(0);
+            *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
-            throw std::runtime_error("Invalid device type");
+            throw std::runtime_error("Invalid device type: " + type);
         }
     }
 
