@@ -124,13 +124,22 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
-            auto sign = (e(m - 1, bid) >= 0) ? 1 : -1;
+            // When rho = e(m-1) is negative, the rank-1 perturbation has the
+            // form |rho| * u * u^T with u = e_{m-1} + sign(rho) * e_m (so that
+            // the diagonal corrections d1[m-1] -= |rho|, d2[0] -= |rho| match
+            // the off-diagonal value rho). The corresponding secular vector
+            // projected into the child-eigenvector basis therefore carries a
+            // sign(rho) factor on the components coming from Q2 (the second
+            // half of v). Without this sign flip the computed eigenvectors
+            // combine Q1 and Q2 columns with inconsistent signs and fail
+            // A*z = lambda*z even though A*z is numerically close to Z*Lambda.
+            const T v_sign2 = (e(m - 1, bid) >= T(0)) ? T(1) : T(-1);
             //Normalized v through division by sqrt(2)
             for (int i = tid; i < m; i += bdim) {
                 v(i, bid) = E1view(m - 1, i, bid) / std::sqrt(T(2));
             }
             for (int i = tid; i < n - m; i += bdim) {
-                v(i + m, bid) = E2view(0, i, bid) / std::sqrt(T(2));
+                v(i + m, bid) = v_sign2 * E2view(0, i, bid) / std::sqrt(T(2));
             }
         });
     });
@@ -141,7 +150,6 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
     //Deflation scheme
-    T reltol = T(64.0) * std::numeric_limits<T>::epsilon();
     ctx -> submit([&](sycl::handler& h) {
         auto Q = eigvects.kernel_view();
         auto perm_local = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
@@ -162,8 +170,27 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         }
 
         sycl::group_barrier(cta);
+
+        // Compute LAPACK-style absolute deflation tolerance: tol = 8*eps*max(|D|_inf, |z|_inf).
+        // We need this BEFORE the Givens loop so eigenvalue-proximity deflation uses the
+        // same (absolute) tolerance as the small-|z| deflation. The previous code used a
+        // relative tolerance (64*eps*max(1,|D_j|,|D_{j+1}|)) which massively under-deflated
+        // clustered small-magnitude eigenvalues, producing two near-parallel eigenvectors
+        // (good residual, bad orthogonality) -- the bimodal ortho distribution.
+        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
+        auto eig_max = sycl::joint_reduce(cta,
+                          util::get_raw_ptr(norm_mem),
+                          util::get_raw_ptr(norm_mem) + n,
+                          sycl::maximum<T>());
+        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid)); }
+        auto v_max_pre = sycl::joint_reduce(cta,
+                          util::get_raw_ptr(norm_mem),
+                          util::get_raw_ptr(norm_mem) + n,
+                          sycl::maximum<T>());
+        const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
+
         for (int j = 0; j < n - 1; j++) {
-            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= reltol * std::max(T(1), std::max(std::abs(eigenvalues(j + 1, bid)), std::abs(eigenvalues(j, bid))))) {
+            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
                 auto f = v(j + 1, bid);
                 auto g = v(j, bid);
                 auto [c, s, r] = internal::lartg(f, g);
@@ -174,23 +201,24 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                 }
                 const int32_t pj = perm_local[j];
                 const int32_t pj1 = perm_local[j + 1];
-                if (pj < 0 || pj >= n || pj1 < 0 || pj1 >= n) {
-                    continue;
+                if (pj >= 0 && pj < n && pj1 >= 0 && pj1 < n) {
+                    for (int k = tid; k < n; k += bdim) {
+                        auto Qi = Q(k, pj, bid), Qj = Q(k, pj1, bid);
+                        Q(k, pj, bid) = Qi*c - Qj*s;
+                        Q(k, pj1, bid) = Qj*c + Qi*s;
+                    }
                 }
-                for (int k = tid; k < n; k += bdim) {
-                    auto Qi = Q(k, pj, bid), Qj = Q(k, pj1, bid);
-                    Q(k, pj, bid) = Qi*c - Qj*s;
-                    Q(k, pj1, bid) = Qj*c + Qi*s;
-                }
+                // Make tid 0's writes to v(j, bid) and v(j+1, bid) visible to all threads
+                // before the next iteration reads v(j+1, bid) to compute its Givens pair.
+                sycl::group_barrier(cta);
             }
         }
 
         sycl::group_barrier(cta);
-        //auto v_norm = std::sqrt(sycl::joint_reduce(cta, util::get_raw_ptr(norm_mem), util::get_raw_ptr(norm_mem) + n, sycl::plus<T>()));
-        //LAPACK LAED8 based tolerance:
-        
+        //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
+
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max = sycl::joint_reduce(cta,
+        auto eig_max2 = sycl::joint_reduce(cta,
                           util::get_raw_ptr(norm_mem),
                           util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
@@ -201,7 +229,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                         util::get_raw_ptr(norm_mem),
                         util::get_raw_ptr(norm_mem) + n,
                         sycl::maximum<T>());
-        auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max);
+        auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max2, v_max);
 
         //if(tid == 0) sycl::ext::oneapi::experimental::printf("Tolerance for deflation: %e\n", tol);
         for (int k = tid; k < n; k += bdim) {
@@ -287,9 +315,9 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                 for (int k = tid; k < n; k += bdim) {
                     auto dview = Q_bid(Slice{}, k);
                     if (k == n - 1){
-                        temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid])) * sign;
+                        temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]));
                     } else {
-                        temp_lambdas(k, bid) = sec_solve_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), k) * sign;
+                        temp_lambdas(k, bid) = sec_solve_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), k);
                     }
                 }
                 sycl::group_barrier(cta);
@@ -311,19 +339,33 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
                     auto Qbid = Qview.batch_item(bid);
                     auto dd = n_reduced[bid];
 
+                    // Löwner-rescale z_tilde via the ~dd-term ratio product. A prior
+                    // fix promoted this accumulation to double to suppress a bimodal
+                    // orthogonality distribution, but the root cause turned out to be
+                    // the deflation tolerance (see absolute 8*eps*max(|D|,|z|) above).
+                    // With correct deflation, native-T accumulation matches double to
+                    // reported digits across n=16..256 for R/O/relerr.
                     for (int eid = 0; eid < dd; ++eid)
                     {
-                        auto Di = eigenvalues(eid, bid);
+                        const T Di = eigenvalues(eid, bid);
                         T partial = T(1);
                         for(int j = tid; j < dd; j += static_cast<int>(bdim))
                         {
-                            partial *= (j == eid) ? Qbid(eid, j) : Qbid(eid, j) / (Di - eigenvalues(j, bid));
+                            const T q_elem = Qbid(eid, j);
+                            T ratio;
+                            if (j == eid) {
+                                ratio = q_elem;
+                            } else {
+                                const T denom = Di - eigenvalues(j, bid);
+                                ratio = q_elem / denom;
+                            }
+                            partial *= ratio;
                         }
 
                         T valf = sycl::reduce_over_group(g, partial, sycl::multiplies<T>());
                         if(tid == 0)
                         {
-                            T mag  = sycl::sqrt(sycl::fabs(valf));
+                            T mag  = std::sqrt(std::fabs(valf));
                             T sign = v(eid, bid) >= T(0) ? T(1) : T(-1);
                             v(eid, bid) = sign * mag;
                         }

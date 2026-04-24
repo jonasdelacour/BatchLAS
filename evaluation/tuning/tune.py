@@ -24,6 +24,7 @@ class BenchSpace:
     direction: str  # "min" | "max"
     arg_spec: List[str]
     cases: List[Dict[str, Any]]  # each has {"fixed": {..}, "tune": {..}}
+    pre_tune: List[Dict[str, Any]]  # optional bench-level phases: {"params": {..}, "cases": [..]}
 
 
 def _repo_root() -> Path:
@@ -117,6 +118,127 @@ def _args_from_spec(arg_spec: List[str], fixed: Dict[str, int], params: Dict[str
     return out
 
 
+def _representative_case_params(case: Dict[str, Any], *, exclude: Optional[Sequence[str]] = None) -> Dict[str, int]:
+    representative: Dict[str, int] = {}
+    excluded = set(exclude or [])
+    for key, values in (case.get("tune") or {}).items():
+        if key in excluded:
+            continue
+        if not isinstance(values, list) or not values:
+            continue
+        representative[str(key)] = int(values[0])
+    return representative
+
+
+def _normalize_case_indices(total_cases: int, selected: Optional[Sequence[Any]]) -> List[int]:
+    if selected is None:
+        return list(range(total_cases))
+
+    indices: List[int] = []
+    for raw in selected:
+        idx = int(raw)
+        if idx < 0 or idx >= total_cases:
+            raise IndexError(f"Case index {idx} out of range for {total_cases} cases")
+        indices.append(idx)
+
+    if not indices:
+        raise ValueError("pre_tune phase must reference at least one case")
+
+    return indices
+
+
+def _collect_tune_keys(cases: Sequence[Dict[str, Any]], *, exclude: Optional[Sequence[str]] = None) -> Dict[str, List[int]]:
+    tune_keys: Dict[str, List[int]] = {}
+    excluded = set(exclude or [])
+    for case in cases:
+        for k, vs in (case.get("tune") or {}).items():
+            if k in excluded:
+                continue
+            if k not in tune_keys:
+                tune_keys[k] = list(vs)
+            else:
+                existing = set(tune_keys[k])
+                new = set(vs)
+                inter = existing.intersection(new)
+                tune_keys[k] = sorted(inter) if inter else sorted(existing.union(new))
+    return tune_keys
+
+
+def _tune_pre_phases(
+    *,
+    space: BenchSpace,
+    exe: Path,
+    backend: str,
+    dtype: str,
+    warmup: int,
+    min_time_ms: float,
+    min_iters: int,
+    max_iters: int,
+    verbose: bool,
+) -> Tuple[Dict[str, int], List[Dict[str, Any]]]:
+    resolved: Dict[str, int] = {}
+    summaries: List[Dict[str, Any]] = []
+
+    for phase_idx, phase in enumerate(space.pre_tune):
+        raw_params = phase.get("params") or {}
+        if not isinstance(raw_params, dict) or not raw_params:
+            raise ValueError(f"Invalid pre_tune phase at index {phase_idx}: expected non-empty 'params' object")
+
+        case_indices = _normalize_case_indices(len(space.cases), phase.get("cases"))
+        candidate_grid = {str(k): [int(v) for v in vs] for k, vs in raw_params.items()}
+
+        best: Optional[Dict[str, Any]] = None
+        for params in _iter_grid(candidate_grid):
+            effective_params = {**resolved, **params}
+            values: List[float] = []
+
+            for case_idx in case_indices:
+                case = space.cases[case_idx]
+                fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
+                case_defaults = _representative_case_params(case, exclude=effective_params.keys())
+                args = _args_from_spec(
+                    space.arg_spec,
+                    fixed=fixed,
+                    params={**case_defaults, **effective_params},
+                )
+                values.append(
+                    _run_one_case(
+                        exe=exe,
+                        backend=backend,
+                        dtype=dtype,
+                        metric=space.metric,
+                        warmup=warmup,
+                        min_time_ms=min_time_ms,
+                        min_iters=min_iters,
+                        max_iters=max_iters,
+                        args=args,
+                    )
+                )
+
+            score = _score(values, space.direction)
+            entry = {
+                "phase_index": phase_idx,
+                "params": dict(params),
+                "resolved_params": dict(effective_params),
+                "cases": case_indices,
+                "values": values,
+                "score": score,
+            }
+            if verbose:
+                pretty = ", ".join(f"{k}={v}" for k, v in effective_params.items())
+                avg = sum(values) / max(1, len(values))
+                print(f"[{space.bench}:pre_tune:{phase_idx}] {pretty} -> avg={avg:.6g} ({space.metric})")
+
+            if best is None or entry["score"] < best["score"]:
+                best = entry
+
+        assert best is not None
+        resolved.update({k: int(v) for k, v in best["params"].items()})
+        summaries.append(best)
+
+    return resolved, summaries
+
+
 def _run_one_case(
     *,
     exe: Path,
@@ -170,6 +292,7 @@ def _load_spaces(path: Path) -> List[BenchSpace]:
                 direction=str(s.get("direction") or "min"),
                 arg_spec=list(s["arg_spec"]),
                 cases=list(s["cases"]),
+                pre_tune=list(s.get("pre_tune") or []),
             )
         )
     return spaces
@@ -192,26 +315,28 @@ def _tune_one_bench(
     leaderboard: List[Dict[str, Any]] = []
     per_case_best: List[Optional[Dict[str, Any]]] = [None for _ in space.cases]
 
-    # For now, we assume all cases share the same tuning keys.
-    tune_keys: Dict[str, List[int]] = {}
-    for case in space.cases:
-        for k, vs in (case.get("tune") or {}).items():
-            if k not in tune_keys:
-                tune_keys[k] = list(vs)
-            else:
-                # If repeated, keep intersection if possible; otherwise just keep the union.
-                existing = set(tune_keys[k])
-                new = set(vs)
-                inter = existing.intersection(new)
-                tune_keys[k] = sorted(inter) if inter else sorted(existing.union(new))
+    resolved_pre_tune, pre_tune_summary = _tune_pre_phases(
+        space=space,
+        exe=exe,
+        backend=backend,
+        dtype=dtype,
+        warmup=warmup,
+        min_time_ms=min_time_ms,
+        min_iters=min_iters,
+        max_iters=max_iters,
+        verbose=verbose,
+    )
+
+    tune_keys = _collect_tune_keys(space.cases, exclude=resolved_pre_tune.keys())
 
     for params in _iter_grid(tune_keys):
+        effective_params = {**resolved_pre_tune, **params}
         values: List[float] = []
         per_case: List[Dict[str, Any]] = []
 
         for case_idx, case in enumerate(space.cases):
             fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
-            args = _args_from_spec(space.arg_spec, fixed=fixed, params=params)
+            args = _args_from_spec(space.arg_spec, fixed=fixed, params=effective_params)
             v = _run_one_case(
                 exe=exe,
                 backend=backend,
@@ -241,15 +366,15 @@ def _tune_one_bench(
                     "fixed": fixed,
                     "args": args,
                     "value": v,
-                    "params": dict(params),
+                    "params": dict(effective_params),
                 }
 
         s = _score(values, space.direction)
-        entry = {"params": params, "score": s, "values": values, "cases": per_case}
+        entry = {"params": effective_params, "score": s, "values": values, "cases": per_case}
 
         if verbose:
             # Print minimal progress; keep stdout readable.
-            pretty = ", ".join(f"{k}={v}" for k, v in params.items())
+            pretty = ", ".join(f"{k}={v}" for k, v in effective_params.items())
             avg = sum(values) / max(1, len(values))
             print(f"[{space.bench}] {pretty} -> avg={avg:.6g} ({space.metric})")
 
@@ -268,6 +393,7 @@ def _tune_one_bench(
         "metric": space.metric,
         "direction": space.direction,
         "arg_spec": space.arg_spec,
+        "pre_tune": pre_tune_summary,
         "best": best,
         "top": leaderboard,
         "per_case_best": [x for x in per_case_best if x is not None],

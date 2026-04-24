@@ -38,11 +38,11 @@ struct Options {
     double log10_cond_max = 10.0;
     unsigned int seed = 1234u;
     size_t max_sweeps = 100;
-    SteqrUpdateScheme scheme = SteqrUpdateScheme::PG;
-    std::string cta_shift = "wilkinson"; // lapack|wilkinson
+    SteqrUpdateScheme scheme = SteqrUpdateScheme::EXP;
+    std::string cta_shift = "lapack"; // lapack|wilkinson
     int sytrd_block_size = 32;
     int ormqr_block_size = 32;
-    int syevx_iterations = 10;
+    int syevx_iterations = 50;
     int syevx_extra_directions = 0;
     int syevx_neigs = -1;
     bool syevx_find_largest = false;
@@ -65,6 +65,10 @@ SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
     if (key == "lapack") return SteqrShiftStrategy::Lapack;
     if (key == "wilkinson") return SteqrShiftStrategy::Wilkinson;
     throw std::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
+}
+
+const char* scheme_name(SteqrUpdateScheme scheme) {
+    return (scheme == SteqrUpdateScheme::PG) ? "pg" : "exp";
 }
 
 std::string syev_dispatch_impl_name() {
@@ -295,6 +299,8 @@ template <Backend B, typename Real>
 void emit_metrics_rows(std::ofstream& out,
                        Queue& q,
                        const char* impl_name,
+                       const char* scheme_label,
+                       const char* cta_shift_label,
                        int neigs,
                        bool compare_largest,
                        const Options& opt,
@@ -371,6 +377,8 @@ void emit_metrics_rows(std::ofstream& out,
             << impl_name << ","
             << opt.backend << ","
             << opt.dtype << ","
+            << (scheme_label ? scheme_label : "") << ","
+            << (cta_shift_label ? cta_shift_label : "") << ","
             << target_log10_cond << ","
             << cond << ","
             << log10_cond << ","
@@ -427,7 +435,7 @@ int run_accuracy(const Options& opt) {
         return 4;
     }
 
-    out << "sample,n,neigs,impl,backend,dtype,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr\n";
+    out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
@@ -507,6 +515,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                impl_name,
+                                               scheme_name(opt.scheme),
+                                               opt.cta_shift.c_str(),
                                                n,
                                                false,
                                                opt,
@@ -553,6 +563,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                "stedc",
+                                               scheme_name(opt.scheme),
+                                               opt.cta_shift.c_str(),
                                                n,
                                                false,
                                                opt,
@@ -595,6 +607,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                impl_name,
+                                               scheme_name(opt.scheme),
+                                               opt.cta_shift.c_str(),
                                                n,
                                                false,
                                                opt,
@@ -633,6 +647,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                "syev_blocked",
+                                               "",
+                                               "",
                                                n,
                                                false,
                                                opt,
@@ -673,6 +689,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                impl_name.c_str(),
+                                               "",
+                                               "",
                                                n,
                                                false,
                                                opt,
@@ -729,6 +747,8 @@ int run_accuracy(const Options& opt) {
                     emit_metrics_rows<B, Real>(out,
                                                *q,
                                                "syevx",
+                                               "",
+                                               "",
                                                neigs,
                                                opt.syevx_find_largest,
                                                opt,

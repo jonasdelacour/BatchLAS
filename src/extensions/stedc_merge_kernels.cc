@@ -44,31 +44,15 @@ void stedc_merge_fused(Queue& ctx,
                     return;
                 }
 
-                // Root solve: for small dd, solve on private D vectors and write the
-                // mutated solver state back to Q_bid(:,k). This preserves the exact
-                // downstream math while removing the up-front dd*dd initialization pass.
-                if (dd <= 128) {
-                    T d_priv[128];
-                    auto z_view = v.batch_item(bid);
-                    const T abs_2rho = std::abs(T(2) * rho[bid]);
-                    for (int k = tid; k < dd; k += bdim) {
-                        for (int i = 0; i < dd; ++i) {
-                            d_priv[i] = eigenvalues(i, bid);
-                        }
-
-                        auto dview = VectorView<T>(d_priv, dd);
-                        if (k == dd - 1) {
-                            temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, z_view, abs_2rho) * sign;
-                        } else {
-                            temp_lambdas(k, bid) = sec_solve_roc(dd, dview, z_view, abs_2rho, k) * sign;
-                        }
-
-                        for (int i = 0; i < dd; ++i) {
-                            Q_bid(i, k) = d_priv[i];
-                        }
-                    }
-                } else {
-                    // Fallback path for larger dd: keep baseline in-place behavior.
+                // Root solve: initialize each column j of Q_bid with eigenvalues(:, bid)
+                // and run the secular solver in-place on column k so that
+                // `apply_shift_to_poles` updates Q_bid(:, k) directly. A previous
+                // "fast path" stored the poles in a private `T d_priv[128]` array
+                // and copied back to Q_bid after the solve; that path produced a
+                // bimodal orthogonality distribution (float STEDC n<=64) versus the
+                // baseline 3-kernel path, while the in-place variant below matches
+                // baseline exactly.
+                {
                     for (int k = tid; k < dd * dd; k += bdim) {
                         const int i = k % dd;
                         const int j = k / dd;
@@ -79,26 +63,35 @@ void stedc_merge_fused(Queue& ctx,
                     for (int k = tid; k < dd; k += bdim) {
                         auto dview = Q_bid(Slice{}, k);
                         if (k == dd - 1) {
-                            temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid])) * sign;
+                            temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]));
                         } else {
-                            temp_lambdas(k, bid) = sec_solve_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), k) * sign;
+                            temp_lambdas(k, bid) = sec_solve_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), k);
                         }
                     }
                 }
                 sycl::group_barrier(cta);
 
                 if (do_rescale) {
-                    // Baseline rescale kernel math.
+                    // Löwner rescale: native T is sufficient once deflation uses the
+                    // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
                     for (int eid = 0; eid < dd; ++eid) {
                         const T Di = eigenvalues(eid, bid);
                         T partial = T(1);
                         for (int j = tid; j < dd; j += static_cast<int>(bdim)) {
-                            partial *= (j == eid) ? Q_bid(eid, j) : Q_bid(eid, j) / (Di - eigenvalues(j, bid));
+                            const T q_elem = Q_bid(eid, j);
+                            T ratio;
+                            if (j == eid) {
+                                ratio = q_elem;
+                            } else {
+                                const T denom = Di - eigenvalues(j, bid);
+                                ratio = q_elem / denom;
+                            }
+                            partial *= ratio;
                         }
 
                         T valf = sycl::reduce_over_group(cta, partial, sycl::multiplies<T>());
                         if (tid == 0) {
-                            T mag = sycl::sqrt(sycl::fabs(valf));
+                            T mag = std::sqrt(std::fabs(valf));
                             T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
                             v(eid, bid) = sgn * mag;
                         }

@@ -264,8 +264,18 @@ inline T compute_roc_step(ShiftedEvalResult<T, Adapter>& eval,
     return step;
 }
 
+// Result of a secular-equation root solve. We return origin and tau separately
+// so the caller can compute denominators as `(d_prob[i] - origin) - tau` and
+// preserve precision when d_prob[i] equals the origin pole (catastrophic
+// cancellation destroys tau when computed as `d_prob[i] - (origin + tau)`).
+template <typename T>
+struct RocRoot {
+    T origin;
+    T tau;
+};
+
 template <typename T, typename Adapter>
-inline T solve_root_roc_generic(const Adapter& adapter,
+inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
@@ -333,7 +343,7 @@ inline T solve_root_roc_generic(const Adapter& adapter,
     T ratio_sq = state.ratio_sq;
 
     if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
-        return origin + tau;
+        return {origin, tau};
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
@@ -383,11 +393,11 @@ inline T solve_root_roc_generic(const Adapter& adapter,
         }
     }
 
-    return origin + tau;
+    return {origin, tau};
 }
 
 template <typename T, typename Adapter>
-inline T solve_root_ext_generic(const Adapter& adapter,
+inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
@@ -439,7 +449,7 @@ inline T solve_root_ext_generic(const Adapter& adapter,
             - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
     if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
-        return origin + tau;
+        return {origin, tau};
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
@@ -502,7 +512,7 @@ inline T solve_root_ext_generic(const Adapter& adapter,
               - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
     }
 
-    return origin + tau;
+    return {origin, tau};
 }
 
 template <typename T, typename Partition>
@@ -529,7 +539,7 @@ inline ShiftedEvalResult<T, Partition> evaluate_shifted_partition(
 }
 
 template <typename T, typename Partition>
-inline T solve_root_roc_partition(const Partition& partition,
+inline RocRoot<T> solve_root_roc_partition(const Partition& partition,
                                   const VectorView<T>& d_prob,
                                   const VectorView<T>& z_prob,
                                   int32_t dd,
@@ -541,7 +551,7 @@ inline T solve_root_roc_partition(const Partition& partition,
 }
 
 template <typename T, typename Partition>
-inline T solve_root_ext_partition(const Partition& partition,
+inline RocRoot<T> solve_root_ext_partition(const Partition& partition,
                                   const VectorView<T>& d_prob,
                                   const VectorView<T>& z_prob,
                                   int32_t dd,
@@ -577,7 +587,7 @@ inline ShiftedEvalResult<T, sycl::group<1>> evaluate_shifted_wg(
 }
 
 template <typename T>
-inline T solve_root_roc_wg(const sycl::group<1>& wg,
+inline RocRoot<T> solve_root_roc_wg(const sycl::group<1>& wg,
                            int32_t tid,
                            int32_t bdim,
                            const VectorView<T>& d_prob,
@@ -591,7 +601,7 @@ inline T solve_root_roc_wg(const sycl::group<1>& wg,
 }
 
 template <typename T>
-inline T solve_root_ext_wg(const sycl::group<1>& wg,
+inline RocRoot<T> solve_root_ext_wg(const sycl::group<1>& wg,
                            int32_t tid,
                            int32_t bdim,
                            const VectorView<T>& d_prob,
@@ -608,19 +618,24 @@ inline void write_denominator_column(QBatch& Q_bid,
                                      const VectorView<T>& d_prob,
                                      int32_t dd,
                                      int32_t root_ix,
-                                     T lambda,
+                                     T origin,
+                                     T tau,
                                      int32_t lane,
                                      int32_t width) {
+    // Compute denom as (d_prob[i] - origin) - tau separately rather than
+    // d_prob[i] - (origin + tau). For i equal to the origin pole this
+    // yields -tau exactly, preserving precision that is otherwise lost
+    // when tau is much smaller than origin. With precise denom the
+    // secular solver guarantees tau != 0 for non-deflated roots, so we
+    // only clamp exact zeros (from extreme cancellation) to epsilon to
+    // avoid NaN in the Löwner reciprocal division.
     for (int32_t i = lane; i < dd; i += width) {
-        T denom = d_prob(i) - lambda;
-        const T floor = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
-        if (sycl::fabs(denom) < floor) {
-            const T s = (denom == T(0)) ? T(1) : sycl::copysign(T(1), denom);
-            denom = s * floor;
+        T denom = (d_prob(i) - origin) - tau;
+        if (denom == T(0)) {
+            denom = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
         }
         Q_bid(i, root_ix) = denom;
-    }
-}
+    }}
 
 template <typename T, typename QBatch, typename VView>
 inline void maybe_rescale_vectors(bool do_rescale,
@@ -636,16 +651,26 @@ inline void maybe_rescale_vectors(bool do_rescale,
         return;
     }
 
+    // Löwner rescale: native T is sufficient once deflation uses the
+    // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
     for (int32_t eid = 0; eid < dd; ++eid) {
         const T Di = d_prob(eid);
         T partial = T(1);
         for (int32_t j = lane; j < dd; j += width) {
-            partial *= (j == eid) ? Q_bid(eid, j) : Q_bid(eid, j) / (Di - d_prob(j));
+            const T q_elem = Q_bid(eid, j);
+            T ratio;
+            if (j == eid) {
+                ratio = q_elem;
+            } else {
+                const T denom = Di - d_prob(j);
+                ratio = q_elem / denom;
+            }
+            partial *= ratio;
         }
 
         const T valf = sycl::reduce_over_group(wg, partial, sycl::multiplies<T>());
         if (lane == 0) {
-            const T mag = sycl::sqrt(sycl::fabs(valf));
+            const T mag = std::sqrt(std::fabs(valf));
             const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
             v(eid, bid) = sgn * mag;
         }
@@ -736,19 +761,19 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
                 for (int32_t root_ix = part_id; root_ix < dd; root_ix += parts_per_wg) {
-                    T lambda;
+                    RocRoot<T> root;
                     if (root_ix == dd - 1) {
-                        lambda = solve_root_ext_partition(partition, d_prob, z_prob, dd,
+                        root = solve_root_ext_partition(partition, d_prob, z_prob, dd,
                                                           abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     } else {
-                        lambda = solve_root_roc_partition(partition, d_prob, z_prob, dd, root_ix,
+                        root = solve_root_roc_partition(partition, d_prob, z_prob, dd, root_ix,
                                                           abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     }
 
                     if (lane == 0) {
-                        temp_lambdas(root_ix, bid) = lambda * sign;
+                        temp_lambdas(root_ix, bid) = root.origin + root.tau;
                     }
-                    write_denominator_column(Q_bid, d_prob, dd, root_ix, lambda, lane, P);
+                    write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, lane, P);
                 }
 
                 sycl::group_barrier(wg);
@@ -812,19 +837,19 @@ void stedc_merge_fused_wg(Queue& ctx,
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
                 for (int32_t root_ix = 0; root_ix < dd; ++root_ix) {
-                    T lambda;
+                    RocRoot<T> root;
                     if (root_ix == dd - 1) {
-                        lambda = solve_root_ext_wg(wg, tid, bdim, d_prob, z_prob, dd,
+                        root = solve_root_ext_wg(wg, tid, bdim, d_prob, z_prob, dd,
                                                    abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     } else {
-                        lambda = solve_root_roc_wg(wg, tid, bdim, d_prob, z_prob, dd, root_ix,
+                        root = solve_root_roc_wg(wg, tid, bdim, d_prob, z_prob, dd, root_ix,
                                                    abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     }
 
                     if (tid == 0) {
-                        temp_lambdas(root_ix, bid) = lambda * sign;
+                        temp_lambdas(root_ix, bid) = root.origin + root.tau;
                     }
-                    write_denominator_column(Q_bid, d_prob, dd, root_ix, lambda, tid, bdim);
+                    write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, tid, bdim);
                 }
 
                 sycl::group_barrier(wg);

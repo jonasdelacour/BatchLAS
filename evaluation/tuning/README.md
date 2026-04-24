@@ -6,6 +6,7 @@ This directory contains a minimal grid-search tuner that reuses the existing ben
 
 - Runs one or more benchmark executables for a fixed set of problem sizes.
 - Sweeps a small discrete search space of tuning parameters (block sizes, thresholds, etc.).
+- Optionally pre-tunes selected parameters on a representative subset of cases before the main cross-case search.
 - Chooses the parameter set that minimizes the selected timing metric averaged across the configured cases.
 - Writes a JSON “tuning profile” you can later consume in the library (compile-time or runtime).
 
@@ -21,6 +22,16 @@ From the repo root, after building benchmarks:
 Notes:
 - Some benchmarks are only built/active for certain backends (e.g. `sytrd_blocked_benchmark` is CUDA-only today). Use `--skip-missing` to ignore unavailable executables.
 - You can change problem sizes and search ranges by editing the JSON space file.
+
+## Tuning space format
+
+Each bench entry contains:
+
+- `arg_spec`: positional benchmark arguments.
+- `cases`: problem sizes, each with `fixed` args and a case-local `tune` grid.
+- Optional `pre_tune`: one or more bench-level phases of the form `{ "params": { ... }, "cases": [ ... ] }`.
+
+`pre_tune` phases run before the main search. The selected values are then injected into every case as fixed parameters for the main sweep and are still recorded in the final profile's `best`, `top`, and `per_case_best` parameter sets.
 
 ## Output format (high level)
 
@@ -87,6 +98,8 @@ When tuning data includes multiple `n` cases, bucketed values are derived from e
 ## STEDC bottom-up cases
 
 STEDC tuning cases start at `n=64` and above. Leaf sizes `n <= 32` are intentionally not tuned separately.
+
+The default STEDC space pre-tunes `recursion_threshold` on the `n=64` case only, then reuses that threshold for the cross-size sweep of merge variant and workgroup settings.
 
 At runtime, recursion thresholds are clamped to local subproblem size (`threshold <= n`) at each recursion level.
 

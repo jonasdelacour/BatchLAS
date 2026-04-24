@@ -6,11 +6,18 @@
       "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "recursion_threshold", "flat", "threads_per_root", "wg_multiplier"],
+      "pre_tune": [
+        {
+          "params": {
+            "recursion_threshold": [8, 16, 32, 64]
+          },
+          "cases": [0]
+        }
+      ],
       "cases": [
         {
           "fixed": {"n": 64, "batch": 8192},
           "tune": {
-            "recursion_threshold": [8, 16, 32, 64],
             "flat": [0, 1, 2],
             "threads_per_root": [4, 8, 16, 32],
             "wg_multiplier": [1, 2, 4]
@@ -19,7 +26,6 @@
         {
           "fixed": {"n": 128, "batch": 4096},
           "tune": {
-            "recursion_threshold": [8, 16, 32, 64],
             "flat": [0, 1, 2],
             "threads_per_root": [4, 8, 16, 32],
             "wg_multiplier": [1, 2, 4]
@@ -28,7 +34,6 @@
         {
           "fixed": {"n": 256, "batch": 2048},
           "tune": {
-            "recursion_threshold": [8, 16, 32, 64],
             "flat": [0, 1, 2],
             "threads_per_root": [4, 8, 16, 32],
             "wg_multiplier": [1, 2, 4]
@@ -37,7 +42,6 @@
         {
           "fixed": {"n": 512, "batch": 1024},
           "tune": {
-            "recursion_threshold": [8, 16, 32, 64],
             "flat": [0, 1, 2],
             "threads_per_root": [4, 8, 16, 32],
             "wg_multiplier": [1, 2, 4]
@@ -46,7 +50,6 @@
         {
           "fixed": {"n": 1024, "batch": 512},
           "tune": {
-            "recursion_threshold": [8, 16, 32, 64],
             "flat": [0, 1, 2],
             "threads_per_root": [4, 8, 16, 32],
             "wg_multiplier": [1, 2, 4]
