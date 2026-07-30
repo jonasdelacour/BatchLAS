@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import datetime as _dt
 import json
 import os
@@ -15,6 +14,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from common.benchmark_runner import default_benchmark_path, default_build_dir, parse_minibench_csv
 
 
 @dataclass(frozen=True)
@@ -42,14 +43,6 @@ class Measurement:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def _default_build_dir(repo_root: Path) -> Path:
-    return repo_root / "build"
-
-
-def _default_benchmark_path(build_dir: Path, exe_name: str) -> Path:
-    return build_dir / "benchmarks" / exe_name
 
 
 def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
@@ -234,59 +227,6 @@ def _metric_is_lower_better(metric: str) -> bool:
     return not _metric_is_higher_better(metric)
 
 
-def _parse_minibench_csv(csv_path: Path, *, expected_metric: str, bench: str) -> List[Measurement]:
-    out: List[Measurement] = []
-    with csv_path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise RuntimeError(f"CSV has no header: {csv_path}")
-
-        # Confirm metric exists (helpful error)
-        if expected_metric not in reader.fieldnames:
-            raise RuntimeError(
-                f"Expected metric column '{expected_metric}' not found in {csv_path}. "
-                f"Columns: {', '.join(reader.fieldnames)}"
-            )
-
-        for row in reader:
-            name = (row.get("name") or "").strip().strip('"')
-            backend, dtype = _guess_backend_and_type_from_name(name)
-
-            # Collect args arg0..argN (ignore trailing empties)
-            args: List[int] = []
-            i = 0
-            while True:
-                k = f"arg{i}"
-                if k not in row:
-                    break
-                v = (row.get(k) or "").strip()
-                if v == "":
-                    break
-                args.append(int(v))
-                i += 1
-
-            metric_val = float(row[expected_metric])
-            avg_ms = float(row.get("avg_ms") or 0.0)
-            stddev_ms = float(row.get("stddev_ms") or 0.0)
-
-            out.append(
-                Measurement(
-                    key=MeasurementKey(
-                        bench=bench,
-                        backend=backend,
-                        dtype=dtype,
-                        args=tuple(args),
-                        metric=expected_metric,
-                    ),
-                    value=metric_val,
-                    avg_ms=avg_ms,
-                    stddev_ms=stddev_ms,
-                )
-            )
-
-    return out
-
-
 def _run_one_benchmark(
     *,
     exe: Path,
@@ -375,7 +315,21 @@ def _run_one_benchmark(
                 },
             )
 
-            parsed = _parse_minibench_csv(csv_path, expected_metric=expected_metric, bench=bench)
+            parsed = [
+                Measurement(
+                    key=MeasurementKey(
+                        bench=bench,
+                        backend=_guess_backend_and_type_from_name(row["name"])[0],
+                        dtype=_guess_backend_and_type_from_name(row["name"])[1],
+                        args=tuple(row["args"]),
+                        metric=row["metric"],
+                    ),
+                    value=row["value"],
+                    avg_ms=row["avg_ms"],
+                    stddev_ms=row["stddev_ms"],
+                )
+                for row in parse_minibench_csv(csv_path, expected_metric=expected_metric)
+            ]
             # With explicit ARGS we expect exactly one result row.
             if len(parsed) != 1:
                 raise RuntimeError(

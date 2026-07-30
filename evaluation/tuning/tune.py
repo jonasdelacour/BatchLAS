@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import datetime as _dt
 import itertools
 import json
 import os
 import platform
-import subprocess
-import tempfile
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.benchmark_runner import default_benchmark_path, default_build_dir, run_minibench_csv
 
 
 @dataclass(frozen=True)
@@ -31,63 +32,12 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _default_build_dir(repo_root: Path) -> Path:
-    return repo_root / "build"
-
-
-def _default_benchmark_path(build_dir: Path, exe_name: str) -> Path:
-    return build_dir / "benchmarks" / exe_name
-
-
 def _default_space_path(repo_root: Path) -> Path:
     return repo_root / "evaluation" / "tuning" / "spaces" / "default.json"
 
 
 def _default_output_path(build_dir: Path) -> Path:
     return build_dir / "tuning" / "profile.json"
-
-
-def _run_cmd(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> None:
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, check=True)
-
-
-def _parse_minibench_csv(csv_path: Path, *, expected_metric: str) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    with csv_path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise RuntimeError(f"CSV has no header: {csv_path}")
-        if expected_metric not in reader.fieldnames:
-            raise RuntimeError(
-                f"Expected metric column '{expected_metric}' not found in {csv_path}. "
-                f"Columns: {', '.join(reader.fieldnames)}"
-            )
-        for row in reader:
-            name = (row.get("name") or "").strip().strip('"')
-            args: List[int] = []
-            i = 0
-            while True:
-                k = f"arg{i}"
-                if k not in row:
-                    break
-                v = (row.get(k) or "").strip()
-                if v == "":
-                    break
-                args.append(int(v))
-                i += 1
-
-            rows.append(
-                {
-                    "name": name,
-                    "args": args,
-                    "metric": expected_metric,
-                    "value": float(row[expected_metric]),
-                    "avg_ms": float(row.get("avg_ms") or 0.0),
-                    "stddev_ms": float(row.get("stddev_ms") or 0.0),
-                }
-            )
-
-    return rows
 
 
 def _score(values: Sequence[float], direction: str) -> float:
@@ -251,26 +201,23 @@ def _run_one_case(
     max_iters: int,
     args: List[int],
 ) -> float:
-    with tempfile.TemporaryDirectory(prefix="batchlas-tune-") as td:
-        csv_path = Path(td) / "out.csv"
-        cmd = [
-            str(exe),
-            f"--backend={backend}",
-            f"--type={dtype}",
-            f"--csv={csv_path}",
-            f"--warmup={warmup}",
-            f"--min_time={min_time_ms}",
-            f"--min_iters={min_iters}",
-            f"--max_iters={max_iters}",
-        ] + [str(x) for x in args]
-
-        _run_cmd(cmd)
-        rows = _parse_minibench_csv(csv_path, expected_metric=metric)
-        if not rows:
-            raise RuntimeError(
-                f"No rows produced by {exe} for backend={backend} type={dtype} args={args}. "
-                "This usually means the benchmark wasn't registered for that backend/type (compiled out)"
-            )
+    rows = run_minibench_csv(
+        exe,
+        backend=backend,
+        dtype=dtype,
+        metric=metric,
+        warmup=warmup,
+        min_time_ms=min_time_ms,
+        min_iters=min_iters,
+        max_iters=max_iters,
+        args=args,
+        prefix="batchlas-tune-",
+    )
+    if not rows:
+        raise RuntimeError(
+            f"No rows produced by {exe} for backend={backend} type={dtype} args={args}. "
+            "This usually means the benchmark wasn't registered for that backend/type (compiled out)"
+        )
 
         # Usually there is exactly one row after backend/type filtering.
         # If multiple appear, choose the first.
