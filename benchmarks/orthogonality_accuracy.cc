@@ -1,6 +1,7 @@
 #include <blas/functions.hh>
 #include <blas/extra.hh>
 #include <blas/linalg.hh>
+#include "accuracy_utils.hh"
 #include <util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
@@ -23,6 +24,12 @@ using namespace batchlas;
 
 namespace {
 
+using accuracy::extract_tridiagonal;
+using accuracy::orthogonality_residuals;
+using accuracy::parse_shift_strategy;
+using accuracy::starts_with;
+using accuracy::to_lower;
+
 struct Options {
     std::string impl = "all";
     std::string backend = "CUDA";
@@ -38,24 +45,6 @@ struct Options {
     std::string cta_shift = "wilkinson";
     std::string output = "output/accuracy/orthogonality_accuracy.csv";
 };
-
-bool starts_with(const std::string& s, const std::string& prefix) {
-    return s.rfind(prefix, 0) == 0;
-}
-
-std::string to_lower(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
-    const auto key = to_lower(value);
-    if (key == "lapack") return SteqrShiftStrategy::Lapack;
-    if (key == "wilkinson") return SteqrShiftStrategy::Wilkinson;
-    throw std::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
-}
 
 Options parse_args(int argc, char** argv) {
     Options opt;
@@ -125,52 +114,6 @@ Options parse_args(int argc, char** argv) {
 
 bool run_impl(const std::string& selected, const std::string& name, const std::string& group) {
     return selected == "all" || selected == name || selected == group;
-}
-
-template <Backend B, typename Real>
-UnifiedVector<typename batchlas::base_type<Real>::type> orthogonality_residuals(
-    Queue& q,
-    const Matrix<Real, MatrixFormat::Dense>& Q) {
-    const int n = Q.rows();
-    const int batch = Q.batch_size();
-    auto qtq_minus_i = Matrix<Real>::Identity(n, batch);
-    gemm<B, Real>(q,
-                  Q.view(),
-                  Q.view(),
-                  qtq_minus_i.view(),
-                  Real(1),
-                  Real(-1),
-                  Transpose::Trans,
-                  Transpose::NoTrans);
-    q.wait();
-    return norm(q, qtq_minus_i.view(), NormType::Frobenius);
-}
-
-template <typename Real>
-void extract_tridiagonal(Queue& q,
-                         const MatrixView<Real, MatrixFormat::Dense>& dense,
-                         Vector<Real>& d,
-                         Vector<Real>& e) {
-    const int n = dense.rows();
-    const int batch = dense.batch_size();
-    auto a_view = dense.kernel_view();
-    auto d_ptr = d.data_ptr();
-    auto e_ptr = e.data_ptr();
-    const int d_inc = d.inc();
-    const int e_inc = e.inc();
-    const int d_stride = d.stride();
-    const int e_stride = e.stride();
-
-    q->parallel_for(sycl::range<1>(static_cast<size_t>(batch * n)), [=](sycl::id<1> idx) {
-        const int linear = static_cast<int>(idx[0]);
-        const int b = linear / n;
-        const int i = linear - b * n;
-        d_ptr[b * d_stride + i * d_inc] = a_view(i, i, b);
-        if (i < n - 1) {
-            e_ptr[b * e_stride + i * e_inc] = a_view(i + 1, i, b);
-        }
-    });
-    q.wait();
 }
 
 template <Backend B, typename Real>

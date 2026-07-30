@@ -1,5 +1,6 @@
 #include <blas/linalg.hh>
 #include <blas/extra.hh>
+#include "accuracy_utils.hh"
 #include <util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
@@ -26,6 +27,10 @@ using namespace batchlas;
 
 namespace {
 
+using accuracy::parse_shift_strategy;
+using accuracy::starts_with;
+using accuracy::to_lower;
+
 struct Options {
     std::string impl = "steqr"; // steqr | steqr_cta | cuda_syev | netlib_syev32 | netlib_steqr | netlib_sterf | netlib_stedc | both | all
     std::string backend = "CUDA"; // CUDA | ROCM | MKL | NETLIB
@@ -41,28 +46,6 @@ struct Options {
     std::string cta_shift = "wilkinson"; // lapack | wilkinson
     std::string output = "output/accuracy/steqr_accuracy.csv";
 };
-
-bool starts_with(const std::string& s, const std::string& prefix) {
-    return s.rfind(prefix, 0) == 0;
-}
-
-std::string to_lower(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
-    const auto key = to_lower(value);
-    if (key == "lapack") {
-        return SteqrShiftStrategy::Lapack;
-    }
-    if (key == "wilkinson") {
-        return SteqrShiftStrategy::Wilkinson;
-    }
-    throw std::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
-}
 
 Options parse_args(int argc, char** argv) {
     Options opt;
