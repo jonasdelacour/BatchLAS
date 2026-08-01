@@ -600,7 +600,8 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
         SyevxParams<float> params;
         params.iterations = max_iters;
         params.extra_directions = extra_dirs;
-        params.find_largest = true;
+        // ILU(k) approximates A^{-1}, so it only accelerates the smallest eigenpairs.
+        params.find_largest = false;
         params.absolute_tolerance = 1e-6f;
         params.relative_tolerance = 1e-6f;
         params.preconditioner = precond_ptr;
@@ -744,10 +745,55 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
                                     : std::nanf("");
         std::cout << "    " << runs[r].label << ": avg_ratio=" << avg_ratio
                   << ", wins=" << agg.win_count << ", losses=" << agg.lose_count << "\n";
+
+        // The whole point of wiring ILU(k) into LOBPCG is that it must beat running
+        // unpreconditioned. Assert it, so a regression here fails the build instead
+        // of quietly showing up in the printed summary.
+        ASSERT_GT(agg.ratio_count, 0) << runs[r].label << " produced no comparable runs";
+        EXPECT_LT(avg_ratio, 1.0f)
+            << runs[r].label << " should reach a smaller final residual than the unpreconditioned baseline";
+        EXPECT_EQ(agg.lose_count, 0)
+            << runs[r].label << " regressed against the unpreconditioned baseline on "
+            << agg.lose_count << " of " << agg.ratio_count << " cases";
     }
 
     csv.close();
     std::cout << "[ILUK trace] wrote " << csv_path << "\n";
+}
+
+TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
+    constexpr int n = 64;
+    constexpr int batch = 1;
+    constexpr size_t neigs = 2;
+
+    auto csr = csr_generators::random_sparse_hermitian_csr<float>(n, 0.05f, batch, 4242u, 2.0f, true);
+    auto view = csr.view();
+
+    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, ILUKParams<float>());
+
+    UnifiedVector<float> W(neigs * batch, 0.0f);
+    SyevxParams<float> params;
+    params.iterations = 5;
+    params.preconditioner = &M;
+    params.find_largest = false;
+
+    // Sizing the workspace for the legal (smallest-eigenpair) configuration also
+    // covers the rejected one, so the throw below is the guard and not an OOM.
+    UnifiedVector<std::byte> workspace(
+        syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+                                                   MatrixView<float, MatrixFormat::Dense>(), params));
+
+    params.find_largest = true;
+    EXPECT_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params),
+        std::invalid_argument);
+
+    params.find_largest = false;
+    EXPECT_NO_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params));
+    ctx->wait_and_throw();
 }
 
 int main(int argc, char** argv) {

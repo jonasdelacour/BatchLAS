@@ -52,6 +52,18 @@ namespace batchlas {
             std::cout << msg << std::endl;
             ctx.wait_and_throw();
         };
+        // An ILU(k) factorization approximates A^{-1}. Applying it to the LOBPCG
+        // residual accelerates convergence toward the smallest eigenpairs, but for
+        // the largest eigenpairs it suppresses the wanted directions and boosts the
+        // unwanted ones -- measurably worse than running unpreconditioned. Reject the
+        // combination instead of silently degrading.
+        if (params.preconditioner != nullptr && params.find_largest) {
+            throw std::invalid_argument(
+                "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
+                "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
+                "or clear SyevxParams::preconditioner");
+        }
+
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
         int64_t block_vectors = neigs + params.extra_directions;

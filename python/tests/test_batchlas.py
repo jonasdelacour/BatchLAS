@@ -142,7 +142,9 @@ def test_sparse_syevx_accepts_iluk_preconditioner():
     base[np.arange(1, n), np.arange(n - 1)] = offdiag
 
     matrices = [sp.csr_matrix(base), sp.csr_matrix(base + 0.1 * np.eye(n, dtype=np.float64))]
-    options = bl.SyevxOptions(iterations=2, extra_directions=1, find_largest=True)
+    # ILU(k) approximates A^-1, so it is only a valid preconditioner for the
+    # smallest eigenpairs; syevx rejects find_largest=True with a preconditioner.
+    options = bl.SyevxOptions(iterations=2, extra_directions=1, find_largest=False)
 
     try:
         handle = bl.iluk_factorize(matrices, backend="cuda", device="gpu")

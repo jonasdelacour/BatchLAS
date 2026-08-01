@@ -41,7 +41,12 @@ namespace batchlas {
         bool find_largest = true;                          // Whether to find largest eigenvalues
         T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Absolute tolerance
         T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Relative tolerance
-        const ILUKPreconditioner<T>* preconditioner = nullptr;                 // Optional ILU(k) preconditioner
+        // Optional ILU(k) preconditioner. An ILU(k) factorization of A approximates
+        // A^{-1}, which is the correct LOBPCG preconditioner only when searching for
+        // the *smallest* eigenpairs. With find_largest = true it damps exactly the
+        // components being sought and amplifies the rest, so syevx rejects that
+        // combination rather than silently converging more slowly.
+        const ILUKPreconditioner<T>* preconditioner = nullptr;
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 
