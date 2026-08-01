@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
 
@@ -375,7 +376,139 @@ namespace {
 template <Backend B, typename T>
 class Sb2stHhBackKernel;
 
-constexpr int kBackCols = 8;  // columns of Z per work-group
+template <Backend B, typename T, int C>
+class Sb2stHhBackTiledKernel;
+
+constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
+
+// Sub-group XOR shuffle that also works for std::complex.
+template <typename T>
+inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
+    using R = typename base_type<T>::type;
+    if constexpr (internal::is_complex<T>::value) {
+        const R re = sycl::permute_group_by_xor(sg, static_cast<R>(v.real()), mask);
+        const R im = sycl::permute_group_by_xor(sg, static_cast<R>(v.imag()), mask);
+        return T(re, im);
+    } else {
+        return sycl::permute_group_by_xor(sg, v, mask);
+    }
+}
+}
+
+// Resident-tile back-transform.
+//
+// The bottleneck is not flops, it is traffic on Z: every reflector reloads its
+// kd rows, and each row of Z is touched ~n/2 times over the whole sweep set, so
+// the naive form moves ~n^3 elements for 2n^3 flops -- about 2 flops/element.
+//
+// A larft/larfb formulation cannot fix that here. Two reflectors commute iff
+// their row ranges are disjoint, i.e. iff |u - u'| >= kd where u = start-1. The
+// BLAS-3-groupable sets (consecutive u, one per sweep at a fixed chase step)
+// interleave: for n=32,kd=4 generation order gives u = 0,4,8,1,..., so u=0
+// precedes u=4 which precedes u=1, and the groups {0..3} and {4..7} cannot be
+// linearised as contiguous units. More generally, in any valid schedule the
+// consecutive reflectors are mutually disjoint -- that is what makes them
+// schedulable -- so the row-sharing ones are always far apart in the product.
+// This is why Wang et al. (PPoPP'25) found a hand-written BLAS-2 back-transform
+// beat MAGMA's larft-based one by 1.5x on A100.
+//
+// So instead of reordering, keep Z resident: one work-group owns a C-column
+// tile of Z for one batch item, loads it into local memory once, applies every
+// reflector in the exact same order, and writes it back once. Traffic drops
+// from ~n^3 to 2*n*ncols per matrix, which is where the BLAS-3-like arithmetic
+// intensity actually comes from.
+//
+// Lane mapping: lane -> (column, row-group), col = lane % C, grp = lane / C,
+// with G = 32/C lanes cooperating per column. Lanes with the same column differ
+// by multiples of C, so the dot product reduces with XOR masks C, 2C, ... < 32.
+// Zs is row-major with C columns, so consecutive lanes touch consecutive
+// addresses.
+template <Backend B, typename T, int C>
+Event unmqr_hb2st_tiled(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& v_in,
+                        const VectorView<T>& tau_in,
+                        const MatrixView<T, MatrixFormat::Dense>& z_io,
+                        int32_t n,
+                        int32_t nrefl,
+                        const int32_t* starts_p,
+                        const int32_t* lens_p) {
+    constexpr int32_t kSg = 32;
+    constexpr int32_t G = kSg / C;
+    static_assert(C >= 1 && C <= 32 && (kSg % C) == 0);
+
+    const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const int32_t ncols = static_cast<int32_t>(z_io.cols());
+    const int32_t col_chunks = (ncols + C - 1) / C;
+    const int32_t num_wg = batch * col_chunks;
+
+    auto Vv = v_in.kernel_view();
+    auto Zv = z_io.kernel_view();
+
+    ctx->submit([&](sycl::handler& h) {
+        sycl::local_accessor<T, 1> Zs(
+            sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
+        auto TAUv = tau_in;
+
+        h.parallel_for<Sb2stHhBackTiledKernel<B, T, C>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kSg),
+                              sycl::range<1>(kSg)),
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+                const auto sg = it.get_sub_group();
+                const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
+                const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
+
+                const int32_t b = wg_id / col_chunks;
+                const int32_t chunk = wg_id - b * col_chunks;
+                if (b >= batch) return;
+
+                const int32_t c0 = chunk * C;
+                auto Z = Zv.batch_item(b);
+                auto V = Vv.batch_item(b);
+
+                T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
+
+                // Load the column tile once.
+                for (int32_t idx = lid; idx < n * C; idx += kSg) {
+                    const int32_t r = idx / C;
+                    const int32_t c = idx - r * C;
+                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
+                }
+                sycl::group_barrier(sg);
+
+                const int32_t col = lid % C;
+                const int32_t grp = lid / C;
+
+                // Q = H_1 ... H_m, so Z := Q Z applies them in reverse order.
+                for (int32_t k = nrefl - 1; k >= 0; --k) {
+                    const T tau = TAUv(k, b);
+                    if (tau == T(0)) continue;
+                    const int32_t s = starts_p[k];
+                    const int32_t L = lens_p[k];
+
+                    T acc = T(0);
+                    for (int32_t r = grp; r < L; r += G) {
+                        acc += conj_if(V(r, k)) * Zl[(s + r) * C + col];
+                    }
+                    if constexpr (G > 1) {
+                        for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
+                            acc += shuffle_xor(sg, acc, m);
+                        }
+                    }
+                    for (int32_t r = grp; r < L; r += G) {
+                        Zl[(s + r) * C + col] -= tau * V(r, k) * acc;
+                    }
+                    sycl::group_barrier(sg);
+                }
+
+                for (int32_t idx = lid; idx < n * C; idx += kSg) {
+                    const int32_t r = idx / C;
+                    const int32_t c = idx - r * C;
+                    if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
+                }
+            });
+    });
+
+    return ctx.get_event();
 }
 
 template <Backend B, typename T>
@@ -395,6 +528,58 @@ Event unmqr_hb2st(Queue& ctx,
     const int32_t ncols = static_cast<int32_t>(z_io.cols());
     if (nrefl <= 0 || batch <= 0 || ncols <= 0 || n <= 0) return ctx.get_event();
 
+    // Prefer the resident-tile kernel: pick the widest column tile whose local
+    // footprint fits, so Z is loaded and stored once instead of once per
+    // reflector. Falls back to the streaming kernel below only if even a single
+    // column does not fit (very large n).
+    {
+        // Two competing costs set the tile width C.
+        //
+        // Holding a column of Z resident already gives the full ~n/2 reuse, so
+        // reuse does NOT grow with C. What does grow is amortisation of the V
+        // reads: V is re-read once per column tile, and at C=1 that alone is
+        // ~292 GB at n=1024/batch=128, which dominates. Pushing C up shrinks
+        // that but grows the local footprint (n*C*sizeof(T)) and so cuts
+        // occupancy -- these are 32-thread work-groups, so a 32 KB tile is
+        // ~1 block/SM.
+        //
+        // Measured on RTX 4090 (back-transform alone, ms):
+        //         C=0(stream)  C=1   C=2   C=4   C=8   C=16
+        //   n=256/b=1024  39.9  109.2  44.8  25.9  27.1   42.8
+        //   n=512/b=512  107.6  184.6 107.0 109.7 174.2  238.3
+        //   n=1024/b=128 420.7  379.5 332.2 396.2 553.6 1391.4
+        //   n=1024/b=256 913.5  752.0 660.5 786.1 1105.7 2782.9
+        //
+        // The optimum tracks a ~8 KB footprint, capped at 4 columns.
+        constexpr size_t kTargetLocalBytes = 8192;
+        constexpr int kMaxTile = 4;
+        const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
+        const size_t per_col = static_cast<size_t>(n) * sizeof(T);
+        int want = 1;
+        while (want < kMaxTile && per_col * static_cast<size_t>(want * 2) <= kTargetLocalBytes) {
+            want <<= 1;
+        }
+        if (const char* ev = std::getenv("BATCHLAS_SB2ST_BACK_TILE")) {
+            const int f = std::atoi(ev);
+            if (f == 0) goto streaming;   // 0 selects the streaming kernel
+            if (f > 0) want = f;
+        }
+        int tile = 0;
+        for (int c = want; c >= 1; c >>= 1) {
+            if (per_col * static_cast<size_t>(c) <= lmem) { tile = c; break; }
+        }
+        switch (tile) {
+            case 32: return unmqr_hb2st_tiled<B, T, 32>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            case 16: return unmqr_hb2st_tiled<B, T, 16>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            case 8:  return unmqr_hb2st_tiled<B, T, 8>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            case 4:  return unmqr_hb2st_tiled<B, T, 4>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            case 2:  return unmqr_hb2st_tiled<B, T, 2>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            case 1:  return unmqr_hb2st_tiled<B, T, 1>(ctx, v_in, tau_in, z_io, n, nrefl, starts.data(), lens.data());
+            default: break;
+        }
+    }
+
+streaming:
     const int32_t col_chunks = (ncols + kBackCols - 1) / kBackCols;
     const int32_t num_wg = batch * col_chunks;
 
