@@ -1,7 +1,7 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tier 0 implemented. Tier 1 implemented (`stebz` + `stein`).**
-Tiers 2–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
+Status: **Tiers 0, 1 and 2 implemented.**
+Tiers 3–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
 user asked about separately — *batches of small matrices* and *batches of medium
@@ -136,6 +136,29 @@ badly-scaling part, so the wall-clock ratio should exceed the flop ratio.
 Two-stage's double back-transform, its main liability for full ED, **disappears in
 the subset regime.** This is the key asymmetry that makes SYEVX worth building on
 top of the machinery already in `syev_two_stage.cc`.
+
+> **Correction, found while implementing Tier 2.** BatchLAS's `syev_two_stage`
+> does *not* actually pay a double back-transform when eigenvectors are wanted: it
+> sets `kd = 1`, which makes the band→tridiagonal stage a pure extract. The sb2st
+> reflectors (`tau_sb2st`) are computed and then **never applied anywhere in the
+> tree** — correct only because `kd = 1` leaves no bulge chasing to undo. So the
+> eigenvector path is really one-stage tridiagonalization plus a single `ormqr`.
+>
+> The ~3× ceiling survives, but it comes from a different pair of terms than
+> written above. With `kd = 1` the reduction cost is identical in both the full and
+> subset solves and simply cancels; the saving is entirely (a) full `stedc` → subset
+> bisection/inverse iteration and (b) `ormqr` on `n` columns → on `k` columns:
+>
+> ```
+> full ED   ≈ (4/3)n³ [sytrd] + (4/3)n³ [stedc] + 2n³   [ormqr, n cols]  ≈ 4.7n³
+> subset    ≈ (4/3)n³ [sytrd] + O(n·k)        + 2n²k  [ormqr, k cols]  ≈ 1.43n³  at k=0.05n
+> ```
+>
+> Eigenvalue-only solves are unaffected by this correction: they use a wide band
+> (`kd` = 16/32), get the GEMM-heavy reduction, and need no back-transform at all.
+>
+> A future `kd > 1` eigenvector path must add a back-transform through the sb2st
+> reflectors first. This is noted at the top of `src/extensions/two_stage_common.hh`.
 
 ### 2.3 Iterative methods on dense input
 
@@ -627,10 +650,13 @@ known-good BLAS before believing an accuracy regression.
    (per-eigenpair degree, per-matrix locking, variable block width) assumes a single
    matrix. Mitigation: max-over-batch or bucketing, decided per feature; do not
    import adaptivity uncritically.
-5. **Two-stage back-transform narrowing may not be a clean shape change.** The Q₂
-   application in `sytrd_sb2st` may have assumptions tied to a square vector matrix.
-   Mitigation: verify early in Tier 2; this is the one place the "parts already
-   exist" claim could fail.
+5. ~~**Two-stage back-transform narrowing may not be a clean shape change.**~~
+   **Resolved in Tier 2, though not as expected.** There is no Q₂ application to
+   narrow at all — the eigenvector path runs at `kd = 1` (see the correction in
+   §2.2). The Q₁ `ormqr` narrowed cleanly. The square-matrix assumption the risk
+   anticipated did exist, but in `apply_phase_rows`, which derived its column count
+   from `rows()`; harmless while it was only ever called on an n×n matrix, an
+   out-of-bounds write the moment it was reused on an n×k block. Fixed.
 
 ---
 
@@ -720,6 +746,40 @@ orthogonal for free. The test was replaced with a Wilkinson matrix
 
 Tests: `stebz_tests` (10) and `stein_tests` (8), both across float and double.
 
+### Tier 2 — done
+
+`syevx_direct_subset` (`src/extensions/syevx_direct_subset.cc`): `sytrd_sy2sb` →
+`sytrd_sb2st` → `stebz` → `stein` → `ormqr_blocked` narrowed to `k` columns.
+Real scalar types and dense input; `syevx_direct_subset_supported<T, MFormat>()`
+gates it and the dispatcher degrades to `Direct` (or `LOBPCG`) elsewhere.
+
+Shared helpers were lifted out of `syev_two_stage.cc` into
+`src/extensions/two_stage_common.hh` rather than duplicated.
+
+`DirectSubset` is now the `Auto` choice for dense real input above `n = 64`, in
+*both* the `k/n > 2 %` band and below it. Below the iterative threshold it beats
+LOBPCG on grounds other than flops: it is direct, so there is no convergence risk
+and no tuning, and its cost is exactly what the model says. When Tier 3 lands,
+the sub-2 % band should be re-evaluated against it.
+
+**Bug found while doing this.** `apply_phase_rows` computed its column count from
+`z.rows()`, i.e. it assumed a square matrix. That is true in `syev_two_stage`,
+where it only ever sees an n×n eigenvector block, so the latent bug was invisible.
+Applied to the subset path's n×k block it wrote out of bounds and corrupted
+neighbouring batch items — the eigenvectors came back correctly normalized but
+with residuals failing on every column, while eigenvalues stayed correct. Fixed to
+use `cols()`; `syev_two_stage` is unaffected.
+
+**Env precedence made explicit.** `BATCHLAS_SYEVX_ALGORITHM` overrides
+`SyevxParams::method` (matching `BATCHLAS_SYEV_PROVIDER`), so an application can be
+forced wholesale onto one algorithm. Tests that pin an algorithm now skip under a
+conflicting override instead of failing, which keeps "run the suite under every
+algorithm" sweeps meaningful.
+
+Tests: `syevx_tests` is 11, covering both orderings × both `JobType` values for
+the subset path, with residuals checked against the *original* A (which is what
+actually validates the back-transform) plus orthonormality.
+
 ### Not yet measured
 
 The crossover thresholds in §2.4 and §8 remain **flop-count estimates**. The sweep
@@ -734,8 +794,10 @@ document.**
 
 ### Next
 
-Tier 2 (`syevx_direct_subset`): compose `sytrd_sy2sb` → `sytrd_sb2st` → `stebz` →
-`stein` → the two back-transforms narrowed to `k` columns, modelled on
-`syev_two_stage.cc`. The risk flagged in §11.5 — that narrowing the Q₂
-application is not a clean shape change — is still unverified and should be
-checked first.
+Tier 3 (`Filtered`): Chebyshev-filtered subspace iteration, per §8. Worth doing
+only once measurements exist — Tier 2 is direct and cheap enough that the band
+where filtering wins may be narrower than §2.3 predicts.
+
+Tier 4 (LOBPCG hardening, §7) is independent of all of the above and is the
+highest-value remaining work for the sparse path, which Tiers 0–2 do not touch at
+all. Start with §7.1 (the per-iteration host synchronization).

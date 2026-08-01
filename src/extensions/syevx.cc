@@ -6,9 +6,13 @@
 //
 //   dense, n <= SMALL_N            -> Direct   (a subset solver cannot beat syev_cta)
 //   dense, neigs/n >  DENSE_DIRECT -> Direct   (iterative methods cannot amortize)
-//   dense, neigs/n >  ITERATIVE    -> DirectSubset (Tier 2; falls back to Direct)
-//   dense, neigs/n <= ITERATIVE    -> Filtered     (Tier 3; falls back to LOBPCG)
+//   dense, neigs/n >  ITERATIVE    -> DirectSubset
+//   dense, neigs/n <= ITERATIVE    -> DirectSubset (Filtered, Tier 3, would go here)
 //   sparse                         -> LOBPCG
+//
+// DirectSubset requires a real scalar type and dense input; where it is not
+// available the choice degrades to Direct (or LOBPCG below the iterative
+// threshold, where a full decomposition is clearly wrong).
 //
 // The thresholds are derived from flop counts, not measurement. Producing measured
 // ones is the deliverable of `benchmarks/syevx_benchmark.cc`.
@@ -63,7 +67,8 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback) {
 SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                       int64_t n,
                                       size_t neigs,
-                                      SyevxAlgorithm requested) {
+                                      SyevxAlgorithm requested,
+                                      bool subset_supported) {
     const SyevxAlgorithm want = algorithm_from_env(requested);
     const bool dense = (format == MatrixFormat::Dense);
 
@@ -74,9 +79,10 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
         switch (want) {
             case SyevxAlgorithm::Direct:       return SyevxAlgorithm::Direct;
             case SyevxAlgorithm::LOBPCG:       return SyevxAlgorithm::LOBPCG;
-            // Tier 2 / Tier 3 are not implemented yet; degrade to the nearest
-            // implemented neighbour rather than failing.
-            case SyevxAlgorithm::DirectSubset: return SyevxAlgorithm::Direct;
+            case SyevxAlgorithm::DirectSubset:
+                return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::Direct;
+            // Tier 3 is not implemented yet; degrade to the nearest implemented
+            // neighbour rather than failing.
             case SyevxAlgorithm::Filtered:     return SyevxAlgorithm::LOBPCG;
             default:                           break;
         }
@@ -87,11 +93,14 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
 
     const double fraction = static_cast<double>(neigs) / static_cast<double>(n);
     if (fraction > kSyevxDenseDirectFraction) return SyevxAlgorithm::Direct;
-    // DirectSubset (Tier 2) would go here; until it exists, Direct is still the
-    // better of the two implemented options in this band.
-    if (fraction > kSyevxIterativeFraction) return SyevxAlgorithm::Direct;
-    // Filtered (Tier 3) would go here.
-    return SyevxAlgorithm::LOBPCG;
+    if (fraction > kSyevxIterativeFraction) {
+        return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::Direct;
+    }
+    // Filtered (Tier 3) would go here. Until it exists the subset solver is a
+    // better default than LOBPCG even below the iterative threshold, because it
+    // is direct: no convergence risk, no tuning, and its cost is what the model
+    // says it is. LOBPCG remains reachable explicitly.
+    return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::LOBPCG;
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -103,9 +112,13 @@ Event syevx(Queue& ctx,
             JobType jobz,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params) {
-    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method);
+    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
+                                              syevx_direct_subset_supported<T, MFormat>());
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+    }
+    if (chosen == SyevxAlgorithm::DirectSubset) {
+        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
     }
     return syevx_lobpcg<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
 }
@@ -118,9 +131,13 @@ size_t syevx_buffer_size(Queue& ctx,
                          JobType jobz,
                          const MatrixView<T, MatrixFormat::Dense>& V,
                          const SyevxParams<T>& params) {
-    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method);
+    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
+                                              syevx_direct_subset_supported<T, MFormat>());
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
+    }
+    if (chosen == SyevxAlgorithm::DirectSubset) {
+        return syevx_direct_subset_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
     }
     return syevx_lobpcg_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
 }

@@ -320,7 +320,8 @@ namespace batchlas {
     SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                           int64_t n,
                                           size_t neigs,
-                                          SyevxAlgorithm requested);
+                                          SyevxAlgorithm requested,
+                                          bool subset_supported);
 
     /**
      * @brief Partial eigensolve by full decomposition followed by selection.
@@ -347,6 +348,41 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
+
+    /**
+     * @brief Partial eigensolve by two-stage reduction plus a subset tridiagonal
+     *        solve (`stebz` + `stein`) and a back-transform narrowed to the
+     *        requested eigenvectors.
+     *
+     * Real scalar types and dense input only; callers should route complex or
+     * sparse input elsewhere (`syevx` does this automatically).
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_direct_subset(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_direct_subset_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Whether `syevx_direct_subset` supports this scalar type and format.
+     */
+    template <typename T, MatrixFormat MFormat>
+    inline constexpr bool syevx_direct_subset_supported() {
+        return MFormat == MatrixFormat::Dense && std::is_same_v<T, typename base_type<T>::type>;
+    }
 
     /**
      * @brief Partial eigensolve by LOBPCG. Supports dense and sparse input.

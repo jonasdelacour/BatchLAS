@@ -14,6 +14,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     iluk.cc
     syevx.cc
     syevx_direct.cc
+    syevx_direct_subset.cc
     syevx_lobpcg.cc
     syev_cta.cc
     syev_blocked.cc

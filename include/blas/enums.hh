@@ -119,9 +119,17 @@ namespace batchlas {
     // Algorithm family used by `syevx` (partial symmetric eigensolve).
     //
     // `Auto` picks based on matrix format, size and the requested fraction of the
-    // spectrum; see `syevx_select_algorithm`. Override with the environment
-    // variable BATCHLAS_SYEVX_ALGORITHM (auto|direct|direct_subset|filtered|lobpcg)
-    // or by setting SyevxParams::method.
+    // spectrum; see `syevx_select_algorithm`. Set per call via SyevxParams::method,
+    // or globally via BATCHLAS_SYEVX_ALGORITHM
+    // (auto|direct|direct_subset|filtered|lobpcg).
+    //
+    // Precedence: the environment variable WINS over SyevxParams::method, matching
+    // the BATCHLAS_SYEV_PROVIDER convention, so that a whole application can be
+    // forced onto one algorithm for diagnosis or benchmarking.
+    //
+    // A choice that is not available for the given scalar type or matrix format
+    // degrades to the nearest implemented one rather than failing: DirectSubset
+    // needs a real type and dense input, and Filtered is not implemented at all.
     enum class SyevxAlgorithm {
         Auto,           // Heuristic selection (default)
         Direct,         // Full syev + select the requested eigenpairs
