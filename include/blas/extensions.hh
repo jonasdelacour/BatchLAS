@@ -473,6 +473,87 @@ namespace batchlas {
         return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
     }
 
+    /**
+     * @brief How a subset of the spectrum is selected.
+     */
+    enum class EigenRangeType {
+        All,    // Every eigenvalue
+        Index,  // Eigenvalues il..iu inclusive, 0-based, in ascending order
+        Value   // Eigenvalues in the half-open interval (vl, vu]
+    };
+
+    /**
+     * @brief Parameters for `stebz` (bisection on a symmetric tridiagonal matrix).
+     */
+    template <typename T>
+    struct StebzParams {
+        EigenRangeType range = EigenRangeType::All;
+        int64_t il = 0;    // First wanted index (0-based, inclusive), range == Index
+        int64_t iu = -1;   // Last wanted index (0-based, inclusive), range == Index
+        T vl = T(0);       // Lower bound (exclusive), range == Value
+        T vu = T(0);       // Upper bound (inclusive), range == Value
+        // Absolute tolerance on each eigenvalue. Non-positive means "use
+        // eps * ||T||", which yields eigenvalues to full working precision.
+        T abstol = T(0);
+        SortOrder order = SortOrder::Ascending;
+        // Safety cap on bisection steps per eigenvalue. The loop also exits on
+        // interval convergence, so this only bounds pathological cases.
+        int32_t max_iterations = 128;
+    };
+
+    /**
+     * @brief Computes selected eigenvalues of a batch of symmetric tridiagonal
+     *        matrices by bisection on Sturm sequence sign counts.
+     *
+     * Every eigenvalue is independent of every other, so this is embarrassingly
+     * parallel: one work-item bisects one eigenvalue. Unlike QR iteration or
+     * divide-and-conquer it can compute a subset at proportionally reduced cost,
+     * which is what makes it the tridiagonal kernel for `syevx`. Eigenvalues only;
+     * use `stein` for the corresponding eigenvectors.
+     *
+     * @param ctx Execution context/device queue
+     * @param d Diagonal, n entries per batch item
+     * @param e Off-diagonal, n-1 entries per batch item
+     * @param w Output eigenvalues; must hold at least the number selected
+     * @param m Output count of eigenvalues found, per batch item
+     * @param ws Pre-allocated workspace buffer
+     * @param params Selection range, tolerance and ordering
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T>
+    Event stebz(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                const VectorView<T>& w,
+                Span<int32_t> m,
+                const Span<std::byte>& ws,
+                StebzParams<T> params = StebzParams<T>());
+
+    /**
+     * @brief Required workspace size, in bytes, for `stebz`.
+     */
+    template <Backend B, typename T>
+    size_t stebz_buffer_size(Queue& ctx,
+                             size_t n,
+                             size_t batch_size,
+                             StebzParams<T> params = StebzParams<T>());
+
+    // Forwarding overload taking owning Vectors.
+    template <Backend B, typename T>
+    inline Event stebz(Queue& ctx,
+                       const Vector<T>& d,
+                       const Vector<T>& e,
+                       const Vector<T>& w,
+                       Span<int32_t> m,
+                       const Span<std::byte>& ws,
+                       StebzParams<T> params = StebzParams<T>()) {
+        return stebz<B, T>(ctx,
+                           static_cast<VectorView<T>>(d),
+                           static_cast<VectorView<T>>(e),
+                           static_cast<VectorView<T>>(w),
+                           m, ws, params);
+    }
+
     enum class SteqrShiftStrategy {
         // LAPACK-style implicit shift (stable formulation used by dsteqr-style iterations).
         Lapack = 0,
