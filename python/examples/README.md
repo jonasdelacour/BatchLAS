@@ -10,93 +10,67 @@ against NumPy/SciPy — so a clean run doubles as a smoke test:
 
 Lines marked `[FAIL]` mean a check did not hold on your machine.
 
-## Two files per example
-
-Each example exists as a matched pair:
-
-| File | What it is |
-|---|---|
-| `NN_name.py` | the **source of truth** — a notebook in "percent" cell format |
-| `NN_name.ipynb` | the rendered notebook, with output from a reference run |
-
-The `.py` files use the widely supported percent format (`# %%` for a code cell,
-`# %% [markdown]` for a prose cell). Jupyter, JupyterLab, VS Code and PyCharm all
-open them directly as notebooks, they diff cleanly in review, and they are still
-ordinary Python scripts you can run with `python`.
-
-The `.ipynb` files are generated from them so the examples render with formatted
-prose, tables and math — with output already captured — on GitHub and in any
-plain notebook viewer.
+The notebooks are committed with output from a reference run, so they render
+fully on GitHub without executing anything.
 
 ## Running them
 
-The examples import `batchlas`, so it must be importable. From a build tree with
-`BATCHLAS_BUILD_PYTHON=ON`:
+The notebooks import `batchlas`, so it must be importable by the kernel. From a
+build tree with `BATCHLAS_BUILD_PYTHON=ON`:
 
 ```bash
 cmake -B build -S . -DBATCHLAS_BUILD_PYTHON=ON
 cmake --build build -j
 
 cd python/examples
-PYTHONPATH=../../build/python python3 01_getting_started.py
+PYTHONPATH=../../build/python jupyter lab
 ```
 
-Or open the notebooks, having pointed the kernel at the same `PYTHONPATH`:
-
-```bash
-PYTHONPATH=../../build/python jupyter lab 01_getting_started.ipynb
-```
-
-Validate everything at once — this runs the `.py` files, so it needs no Jupyter
-kernel and takes seconds:
+To execute and check all twelve without opening Jupyter:
 
 ```bash
 PYTHONPATH=../../build/python python3 run_all.py
 PYTHONPATH=../../build/python python3 run_all.py 05 06   # just these
 ```
 
-`run_all.py` exits non-zero if any example raises or reports a failed check.
-
-## Regenerating the notebooks
-
-After editing a `.py`, rebuild its `.ipynb`:
+`run_all.py` exits non-zero if any notebook raises or reports a failed check.
+After editing a notebook, `--save` re-executes it and writes the refreshed
+output back in, so the committed rendering matches the code:
 
 ```bash
-PYTHONPATH=../../build/python python3 build_notebooks.py          # all, executed
-PYTHONPATH=../../build/python python3 build_notebooks.py 07       # just this one
-python3 build_notebooks.py --no-execute                           # convert only
+PYTHONPATH=../../build/python python3 run_all.py 07 --save
 ```
 
-Requires `nbformat`; executing additionally needs `nbclient` and `ipykernel`.
-Committed outputs come from a reference run on an RTX 4090, so timings and
-device names in notebook 12 will differ from yours.
+Requirements: NumPy for everything, SciPy for notebook 09, and
+`nbformat` + `nbclient` + `ipykernel` for `run_all.py`. A GPU is optional — the
+notebooks fall back to whatever device the library picks — but a few routines
+are GPU-only, as noted below.
 
-## The examples
+## The notebooks
 
 | # | Notebook | What it covers |
 |---|------|----------------|
-| 01 | `01_getting_started` | Backends, devices, features, first `gemm`, the batching convention, dtypes, `out=` |
-| 02 | `02_dense_blas` | `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`, heterogeneous batches, mixed precision |
-| 03 | `03_linear_solvers` | `potrf`, `getrf`/`getrs`, `getri`, `inv`, triangular solves, complex input |
-| 04 | `04_qr_and_orthogonalization` | `geqrf`, `orgqr`, `ormqr`, `ortho` algorithms, `ortho_metric` |
-| 05 | `05_svd` | `gesvd`, `gesvd_blocked`, `gesvd_cta`, `gebrd_*`, `bdsqr`, `ormbr` |
-| 06 | `06_symmetric_eigensolvers` | The whole `syev` family incl. `syev_jacobi_cta`, `syev_variant_support`, options objects |
-| 07 | `07_tridiagonal_reduction` | `sytrd_cta`, `sytrd_blocked`, `sytrd_sy2sb`, `sytrd_sb2st`, `hetrd_hb2st`, `sytrd_band_reduction` |
-| 08 | `08_tridiagonal_eigensolvers` | `steqr`, `steqr_cta`, `stedc`, `stedc_flat`, `tridiagonal_solver` |
-| 09 | `09_sparse_and_iterative` | `spmm`, `syevx` (+ convergence history), `lanczos`, `ritz_values`, ILU(k) |
-| 10 | `10_jacobi_relative_accuracy` | Why `syev_jacobi_cta` exists: relative accuracy on graded matrices |
-| 11 | `11_generators_and_utilities` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
-| 12 | `12_choosing_a_variant` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
+| 01 | `01_getting_started.ipynb` | Backends, devices, features, first `gemm`, the batching convention, dtypes, `out=` |
+| 02 | `02_dense_blas.ipynb` | `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`, heterogeneous batches, mixed precision |
+| 03 | `03_linear_solvers.ipynb` | `potrf`, `getrf`/`getrs`, `getri`, `inv`, triangular solves, complex input |
+| 04 | `04_qr_and_orthogonalization.ipynb` | `geqrf`, `orgqr`, `ormqr`, `ortho` algorithms, `ortho_metric` |
+| 05 | `05_svd.ipynb` | `gesvd`, `gesvd_blocked`, `gesvd_cta`, `gebrd_*`, `bdsqr`, `ormbr` |
+| 06 | `06_symmetric_eigensolvers.ipynb` | The whole `syev` family incl. `syev_jacobi_cta`, `syev_variant_support`, options objects |
+| 07 | `07_tridiagonal_reduction.ipynb` | `sytrd_cta`, `sytrd_blocked`, `sytrd_sy2sb`, `sytrd_sb2st`, `hetrd_hb2st`, `sytrd_band_reduction` |
+| 08 | `08_tridiagonal_eigensolvers.ipynb` | `steqr`, `steqr_cta`, `stedc`, `stedc_flat`, `tridiagonal_solver` |
+| 09 | `09_sparse_and_iterative.ipynb` | `spmm`, `syevx` (+ convergence history), `lanczos`, `ritz_values`, ILU(k) |
+| 10 | `10_jacobi_relative_accuracy.ipynb` | Why `syev_jacobi_cta` exists: relative accuracy on graded matrices |
+| 11 | `11_generators_and_utilities.ipynb` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
+| 12 | `12_choosing_a_variant.ipynb` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
 
 Between them they exercise 77 of the 78 names exported by `batchlas` (the 78th is
 `ILUKPreconditioner`, the handle type returned by `iluk_factorize`).
 
 `_common.py` holds shared helpers (device selection, reporting, reference
-constructions). It is not part of the library API.
+constructions) that the notebooks import. It is not part of the library API.
 
-Requirements: NumPy for everything, SciPy for notebook 09. A GPU is optional —
-the examples fall back to whatever device the library picks — but a few routines
-are GPU-only, as noted below.
+Timings and device names in notebook 12 come from a run on an RTX 4090 and will
+differ on your hardware.
 
 ## Conventions worth knowing
 
@@ -119,7 +93,7 @@ are GPU-only, as noted below.
 - **Band storage.** `(kd + 1, n)`, lower LAPACK convention: `AB[i, j]` holds
   `A[j + i, j]`. `_common.band_to_dense` expands it.
 
-## Known issues visible in these examples
+## Known issues visible in these notebooks
 
 These are library-level problems, not mistakes in the examples. They are called
 out in the notebooks where they come up.
