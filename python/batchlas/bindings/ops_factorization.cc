@@ -373,6 +373,98 @@ py::tuple dense_gebrd_impl(const DenseMatrix& a_wrapper,
                           wrap_vector(std::move(taup)));
 }
 
+// CTA and blocked GEBRD share gebrd_unblocked's (A, d, e, tauq, taup) contract.
+template <typename T>
+py::tuple dense_gebrd_variant_impl(const DenseMatrix& a_wrapper,
+                                   bool blocked,
+                                   int32_t block_size,
+                                   std::size_t cta_wg_size_multiplier,
+                                   Backend backend,
+                                   const std::optional<std::string>& device_name) {
+    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    if (out.rows() != out.cols()) {
+        throw py::value_error("gebrd requires square matrices");
+    }
+    const int n = out.rows();
+    Vector<typename base_type<T>::type> d(n, out.batch_size());
+    Vector<typename base_type<T>::type> e(std::max(0, n - 1), out.batch_size());
+    // The CTA and blocked kernels expect one reflector scalar per column,
+    // unlike the unblocked path which stops at n - 1.
+    Vector<T> tauq(n, out.batch_size());
+    Vector<T> taup(n, out.batch_size());
+    Queue queue = make_queue(device_name);
+    if (blocked) {
+        run_backend_with_workspace(
+            backend, queue,
+            [&](auto backend_tag) {
+                constexpr Backend B = decltype(backend_tag)::value;
+                return batchlas::gebrd_blocked_buffer_size<B, T>(queue, out.view(), d, e, tauq, taup, block_size);
+            },
+            [&](auto backend_tag, Span<std::byte> workspace) {
+                constexpr Backend B = decltype(backend_tag)::value;
+                batchlas::gebrd_blocked<B, T>(queue, out.view(), d, e, tauq, taup, workspace, block_size);
+            });
+    } else {
+        visit_backend(backend, [&](auto backend_tag) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            batchlas::gebrd_cta<B, T>(queue, out.view(), d, e, tauq, taup, cta_wg_size_multiplier);
+        });
+    }
+    queue.wait();
+    return py::make_tuple(wrap_dense(std::move(out)),
+                          wrap_vector(std::move(d)),
+                          wrap_vector(std::move(e)),
+                          wrap_vector(std::move(tauq)),
+                          wrap_vector(std::move(taup)));
+}
+
+template <typename T>
+py::object dense_gesvd_cta_impl(const DenseMatrix& a_wrapper,
+                                bool compute_vectors,
+                                Backend backend,
+                                const std::optional<std::string>& device_name,
+                                std::optional<Uplo> hermitian_uplo) {
+    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    if (out.rows() != out.cols()) {
+        throw py::value_error("gesvd_cta requires square matrices");
+    }
+    const int n = out.rows();
+    Vector<typename base_type<T>::type> singular_values(n, out.batch_size());
+    DenseMatrixT<T> u = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size())
+                                        : DenseMatrixT<T>(1, 1, out.batch_size());
+    DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size())
+                                         : DenseMatrixT<T>(1, 1, out.batch_size());
+    const SvdVectors job = compute_vectors ? SvdVectors::All : SvdVectors::None;
+    Queue queue = make_queue(device_name);
+    run_backend_with_workspace(
+        backend, queue,
+        [&](auto backend_tag) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            return hermitian_uplo.has_value()
+                ? batchlas::gesvd_cta_buffer_size<B, T>(queue, out.view(), singular_values.data(), u.view(),
+                                                        vh.view(), job, job, *hermitian_uplo)
+                : batchlas::gesvd_cta_buffer_size<B, T>(queue, out.view(), singular_values.data(), u.view(),
+                                                        vh.view(), job, job);
+        },
+        [&](auto backend_tag, Span<std::byte> workspace) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            if (hermitian_uplo.has_value()) {
+                batchlas::gesvd_cta<B, T>(queue, out.view(), singular_values.data(), u.view(), vh.view(), job, job,
+                                          *hermitian_uplo, workspace);
+            } else {
+                batchlas::gesvd_cta<B, T>(queue, out.view(), singular_values.data(), u.view(), vh.view(), job, job,
+                                          workspace);
+            }
+        });
+    queue.wait();
+    if (!compute_vectors) {
+        return dense_vector_to_python(wrap_vector(std::move(singular_values)));
+    }
+    return py::make_tuple(wrap_dense(std::move(u)),
+                          wrap_vector(std::move(singular_values)),
+                          wrap_dense(std::move(vh)));
+}
+
 template <typename T>
 DenseVector dense_bdsqr_impl(const DenseVector& d_wrapper,
                              const DenseVector& e_wrapper,
@@ -621,6 +713,56 @@ void init_factorization_ops(py::module_& module) {
         return visit_dense(a, [&](auto tag, const auto&) {
             using scalar_type = typename decltype(tag)::type;
             return dense_ormbr_impl<scalar_type>(a, tau, c, vect, side, trans, block_size, backend, device_name);
+        });
+    });
+
+    module.def("_gebrd_cta", [](const DenseMatrix& a,
+                                 std::size_t cta_wg_size_multiplier,
+                                 const std::string& backend_name,
+                                 const py::object& device_name_obj) {
+        const Backend backend = parse_backend(backend_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> py::tuple {
+            using scalar_type = typename decltype(tag)::type;
+            if constexpr (!std::is_floating_point_v<scalar_type>) {
+                not_implemented<py::tuple>("gebrd_cta only supports float32 and float64");
+            } else {
+                return dense_gebrd_variant_impl<scalar_type>(a, false, 0, cta_wg_size_multiplier, backend,
+                                                             device_name);
+            }
+        });
+    });
+
+    module.def("_gebrd_blocked", [](const DenseMatrix& a,
+                                     int32_t block_size,
+                                     const std::string& backend_name,
+                                     const py::object& device_name_obj) {
+        const Backend backend = parse_backend(backend_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> py::tuple {
+            using scalar_type = typename decltype(tag)::type;
+            if constexpr (!std::is_floating_point_v<scalar_type>) {
+                not_implemented<py::tuple>("gebrd_blocked only supports float32 and float64");
+            } else {
+                return dense_gebrd_variant_impl<scalar_type>(a, true, block_size, 1, backend, device_name);
+            }
+        });
+    });
+
+    module.def("_gesvd_cta", [](const DenseMatrix& a,
+                                 bool compute_vectors,
+                                 const py::object& uplo_name_obj,
+                                 const std::string& backend_name,
+                                 const py::object& device_name_obj) {
+        const Backend backend = parse_backend(backend_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        const auto uplo_name = optional_string_from_obj(uplo_name_obj);
+        const auto hermitian_uplo = uplo_name.has_value()
+            ? std::optional<Uplo>(parse_uplo(*uplo_name))
+            : std::nullopt;
+        return visit_dense(a, [&](auto tag, const auto&) -> py::object {
+            using scalar_type = typename decltype(tag)::type;
+            return dense_gesvd_cta_impl<scalar_type>(a, compute_vectors, backend, device_name, hermitian_uplo);
         });
     });
 }

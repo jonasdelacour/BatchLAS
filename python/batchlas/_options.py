@@ -63,6 +63,15 @@ class SytrdBandReductionOptions:
 
 
 @dataclass(slots=True)
+class JacobiOptions:
+    tol_multiplier: float = 1.0
+    max_sweeps: int = 30
+    sort: bool = True
+    sort_order: str = "ascending"
+    cta_wg_size_multiplier: int = 1
+
+
+@dataclass(slots=True)
 class StedcOptions:
     recursion_threshold: int = 0
     secular_solver: str = "rocm"
@@ -82,4 +91,11 @@ def options_to_dict(options):
         raw = dict(options)
     else:
         raw = asdict(options)
-    return {key: value for key, value in raw.items() if value is not None}
+    # Nested option objects (e.g. StedcOptions.leaf_steqr_params) are turned into
+    # plain dicts by asdict, so drop their unset entries too -- the bindings cast
+    # each present key to a concrete C++ type and None would fail that cast.
+    return {
+        key: options_to_dict(value) if isinstance(value, dict) else value
+        for key, value in raw.items()
+        if value is not None
+    }

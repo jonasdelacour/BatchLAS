@@ -1278,4 +1278,19 @@ inline SytrdBandReductionParams parse_sytrd_band_reduction_params(const py::dict
     return params;
 }
 
+template <typename T>
+JacobiParams<T> parse_jacobi_params(const py::dict& options) {
+    using real_type = typename base_type<T>::type;
+    JacobiParams<T> params;
+    params.tol_multiplier = py_scalar_or_default<real_type>(options, "tol_multiplier", params.tol_multiplier);
+    params.max_sweeps = py_scalar_or_default<std::size_t>(options, "max_sweeps", params.max_sweeps);
+    params.sort = py_scalar_or_default<bool>(options, "sort", params.sort);
+    params.cta_wg_size_multiplier =
+        py_scalar_or_default<std::size_t>(options, "cta_wg_size_multiplier", params.cta_wg_size_multiplier);
+    if (options.contains("sort_order")) {
+        params.sort_order = parse_sort_order(py::cast<std::string>(options["sort_order"]));
+    }
+    return params;
+}
+
 }  // namespace batchlas::python

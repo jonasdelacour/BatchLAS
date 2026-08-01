@@ -115,6 +115,7 @@ Event steqr_impl(Queue& ctx,
                     const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, //Storage for Givens rotations
                     const Span<std::array<int32_t,3>>& deflation_indices, //#sub_problems deflation indices i.e. where e is zero
                     const Span<ApplyOrder>& order_view, //Order of application of rotations, has #sub_problems number of entries
+                    const Span<int32_t>& sweep_counts, //Number of sweeps actually performed per sub-problem
                     BumpAllocator allocator,
                     size_t max_sweeps, //Maximum number of sweeps to perform
                     T zero_threshold) {
@@ -196,6 +197,7 @@ Event steqr_impl(Queue& ctx,
             auto e_ = ebid(Slice(start_ix, end_ix - 1));
             auto n = end_ix - start_ix;
 
+            if (store_givens) sweep_counts[gid] = 0;
             if (n == 1) continue; //Nothing to do for 1x1 blocks
             if (n == 2) { //Analytically compute eigenvalues for 2x2 blocks
                 if (store_givens) {
@@ -205,6 +207,7 @@ Event steqr_impl(Queue& ctx,
                     e_(0) = T(0);
                     rotations_view(0, 0, gid) = {c, -s};
                     order_view[gid] = ApplyOrder::Forward;
+                    sweep_counts[gid] = 1;
                 } else {
                     auto [rt1, rt2] = internal::eigenvalues_2x2(d_(0), e_(0), d_(1));
                     d_(0) = rt1;
@@ -286,6 +289,7 @@ Event steqr_impl(Queue& ctx,
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
                 }
 
+                if (store_givens) sweep_counts[gid] = static_cast<int32_t>(k + 1);
                 if (deflatable) break;
             }
         }
@@ -310,10 +314,14 @@ Event steqr_impl(Queue& ctx,
                         : (ncols - 1 - v);
             };
 
-            for (int i = 0; i < rotations_view.cols(); ++i) {
+            // Only replay the sweeps that were actually performed for this sub-problem.
+            // Slots beyond that are stale/uninitialised and must not be applied.
+            // sweep_counts is empty when eigenvectors were not requested; nothing to replay then.
+            const int n_sweeps = sweep_counts.size() == 0 ? 0 : static_cast<int>(sweep_counts[gid]);
+            for (int i = 0; i < n_sweeps; ++i) {
                 for (int j = 0; j < ncols - 1; ++j) {
                     auto [c, s] = rotations_view(j, i, gid);
-                    //if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
 
                     // Map virtual indices (j, j+1) to physical column indices.
                     int ix1 = col_index(j);
@@ -579,17 +587,33 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
                             MatrixView<std::array<T,2>>(pool.allocate<std::array<T,2>>(ctx, stride * max_subproblems * batch_size).data(), n - 1, n_sweeps_to_store, n - 1, stride, max_subproblems * batch_size) : MatrixView<std::array<T,2>>();
     auto apply_order = pool.allocate<ApplyOrder>(ctx, batch_size * max_subproblems);
     auto deflation_indices = pool.allocate<std::array<int32_t,3>>(ctx, batch_size * max_subproblems); //Max n/2 subproblems
-    //auto mock_eigen = Matrix<T>::Identity(n, batch_size);
+    auto sweep_counts = jobz == JobType::EigenVectors ? pool.allocate<int32_t>(ctx, batch_size * max_subproblems) : Span<int32_t>();
+
+    // Each pass deflates at least one off-diagonal entry per active sub-problem, so n - 1
+    // passes is the worst case. Random inputs typically converge long before that, and each
+    // pass is O(n^2 * batch) work, so bail out as soon as the tridiagonal is fully split.
+    UnifiedVector<int32_t> not_converged(1, 0);
+    auto converged_flag = not_converged.to_span();
+    ctx.wait();
     for (int64_t i = 0; i < n - 1; ++i) {
-        givens_rotations.fill(ctx, std::array<T,2>{1, 0}); //Fill with identity rotations
-        steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, pool, params.max_sweeps, params.zero_threshold);
-        //if (jobz == JobType::EigenVectors) {
-        //    if (params.block_rotations) {
-        //        block_rot<B>(ctx, givens_rotations, eigvects, apply_Q_ws.template as_span<std::byte>(), params.block_size);
-        //    } else {
-        //        //rot<B>(ctx, givens_rotations, eigvects, apply_order);
-        //    }
-        //}
+        not_converged[0] = 0; // Safe: the queue is idle at this point.
+        steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, sweep_counts, pool, params.max_sweeps, params.zero_threshold);
+
+        ctx -> submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+                auto ebid = e.batch_item(id[0]);
+                for (int64_t j = 0; j < n - 1; ++j) {
+                    if (ebid(j) != T(0)) {
+                        sycl::atomic_ref<int32_t, sycl::memory_order::relaxed,
+                                         sycl::memory_scope::device> flag(converged_flag[0]);
+                        flag.store(1);
+                        return;
+                    }
+                }
+            });
+        });
+        ctx.wait();
+        if (not_converged[0] == 0) break;
     }
 
     ctx -> submit([&](sycl::handler& cgh) {
@@ -626,7 +650,9 @@ size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<T>& d, const Vector
         size += BumpAllocator::allocation_size<std::array<T,2>>(ctx, (d.size() / 2 + 1) * d.batch_size() * d.size() * params.max_sweeps);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * params.block_size * params.block_size * 4);
         size += BumpAllocator::allocation_size<T>(ctx, d.batch_size() * 8 * params.block_size * d.size());
-        size += BumpAllocator::allocation_size<ApplyOrder>(ctx, d.batch_size());
+        // One entry per sub-problem, of which there are at most n/2 + 1 per batch item.
+        size += BumpAllocator::allocation_size<ApplyOrder>(ctx, d.batch_size() * (d.size() / 2 + 1));
+        size += BumpAllocator::allocation_size<int32_t>(ctx, d.batch_size() * (d.size() / 2 + 1)); // For sweep counts
     }
     size += sort_buffer_size<T>(ctx, eigenvalues.data(), MatrixView<T, MatrixFormat::Dense>(nullptr, d.size(), d.size(), d.size(), d.size() * d.size(), d.batch_size()), jobz);
     return size;

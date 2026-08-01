@@ -674,7 +674,6 @@ template <MatrixFormat M>
 Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
                                              T non_diagonal_value) const {
     T* data_ptr = data_.data();
-    size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
     auto stride = stride_; // Stride for batched matrices
@@ -683,32 +682,31 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
     // Use batched matrix decomposition strategy
     auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
         batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
+    (void)wg_per_matrix; // the grid-stride loop below covers the batch directly
 
     ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        // Grid-stride loop to handle large matrices
-        auto bid = item.get_group(0);
-        auto bdim = item.get_local_range(0);
-        auto n_wgs = item.get_group_range(0);
-        auto grid_stride = n_wgs / wg_per_matrix;
-        auto batch_id = bid / wg_per_matrix;
-        auto matrix_wg_ix = bid % wg_per_matrix;
-        for (; batch_id < batch_size; batch_id += grid_stride) {
-            for (auto flat_idx = matrix_wg_ix; 
-                 flat_idx < n*n; 
-                 flat_idx += bdim * wg_per_matrix) {
-                auto i = flat_idx % n; // row index
-                auto j = flat_idx / n; // column index
-                if (i == j) {
-                    // Diagonal elements
-                    data_ptr[batch_id * stride + i * ld + j] = diagonal_value;
-                } else if ((uplo == Uplo::Lower && i > j) || 
-                        (uplo == Uplo::Upper && i < j)) {
-                    // Lower or upper triangular elements (Left = lower, Right = upper)
-                    data_ptr[batch_id * stride + i * ld + j] = non_diagonal_value;
-                } else {
-                    // Zero elements
-                    data_ptr[batch_id * stride + i * ld + j] = T(0);
-                }
+        const size_t global_id = item.get_global_id(0);
+        const size_t total_work_items = item.get_global_range(0);
+        const size_t elements_per_matrix = static_cast<size_t>(n) * static_cast<size_t>(n);
+        const size_t total_work = elements_per_matrix * static_cast<size_t>(batch_size);
+
+        // Grid-stride loop over every element of every matrix in the batch.
+        for (size_t flat_idx = global_id; flat_idx < total_work; flat_idx += total_work_items) {
+            const size_t batch_id = flat_idx / elements_per_matrix;
+            const size_t remainder = flat_idx % elements_per_matrix;
+            const size_t i = remainder % static_cast<size_t>(n); // row index
+            const size_t j = remainder / static_cast<size_t>(n); // column index
+            T* element = data_ptr + batch_id * stride + j * ld + i;
+            if (i == j) {
+                // Diagonal elements
+                *element = diagonal_value;
+            } else if ((uplo == Uplo::Lower && i > j) ||
+                    (uplo == Uplo::Upper && i < j)) {
+                // Lower or upper triangular elements (Left = lower, Right = upper)
+                *element = non_diagonal_value;
+            } else {
+                // Zero elements
+                *element = T(0);
             }
         }
     });
