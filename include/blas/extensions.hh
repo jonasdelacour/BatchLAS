@@ -554,6 +554,61 @@ namespace batchlas {
                            m, ws, params);
     }
 
+    /**
+     * @brief Parameters for `stein` (inverse iteration on a symmetric tridiagonal).
+     */
+    template <typename T>
+    struct SteinParams {
+        // Inverse iteration steps per vector. With eigenvalues accurate to working
+        // precision (as `stebz` produces) two to three steps are sufficient.
+        int32_t max_iterations = 3;
+        // Eigenvalues closer than ortho_threshold * ||T|| are treated as one
+        // cluster and the corresponding vectors are explicitly reorthogonalized.
+        // This is the mechanism that keeps inverse iteration usable on clustered
+        // spectra; it matches LAPACK dstein's default of 1e-3.
+        T ortho_threshold = T(1e-3);
+        uint32_t seed = 0x5eed1234u;
+    };
+
+    /**
+     * @brief Computes eigenvectors of a batch of symmetric tridiagonal matrices by
+     *        inverse iteration, given previously computed eigenvalues.
+     *
+     * Pairs with `stebz`. Each vector is obtained by solving (T - lambda*I) x = b
+     * with a tridiagonal LU factorization (partial pivoting), repeated a few times
+     * from a pseudo-random start. Vectors whose eigenvalues form a cluster are
+     * reorthogonalized against each other afterwards.
+     *
+     * @param ctx Execution context/device queue
+     * @param d Diagonal, n entries per batch item
+     * @param e Off-diagonal, n-1 entries per batch item
+     * @param w Eigenvalues, k per batch item, in ascending order
+     * @param k Number of eigenvectors to compute
+     * @param Z Output eigenvectors, n x k per batch item, columns matching w
+     * @param ws Pre-allocated workspace buffer
+     * @param params Iteration count and clustering threshold
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T>
+    Event stein(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                const VectorView<T>& w,
+                size_t k,
+                const MatrixView<T, MatrixFormat::Dense>& Z,
+                const Span<std::byte>& ws,
+                SteinParams<T> params = SteinParams<T>());
+
+    /**
+     * @brief Required workspace size, in bytes, for `stein`.
+     */
+    template <Backend B, typename T>
+    size_t stein_buffer_size(Queue& ctx,
+                             size_t n,
+                             size_t k,
+                             size_t batch_size,
+                             SteinParams<T> params = SteinParams<T>());
+
     enum class SteqrShiftStrategy {
         // LAPACK-style implicit shift (stable formulation used by dsteqr-style iterations).
         Lapack = 0,

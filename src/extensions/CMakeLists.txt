@@ -44,6 +44,7 @@ set(EXTENSIONS_TRIDIAG_SOURCES
     tridiag_solver.cc
     steqr.cc
     stebz.cc
+    stein.cc
     steqr_wg.cc
     steqr_legacy.cc
     latrd_lower_panel.cc

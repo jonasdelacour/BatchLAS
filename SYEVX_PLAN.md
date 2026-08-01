@@ -1,6 +1,7 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **design only.** No code in this document has been implemented.
+Status: **Tier 0 implemented. Tier 1 implemented (`stebz` + `stein`).**
+Tiers 2–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
 user asked about separately — *batches of small matrices* and *batches of medium
@@ -27,6 +28,7 @@ single biggest available win is not a new kernel; it is routing.
 10. [Validation and benchmarking plan](#10-validation)
 11. [Risks, ranked](#11-risks)
 12. [Sources](#12-sources)
+13. [Implementation status](#13-implementation-status)
 
 ---
 
@@ -664,3 +666,76 @@ Dense eigensolver performance on GPUs:
 - [Extracting the potential of emerging hardware accelerators for symmetric eigenvalue decomposition](https://arxiv.org/html/2410.02170v1)
 - [cuSOLVER documentation](https://docs.nvidia.com/cuda/cusolver/index.html)
 - [pytorch/pytorch#175585 — `linalg.eigh` performance cliff at n=32 for batched CUDA inputs](https://github.com/pytorch/pytorch/issues/175585)
+
+---
+
+## 13. Implementation status
+
+### Tier 0 — done
+
+- `SyevxAlgorithm {Auto, Direct, DirectSubset, Filtered, LOBPCG}` on
+  `SyevxParams::method`, with a `BATCHLAS_SYEVX_ALGORITHM` env override.
+- `syevx_select_algorithm` (`src/extensions/syevx.cc`) implements the routing of
+  §8 Tier 0. Unimplemented tiers degrade to their nearest implemented neighbour,
+  so `Auto` never fails and never picks something that does not exist.
+- `syevx_direct` (`src/extensions/syevx_direct.cc`): `syev` on a private copy of
+  `A` plus a selection kernel. `A` is left unmodified and the output ordering
+  matches the LOBPCG path.
+- The LOBPCG implementation moved to `src/extensions/syevx_lobpcg.cc`;
+  `syevx.cc` is now purely the dispatcher.
+
+**Bug found and fixed while doing this.** The LOBPCG workspace calculation sized
+the projected `syev` for `block_vectors` and `3*block_vectors` only, but the
+restart iteration solves a `2*block_vectors` problem. Because the SYEV provider is
+chosen per size (CTA only up to n=32), the largest matrix does not necessarily
+need the largest workspace, so the omission was not masked — it threw
+`syev: insufficient workspace for chosen provider` for e.g. n=60, neigs=3,
+extra_directions=10. This is what made `SyevxOperationsTest.RandomMatrix` fail on
+`main`; confirmed against a pre-change binary. Both the runtime and buffer-size
+paths now cover all three sizes.
+
+Also fixed `SyevxOperationsTest.ComplexShiftInverToeplitzEigenpairs`, which sized
+its workspace from a CSR view but solved a dense matrix — latent on `main`,
+exposed once the two could select different algorithms.
+
+### Tier 1 — done
+
+- `stebz` (`src/extensions/stebz.cc`): batched tridiagonal bisection.
+  All / Index / Value ranges, either sort order, no global scratch.
+  One work-group per batch item, one work-item per wanted eigenvalue.
+  The Sturm recurrence clamps `|q|` below `pivmin` as LAPACK `dlaebz` does;
+  without that guard an underflowing pivot yields an infinity and the count stops
+  being monotone in `x`, breaking the bisection invariant.
+- `stein` (`src/extensions/stein.cc`): batched inverse iteration.
+  Phase 1 is one work-item per vector doing tridiagonal LU with partial pivoting
+  (LAPACK `dgttrf`/`dgttrs`); phase 2 is modified Gram-Schmidt within clusters of
+  eigenvalues closer than `ortho_threshold * ||T||`.
+
+**Testing note worth keeping.** The obvious clustered-spectrum test — a
+block-diagonal matrix with doubled eigenvalues — does *not* test
+reorthogonalization: its degenerate pairs have disjoint supports and come out
+orthogonal for free. The test was replaced with a Wilkinson matrix
+`W+_(2m+1)`, whose near-degenerate pairs share support. Verified to have teeth: with
+`ortho_threshold` forced to 0, columns 4 and 5 have a dot product of 8.6e-4.
+
+Tests: `stebz_tests` (10) and `stein_tests` (8), both across float and double.
+
+### Not yet measured
+
+The crossover thresholds in §2.4 and §8 remain **flop-count estimates**. The sweep
+that would replace them (`BM_SYEVX_Crossover` in `benchmarks/syevx_benchmark.cc`)
+is written but has not produced numbers: the only build available on the
+development machine is CPU-only SYCL (`native_cpu`, CUDA off), and the syevx
+benchmark aborts there with `UR_RESULT_ERROR_INVALID_NULL_POINTER` at every shape
+— including for the untouched LOBPCG path and for the pre-existing `BM_SYEVX`, so
+it is a pre-existing backend limitation rather than something the new code
+introduced. **Run this sweep on a GPU build before trusting any threshold in this
+document.**
+
+### Next
+
+Tier 2 (`syevx_direct_subset`): compose `sytrd_sy2sb` → `sytrd_sb2st` → `stebz` →
+`stein` → the two back-transforms narrowed to `k` columns, modelled on
+`syev_two_stage.cc`. The risk flagged in §11.5 — that narrowing the Q₂
+application is not a clean shape change — is still unverified and should be
+checked first.
