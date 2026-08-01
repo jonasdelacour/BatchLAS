@@ -36,7 +36,13 @@ points at intra-kernel serialization rather than launch geometry alone.
 
 ## 2. Code-level findings
 
-### 2.1 Rescale and normalize were serialized over `dd` — **[done]**
+### 2.1 Rescale and normalize were serialized over `dd` — **[half done]**
+
+> **Outcome so far: rescale is parallelized and verified; normalize is NOT.**
+> End-to-end gain is currently within measurement noise (~1%), because the
+> still-serial normalize loop keeps the `dd` work-group barriers it was supposed
+> to lose. See §2.1a for the normalize fault and §6 for the measurements.
+
 
 `stedc_merge_cta.cc`, `maybe_rescale_vectors` and `normalize_vectors`.
 
@@ -56,18 +62,86 @@ Both outer loops are embarrassingly parallel:
 Fix applied: both are now templated on a reduction adapter plus a
 `(first, stride)` index range.
 
-- CTA variant passes `PartitionAdapter` with `(part_id, parts_per_wg)` — one
-  index per sub-group partition, all running concurrently, **zero work-group
-  barriers inside either loop**. A single `group_barrier(wg)` separates the two
-  phases (rescale reads `Q` / writes `v`; normalize overwrites `Q` / reads `v`).
-- WG variant passes `WorkgroupAdapter` with `(0, 1)` — bit-identical to the
-  previous behaviour, retained as the reference path for A/B comparison.
+- CTA variant passes `PartitionAdapter` with `(part_id, parts_per_wg)` for
+  **rescale only** — one index per sub-group partition, all running concurrently,
+  no work-group barrier inside that loop. It still passes `WorkgroupAdapter` with
+  `(0, 1)` for **normalize**, which therefore keeps its `dd` barriers; see §2.1a
+  for why. A single `group_barrier(wg)` separates the two phases (rescale reads
+  `Q` / writes `v`; normalize overwrites `Q` / reads `v`).
+- WG variant passes `WorkgroupAdapter` with `(0, 1)` for both — bit-identical to
+  the previous behaviour, retained as the reference path for A/B comparison.
 
 Supporting changes: `reduce_product` and a no-op/barrier `sync()` added to both
 adapters; `nrm2_column` added as an adapter-generic Blue's-scaled 2-norm
 mirroring `internal::nrm2` in `src/math-helpers.hh` (the three accumulators are
 reduced as scalars rather than a `sycl::vec<R,3>`, which is componentwise
 identical).
+
+### 2.1a Partition-parallel `normalize_vectors` faults — **[open, unresolved]**
+
+Making `normalize_vectors` partition-parallel (one column per partition) causes
+`CUDA_ERROR_ILLEGAL_ADDRESS` **inside the merge kernel itself**. Do not retry the
+obvious version without reading this section.
+
+Reproducer (fails within seconds; baseline and the shipped version both pass):
+
+```bash
+./build/benchmarks/stedc_acc --backend=CUDA --type=float --samples=64 64
+```
+
+Fault is size-dependent: n=16 and n=32 pass, n>=64 fault. It needs
+`parts_per_wg > 1`, i.e. `secular_threads_per_root < 32`; the tuning default for
+n<=64 is 4 (8 partitions of 4 lanes, `wg_size` 32).
+
+Confirmed to be a real in-kernel OOB, not downstream NaN. `SYCL_UR_TRACE=2` with
+`CUDA_LAUNCH_BLOCKING=1` attributes the failure to a launch with `localWorkSize`
+32 and two 256-byte local accessors (= `d_local`/`z_local` at `nloc` 64), which is
+`StedcFusedCtaMerge`.
+
+Eliminated so far — each of these was built and run against the reproducer:
+
+| Hypothesis | Result |
+| --- | --- |
+| The adapter/`nrm2_column` refactor itself is wrong | **Ruled out.** CTA kernel with `WorkgroupAdapter` at `(0,1)` passes. |
+| Partition-parallel *rescale* is at fault | **Ruled out.** Rescale on partitions + normalize on WG passes (this is what shipped). |
+| Blue's-scaled `nrm2_column` indexes out of range | **Ruled out.** Replacing it with a plain sum-of-squares still faults. |
+| The reduction inside normalize is the problem | **Ruled out.** Bypassing `nrm2` entirely (`nrm2 = 1`) still faults. |
+| Löwner product overflow from longer per-lane chains | **Real but not the cause.** Fixed anyway via frexp accumulation (see below); fault persists. |
+| Divergent warp collectives when `dd % parts_per_wg != 0` | **Real hazard, not the cause.** Fixed anyway via uniform trip counts; fault persists. |
+
+That leaves a puzzle: with `nrm2` bypassed, the partition normalize performs only
+`Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig)` and a scale, both trivially in range
+for `i, eig < dd <= nloc` — yet it still faults. The next step is a device-side
+sanitizer build (`-fsanitize=address` on the SYCL device path) to get a line
+number; `compute-sanitizer` cannot attach here because SYCL initializes CUDA
+before the sanitizer ("CUDA initialized before the Sanitizer. The Sanitizer will
+be disabled").
+
+Two robustness fixes were kept even though neither resolved the fault, because
+both are genuine latent hazards exposed by narrowing the reduction group:
+
+- **Löwner product range.** A lane multiplies `dd/width` factors before any
+  reduction, so going from width 32 to width 4 lengthens each serial product 8x
+  and it can leave float range. The product is now accumulated as a
+  (mantissa, exponent) pair with `frexp` renormalization. Because the rescaling
+  is by exact powers of two, this reproduces the naive product bit-for-bit
+  wherever the naive product was in range.
+- **Uniform trip counts.** `dd` is rarely a multiple of `parts_per_wg` (deflation
+  makes it arbitrary), so a plain `eid < dd` bound lets some partitions exit the
+  loop while others are still inside it — and the reductions are sub-group
+  shuffles that need every lane of the warp. Both loops now iterate a uniform
+  number of times and mask the work instead.
+
+### 2.1b Test coverage gap — **[open]**
+
+`StedcTest.FusedCtaMergeMatchesReference` sets `secular_threads_per_root = 32`,
+which with `wg_size` 32 gives `parts_per_wg == 1` — a single partition spanning
+the whole work-group. **The CTA tests therefore never exercise multi-partition
+behaviour**, which is exactly the configuration the tuning tables select by
+default (`STEDC_THREADS_PER_ROOT_TINY = 4`) and exactly where §2.1a fails. The
+suite passed 20/20 throughout the failure above.
+
+Worth adding: a CTA case at `secular_threads_per_root = 4` and n >= 64.
 
 **Numerical note.** Narrowing the reduction group reassociates both reductions.
 This is safe here because neither involves cancellation: the Löwner reduction is
@@ -181,7 +255,9 @@ rocSOLVER middle-way / fixed-weight hybrid with bound-clamped steps and a proper
 
 ## 4. Prioritized plan
 
-1. **[done]** Partition-parallelize rescale + normalize (removes `2*dd` barriers).
+1. **[half done]** Partition-parallelize rescale + normalize. Rescale done and
+   verified; normalize blocked on §2.1a. Until normalize lands, the `dd`
+   work-group barriers are only halved and the end-to-end effect is ~noise.
 2. **[open]** Recompute denominators from `d_local`/`temp_lambdas` instead of
    round-tripping through `Q` (kills the uncoalesced access and most global
    traffic); then drop the `write_denominator_column` global store.
@@ -211,3 +287,50 @@ orthogonality distribution for float STEDC at n <= 64.
   deliberately left bit-identical as the reference.
 - `benchmarks/stedc_benchmark.cc` — timing, plus re-profile with the `ncu`
   recipe in the skill reference to confirm occupancy actually moved.
+
+---
+
+## 6. Measurements (RTX 4090, sm_89, CUDA backend)
+
+### Correctness
+
+`stedc_acc --backend=CUDA --samples=64`, float and double, n = 16 / 32 / 64 /
+128 / 256 / 512: **0.00000 Fail% everywhere**, residual and orthogonality at
+machine-epsilon levels for both precisions.
+
+Orthogonality `||Z^T Z - I||_F / n`, float, `--samples=256`, against baseline:
+
+| n | baseline | with change |
+| --- | --- | --- |
+| 16 | 1.21899e-07 | 1.21899e-07 |
+| 32 | 9.36432e-08 | 9.38560e-08 |
+| 64 | 7.41322e-08 | 7.44386e-08 |
+
+Differences appear in the third significant digit, consistent with benign
+reassociation of a cancellation-free reduction.
+
+`stedc_tests --gtest_filter='*FusedCta*:*FusedMerge*'`: 20 passed, 0 failed
+(12 skipped are host-backend CTA skips). Note the coverage caveat in §2.1b.
+
+### Performance — no meaningful gain yet
+
+`stedc_benchmark --backend=CUDA --type=float --warmup=5 --min_iters=30
+--max_iters=30 <n> 256 16 2 4 1` (arg3=2 selects FusedCta, arg4=4 threads per
+root, arg5=1 wg multiplier), avg ms over 30 iterations:
+
+| n | baseline | with change | delta |
+| --- | --- | --- | --- |
+| 64 | 0.91981 (±0.039) | 0.95147 (±0.044) | -3.4% (within noise) |
+| 128 | 2.0738 (±0.214) | 1.9972 (±0.002) | +3.7% (baseline noisy) |
+| 256 | 4.9286 (±0.014) | 4.8577 (±0.009) | +1.4% |
+| 512 | 13.240 (±0.005) | 13.102 (±0.032) | +1.0% |
+
+**Read this as flat.** Only the rescale half of §2.1 landed, so the phase still
+carries `dd` work-group barriers from normalize. The occupancy problem the
+change was aimed at is not fixed until §2.1a is resolved.
+
+Caution for future runs: **arg3 selects the merge variant**
+(`-1` Auto, `0` Baseline, `1` Fused, `2` FusedCta). An earlier measurement in
+this investigation used `arg3=0`, which runs the Baseline 3-kernel path and does
+not exercise the CTA merge at all -- it produced a spurious "7-8% speedup" that
+was pure run-to-run variance. Always pass `2` when benchmarking this work.
