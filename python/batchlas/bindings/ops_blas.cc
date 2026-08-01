@@ -55,6 +55,70 @@ DenseMatrixT<T> make_gemm_output(const DenseMatrixT<T>& a,
     return result;
 }
 
+// BLAS updates read C as well as writing it (C <- alpha * op(A) op(B) + beta * C).
+// When the caller supplies an accumulator we start from a copy of it; otherwise we
+// allocate a fresh buffer, which is only meaningful when beta == 0.
+template <typename T>
+DenseMatrixT<T> resolve_accumulator(const py::object& c_object,
+                                    DenseMatrixT<T>&& fallback,
+                                    const T& beta,
+                                    const char* where) {
+    if (c_object.is_none()) {
+        if (beta != T(0)) {
+            throw py::value_error(std::string(where) +
+                                  ": beta != 0 requires an existing C; pass it via out=");
+        }
+        return std::move(fallback);
+    }
+    const DenseMatrix& wrapper = py::cast<const DenseMatrix&>(c_object);
+    const auto* typed = std::get_if<DenseMatrixT<T>>(&wrapper.storage);
+    if (typed == nullptr) {
+        throw py::value_error(std::string(where) + ": out dtype must match the operand dtype");
+    }
+    if (fallback.is_heterogeneous() || typed->is_heterogeneous()) {
+        // A cloned accumulator would carry its own per-batch active dimensions,
+        // which need not agree with the ones this product implies.
+        throw py::value_error(std::string(where) +
+                              ": out is not supported for heterogeneous batches");
+    }
+    if (typed->rows() != fallback.rows() || typed->cols() != fallback.cols() ||
+        typed->batch_size() != fallback.batch_size()) {
+        throw py::value_error(std::string(where) + ": out has the wrong shape for this operation");
+    }
+    return typed->clone();
+}
+
+template <typename T>
+Vector<T> resolve_accumulator_vector(const py::object& y_object,
+                                     Vector<T>&& fallback,
+                                     const T& beta,
+                                     const char* where) {
+    if (y_object.is_none()) {
+        if (beta != T(0)) {
+            throw py::value_error(std::string(where) +
+                                  ": beta != 0 requires an existing y; pass it via out=");
+        }
+        return std::move(fallback);
+    }
+    const DenseVector& wrapper = py::cast<const DenseVector&>(y_object);
+    const auto* typed = std::get_if<Vector<T>>(&wrapper.storage);
+    if (typed == nullptr) {
+        throw py::value_error(std::string(where) + ": out dtype must match the operand dtype");
+    }
+    if (typed->size() != fallback.size() || typed->batch_size() != fallback.batch_size()) {
+        throw py::value_error(std::string(where) + ": out has the wrong shape for this operation");
+    }
+    Vector<T> copy(typed->size(), typed->batch_size());
+    const auto source = typed->data();
+    for (int batch = 0; batch < typed->batch_size(); ++batch) {
+        for (int index = 0; index < typed->size(); ++index) {
+            copy[static_cast<std::size_t>(batch * copy.stride() + index * copy.inc())] =
+                source[static_cast<std::size_t>(batch * typed->stride() + index * typed->inc())];
+        }
+    }
+    return copy;
+}
+
 template <typename T>
 DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
                             const DenseVector& x_wrapper,
@@ -62,7 +126,8 @@ DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
                             const py::object& beta_object,
                             Transpose trans_a,
                             Backend backend,
-                            const std::optional<std::string>& device_name) {
+                            const std::optional<std::string>& device_name,
+                            const py::object& y_object) {
     ensure_same_dtype(a_wrapper, x_wrapper, "matrix and vector dtypes must match");
     const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
     const auto& x = std::get<Vector<T>>(x_wrapper.storage);
@@ -76,9 +141,9 @@ DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
         throw py::value_error("matrix/vector dimensions do not match for gemv");
     }
 
-    Vector<T> y(y_size, a.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
+    Vector<T> y = resolve_accumulator_vector<T>(y_object, Vector<T>(y_size, a.batch_size()), beta, "gemv");
     Queue queue = make_queue(device_name);
     visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
@@ -96,7 +161,8 @@ DenseMatrix dense_symm_impl(const DenseMatrix& a_wrapper,
                             Side side,
                             Uplo uplo,
                             Backend backend,
-                            const std::optional<std::string>& device_name) {
+                            const std::optional<std::string>& device_name,
+                            const py::object& c_object) {
     static_assert(std::is_floating_point_v<T>, "symm only supports real dtypes");
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
     const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
@@ -105,9 +171,10 @@ DenseMatrix dense_symm_impl(const DenseMatrix& a_wrapper,
         throw py::value_error("matrix batch sizes must match");
     }
 
-    DenseMatrixT<T> c(b.rows(), b.cols(), b.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
+    DenseMatrixT<T> c =
+        resolve_accumulator<T>(c_object, DenseMatrixT<T>(b.rows(), b.cols(), b.batch_size()), beta, "symm");
     Queue queue = make_queue(device_name);
     visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
@@ -124,13 +191,14 @@ DenseMatrix dense_syrk_impl(const DenseMatrix& a_wrapper,
                             Uplo uplo,
                             Transpose trans_a,
                             Backend backend,
-                            const std::optional<std::string>& device_name) {
+                            const std::optional<std::string>& device_name,
+                            const py::object& c_object) {
     static_assert(std::is_floating_point_v<T>, "syrk only supports real dtypes");
     const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
-    DenseMatrixT<T> c(n, n, a.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
+    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syrk");
     Queue queue = make_queue(device_name);
     visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
@@ -148,7 +216,8 @@ DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
                              Uplo uplo,
                              Transpose trans_a,
                              Backend backend,
-                             const std::optional<std::string>& device_name) {
+                             const std::optional<std::string>& device_name,
+                             const py::object& c_object) {
     static_assert(std::is_floating_point_v<T>, "syr2k only supports real dtypes");
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
     const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
@@ -157,9 +226,9 @@ DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
         throw py::value_error("matrix batch sizes must match");
     }
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
-    DenseMatrixT<T> c(n, n, a.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
+    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syr2k");
     Queue queue = make_queue(device_name);
     visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
@@ -228,7 +297,8 @@ DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
                              Transpose trans_a,
                              Transpose trans_b,
                              Backend backend,
-                             const std::optional<std::string>& device_name) {
+                             const std::optional<std::string>& device_name,
+                             const py::object& c_object) {
     ensure_same_dtype(a_wrapper, b_wrapper, "sparse and dense dtypes must match");
     const auto& a = std::get<SparseMatrixT<T>>(a_wrapper.storage);
     const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
@@ -243,9 +313,9 @@ DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
         throw py::value_error("inner dimensions do not match for spmm");
     }
 
-    DenseMatrixT<T> c(m, n, b.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
+    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(m, n, b.batch_size()), beta, "spmm");
     Queue queue = make_queue(device_name);
     run_backend_with_workspace(
         backend, queue,
@@ -274,7 +344,8 @@ void init_blas_ops(py::module_& module) {
                             const std::string& trans_b_name,
                             const std::string& precision_name,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
         ensure_same_dtype(a, b, "matrix dtypes must match");
         const Backend backend = parse_backend(backend_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
@@ -284,9 +355,10 @@ void init_blas_ops(py::module_& module) {
         return visit_dense(a, [&](auto tag, const auto& typed_a) {
             using scalar_type = typename decltype(tag)::type;
             const auto& typed_b = std::get<DenseMatrixT<scalar_type>>(b.storage);
-            DenseMatrixT<scalar_type> c = make_gemm_output(typed_a, typed_b, trans_a, trans_b);
             const scalar_type typed_alpha = scalar_from_object<scalar_type>(alpha);
             const scalar_type typed_beta = scalar_from_object<scalar_type>(beta);
+            DenseMatrixT<scalar_type> c = resolve_accumulator<scalar_type>(
+                out_object, make_gemm_output(typed_a, typed_b, trans_a, trans_b), typed_beta, "gemm");
             Queue queue = make_queue(device_name);
             visit_backend(backend, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
@@ -311,7 +383,8 @@ void init_blas_ops(py::module_& module) {
                                           const std::string& trans_b_name,
                                           const std::string& precision_name,
                                           const std::string& backend_name,
-                                          const py::object& device_name_obj) {
+                                          const py::object& device_name_obj,
+                            const py::object& out_object) {
         ensure_same_dtype(a, b, "matrix dtypes must match");
         const Backend backend = parse_backend(backend_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
@@ -321,9 +394,11 @@ void init_blas_ops(py::module_& module) {
         return visit_dense(a, [&](auto tag, const auto& typed_a) {
             using scalar_type = typename decltype(tag)::type;
             const auto& typed_b = std::get<DenseMatrixT<scalar_type>>(b.storage);
-            DenseMatrixT<scalar_type> c = make_gemm_output(typed_a, typed_b, trans_a, trans_b);
             const scalar_type typed_alpha = scalar_from_object<scalar_type>(alpha);
             const scalar_type typed_beta = scalar_from_object<scalar_type>(beta);
+            DenseMatrixT<scalar_type> c = resolve_accumulator<scalar_type>(
+                out_object, make_gemm_output(typed_a, typed_b, trans_a, trans_b), typed_beta,
+                "gemm_heterogeneous");
             Queue queue = make_queue(device_name);
             visit_backend(backend, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
@@ -341,13 +416,14 @@ void init_blas_ops(py::module_& module) {
                             const py::object& beta,
                             const std::string& trans_a_name,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
         const Backend backend = parse_backend(backend_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         return visit_dense(a, [&](auto tag, const auto&) {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gemv_impl<scalar_type>(a, x, alpha, beta, trans_a, backend, device_name);
+            return dense_gemv_impl<scalar_type>(a, x, alpha, beta, trans_a, backend, device_name, out_object);
         });
     });
 
@@ -358,7 +434,8 @@ void init_blas_ops(py::module_& module) {
                             const std::string& side_name,
                             const std::string& uplo_name,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
         const Backend backend = parse_backend(backend_name);
         const Side side = parse_side(side_name);
         const Uplo uplo = parse_uplo(uplo_name);
@@ -368,7 +445,7 @@ void init_blas_ops(py::module_& module) {
             if constexpr (!std::is_floating_point_v<scalar_type>) {
                 throw_not_implemented("symm only supports float32 and float64");
             } else {
-                return dense_symm_impl<scalar_type>(a, b, alpha, beta, side, uplo, backend, device_name);
+                return dense_symm_impl<scalar_type>(a, b, alpha, beta, side, uplo, backend, device_name, out_object);
             }
         });
     });
@@ -379,7 +456,8 @@ void init_blas_ops(py::module_& module) {
                             const std::string& uplo_name,
                             const std::string& trans_a_name,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
         const Backend backend = parse_backend(backend_name);
         const Uplo uplo = parse_uplo(uplo_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
@@ -389,7 +467,7 @@ void init_blas_ops(py::module_& module) {
             if constexpr (!std::is_floating_point_v<scalar_type>) {
                 throw_not_implemented("syrk only supports float32 and float64");
             } else {
-                return dense_syrk_impl<scalar_type>(a, alpha, beta, uplo, trans_a, backend, device_name);
+                return dense_syrk_impl<scalar_type>(a, alpha, beta, uplo, trans_a, backend, device_name, out_object);
             }
         });
     });
@@ -401,7 +479,8 @@ void init_blas_ops(py::module_& module) {
                              const std::string& uplo_name,
                              const std::string& trans_a_name,
                              const std::string& backend_name,
-                             const py::object& device_name_obj) {
+                             const py::object& device_name_obj,
+                            const py::object& out_object) {
         const Backend backend = parse_backend(backend_name);
         const Uplo uplo = parse_uplo(uplo_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
@@ -411,7 +490,7 @@ void init_blas_ops(py::module_& module) {
             if constexpr (!std::is_floating_point_v<scalar_type>) {
                 throw_not_implemented("syr2k only supports float32 and float64");
             } else {
-                return dense_syr2k_impl<scalar_type>(a, b, alpha, beta, uplo, trans_a, backend, device_name);
+                return dense_syr2k_impl<scalar_type>(a, b, alpha, beta, uplo, trans_a, backend, device_name, out_object);
             }
         });
     });
@@ -465,14 +544,15 @@ void init_blas_ops(py::module_& module) {
                             const std::string& trans_a_name,
                             const std::string& trans_b_name,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
         const Backend backend = parse_backend(backend_name);
         const Transpose trans_a = parse_transpose(trans_a_name);
         const Transpose trans_b = parse_transpose(trans_b_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         return visit_sparse(a, [&](auto tag, const auto&) {
             using scalar_type = typename decltype(tag)::type;
-            return sparse_spmm_impl<scalar_type>(a, b, alpha, beta, trans_a, trans_b, backend, device_name);
+            return sparse_spmm_impl<scalar_type>(a, b, alpha, beta, trans_a, trans_b, backend, device_name, out_object);
         });
     });
 }

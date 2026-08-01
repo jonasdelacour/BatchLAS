@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - optional at import time
 from . import _batchlas as _ext
 from ._options import (
     ILUKOptions,
+    JacobiOptions,
     LanczosOptions,
     StedcOptions,
     SteqrOptions,
@@ -307,6 +308,7 @@ def gemm(
             compute_precision,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -336,6 +338,7 @@ def gemm_heterogeneous(
             compute_precision,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -361,6 +364,7 @@ def gemv(
             trans_a,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_vector(out),
         ),
         out,
     )
@@ -388,6 +392,7 @@ def symm(
             uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -413,6 +418,7 @@ def syrk(
             trans_a,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -440,6 +446,7 @@ def syr2k(
             trans_a,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -525,6 +532,7 @@ def spmm(
             trans_b,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
         ),
         out,
     )
@@ -658,6 +666,72 @@ def gebrd_unblocked(a: Any, *, backend: str = "auto", device: str | None = None)
     )
 
 
+def gebrd_cta(
+    a: Any,
+    *,
+    cta_wg_size_multiplier: int = 1,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Bidiagonal reduction of a small (``n <= 32``) real matrix inside one CTA.
+
+    Returns ``(a, d, e, tauq, taup)``.
+    """
+    return _unwrap(
+        _ext._gebrd_cta(
+            _coerce_dense_matrix(a),
+            int(cta_wg_size_multiplier),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def gebrd_blocked(
+    a: Any,
+    *,
+    block_size: int = 16,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Blocked (DLABRD panel + GEMM update) bidiagonal reduction.
+
+    Returns ``(a, d, e, tauq, taup)``.
+    """
+    return _unwrap(
+        _ext._gebrd_blocked(
+            _coerce_dense_matrix(a),
+            int(block_size),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def gesvd_cta(
+    a: Any,
+    *,
+    compute_vectors: bool = True,
+    uplo: str | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """CTA-resident SVD for small (``n <= 32``) square matrices.
+
+    Returns ``(u, s, vh)`` when ``compute_vectors`` is set, otherwise ``s``.
+    Pass ``uplo`` to take the Hermitian fast path.
+    """
+    return _unwrap(
+        _ext._gesvd_cta(
+            _coerce_dense_matrix(a),
+            compute_vectors,
+            uplo,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
 def bdsqr(d: Any, e: Any, *, sort_desc: bool = False, backend: str = "auto", device: str | None = None):
     return _unwrap(
         _ext._bdsqr(
@@ -774,6 +848,192 @@ def syev_two_stage(
             _coerce_dense_matrix(a),
             compute_vectors,
             uplo,
+            _normalize_options(options),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def syev_jacobi_cta(
+    a: Any,
+    *,
+    compute_vectors: bool = True,
+    uplo: str = "lower",
+    options: JacobiOptions | dict[str, Any] | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """One-sided cyclic Jacobi eigensolver, resident in a single CTA partition.
+
+    Intended for ``n <= 32``. Trades throughput against ``syev_cta`` for high
+    *relative* accuracy on graded or badly scaled symmetric positive definite
+    input.
+    """
+    return _unwrap(
+        _ext._syev_jacobi_cta(
+            _coerce_dense_matrix(a),
+            compute_vectors,
+            uplo,
+            _normalize_options(options),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def syev_variant_support(
+    a: Any,
+    *,
+    uplo: str = "lower",
+    device: str | None = None,
+) -> dict[str, Any]:
+    """Report which ``syev`` variants the current device supports for ``a``.
+
+    Returns a dict with the device name/capabilities plus ``cta``, ``blocked``
+    and ``two_stage`` booleans.
+    """
+    return _ext._syev_variant_support(
+        _coerce_dense_matrix(a),
+        uplo,
+        _normalize_device(device),
+    )
+
+
+def sytrd_cta(
+    a: Any,
+    *,
+    uplo: str = "lower",
+    cta_wg_size_multiplier: int = 1,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Reduce a small symmetric/Hermitian matrix to tridiagonal form in one CTA.
+
+    Returns ``(a, d, e, tau)`` where ``a`` holds the SYTD2-style reflectors.
+    """
+    return _unwrap(
+        _ext._sytrd_cta(
+            _coerce_dense_matrix(a),
+            uplo,
+            int(cta_wg_size_multiplier),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def sytrd_blocked(
+    a: Any,
+    *,
+    uplo: str = "lower",
+    block_size: int = 32,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Blocked (LATRD panel + BLAS-3 update) tridiagonal reduction.
+
+    Returns ``(a, d, e, tau)``. Only ``uplo="lower"`` is currently implemented.
+    """
+    return _unwrap(
+        _ext._sytrd_blocked(
+            _coerce_dense_matrix(a),
+            uplo,
+            int(block_size),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def sytrd_sy2sb(
+    a: Any,
+    kd: int,
+    *,
+    uplo: str = "lower",
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """First stage of the two-stage reduction: dense -> band.
+
+    Returns ``(a, ab, tau)`` where ``ab`` is ``(kd + 1, n)`` LAPACK band storage
+    and ``a`` holds the Householder reflectors.
+    """
+    return _unwrap(
+        _ext._sytrd_sy2sb(
+            _coerce_dense_matrix(a),
+            uplo,
+            int(kd),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def sytrd_sb2st(
+    ab: Any,
+    kd: int,
+    *,
+    uplo: str = "lower",
+    block_size: int = 32,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Second stage of the two-stage reduction: band -> tridiagonal (bulge chasing).
+
+    ``ab`` must be ``(kd + 1, n)`` LAPACK band storage. Returns ``(d, e, tau)``
+    with real-valued ``d``/``e``; ``tau`` is zero-filled (VECT='N' style).
+    """
+    return _unwrap(
+        _ext._sytrd_sb2st(
+            _coerce_dense_matrix(ab),
+            uplo,
+            int(kd),
+            int(block_size),
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+        )
+    )
+
+
+def hetrd_hb2st(
+    ab: Any,
+    kd: int,
+    *,
+    uplo: str = "lower",
+    block_size: int = 32,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """LAPACK-style alias for :func:`sytrd_sb2st` on Hermitian band input."""
+    return sytrd_sb2st(
+        ab,
+        kd,
+        uplo=uplo,
+        block_size=block_size,
+        backend=backend,
+        device=device,
+    )
+
+
+def sytrd_band_reduction(
+    ab: Any,
+    kd: int,
+    *,
+    uplo: str = "lower",
+    options: SytrdBandReductionOptions | dict[str, Any] | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+):
+    """Band -> tridiagonal reduction using the BANDR1-style blocked schedule.
+
+    ``ab`` must be ``(kd + 1, n)`` LAPACK band storage. Returns ``(d, e, tau)``.
+    """
+    return _unwrap(
+        _ext._sytrd_band_reduction(
+            _coerce_dense_matrix(ab),
+            uplo,
+            int(kd),
             _normalize_options(options),
             _normalize_backend(backend, device),
             _normalize_device(device),
