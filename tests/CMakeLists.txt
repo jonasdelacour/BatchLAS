@@ -54,6 +54,7 @@ set(TEST_TARGETS
     sytrd_blocked_tests
     syev_cta_tests
     syev_jacobi_cta_tests
+    syev_cta_fused_tests
     syev_blocked_tests
 )
 
