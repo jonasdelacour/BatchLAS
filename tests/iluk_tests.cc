@@ -114,6 +114,51 @@ T csr_entry(const MatrixView<T, MatrixFormat::CSR>& A, int row, int col, int bat
     return T(0);
 }
 
+
+// Canonical 5-point 2D Laplacian on an m x m grid: the standard problem class
+// ILU preconditioning targets, and one where LOBPCG actually reaches tolerance
+// (the random sparse Hermitian matrices used elsewhere here do not).
+Matrix<float, MatrixFormat::CSR> make_laplacian_2d(int m, int batch) {
+    const int n = m * m;
+    std::vector<int> ro(static_cast<std::size_t>(n) + 1, 0);
+    std::vector<int> ci;
+    std::vector<float> va;
+    std::vector<int> diag_slot(static_cast<std::size_t>(n), 0);
+
+    for (int idx = 0; idx < n; ++idx) {
+        const int r = idx / m;
+        const int c = idx % m;
+        if (r > 0)     { ci.push_back(idx - m); va.push_back(-1.0f); }
+        if (c > 0)     { ci.push_back(idx - 1); va.push_back(-1.0f); }
+        diag_slot[static_cast<std::size_t>(idx)] = static_cast<int>(ci.size());
+        ci.push_back(idx); va.push_back(4.0f);
+        if (c < m - 1) { ci.push_back(idx + 1); va.push_back(-1.0f); }
+        if (r < m - 1) { ci.push_back(idx + m); va.push_back(-1.0f); }
+        ro[static_cast<std::size_t>(idx) + 1] = static_cast<int>(ci.size());
+    }
+
+    const int nnz = static_cast<int>(ci.size());
+    Matrix<float, MatrixFormat::CSR> A(n, n, nnz, batch);
+    auto v = A.view();
+    auto Ro = v.row_offsets();
+    auto Ci = v.col_indices();
+    auto Va = v.data();
+    for (int b = 0; b < batch; ++b) {
+        const int rb = b * v.offset_stride();
+        const int vb = b * v.matrix_stride();
+        for (int i = 0; i <= n; ++i) Ro[rb + i] = ro[static_cast<std::size_t>(i)];
+        for (int p = 0; p < nnz; ++p) {
+            Ci[vb + p] = ci[static_cast<std::size_t>(p)];
+            Va[vb + p] = va[static_cast<std::size_t>(p)];
+        }
+        // Make the batch elements genuinely distinct systems.
+        for (int i = 0; i < n; ++i) {
+            Va[vb + diag_slot[static_cast<std::size_t>(i)]] += 0.01f * static_cast<float>(b);
+        }
+    }
+    return A;
+}
+
 }  // namespace
 
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -285,6 +330,8 @@ TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
     ci[1] = 1;
     vals[0] = 0.0f;
     vals[1] = 2.0f;
+
+    iluk_build_level_schedule(M);
 
     Matrix<float, MatrixFormat::Dense> rhs(n, 1, batch);
     Matrix<float, MatrixFormat::Dense> out(n, 1, batch);
@@ -794,6 +841,164 @@ TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
         syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
+}
+
+// Not a correctness test: an end-to-end cost model for whether building the
+// preconditioner pays for itself. Run with --gtest_also_run_disabled_tests.
+TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
+    struct Shape { int m; int batch; };
+    const std::vector<Shape> shapes = {
+        {16, 1}, {16, 16}, {32, 1}, {32, 16}, {64, 1}, {64, 16},
+    };
+    constexpr size_t neigs = 5;
+    constexpr size_t extra_dirs = 5;
+    // High enough that both configurations actually reach the tolerance: the
+    // amortization question is time-to-solution, not cost of a fixed iteration count.
+    constexpr int max_iters = 2000;
+    // syevx's criterion is ||r|| / (||x|| |lambda|). For the smallest Laplacian
+    // eigenvalues |lambda| is O(1e-3), so a 1e-6 relative target sits below float32
+    // resolution and neither configuration can ever reach it.
+    constexpr float tol = 1e-3f;
+    constexpr int level = 1;
+
+    auto seconds_since = [](std::chrono::steady_clock::time_point t0) {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    };
+
+    std::cout << "\n[ILUK amortization] level=" << level << ", neigs=" << neigs
+              << ", max_iters=" << max_iters << "\n";
+    std::cout << "  n  batch    nnz  factor_s   apply_s  base_s  base_it  prec_s  prec_it  "
+                 "solve_speedup  net_speedup\n";
+    // The host is often shared with other jobs, so single timings are unreliable;
+    // report the median of several repetitions.
+    constexpr int reps = 5;
+    auto median = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+
+    for (const auto& s : shapes) {
+        auto csr = make_laplacian_2d(s.m, s.batch);
+        auto view = csr.view();
+        const int n = s.m * s.m;
+
+        auto run_syevx = [&](const ILUKPreconditioner<float>* precond, int& iters_out) {
+            UnifiedVector<float> W(neigs * s.batch, 0.0f);
+            UnifiedVector<int32_t> iters(s.batch, 0);
+            SyevxInstrumentation<float> instr;
+            instr.max_iterations = max_iters;
+            instr.iterations_done = iters.data();
+
+            SyevxParams<float> params;
+            params.iterations = max_iters;
+            params.extra_directions = extra_dirs;
+            params.find_largest = false;
+            params.absolute_tolerance = tol;
+            params.relative_tolerance = tol;
+            params.preconditioner = precond;
+            params.instrumentation = &instr;
+
+            UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+                *ctx, view, W, neigs, JobType::NoEigenVectors,
+                MatrixView<float, MatrixFormat::Dense>(), params));
+            ctx->wait_and_throw();
+
+            // Discarded warm-up: the first launch of each kernel pays JIT and
+            // clock ramp, which otherwise lands entirely on whichever run goes first.
+            syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+                                           MatrixView<float, MatrixFormat::Dense>(), params);
+            ctx->wait_and_throw();
+
+            const auto t0 = std::chrono::steady_clock::now();
+            syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+                                           MatrixView<float, MatrixFormat::Dense>(), params);
+            ctx->wait_and_throw();
+            const double elapsed = seconds_since(t0);
+            iters_out = *std::max_element(iters.begin(), iters.end());
+            return elapsed;
+        };
+
+        int base_iters = 0;
+        std::vector<double> base_samples;
+        for (int r = 0; r < reps; ++r) base_samples.push_back(run_syevx(nullptr, base_iters));
+        const double base_s = median(base_samples);
+
+        ILUKParams<float> iluk_params;
+        iluk_params.levels_of_fill = level;
+
+        std::vector<double> factor_samples;
+        for (int r = 0; r < reps; ++r) {
+            const auto tf = std::chrono::steady_clock::now();
+            auto tmp = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+            ctx->wait_and_throw();
+            factor_samples.push_back(seconds_since(tf));
+        }
+        const double factor_s = median(factor_samples);
+        auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+        ctx->wait_and_throw();
+
+        // Cost of a single preconditioner application at LOBPCG block width.
+        const int block = static_cast<int>(neigs + extra_dirs);
+        Matrix<float, MatrixFormat::Dense> rhs(n, block, s.batch);
+        Matrix<float, MatrixFormat::Dense> out(n, block, s.batch);
+        rhs.view().fill(*ctx, 1.0f);
+        ctx->wait_and_throw();
+        const auto ta = std::chrono::steady_clock::now();
+        constexpr int apply_reps = 10;
+        for (int r = 0; r < apply_reps; ++r) {
+            iluk_apply<test_utils::gpu_backend>(*ctx, M, rhs.view(), out.view());
+        }
+        ctx->wait_and_throw();
+        const double apply_s = seconds_since(ta) / apply_reps;
+
+        int prec_iters = 0;
+        std::vector<double> prec_samples;
+        for (int r = 0; r < reps; ++r) prec_samples.push_back(run_syevx(&M, prec_iters));
+        const double prec_s = median(prec_samples);
+
+        const double solve_speedup = base_s / prec_s;
+        const double net_speedup = base_s / (prec_s + factor_s);
+
+        std::cout << "  " << n << "  " << s.batch << "  " << csr.nnz()
+                  << "  " << factor_s << "  " << apply_s
+                  << "  " << base_s << "  " << base_iters
+                  << "  " << prec_s << "  " << prec_iters
+                  << "  " << solve_speedup << "  " << net_speedup << "\n";
+    }
+}
+
+
+TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
+    struct Shape { int n; int batch; float density; };
+    const std::vector<Shape> shapes = {{256,1,0.02f},{1024,1,0.01f},{4096,1,0.003f}};
+    for (int level : {0, 1, 2}) {
+        for (const auto& s : shapes) {
+            auto csr = csr_generators::random_sparse_hermitian_csr<float>(s.n, s.density, s.batch, 1234u, 2.0f, true);
+            ILUKParams<float> p; p.levels_of_fill = level;
+            auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, csr.view(), p);
+            auto lu = M.lu.view();
+            auto ro = lu.row_offsets(); auto ci = lu.col_indices();
+            const int n = s.n;
+            // Depth of the unit-lower-triangular forward solve dependency DAG.
+            std::vector<int> lvlL(n, 0), lvlU(n, 0);
+            for (int i = 0; i < n; ++i)
+                for (int q = ro[i]; q < ro[i+1]; ++q) {
+                    int j = ci[q];
+                    if (j < i) lvlL[i] = std::max(lvlL[i], lvlL[j] + 1);
+                }
+            for (int i = n-1; i >= 0; --i)
+                for (int q = ro[i]; q < ro[i+1]; ++q) {
+                    int j = ci[q];
+                    if (j > i) lvlU[i] = std::max(lvlU[i], lvlU[j] + 1);
+                }
+            const int depthL = *std::max_element(lvlL.begin(), lvlL.end()) + 1;
+            const int depthU = *std::max_element(lvlU.begin(), lvlU.end()) + 1;
+            std::cout << "  level=" << level << " n=" << n << " lu_nnz=" << lu.nnz()
+                      << " nnz/row=" << (double)lu.nnz()/n
+                      << "  L_depth=" << depthL << " (avg " << (double)n/depthL << " rows/level)"
+                      << "  U_depth=" << depthU << " (avg " << (double)n/depthU << " rows/level)\n";
+        }
+    }
 }
 
 int main(int argc, char** argv) {

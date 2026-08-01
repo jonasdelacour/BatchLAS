@@ -90,6 +90,24 @@ inline T stabilize_pivot_or_mark(const T& pivot,
 }
 
 template <typename T>
+bool u_diagonals_are_usable(const Matrix<T, MatrixFormat::CSR>& lu,
+                            const UnifiedVector<int>& diag_positions,
+                            int n,
+                            int batch_size,
+                            const T& diagonal_shift) {
+    const auto vals = lu.view().data();
+    for (int b = 0; b < batch_size; ++b) {
+        for (int i = 0; i < n; ++i) {
+            int32_t status = 0;
+            (void)stabilize_pivot_or_mark(vals[diag_positions[static_cast<std::size_t>(b * n + i)]],
+                                          diagonal_shift, &status);
+            if (status != 0) return false;
+        }
+    }
+    return true;
+}
+
+template <typename T>
 bool has_identical_batch_sparsity(const MatrixView<T, MatrixFormat::CSR>& A) {
     if (A.batch_size() <= 1) return true;
     const auto ro = A.row_offsets();
@@ -212,7 +230,70 @@ std::vector<std::vector<int>> symbolic_iluk_pattern_single(const Span<int>& row_
 template <Backend B, typename T>
 struct ILUKApplyKernel;
 
+// Bucket rows of a triangular factor into dependency levels. `lower` selects the
+// unit-lower forward solve (row i depends on columns j < i, scanned in increasing
+// row order) versus the upper backward solve (row i depends on columns j > i,
+// scanned in decreasing row order). Rows sharing a level are mutually independent.
+void build_level_schedule(const std::vector<int>& row_offsets,
+                          const std::vector<int>& col_indices,
+                          int n,
+                          bool lower,
+                          UnifiedVector<int>& rows_out,
+                          UnifiedVector<int>& level_ptr_out,
+                          int& num_levels) {
+    std::vector<int> level(static_cast<std::size_t>(n), 0);
+    int max_level = 0;
+
+    for (int step = 0; step < n; ++step) {
+        const int i = lower ? step : (n - 1 - step);
+        int lvl = 0;
+        for (int p = row_offsets[static_cast<std::size_t>(i)]; p < row_offsets[static_cast<std::size_t>(i + 1)]; ++p) {
+            const int j = col_indices[static_cast<std::size_t>(p)];
+            const bool depends = lower ? (j < i) : (j > i);
+            if (depends) {
+                lvl = std::max(lvl, level[static_cast<std::size_t>(j)] + 1);
+            }
+        }
+        level[static_cast<std::size_t>(i)] = lvl;
+        max_level = std::max(max_level, lvl);
+    }
+
+    num_levels = max_level + 1;
+    std::vector<int> counts(static_cast<std::size_t>(num_levels) + 1, 0);
+    for (int i = 0; i < n; ++i) counts[static_cast<std::size_t>(level[static_cast<std::size_t>(i)]) + 1] += 1;
+    for (int l = 0; l < num_levels; ++l) counts[static_cast<std::size_t>(l) + 1] += counts[static_cast<std::size_t>(l)];
+
+    level_ptr_out = UnifiedVector<int>(static_cast<std::size_t>(num_levels) + 1);
+    for (int l = 0; l <= num_levels; ++l) level_ptr_out[static_cast<std::size_t>(l)] = counts[static_cast<std::size_t>(l)];
+
+    rows_out = UnifiedVector<int>(static_cast<std::size_t>(n));
+    std::vector<int> cursor(counts.begin(), counts.end() - 1);
+    for (int i = 0; i < n; ++i) {
+        rows_out[static_cast<std::size_t>(cursor[static_cast<std::size_t>(level[static_cast<std::size_t>(i)])]++)] = i;
+    }
+}
+
 }  // namespace
+
+template <typename T>
+void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
+    const int n = M.n;
+    if (n <= 0) {
+        throw std::invalid_argument("ILU(k): cannot build a level schedule for an empty factor");
+    }
+    auto lu = M.lu.view();
+    const auto ro = lu.row_offsets();
+    const auto ci = lu.col_indices();
+
+    std::vector<int> row_offsets(static_cast<std::size_t>(n) + 1);
+    for (int i = 0; i <= n; ++i) row_offsets[static_cast<std::size_t>(i)] = ro[i];
+    std::vector<int> col_indices(static_cast<std::size_t>(row_offsets[static_cast<std::size_t>(n)]));
+    for (std::size_t p = 0; p < col_indices.size(); ++p) col_indices[p] = ci[p];
+
+    build_level_schedule(row_offsets, col_indices, n, /*lower=*/true, M.l_rows, M.l_level_ptr, M.l_levels);
+    build_level_schedule(row_offsets, col_indices, n, /*lower=*/false, M.u_rows, M.u_level_ptr, M.u_levels);
+    M.u_diagonals_usable = u_diagonals_are_usable(M.lu, M.diag_positions, M.n, M.batch_size, M.diagonal_shift);
+}
 
 template <Backend B, typename T>
 ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
@@ -274,6 +355,12 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     std::vector<std::vector<std::vector<uint8_t>>> batch_keep(static_cast<std::size_t>(batch_size));
 
     const auto a_vals = A.data();
+
+    // Scatter workspace mapping a column index to its slot in the row currently
+    // being assembled. Replaces a binary search per touched entry with an O(1)
+    // lookup; -1 means the column is outside this row's symbolic pattern.
+    std::vector<int> col_to_slot(static_cast<std::size_t>(n), -1);
+
     for (int b = 0; b < batch_size; ++b) {
         auto& values_by_row = batch_values[static_cast<std::size_t>(b)];
         auto& keep_by_row = batch_keep[static_cast<std::size_t>(b)];
@@ -289,15 +376,19 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
             row_vals.assign(row_cols.size(), T(0));
             row_keep.assign(row_cols.size(), 1);
 
+            const int row_nnz = static_cast<int>(row_cols.size());
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = p;
+
             const int ars = ro[ro_base + i];
             const int are = ro[ro_base + i + 1];
             for (int p = ars; p < are; ++p) {
-                const int col = ci[val_base + p];
-                const auto it = std::lower_bound(row_cols.begin(), row_cols.end(), col);
-                if (it != row_cols.end() && *it == col) {
-                    row_vals[static_cast<std::size_t>(it - row_cols.begin())] = a_vals[val_base + p];
+                const int slot = col_to_slot[static_cast<std::size_t>(ci[val_base + p])];
+                if (slot >= 0) {
+                    row_vals[static_cast<std::size_t>(slot)] = a_vals[val_base + p];
                 }
             }
+
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = -1;
         }
 
         for (int i = 0; i < n; ++i) {
@@ -305,30 +396,32 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
             auto& row_keep = keep_by_row[static_cast<std::size_t>(i)];
             const auto& row_cols = symbolic_rows[static_cast<std::size_t>(i)];
 
-            for (int p = 0; p < static_cast<int>(row_cols.size()); ++p) {
+            const int row_nnz = static_cast<int>(row_cols.size());
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = p;
+
+            for (int p = 0; p < row_nnz; ++p) {
                 const int j = row_cols[static_cast<std::size_t>(p)];
                 if (j >= i) break;
 
-                auto& pivot_row_vals = values_by_row[static_cast<std::size_t>(j)];
-                auto& pivot_row_keep = keep_by_row[static_cast<std::size_t>(j)];
-                const auto pivot_scale = row_scale(pivot_row_vals, pivot_row_keep);
+                const auto& pivot_row_vals = values_by_row[static_cast<std::size_t>(j)];
+                const auto& pivot_row_keep = keep_by_row[static_cast<std::size_t>(j)];
                 const int diag_j = diag_local[static_cast<std::size_t>(j)];
-                pivot_row_vals[static_cast<std::size_t>(diag_j)] = stabilize_pivot_or_mark(
-                    pivot_row_vals[static_cast<std::size_t>(diag_j)], pivot_scale, params, &factor_status[static_cast<std::size_t>(b)]);
 
+                // Row j < i is already finalized: its diagonal was stabilized when row j
+                // was processed and the row has not changed since. Stabilization is
+                // idempotent, so re-deriving the row scale here (an O(nnz_j) scan on every
+                // elimination step) would recompute the value already stored.
                 const T lij = row_vals[static_cast<std::size_t>(p)] / pivot_row_vals[static_cast<std::size_t>(diag_j)];
                 row_vals[static_cast<std::size_t>(p)] = lij;
 
+                // Columns are sorted, so the strict upper part of row j starts past its diagonal.
                 const auto& pivot_cols = symbolic_rows[static_cast<std::size_t>(j)];
-                for (int q = 0; q < static_cast<int>(pivot_cols.size()); ++q) {
+                const int pivot_nnz = static_cast<int>(pivot_cols.size());
+                for (int q = diag_j + 1; q < pivot_nnz; ++q) {
                     if (pivot_row_keep[static_cast<std::size_t>(q)] == 0) continue;
-                    const int col = pivot_cols[static_cast<std::size_t>(q)];
-                    if (col <= j) continue;
-
-                    const auto it = std::lower_bound(row_cols.begin(), row_cols.end(), col);
-                    if (it != row_cols.end() && *it == col) {
-                        const auto target = static_cast<std::size_t>(it - row_cols.begin());
-                        row_vals[target] -= lij * pivot_row_vals[static_cast<std::size_t>(q)];
+                    const int slot = col_to_slot[static_cast<std::size_t>(pivot_cols[static_cast<std::size_t>(q)])];
+                    if (slot >= 0) {
+                        row_vals[static_cast<std::size_t>(slot)] -= lij * pivot_row_vals[static_cast<std::size_t>(q)];
                     }
                 }
             }
@@ -337,6 +430,8 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
             const auto final_scale = row_scale(row_vals, row_keep);
             row_vals[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])] = stabilize_pivot_or_mark(
                 row_vals[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])], final_scale, params, &factor_status[static_cast<std::size_t>(b)]);
+
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = -1;
         }
     }
 
@@ -384,6 +479,10 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
 
     const int nnz = static_cast<int>(col_indices.size());
     ILUKPreconditioner<T> result;
+    build_level_schedule(row_offsets, col_indices, n, /*lower=*/true,
+                         result.l_rows, result.l_level_ptr, result.l_levels);
+    build_level_schedule(row_offsets, col_indices, n, /*lower=*/false,
+                         result.u_rows, result.u_level_ptr, result.u_levels);
     result.lu = Matrix<T, MatrixFormat::CSR>(n, n, nnz, batch_size);
     result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n * batch_size));
     result.n = n;
@@ -422,6 +521,9 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
         }
     }
 
+    result.u_diagonals_usable = u_diagonals_are_usable(result.lu, result.diag_positions, n, batch_size,
+                                                       result.diagonal_shift);
+
     return result;
 }
 
@@ -439,6 +541,17 @@ Event iluk_apply(Queue& ctx,
     }
     if (rhs.batch_size() != M.batch_size || out.batch_size() != M.batch_size) {
         throw std::invalid_argument("ILU(k) apply: rhs/out batch size must match factor batch size");
+    }
+    if (M.l_levels <= 0 || M.u_levels <= 0 ||
+        M.l_rows.size() != static_cast<std::size_t>(M.n) ||
+        M.u_rows.size() != static_cast<std::size_t>(M.n)) {
+        throw std::invalid_argument(
+            "ILU(k) apply: preconditioner has no triangular-solve level schedule; "
+            "call iluk_build_level_schedule() when constructing one by hand");
+    }
+    if (!M.u_diagonals_usable) {
+        throw std::runtime_error(
+            "ILU(k) apply: encountered a zero or effectively zero U diagonal without a usable diagonal shift");
     }
 
     const int n = M.n;
@@ -459,56 +572,74 @@ Event iluk_apply(Queue& ctx,
     const T diag_shift = M.diagonal_shift;
 
     const size_t total_systems = static_cast<size_t>(batch * nrhs);
-    UnifiedVector<int32_t> apply_status(total_systems, 0);
-    auto apply_status_ptr = apply_status.data();
-    ctx->parallel_for<ILUKApplyKernel<B, T>>(sycl::range<1>(total_systems), [=](sycl::id<1> id) {
-        const int linear = static_cast<int>(id[0]);
+
+    // One work-group per (batch, rhs column) system. Within a group the rows of a
+    // dependency level are split across work-items and a group barrier separates
+    // levels, so the serial chain is the level count rather than n. Each group owns
+    // its system exclusively, so no cross-group synchronization is needed.
+    const int l_levels = M.l_levels;
+    const int u_levels = M.u_levels;
+    auto l_rows = M.l_rows.data();
+    auto l_level_ptr = M.l_level_ptr.data();
+    auto u_rows = M.u_rows.data();
+    auto u_level_ptr = M.u_level_ptr.data();
+
+    constexpr int wg_size = 128;
+    ctx->parallel_for<ILUKApplyKernel<B, T>>(
+        sycl::nd_range<1>(total_systems * wg_size, wg_size), [=](sycl::nd_item<1> item) {
+        const int linear = static_cast<int>(item.get_group(0));
         const int b = linear / nrhs;
         const int col = linear % nrhs;
+        const int lid = static_cast<int>(item.get_local_id(0));
 
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
         const int rhs_base = b * rhs_kv.stride_ + col * rhs_kv.ld_;
         const int out_base = b * out_kv.stride_ + col * out_kv.ld_;
-        // Forward solve into out (as temporary y).
-        for (int i = 0; i < n; ++i) {
-            T sum = rhs_data[rhs_base + i];
-            const int rs = lu_ro[ro_base + i];
-            const int re = lu_ro[ro_base + i + 1];
-            for (int p = rs; p < re; ++p) {
-                const int j = lu_ci[lu_base + p];
-                if (j >= i) break;
-                sum -= lu_vals[lu_base + p] * out_data[out_base + j];
-            }
-            out_data[out_base + i] = sum;
-        }
 
-        for (int i = n - 1; i >= 0; --i) {
-            T sum = out_data[out_base + i];
-            const int rs = lu_ro[ro_base + i];
-            const int re = lu_ro[ro_base + i + 1];
-            T diag = stabilize_pivot_or_mark(lu_vals[diag_pos[b * n + i]],
-                                             diag_shift,
-                                             &apply_status_ptr[linear]);
-            for (int p = rs; p < re; ++p) {
-                const int j = lu_ci[lu_base + p];
-                if (j > i) {
+        // Forward solve into out (as temporary y).
+        for (int lv = 0; lv < l_levels; ++lv) {
+            const int begin = l_level_ptr[lv];
+            const int end = l_level_ptr[lv + 1];
+            for (int t = begin + lid; t < end; t += wg_size) {
+                const int i = l_rows[t];
+                T sum = rhs_data[rhs_base + i];
+                const int rs = lu_ro[ro_base + i];
+                const int re = lu_ro[ro_base + i + 1];
+                for (int p = rs; p < re; ++p) {
+                    const int j = lu_ci[lu_base + p];
+                    if (j >= i) break;
                     sum -= lu_vals[lu_base + p] * out_data[out_base + j];
                 }
+                out_data[out_base + i] = sum;
             }
-            out_data[out_base + i] = sum / diag;
+            sycl::group_barrier(item.get_group());
+        }
+
+        for (int lv = 0; lv < u_levels; ++lv) {
+            const int begin = u_level_ptr[lv];
+            const int end = u_level_ptr[lv + 1];
+            for (int t = begin + lid; t < end; t += wg_size) {
+                const int i = u_rows[t];
+                T sum = out_data[out_base + i];
+                const int diag_abs = diag_pos[b * n + i];
+                const int re = lu_ro[ro_base + i + 1];
+                // Usability of every U diagonal was established when the factor was
+                // built; this only substitutes the shifted value.
+                T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
+                // Columns are sorted ascending, so the strict upper part of row i
+                // starts one past the diagonal.
+                for (int p = diag_abs - lu_base + 1; p < re; ++p) {
+                    sum -= lu_vals[lu_base + p] * out_data[out_base + lu_ci[lu_base + p]];
+                }
+                out_data[out_base + i] = sum / diag;
+            }
+            sycl::group_barrier(item.get_group());
         }
     });
 
-    ctx.wait_and_throw();
-
-    for (size_t idx = 0; idx < total_systems; ++idx) {
-        if (apply_status[idx] != 0) {
-            throw std::runtime_error(
-                "ILU(k) apply: encountered a zero or effectively zero U diagonal without a usable diagonal shift");
-        }
-    }
-
+    // No host sync here: the caller owns synchronization, so repeated applications
+    // inside an iterative solver stay pipelined.
     return ctx.get_event();
 }
 
@@ -516,6 +647,15 @@ template <Backend B, typename T>
 size_t iluk_apply_buffer_size(Queue&, const ILUKPreconditioner<T>&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&) {
     return 0;
 }
+
+#define ILUK_INSTANTIATE_COMMON(FP) \
+    template void iluk_build_level_schedule<FP>(ILUKPreconditioner<FP>&);
+
+ILUK_INSTANTIATE_COMMON(float)
+ILUK_INSTANTIATE_COMMON(double)
+ILUK_INSTANTIATE_COMMON(std::complex<float>)
+ILUK_INSTANTIATE_COMMON(std::complex<double>)
+#undef ILUK_INSTANTIATE_COMMON
 
 #define ILUK_INSTANTIATE(BACK, FP) \
     template ILUKPreconditioner<FP> iluk_factorize<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&); \
