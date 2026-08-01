@@ -61,61 +61,20 @@ inline int32_t sytrd_block_size_override(int32_t n) {
 }
 
 template <typename T>
-inline void pack_sytrd_lower_to_qsub_qr_layout(Queue& ctx,
-                                              const MatrixView<T, MatrixFormat::Dense>& a_sytrd,
-                                              const MatrixView<T, MatrixFormat::Dense>& a_qsub_qr,
-                                              const VectorView<T>& tau_sytrd,
-                                              const VectorView<T>& tau_qsub,
-                                              int32_t n) {
-    // Pack SYTRD Lower reflectors into a QR-compatible layout for the trailing
-    // (n-1)x(n-1) subproblem (Qsub). This matches the approach used by
-    // tests/sytrd_blocked_tests.cc:
-    //   - Q = [1, 0; 0, Qsub]
-    //   - For i in [0, p-1) where p=n-1, reflector i acts on rows i..p-1
-    //     in the subproblem and has tail entries from A_out((i+2):n-1, i).
-    const int32_t batch = static_cast<int32_t>(a_sytrd.batch_size());
+inline MatrixView<T, MatrixFormat::Dense> sytrd_lower_qsub_reflector_view(
+    const MatrixView<T, MatrixFormat::Dense>& a_sytrd,
+    int32_t n) {
+    // SYTRD (Lower) stores reflector i of the trailing (n-1)x(n-1) subproblem
+    // (Qsub, with Q = [1, 0; 0, Qsub]) in A_out((i+2):n-1, i). Shifting the
+    // matrix down by one row therefore yields exactly the QR-style layout that
+    // ormqr_blocked expects: local (row, col) == A_out(row + 1, col).
+    //
+    // ormqr_blocked's V-panel packing only reads the strictly lower triangle
+    // (it forces the diagonal to 1 and the upper triangle to 0), so no explicit
+    // packed copy is needed - the sliced view is sufficient and avoids a
+    // p*p*batch write plus read on every call.
     const int32_t p = std::max<int32_t>(0, n - 1);
-    if (p == 0) return;
-
-    // Pack A (strictly lower triangle). Diagonal is implicit 1 in ormqr_blocked.
-    ctx->submit([&](sycl::handler& cgh) {
-        auto A = a_sytrd.kernel_view();
-        auto AQ = a_qsub_qr.kernel_view();
-        const int32_t pp = p;
-        const int32_t nb = batch;
-
-        const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(pp) * static_cast<int64_t>(pp);
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-            const int64_t idx = static_cast<int64_t>(tid[0]);
-            const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(pp) * pp));
-            const int64_t rem = idx - static_cast<int64_t>(b) * pp * pp;
-            const int32_t row = static_cast<int32_t>(rem % pp);
-            const int32_t col = static_cast<int32_t>(rem / pp);
-
-            T val = T(0);
-            if (row > col) {
-                // Local (row,col) maps to global (row+1, col) in A_out.
-                val = A(row + 1, col, b);
-            }
-            AQ(row, col, b) = val;
-        });
-    });
-
-    // Pack tau for the subproblem (size p).
-    ctx->submit([&](sycl::handler& cgh) {
-        auto TAU = tau_sytrd;
-        auto TAUQ = tau_qsub;
-        const int32_t pp = p;
-        const int32_t nb = batch;
-        const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(pp);
-
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-            const int64_t idx = static_cast<int64_t>(tid[0]);
-            const int32_t b = static_cast<int32_t>(idx / pp);
-            const int32_t i = static_cast<int32_t>(idx - static_cast<int64_t>(b) * pp);
-            TAUQ(i, b) = TAU(i, b);
-        });
-    });
+    return a_sytrd({1, SliceEnd()}, {0, p});
 }
 
 } // namespace
@@ -174,12 +133,6 @@ Event syev_blocked(Queue& ctx,
 
         MatrixView<Real, MatrixFormat::Dense> z_view(z_span.data(), n, n, n, n * n, batch);
         MatrixView<T, MatrixFormat::Dense> zc_view(zc_span.data(), n, n, n, n * n, batch);
-
-        // Pack reflectors for Qsub into QR layout for ORMQR (size (n-1)x(n-1)).
-        auto aq_span = pool.allocate<T>(ctx, static_cast<std::size_t>(p) * static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        auto tau_q_span = pool.allocate<T>(ctx, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        MatrixView<T, MatrixFormat::Dense> aq_view(aq_span.data(), p, p, p, p * p, batch);
-        VectorView<T> tau_q_view(tau_q_span, p, batch, 1, p);
 
         // Sub-workspaces.
         {
@@ -262,33 +215,28 @@ Event syev_blocked(Queue& ctx,
             });
 
             if (p > 0) {
-                pack_sytrd_lower_to_qsub_qr_layout<T>(ctx, a, aq_view, tau_c_view, tau_q_view, n);
-            }
-
-            // Apply Qsub from packed QR reflectors to rows 1..n-1: Zc_sub := Qsub * Zc_sub.
-            {
+                // Apply Qsub directly from the SYTRD reflectors (no packed copy).
+                auto aq_view = sytrd_lower_qsub_reflector_view<T>(a, n);
                 auto zc_sub = zc_view({1, SliceEnd()}, Slice());
-                Span<T> tau_q_span_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
+                Span<T> tau_q_span_flat(tau_c_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
 
-                if (p > 0) {
-                    auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
-                                                                          aq_view,
-                                                                          zc_sub,
-                                                                          Side::Left,
-                                                                          Transpose::NoTrans,
-                                                                          tau_q_span_flat,
-                                                                          ormqr_block_size);
-                    auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
+                auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
+                                                                      aq_view,
+                                                                      zc_sub,
+                                                                      Side::Left,
+                                                                      Transpose::NoTrans,
+                                                                      tau_q_span_flat,
+                                                                      ormqr_block_size);
+                auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
 
-                    ormqr_blocked<B, T>(ctx,
-                                        aq_view,
-                                        zc_sub,
-                                        Side::Left,
-                                        Transpose::NoTrans,
-                                        tau_q_span_flat,
-                                        ormqr_ws,
-                                        ormqr_block_size);
-                }
+                ormqr_blocked<B, T>(ctx,
+                                    aq_view,
+                                    zc_sub,
+                                    Side::Left,
+                                    Transpose::NoTrans,
+                                    tau_q_span_flat,
+                                    ormqr_ws,
+                                    ormqr_block_size);
             }
 
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
@@ -309,11 +257,6 @@ Event syev_blocked(Queue& ctx,
 
         auto z_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
         MatrixView<T, MatrixFormat::Dense> z_view(z_span.data(), n, n, n, n * n, batch);
-
-        auto aq_span = pool.allocate<T>(ctx, static_cast<std::size_t>(p) * static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        auto tau_q_span = pool.allocate<T>(ctx, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-        MatrixView<T, MatrixFormat::Dense> aq_view(aq_span.data(), p, p, p, p * p, batch);
-        VectorView<T> tau_q_view(tau_q_span, p, batch, 1, p);
 
         {
             auto sytrd_ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_block_size);
@@ -371,31 +314,28 @@ Event syev_blocked(Queue& ctx,
             });
 
             if (p > 0) {
-                pack_sytrd_lower_to_qsub_qr_layout<T>(ctx, a, aq_view, tau_view, tau_q_view, n);
-            }
-
-            {
+                // Apply Qsub directly from the SYTRD reflectors (no packed copy).
+                auto aq_view = sytrd_lower_qsub_reflector_view<T>(a, n);
                 auto z_sub = z_view({1, SliceEnd()}, Slice());
-                Span<T> tau_q_span_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-                if (p > 0) {
-                    auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
-                                                                          aq_view,
-                                                                          z_sub,
-                                                                          Side::Left,
-                                                                          Transpose::NoTrans,
-                                                                          tau_q_span_flat,
-                                                                          ormqr_block_size);
-                    auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
+                Span<T> tau_q_span_flat(tau_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
 
-                    ormqr_blocked<B, T>(ctx,
-                                        aq_view,
-                                        z_sub,
-                                        Side::Left,
-                                        Transpose::NoTrans,
-                                        tau_q_span_flat,
-                                        ormqr_ws,
-                                        ormqr_block_size);
-                }
+                auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
+                                                                      aq_view,
+                                                                      z_sub,
+                                                                      Side::Left,
+                                                                      Transpose::NoTrans,
+                                                                      tau_q_span_flat,
+                                                                      ormqr_block_size);
+                auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
+
+                ormqr_blocked<B, T>(ctx,
+                                    aq_view,
+                                    z_sub,
+                                    Side::Left,
+                                    Transpose::NoTrans,
+                                    tau_q_span_flat,
+                                    ormqr_ws,
+                                    ormqr_block_size);
             }
 
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
@@ -441,8 +381,6 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         const std::size_t phase_count = d_c_count;
         const std::size_t z_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
         const std::size_t zc_count = z_count;
-        const std::size_t aq_count = static_cast<std::size_t>(p) * static_cast<std::size_t>(p) * static_cast<std::size_t>(batch);
-        const std::size_t tau_q_count = static_cast<std::size_t>(p) * static_cast<std::size_t>(batch);
 
         bytes += BumpAllocator::allocation_size<T>(ctx, d_c_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, e_c_count);
@@ -454,9 +392,6 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 
         bytes += BumpAllocator::allocation_size<Real>(ctx, z_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, zc_count);
-
-        bytes += BumpAllocator::allocation_size<T>(ctx, aq_count);
-        bytes += BumpAllocator::allocation_size<T>(ctx, tau_q_count);
 
         // Sub-workspaces.
         VectorView<T> d_c_dummy(nullptr, n, batch, 1, n);
@@ -480,16 +415,12 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         const std::size_t tau_count = e_count;
         const std::size_t phase_count = d_count;
         const std::size_t z_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
-        const std::size_t aq_count = static_cast<std::size_t>(p) * static_cast<std::size_t>(p) * static_cast<std::size_t>(batch);
-        const std::size_t tau_q_count = static_cast<std::size_t>(p) * static_cast<std::size_t>(batch);
 
         bytes += BumpAllocator::allocation_size<T>(ctx, d_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, e_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, tau_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, phase_count);
         bytes += BumpAllocator::allocation_size<T>(ctx, z_count);
-        bytes += BumpAllocator::allocation_size<T>(ctx, aq_count);
-        bytes += BumpAllocator::allocation_size<T>(ctx, tau_q_count);
 
         VectorView<T> d_dummy(nullptr, n, batch, 1, n);
         VectorView<T> e_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));

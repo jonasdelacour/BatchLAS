@@ -209,6 +209,18 @@ inline void ormqx_cta_impl(Queue& ctx,
             // LEFT specialization: lane->column and keep that column in registers.
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
+            // Coalescing: lane j owns column j, and a column is contiguous in memory.
+            // Consecutive lanes are therefore `ld` elements apart, so a scalar per-row
+            // load/store issues one 32-sector request per instruction (8x more L1<->L2
+            // traffic than the data requires). Moving 16 bytes per lane per access cuts
+            // the request count - and the resulting L2 traffic - by a factor of VW.
+            constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
+            const bool vec_ok =
+                !internal::is_complex<T>::value && VW > 1 && (n % VW) == 0 &&
+                ((static_cast<std::size_t>(c.ld()) * sizeof(T)) % 16u) == 0 &&
+                ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
+                (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;
+
             cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
@@ -234,12 +246,36 @@ inline void ormqx_cta_impl(Queue& ctx,
                 const int32_t j = lane;
 
                 // Register column buffer for column j.
+                //
+                // Every index into `C_col` below is a compile-time constant so that the
+                // array really is promoted to registers.  Indexing it with a runtime
+                // value (the reflector support `offset + r`, or a bound of `n`) forces
+                // the whole array into local memory, and the reflector loop then pays a
+                // dependent L1/global round trip for each of its ~n^2 accesses.
                 T C_col[P];
+#pragma unroll
                 for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                    if (active_col && r < n) {
-                        C_col[r] = C_prob(r, j);
-                    } else {
-                        C_col[r] = T(0);
+                    C_col[r] = T(0);
+                }
+                if (vec_ok && active_col) {
+                    using VecT = sycl::vec<T, VW>;
+                    auto* col_ptr = reinterpret_cast<const VecT*>(&C_prob(0, j));
+#pragma unroll
+                    for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
+                        if (r < n) {
+                            const VecT v = col_ptr[r / VW];
+#pragma unroll
+                            for (int32_t t = 0; t < VW; ++t) {
+                                C_col[r + t] = v[t];
+                            }
+                        }
+                    }
+                } else if (active_col) {
+#pragma unroll
+                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                        if (r < n) {
+                            C_col[r] = C_prob(r, j);
+                        }
                     }
                 }
 
@@ -268,51 +304,38 @@ inline void ormqx_cta_impl(Queue& ctx,
                     const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
                     const T tau_eff = TransposeOrConj ? detail::conj_val(tau_i) : tau_i;
 
-                    // Build v and compute (offset,len) for this reflector.
-                    int32_t offset = 0;
-                    int32_t len = 0;
-
+                    // Stage the reflector indexed by *absolute row*, explicitly zeroed
+                    // outside its support.  The rank-1 update can then run over the
+                    // full compile-time row range with no predication and, crucially,
+                    // with constant `C_col` subscripts.
                     if constexpr (!QL) {
-                        // QR: reflector ii stored in column ii, v has leading zeros of length ii.
-                        offset = ii;
-                        len = n - ii;
-
-                        if (lane < len) {
-                            const int32_t row = offset + lane;
-                            const int32_t col = ii;
-                            V_local[base_v + lane] = (lane == 0) ? T(1) : A_prob(row, col);
-                        } else {
-                            V_local[base_v + lane] = T(0);
-                        }
+                        // QR: reflector ii is stored in column ii with v(ii) == 1 and
+                        // v(0:ii-1) == 0; its support ends at row n-1.
+                        const bool in_support = (lane >= ii) && (lane < n);
+                        V_local[base_v + lane] =
+                            !in_support ? T(0) : ((lane == ii) ? T(1) : A_prob(lane, ii));
                     } else {
-                        // QL: reflector ii is H(ii+1), stored in last k columns.
-                        // From LAPACK DGEQLF/ZGEQLF: v(pivot) = 1, v(pivot+1:m)=0, and v(0:pivot-1)
-                        // stored in A(0:pivot-1, n-k+ii).
+                        // QL: reflector ii is H(ii+1); with m == n the pivot row is
+                        // (n-k)+ii, v(pivot) == 1 and v(pivot+1:) == 0.
                         const int32_t col = (n - k) + ii;
-                        const int32_t pivot = (n - k) + ii; // since m=n in our current restriction
-                        offset = 0;
-                        len = pivot + 1;
-
-                        if (lane < len) {
-                            const int32_t row = lane;
-                            V_local[base_v + lane] = (row == pivot) ? T(1) : A_prob(row, col);
-                        } else {
-                            V_local[base_v + lane] = T(0);
-                        }
+                        const int32_t pivot = (n - k) + ii;
+                        const bool in_support = (lane <= pivot) && (lane < n);
+                        V_local[base_v + lane] =
+                            !in_support ? T(0) : ((lane == pivot) ? T(1) : A_prob(lane, col));
                     }
 
                     group_barrier(part);
 
-                    if (active_col && tau_eff != T(0) && len > 0) {
+                    if (active_col && tau_eff != T(0)) {
                         T dot = T(0);
-                        for (int32_t r = 0; r < len; ++r) {
-                            const T v_r = V_local[base_v + r];
-                            dot += detail::conj_val(v_r) * C_col[offset + r];
+#pragma unroll
+                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                            dot += detail::conj_val(V_local[base_v + r]) * C_col[r];
                         }
                         const T gamma = tau_eff * dot;
-                        for (int32_t r = 0; r < len; ++r) {
-                            const T v_r = V_local[base_v + r];
-                            C_col[offset + r] -= v_r * gamma;
+#pragma unroll
+                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                            C_col[r] -= V_local[base_v + r] * gamma;
                         }
                     }
 
@@ -320,9 +343,26 @@ inline void ormqx_cta_impl(Queue& ctx,
                     group_barrier(part);
                 }
 
-                if (active_col) {
-                    for (int32_t r = 0; r < n; ++r) {
-                        C_prob(r, j) = C_col[r];
+                if (vec_ok && active_col) {
+                    using VecT = sycl::vec<T, VW>;
+                    auto* col_ptr = reinterpret_cast<VecT*>(&C_prob(0, j));
+#pragma unroll
+                    for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
+                        if (r < n) {
+                            VecT v{};
+#pragma unroll
+                            for (int32_t t = 0; t < VW; ++t) {
+                                v[t] = C_col[r + t];
+                            }
+                            col_ptr[r / VW] = v;
+                        }
+                    }
+                } else if (active_col) {
+#pragma unroll
+                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                        if (r < n) {
+                            C_prob(r, j) = C_col[r];
+                        }
                     }
                 }
             });

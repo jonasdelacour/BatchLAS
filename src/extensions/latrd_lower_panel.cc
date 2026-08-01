@@ -151,11 +151,6 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
 
-                auto Ah = [&](int r, int c) -> T {
-                    if (r >= c) return Ab(r, c);
-                    return conj_if_needed(Ab(c, r));
-                };
-
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
 
@@ -265,11 +260,45 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     const int col = i;
 
                     for (int r = i + 1 + lid; r < n; r += wg) {
+                        // Symmetric mat-vec: acc = sum_c Ah(r,c) * v(c), where
+                        // Ah(r,c) is Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r.
+                        //
+                        // Ascending c crosses that boundary exactly once, at c == r,
+                        // so the loop splits into two contiguous ranges without
+                        // changing the accumulation order (results stay bit-identical).
+                        // Removing the per-element branch lets the compiler unroll and
+                        // keep several independent loads in flight; this kernel is
+                        // memory-latency bound, so memory-level parallelism is what
+                        // matters here.
+                        //
+                        // Measured alternatives that were all slower and rejected:
+                        //   - unroll 8, and processing two rows per iteration: both
+                        //     cost more registers than the added parallelism returns.
+                        //   - computing the c > r term with one sub-group per column
+                        //     (fully coalesced, 20 -> 9.7 sectors/request): the extra
+                        //     barrier destroys reuse between the two passes and short
+                        //     columns near r -> n leave most lanes idle, so DRAM
+                        //     traffic and runtime both rose.
+                        const int c_split = sycl::min(r, n - 1);
+
                         T acc = T(0);
-                        for (int c = i + 1; c < n; ++c) {
-                            const T vc = v_local[c];
-                            acc += Ah(r, c) * vc;
+
+                        // c in [i+1, r]: walk row r of the lower triangle.
+                        // Consecutive threads hold consecutive r, so each step is a
+                        // coalesced access across the warp.
+                        #pragma unroll 4
+                        for (int c = i + 1; c <= c_split; ++c) {
+                            acc += Ab(r, c) * v_local[c];
                         }
+
+                        // c in (r, n): walk column r of the lower triangle.
+                        // Contiguous per thread, so successive iterations reuse the
+                        // same cache lines.
+                        #pragma unroll 4
+                        for (int c = c_split + 1; c < n; ++c) {
+                            acc += conj_if_needed(Ab(c, r)) * v_local[c];
+                        }
+
                         wcol_local[r] = acc;
                     }
 
