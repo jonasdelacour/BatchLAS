@@ -901,6 +901,78 @@ namespace batchlas {
                                 JobType jobz,
                                 SteqrParams<T> steqr_params = SteqrParams<T>());
 
+    template <typename T>
+    struct JacobiParams {
+        using Real = typename base_type<T>::type;
+
+        // Multiplier on the relative off-diagonal threshold. A rotation is
+        // applied to pivot pair (p,q) only when
+        //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
+        // so the default of 1 gives a threshold of order n*eps, matching the
+        // criterion of Demmel & Veselic / LAWN 169. This relative form (rather
+        // than the classical absolute test against max|a_kl|) is what yields the
+        // high relative accuracy; raising this trades accuracy for sweeps.
+        Real tol_multiplier = Real(1);
+
+        // Cap on cyclic sweeps. Convergence normally occurs in well under 10;
+        // this is a safety net for pathological inputs.
+        size_t max_sweeps = 30;
+
+        // Sort eigenvalues (and permute eigenvectors to match) on output.
+        bool sort = true;
+        SortOrder sort_order = SortOrder::Ascending;
+
+        // Multiplies the baseline work-group size. Baseline is
+        // LCM(P, sub_group_size) where P is the compile-time partition width
+        // chosen from n; the result is clamped by the device's maximum
+        // work-group size and by available local memory.
+        size_t cta_wg_size_multiplier = 1;
+    };
+
+    /**
+     * @brief CTA-optimized Jacobi symmetric/Hermitian eigen-solver for very small matrices.
+     *
+     * Cyclic two-sided Jacobi run entirely inside a single sub-group partition:
+     * A (and the eigenvector accumulator Z) stay in local memory for the whole
+     * solve, so one kernel launch performs the complete eigendecomposition with
+     * no intermediate global-memory traffic.
+     *
+     * Relative to syev_cta (sytrd_cta -> steqr_cta -> ormqx_cta), this trades
+     * throughput on generic matrices for high *relative* accuracy on graded or
+     * badly scaled input: with the relative stopping criterion the eigenvalue
+     * error is governed by the condition number of the column-equilibrated
+     * matrix rather than that of the tridiagonalized matrix. Note the underlying
+     * theorem (Demmel & Veselic, SIMAX 13(4), 1992) is proved for symmetric
+     * positive definite input; indefinite matrices are solved correctly but do
+     * not inherit the relative-accuracy bound.
+     *
+     * Notes:
+     * - Intended for n <= 32.
+     * - Supports both real symmetric and complex Hermitian inputs.
+     * - Overwrites A with eigenvectors when jobz == EigenVectors; A is left
+     *   untouched when jobz == NoEigenVectors.
+     * - Eigenvalues are returned in ascending order when JacobiParams::sort is
+     *   enabled (default).
+     * - Requires no global workspace; the ws argument is accepted for API
+     *   symmetry and ignored.
+     *
+     * See JACOBI_EIGENSOLVER_PLAN.md for the design rationale and references.
+     */
+    template <Backend B, typename T>
+    Event syev_jacobi_cta(Queue& ctx,
+                          const MatrixView<T, MatrixFormat::Dense>& a_in,
+                          Span<typename base_type<T>::type> eigenvalues,
+                          JobType jobz,
+                          Uplo uplo,
+                          const Span<std::byte>& ws = Span<std::byte>(),
+                          JacobiParams<T> params = JacobiParams<T>());
+
+    template <Backend B, typename T>
+    size_t syev_jacobi_cta_buffer_size(Queue& ctx,
+                                       const MatrixView<T, MatrixFormat::Dense>& a,
+                                       JobType jobz,
+                                       JacobiParams<T> params = JacobiParams<T>());
+
     /**
      * @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large matrices.
      *

@@ -5,6 +5,7 @@ set(EXTENSIONS_CTA_SOURCES
     stedc_merge_cta.cc
     sytrd_cta.cc
     sytrd_sb2st_cta.cc
+    syev_jacobi_cta.cc
 )
 
 set(EXTENSIONS_EIGEN_SOURCES
