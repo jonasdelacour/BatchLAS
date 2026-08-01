@@ -353,6 +353,98 @@ Event sytrd_sb2st_hh(Queue& ctx,
     return ctx.get_event();
 }
 
+// ---------------------------------------------------------------------------
+// Q2 back-transform:  Z := Q2 Z  with  Q2 = H_1 H_2 ... H_m.
+//
+// Because the product is in generation order, Z := Q2 Z applies the reflectors
+// in *reverse* order: H_m first, H_1 last.
+//
+// Parallelisation: reflectors act on rows, so distinct columns of Z are
+// completely independent. Each work-group takes one (batch item, column chunk)
+// and walks the entire reflector list itself -- no inter-work-group
+// synchronisation and no launch per sweep. Within a work-group the 32 lanes map
+// to *rows* of the reflector (len <= kd <= 32), which keeps the Z accesses
+// contiguous since Z is column-major; the dot product is a sub-group reduction.
+//
+// This is flop-optimal (2n^3 total, versus ~4n^3 for a larft/larfb formulation
+// whose V panels are zero-padded) but memory bound. Wang et al. (PPoPP'25)
+// found a hand-written BLAS-2 back-transform beat MAGMA's BLAS-3 one by 1.5x on
+// A100 for exactly this reason, so this is a reasonable starting point; the
+// larft grouping remains available if profiling says otherwise.
+namespace {
+template <Backend B, typename T>
+class Sb2stHhBackKernel;
+
+constexpr int kBackCols = 8;  // columns of Z per work-group
+}
+
+template <Backend B, typename T>
+Event unmqr_hb2st(Queue& ctx,
+                  const MatrixView<T, MatrixFormat::Dense>& v_in,
+                  const VectorView<T>& tau_in,
+                  const MatrixView<T, MatrixFormat::Dense>& z_io,
+                  int32_t n,
+                  int32_t kd,
+                  Span<const int32_t> starts,
+                  Span<const int32_t> lens) {
+    if (!ctx.in_order()) {
+        throw std::runtime_error("unmqr_hb2st: requires an in-order Queue");
+    }
+    const int32_t nrefl = static_cast<int32_t>(starts.size());
+    const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const int32_t ncols = static_cast<int32_t>(z_io.cols());
+    if (nrefl <= 0 || batch <= 0 || ncols <= 0 || n <= 0) return ctx.get_event();
+
+    const int32_t col_chunks = (ncols + kBackCols - 1) / kBackCols;
+    const int32_t num_wg = batch * col_chunks;
+
+    auto Vv = v_in.kernel_view();
+    auto Zv = z_io.kernel_view();
+    const int32_t* starts_p = starts.data();
+    const int32_t* lens_p = lens.data();
+
+    ctx->submit([&](sycl::handler& h) {
+        auto TAUv = tau_in;
+        h.parallel_for<Sb2stHhBackKernel<B, T>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * 32),
+                              sycl::range<1>(32)),
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+                const auto sg = it.get_sub_group();
+                const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
+                const int32_t lane = static_cast<int32_t>(it.get_local_linear_id());
+
+                const int32_t b = wg_id / col_chunks;
+                const int32_t chunk = wg_id - b * col_chunks;
+                if (b >= batch) return;
+
+                const int32_t c0 = chunk * kBackCols;
+                const int32_t c1 = sycl::min(c0 + kBackCols, ncols);
+
+                auto Z = Zv.batch_item(b);
+                auto V = Vv.batch_item(b);
+
+                for (int32_t k = nrefl - 1; k >= 0; --k) {
+                    const T tau = TAUv(k, b);
+                    if (tau == T(0)) continue;
+                    const int32_t s = starts_p[k];
+                    const int32_t L = lens_p[k];
+
+                    const T vj = (lane < L) ? V(lane, k) : T(0);
+
+                    for (int32_t c = c0; c < c1; ++c) {
+                        const T zj = (lane < L) ? Z(s + lane, c) : T(0);
+                        const T sum = group_sum(sg, conj_if(vj) * zj);
+                        if (lane < L) {
+                            Z(s + lane, c) = zj - tau * vj * sum;
+                        }
+                    }
+                }
+            });
+    });
+
+    return ctx.get_event();
+}
+
 #define SB2ST_HH_INSTANTIATE(back, fp)                                                  \
     template Event sytrd_sb2st_hh<back, BATCHLAS_UNPAREN fp>(                           \
         Queue&,                                                                          \
@@ -366,7 +458,16 @@ Event sytrd_sb2st_hh(Queue& ctx,
         int32_t,                                                                         \
         const Span<std::byte>&);                                                         \
     template size_t sytrd_sb2st_hh_buffer_size<back, BATCHLAS_UNPAREN fp>(               \
-        Queue&, int32_t, int32_t, int32_t);
+        Queue&, int32_t, int32_t, int32_t);                                              \
+    template Event unmqr_hb2st<back, BATCHLAS_UNPAREN fp>(                               \
+        Queue&,                                                                          \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,                     \
+        const VectorView<BATCHLAS_UNPAREN fp>&,                                          \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,                     \
+        int32_t,                                                                         \
+        int32_t,                                                                         \
+        Span<const int32_t>,                                                             \
+        Span<const int32_t>);
 
 #define SB2ST_HH_INSTANTIATE_FOR_BACKEND(back) \
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SB2ST_HH_INSTANTIATE, back)

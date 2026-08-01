@@ -109,5 +109,18 @@ Event sytrd_sb2st_hh(Queue& ctx,
 template <Backend B, typename T>
 size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch);
 
+// Z := Q2 Z, with Q2 = H_1 H_2 ... H_m from sytrd_sb2st_hh. Applies the
+// reflectors in reverse generation order. `starts`/`lens` come from
+// build_sb2st_hh_schedule (host side, batch-independent).
+template <Backend B, typename T>
+Event unmqr_hb2st(Queue& ctx,
+                  const MatrixView<T, MatrixFormat::Dense>& v_in,
+                  const VectorView<T>& tau_in,
+                  const MatrixView<T, MatrixFormat::Dense>& z_io,
+                  int32_t n,
+                  int32_t kd,
+                  Span<const int32_t> starts,
+                  Span<const int32_t> lens);
+
 } // namespace internal
 } // namespace batchlas
