@@ -493,6 +493,14 @@ Event syev_cta(Queue& ctx,
                             AQ(row, col, b) = A(row, i, b);
                         }
                     }
+
+                    // Fold the TAUQ permutation into this kernel: one thread per
+                    // column already exists here, so the separate n*batch launch it
+                    // used to need is pure overhead.
+                    // tau_q[0] = 0, tau_q[j] = tau[j-1] for j>=1.
+                    if (row == 0) {
+                        TAUQ(col, b) = (col >= 1 && (col - 1) < (nn - 1)) ? TAU(col - 1, b) : T(0);
+                    }
                 } else {
                     // Upper -> QL reflectors stored in columns 0..n-2.
                     // Reflector with pivot p (0..n-2) comes from SYTRD column (p+1)
@@ -504,41 +512,15 @@ Event syev_cta(Queue& ctx,
                             AQ(row, col, b) = A(row, k, b);
                         }
                     }
-                }
-            });
-        });
-        cta_debug_sync(ctx, "syev_cta: after pack AQ");
 
-        ctx->submit([&](sycl::handler& cgh) {
-            auto TAU = tau_view;
-            auto TAUQ = tau_q_view;
-            const int32_t nb = batch;
-            const int32_t nn = n;
-            const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn);
-
-            cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-                const int64_t idx = static_cast<int64_t>(tid[0]);
-                const int32_t b = static_cast<int32_t>(idx / nn);
-                const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
-
-                if (uplo_eff == Uplo::Lower) {
-                    // tau_q[0] = 0, tau_q[j] = tau[j-1] for j>=1.
-                    if (j == 0) {
-                        TAUQ(j, b) = T(0);
-                    } else {
-                        TAUQ(j, b) = (j - 1 < (nn - 1)) ? TAU(j - 1, b) : T(0);
-                    }
-                } else {
-                    // tau_q[j] = tau[j] for j<=n-2, tau_q[n-1]=0.
-                    if (j < (nn - 1)) {
-                        TAUQ(j, b) = TAU(j, b);
-                    } else {
-                        TAUQ(j, b) = T(0);
+                    // tau_q[j] = tau[j] for j<=n-2, tau_q[n-1] = 0.
+                    if (row == 0) {
+                        TAUQ(col, b) = (col < (nn - 1)) ? TAU(col, b) : T(0);
                     }
                 }
             });
         });
-        cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
+        cta_debug_sync(ctx, "syev_cta: after pack AQ/TAUQ");
 
         const Uplo ormq_factorization = (uplo_eff == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
         // Apply Q (from SYTRD reflectors) to Z: Z := Q * Z.

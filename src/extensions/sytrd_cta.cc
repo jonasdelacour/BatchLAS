@@ -119,24 +119,25 @@ namespace batchlas {
         // Compute xnorm.
         const Real xsq = x_active ? abs2_if_complex(x) : Real(0);
         const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
-        const Real xnorm = invoke_one_broadcast(part, [&]() {
-            return sycl::sqrt(sumsq);
-        });
+        // `sumsq` is already replicated across the partition, so evaluate the
+        // reflector scalars redundantly instead of serializing onto the leader.
+        const Real xnorm = sycl::sqrt(sumsq);
 
         T tau = T(0);
 
-        // Ensure the leader sees the correct alpha value regardless of where
+        // Ensure every lane sees the correct alpha value regardless of where
         // alpha lives inside the partition.
         const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
-        const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
-            if (len <= 1) {
-                return std::array<T, 3>{alpha_leader, T(0), T(0)};
-            }
-
+        T beta_b = alpha_leader;
+        T tau_b = T(0);
+        T scale_b = T(0);
+        if (len > 1) {
             const auto scalars = internal::larfg(alpha_leader, xnorm, len);
-            return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
-        });
+            beta_b = scalars.beta;
+            tau_b = scalars.tau;
+            scale_b = scalars.scale;
+        }
 
         tau = tau_b;
 
@@ -345,9 +346,7 @@ namespace batchlas {
                                 // dot = v^H x
                                 const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
                                 const T dot = group_reduce_sum_select_from_group(part, dot_lane);
-                                const T alpha2 = invoke_one_broadcast(part, [&]() {
-                                    return T(-0.5) * taui * dot;
-                                });
+                                const T alpha2 = T(-0.5) * taui * dot;
 
                                 // w := x + alpha2 * v
                                 if (lane < m) {
@@ -471,9 +470,7 @@ namespace batchlas {
                                 // dot = v^H x
                                 const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
                                 const T dot = group_reduce_sum_select_from_group(part, dot_lane);
-                                const T alpha2 = invoke_one_broadcast(part, [&]() {
-                                    return T(-0.5) * taui * dot;
-                                });
+                                const T alpha2 = T(-0.5) * taui * dot;
 
                                 // w := x + alpha2 * v
                                 if (lane < m) {
