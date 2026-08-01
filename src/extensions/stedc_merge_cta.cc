@@ -11,6 +11,7 @@
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
 
+#include <cassert>
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -426,6 +427,17 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
                                 T rho,
                                 int32_t max_iter) {
     const T rho_inv = T(1) / rho;
+
+    // dd == 1 has no second pole: `prev` below would be -1 and d_prob(prev)
+    // would read outside the shared-memory window (d_prob aliases d_local via a
+    // generic pointer, so a negative offset can fault). With a single pole the
+    // secular equation 1/rho + z0^2/(d0 - x) = 0 solves exactly:
+    //     x = d0 + rho * z0^2.
+    if (dd <= 1) {
+        const T z0 = z_prob(0);
+        return {d_prob(0), rho * z0 * z0};
+    }
+
     const int32_t last = dd - 1;
     const int32_t prev = dd - 2;
     const T d_last = d_prob(last);
@@ -792,6 +804,7 @@ inline void maybe_rescale_vectors(bool do_rescale,
 
     // Löwner rescale: native T is sufficient once deflation uses the
     // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
+
     for (int32_t it = 0; it < iters; ++it) {
         const int32_t eid = first + it * stride;
         const bool active = (eid < dd);
@@ -855,6 +868,7 @@ inline void normalize_vectors(const Adapter& adapter,
     // maybe_rescale_vectors. nrm2_column reduces with sub-group shuffles, so a
     // partition must not fall out of the loop while others are still inside it.
     const int32_t iters = (dd + stride - 1) / stride;
+
 
     for (int32_t it = 0; it < iters; ++it) {
         const int32_t eig = first + it * stride;
@@ -961,15 +975,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                                       Q_bid, d_prob, v, bid);
                 // Rescale reads all of Q and writes all of v; normalize
                 // overwrites Q and reads all of v. One barrier separates the two
-                // phases -- the rescale loop itself no longer needs any.
+                // phases -- the loops themselves no longer need any.
                 sycl::group_barrier(wg);
-                // Normalize deliberately stays on the work-group path for now:
-                // the partition-parallel version faults with an illegal access
-                // inside this kernel once parts_per_wg > 1. See the "normalize"
-                // open item in STEDC_MERGE_OPTIMIZATION.md for the repro and the
-                // elimination results so far.
-                const WorkgroupAdapter wadapter{wg, tid, bdim};
-                normalize_vectors<T>(wadapter, 0, 1, dd, Q_bid, v, bid);
+                normalize_vectors<T>(padapter, part_id, parts_per_wg, dd, Q_bid, v, bid);
             });
     });
 }
