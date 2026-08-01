@@ -1,3 +1,5 @@
+#pragma once
+
 #include <sycl/sycl.hpp>
 
 #include <blas/enums.hh>

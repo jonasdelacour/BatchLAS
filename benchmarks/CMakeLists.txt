@@ -33,6 +33,7 @@ set(BENCHMARK_TARGETS
     syev_benchmark
     syev_cta_benchmark
     syev_jacobi_cta_benchmark
+    syev_cta_fused_benchmark
     syev_blocked_benchmark
     gesvd_cta_benchmark
     gesvd_blocked_benchmark

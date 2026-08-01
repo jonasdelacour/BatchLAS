@@ -901,6 +901,46 @@ namespace batchlas {
                                 JobType jobz,
                                 SteqrParams<T> steqr_params = SteqrParams<T>());
 
+    /**
+     * @brief Fused (single-kernel) variant of syev_cta for very small matrices.
+     *
+     * Same algorithm as syev_cta -- SYTD2 tridiagonalization, implicit QL/QR on
+     * the tridiagonal, Householder back-transform -- but run end to end inside a
+     * single sub-group partition instead of as three kernel launches with
+     * global-memory intermediates. The reduced tile stays in local memory and
+     * doubles as the reflector store for the back-transform, so d, e, tau, the
+     * packed reflector matrix and the intermediate eigenvector matrix never
+     * reach global memory: traffic is one read of A plus one write of the
+     * results.
+     *
+     * The three stages share their device code with sytrd_cta and steqr_cta
+     * (sytrd_cta_device.hh / steqr_cta_device.hh), so results track syev_cta to
+     * within the reassociation implied by fusing.
+     *
+     * Notes:
+     * - Intended for n <= 32; supports real symmetric and complex Hermitian input.
+     * - Overwrites A with eigenvectors when jobz == EigenVectors; unlike
+     *   syev_cta, A is left untouched when jobz == NoEigenVectors.
+     * - Eigenvalues are returned in ascending order when SteqrParams::sort is
+     *   enabled (default).
+     * - Requires no global workspace; ws is accepted for API symmetry and ignored.
+     */
+    template <Backend B, typename T>
+    Event syev_cta_fused(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& a_in,
+                         Span<typename base_type<T>::type> eigenvalues,
+                         JobType jobz,
+                         Uplo uplo,
+                         const Span<std::byte>& ws = Span<std::byte>(),
+                         SteqrParams<T> steqr_params = SteqrParams<T>(),
+                         size_t cta_wg_size_multiplier = 1);
+
+    template <Backend B, typename T>
+    size_t syev_cta_fused_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& a,
+                                      JobType jobz,
+                                      SteqrParams<T> steqr_params = SteqrParams<T>());
+
     template <typename T>
     struct JacobiParams {
         using Real = typename base_type<T>::type;
