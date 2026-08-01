@@ -54,6 +54,7 @@ set(TEST_TARGETS
     sytrd_blocked_tests
     syev_cta_tests
     syev_jacobi_cta_tests
+    syev_cta_fused_tests
     syev_blocked_tests
 )
 
@@ -124,6 +125,13 @@ function(batchlas_add_test_target test_name)
         )
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
+    if(BATCHLAS_OPENBLAS_CORETYPE)
+        # The host BLAS was found to compute dgemm incorrectly with its
+        # auto-detected kernel. OpenBLAS picks the kernel in its library
+        # constructor, before main(), so this has to come from the environment.
+        set_tests_properties(${test_name} PROPERTIES
+            ENVIRONMENT "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+    endif()
 endfunction()
 
 foreach(test ${TEST_TARGETS})

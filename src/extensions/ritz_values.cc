@@ -119,7 +119,10 @@ namespace batchlas {
                     
                     // Reduce across work-group
                     T numerator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
-                    
+                    // dot_mem is reused below; no work-item may overwrite it until every
+                    // work-item has finished reading it in the reduction above.
+                    sycl::group_barrier(cta);
+
                     // Compute v_j^T * v_j using work-group reduction
                     T denominator_partial = T(0);
                     for (int i = tid; i < n; i += wg) {
@@ -135,7 +138,9 @@ namespace batchlas {
                     
                     // Reduce across work-group
                     T denominator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
-                    
+                    // Likewise before the next grid-stride iteration overwrites dot_mem.
+                    sycl::group_barrier(cta);
+
                     // Only the first thread in the work-group writes the result
                     if (tid == 0) {
                         ritz_vals(j, b) = real_part(numerator / denominator);

@@ -14,142 +14,11 @@
 #include <complex>
 #include <numeric>
 #include <array>
+#include "sytrd_cta_device.hh"
+
 using namespace sycl::ext::oneapi;
 
 namespace batchlas {
-
-    template <typename U>
-    inline U conj_if_complex(const U& x) {
-        if constexpr (internal::is_complex<U>::value) {
-            return U(x.real(), -x.imag());
-        } else {
-            return x;
-        }
-    }
-
-    template <typename U>
-    inline typename base_type<U>::type abs2_if_complex(const U& x) {
-        using Real = typename base_type<U>::type;
-        if constexpr (internal::is_complex<U>::value) {
-            const Real re = x.real();
-            const Real im = x.imag();
-            return re * re + im * im;
-        } else {
-            return x * x;
-        }
-    }
-
-    // Unblocked symmetric tridiagonal reduction (LAPACK SYTD2-style) for very small matrices.
-    //
-    // This is intended as a building block for batched eigensolvers: it overwrites A with the
-    // tridiagonal (diag + first offdiag) and stores Householder reflectors in the same layout
-    // as LAPACK's {s,d}sytd2.
-    //
-    // References:
-    // - DSYTD2 reference algorithm (unblocked) in LAPACK.
-
-    template <typename T, typename Group>
-    inline T group_reduce_sum(const Group& g, T v) {
-        // Butterfly reduction using XOR shuffles; assumes power-of-two group size.
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
-    }
-
-    template <typename T, typename Group>
-    inline T group_reduce_max(const Group& g, T v) {
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            const T other = permute_group_by_xor(g, v, offset);
-            v = sycl::fmax(v, other);
-        }
-        return v;
-    }
-
-    // NOTE: DPC++'s CUDA path for non-uniform group collectives currently has
-    // limitations for floating-point reductions on chunked partitions.
-    // This reduction uses XOR shuffles (butterfly), which is O(log P) and keeps
-    // the result replicated in all lanes.
-    template <typename T, typename Group>
-    inline T group_reduce_sum_select_from_group(const Group& g, T v) {
-        const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-        (void)lanes;
-
-        if constexpr (internal::is_complex<T>::value) {
-            using Real = typename base_type<T>::type;
-            Real re = v.real();
-            Real im = v.imag();
-            for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-                re += permute_group_by_xor(g, re, offset);
-                im += permute_group_by_xor(g, im, offset);
-            }
-            return T(re, im);
-        } else {
-            for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-                v += permute_group_by_xor(g, v, offset);
-            }
-            return v;
-        }
-    }
-
-    // Generate a Householder reflector H = I - tau * v v^T for a vector [alpha; x].
-    // Mirrors DLARFG for the real case.
-    //
-    // Input:
-    //  - alpha: scalar (lane==alpha_lane)
-    //  - x elements in other lanes (inactive lanes must pass 0)
-    // Output:
-    //  - alpha overwritten with beta
-    //  - x elements overwritten with v (scaled), and the implicit element becomes 1
-    //  - tau returned
-    template <typename T, typename Partition>
-    inline T larfg_small(const Partition& part,
-                         int32_t len,
-                         int32_t lane,
-                         int32_t alpha_lane,
-                         T& alpha,
-                         T& x,
-                         bool x_active) {
-        using Real = typename base_type<T>::type;
-
-        // Compute xnorm.
-        const Real xsq = x_active ? abs2_if_complex(x) : Real(0);
-        const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
-        // `sumsq` is already replicated across the partition, so evaluate the
-        // reflector scalars redundantly instead of serializing onto the leader.
-        const Real xnorm = sycl::sqrt(sumsq);
-
-        T tau = T(0);
-
-        // Ensure every lane sees the correct alpha value regardless of where
-        // alpha lives inside the partition.
-        const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
-
-        T beta_b = alpha_leader;
-        T tau_b = T(0);
-        T scale_b = T(0);
-        if (len > 1) {
-            const auto scalars = internal::larfg(alpha_leader, xnorm, len);
-            beta_b = scalars.beta;
-            tau_b = scalars.tau;
-            scale_b = scalars.scale;
-        }
-
-        tau = tau_b;
-
-        // Apply scaling to x and set alpha=beta.
-        if (lane == alpha_lane) {
-            alpha = beta_b;
-        } else if (x_active && tau != T(0)) {
-            x *= scale_b;
-        }
-
-        return tau;
-    }
 
     template <typename T, size_t P, bool Upper>
     class Sytd2CTAKernel;
@@ -268,128 +137,23 @@ namespace batchlas {
                     group_barrier(part);
 
                     if constexpr (Upper) {
-                        // Reduce the upper triangle of A.
-                        // For k = n-1 .. 1, annihilate A(0:k-2, k).
-                        for (int32_t k = n - 1; k >= 1; --k) {
-                            const int32_t m = k;          // active submatrix size (0..m-1)
-                            const int32_t alpha_row = k - 1;
-                            const int32_t col = k;
+                        // Reduce the upper triangle of A (shared with the fused
+                        // SYEV kernel; see sytrd_cta_device.hh).
+                        const T tau_lane = sytd2_cta_upper_partition<T, static_cast<int32_t>(P)>(
+                            part,
+                            &A_local[base_a],
+                            &V_local[base_v],
+                            &W_local[base_w],
+                            n,
+                            lane);
 
-                            // Vector [x; alpha] lives in column 'col' rows [0..m-1], alpha at row alpha_row.
-                            const bool in_vec = (lane < m);
-                            const bool is_alpha = (lane == alpha_row);
-                            const bool x_active = (lane < (m - 1));
-
-                            T alpha = T(0);
-                            T x = T(0);
-                            if (in_vec) {
-                                const T a_val = A_local[base_a + lane + col * static_cast<int32_t>(P)];
-                                if (is_alpha) {
-                                    alpha = a_val;
-                                } else {
-                                    x = a_val;
-                                }
-                            }
-
-                            // Form reflector.
-                            const T taui = larfg_small<T>(part, m, lane, alpha_row, alpha, x, x_active);
-
-                            // Write back scaled vector and beta (alpha).
-                            if (x_active) {
-                                A_local[base_a + lane + col * static_cast<int32_t>(P)] = x;
-                                // Keep Hermitian/symmetric storage consistent.
-                                A_local[base_a + col + lane * static_cast<int32_t>(P)] = conj_if_complex(x);
-                            }
-                            if (is_alpha) {
-                                A_local[base_a + lane + col * static_cast<int32_t>(P)] = alpha;
-                                A_local[base_a + col + lane * static_cast<int32_t>(P)] = conj_if_complex(alpha);
-                            }
-
-                            // Offdiagonal element for T.
-                            // NOTE: select_from_group is a collective; all lanes must participate.
-                            const T alpha_out = select_from_group(part, alpha, static_cast<uint32_t>(alpha_row));
-                            if (lane == 0) {
-                                // E index is k-1.
-                                E_prob(k - 1) = alpha_out;
-                                TAU_prob(k - 1) = taui;
-                            }
-
-                            if (taui != T(0)) {
-                                // Build v (length m) with v(m-1)=1.
-                                const T v_lane = (lane < m)
-                                                    ? ((lane == alpha_row) ? T(1)
-                                                                           : A_local[base_a + lane + col * static_cast<int32_t>(P)])
-                                                    : T(0);
-                                V_local[base_v + lane] = v_lane;
-                                group_barrier(part);
-
-                                // Temporarily set A(alpha_row, col) = 1 (LAPACK convention) for the math.
-                                if (is_alpha) {
-                                    A_local[base_a + alpha_row + col * static_cast<int32_t>(P)] = T(1);
-                                    A_local[base_a + col + alpha_row * static_cast<int32_t>(P)] = T(1);
-                                }
-                                group_barrier(part);
-
-                                // Compute x := tau * A(0:m-1,0:m-1) * v, store in W_local.
-                                T y = T(0);
-                                if (lane < m) {
-                                    for (int32_t c = 0; c < m; ++c) {
-                                        const T a_rc = A_local[base_a + lane + c * static_cast<int32_t>(P)];
-                                        const T v_c = V_local[base_v + c];
-                                        y += a_rc * v_c;
-                                    }
-                                    y *= taui;
-                                }
-                                W_local[base_w + lane] = y;
-                                group_barrier(part);
-
-                                // dot = v^H x
-                                const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
-                                const T dot = group_reduce_sum_select_from_group(part, dot_lane);
-                                const T alpha2 = T(-0.5) * taui * dot;
-
-                                // w := x + alpha2 * v
-                                if (lane < m) {
-                                    W_local[base_w + lane] = W_local[base_w + lane] + alpha2 * V_local[base_v + lane];
-                                }
-                                group_barrier(part);
-
-                                // Rank-2 update on the leading m x m block (Hermitian-safe):
-                                // A := A - v*w^H - w*v^H
-                                if (lane < m) {
-                                    const T v_r = V_local[base_v + lane];
-                                    const T w_r = W_local[base_w + lane];
-                                    for (int32_t c = 0; c < m; ++c) {
-                                        const T v_c = V_local[base_v + c];
-                                        const T w_c = W_local[base_w + c];
-                                        const int32_t idx = base_a + lane + c * static_cast<int32_t>(P);
-                                        A_local[idx] = A_local[idx] - (v_r * conj_if_complex(w_c) + w_r * conj_if_complex(v_c));
-                                    }
-                                }
-                                group_barrier(part);
-
-                                // Restore superdiagonal element and keep symmetry consistent.
-                                if (is_alpha) {
-                                    A_local[base_a + alpha_row + col * static_cast<int32_t>(P)] = alpha;
-                                    A_local[base_a + col + alpha_row * static_cast<int32_t>(P)] = conj_if_complex(alpha);
-                                }
-                                group_barrier(part);
-                            } else {
-                                // If tau==0, ensure we don't leave a "1" in A.
-                                if (is_alpha) {
-                                    // alpha already stored.
-                                    A_local[base_a + col + alpha_row * static_cast<int32_t>(P)] = conj_if_complex(alpha);
-                                }
-                            }
-
-                            // Store diagonal element D(k).
-                            if (lane == 0) {
-                                D_prob(k) = A_local[base_a + k + k * static_cast<int32_t>(P)];
-                            }
-                            group_barrier(part);
+                        // Read the tridiagonal straight off the reduced tile.
+                        if (lane < n) {
+                            D_prob(lane) = A_local[base_a + lane + lane * static_cast<int32_t>(P)];
                         }
-                        if (lane == 0) {
-                            D_prob(0) = A_local[base_a + 0 + 0 * static_cast<int32_t>(P)];
+                        if (lane < (n - 1)) {
+                            E_prob(lane) = A_local[base_a + lane + (lane + 1) * static_cast<int32_t>(P)];
+                            TAU_prob(lane) = tau_lane;
                         }
                     } else {
                         // Reduce the lower triangle of A.
