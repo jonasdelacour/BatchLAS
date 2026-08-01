@@ -255,6 +255,14 @@ endif()
 
 find_netlib_libs()
 
+# Some BLAS builds dispatch to CPU kernels that compute wrong results; find out
+# now rather than through mysterious numerical test failures later.
+include(${CMAKE_CURRENT_LIST_DIR}/BatchLASBlasHealthCheck.cmake)
+if(BATCHLAS_HAS_HOST_BACKEND)
+    batchlas_check_blas_health("${BATCHLAS_NETLIB_LINK_LIBRARIES}")
+endif()
+batchlas_write_env_script()
+
 if(BATCHLAS_HAS_CUDA_BACKEND)
     find_package(CUDAToolkit REQUIRED)
     set(BATCHLAS_CUDA_LINK_LIBRARIES
