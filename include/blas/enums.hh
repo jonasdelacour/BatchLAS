@@ -116,6 +116,20 @@ namespace batchlas {
         Backward
     };
     
+    // Algorithm family used by `syevx` (partial symmetric eigensolve).
+    //
+    // `Auto` picks based on matrix format, size and the requested fraction of the
+    // spectrum; see `syevx_select_algorithm`. Override with the environment
+    // variable BATCHLAS_SYEVX_ALGORITHM (auto|direct|direct_subset|filtered|lobpcg)
+    // or by setting SyevxParams::method.
+    enum class SyevxAlgorithm {
+        Auto,           // Heuristic selection (default)
+        Direct,         // Full syev + select the requested eigenpairs
+        DirectSubset,   // Two-stage reduction + subset tridiagonal solve (Tier 2, not yet implemented)
+        Filtered,       // Chebyshev-filtered subspace iteration (Tier 3, not yet implemented)
+        LOBPCG          // Locally Optimal Block Preconditioned Conjugate Gradient
+    };
+
     enum class OrthoAlgorithm {
         Chol2,          //Default
         Cholesky,       //Rarely sufficient

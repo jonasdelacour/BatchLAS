@@ -929,6 +929,42 @@ inline void SyevxBenchSizesNetlib(Benchmark* b) {
     }
 }
 
+// Crossover sweep for syevx: (n, batch, neigs, algorithm).
+//
+// neigs is generated as a fraction of n so the cost model in SYEVX_PLAN.md §2 can
+// be checked directly. The 4th argument is a batchlas::SyevxAlgorithm value; only
+// the implemented ones (Direct = 1, LOBPCG = 4) are swept.
+template <typename Benchmark>
+inline void SyevxCrossoverSizes(Benchmark* b) {
+    for (int n : {64, 128, 256, 512, 1024}) {
+        for (int bs : {1, 8, 64}) {
+            for (double frac : {0.01, 0.02, 0.05, 0.1, 0.25, 0.5}) {
+                const int ne = static_cast<int>(n * frac);
+                if (ne < 1) continue;
+                for (int algo : {1, 4}) {
+                    b->Args({n, bs, ne, algo});
+                }
+            }
+        }
+    }
+}
+
+
+// Reduced crossover sweep for the CPU/NETLIB backend.
+template <typename Benchmark>
+inline void SyevxCrossoverSizesNetlib(Benchmark* b) {
+    for (int n : {64, 128, 256}) {
+        for (int bs : {1, 8}) {
+            for (double frac : {0.02, 0.05, 0.1, 0.25, 0.5}) {
+                const int ne = static_cast<int>(n * frac);
+                if (ne < 1) continue;
+                for (int algo : {1, 4}) {
+                    b->Args({n, bs, ne, algo});
+                }
+            }
+        }
+    }
+}
 
 template <typename Benchmark>
 inline void OrthoBenchSizes(Benchmark* b) {

@@ -34,6 +34,7 @@ namespace batchlas {
     template <typename T>
     struct SyevxParams {
         using float_type = typename base_type<T>::type;
+        SyevxAlgorithm method = SyevxAlgorithm::Auto;      // Algorithm family (see SyevxAlgorithm)
         OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;  // Default orthogonalization algorithm
         size_t ortho_iterations = 2;                       // Number of orthogonalization iterations
         size_t iterations = 100;                           // Default number of iterations
@@ -301,6 +302,73 @@ namespace batchlas {
                 const SyevxParams<T>& params = SyevxParams<T>()) {
         return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
     }
+
+    /**
+     * @brief Resolves SyevxParams::method (and the BATCHLAS_SYEVX_ALGORITHM override)
+     *        to a concrete, implemented algorithm.
+     *
+     * Never returns `Auto`, `DirectSubset` or `Filtered`: unimplemented tiers fall
+     * back to their nearest implemented neighbour. Deterministic in its inputs so
+     * that `syevx` and `syevx_buffer_size` always agree on the choice.
+     *
+     * @param format Matrix format of A (sparse formats always use LOBPCG)
+     * @param n Matrix dimension
+     * @param neigs Number of requested eigenpairs
+     * @param requested Algorithm requested via SyevxParams::method
+     * @return SyevxAlgorithm Either Direct or LOBPCG
+     */
+    SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
+                                          int64_t n,
+                                          size_t neigs,
+                                          SyevxAlgorithm requested);
+
+    /**
+     * @brief Partial eigensolve by full decomposition followed by selection.
+     *
+     * Runs `syev` on a private copy of A (A is not modified) and extracts the
+     * `neigs` extreme eigenpairs. Ordering matches the LOBPCG path: descending
+     * when `params.find_largest`, ascending otherwise. Dense input only.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_direct(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_direct_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Partial eigensolve by LOBPCG. Supports dense and sparse input.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_lobpcg(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_lobpcg_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
 
     /**
      * @brief Computes eigenvalues and optionally eigenvectors of a sparse matrix using the Lanczos algorithm

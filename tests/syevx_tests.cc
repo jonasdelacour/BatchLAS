@@ -344,8 +344,11 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     params.iterations = 30;
 
     UnifiedVector<double> W(neig * batch);
+    // Size the workspace against the matrix actually passed to syevx (the dense
+    // shift-inverted operator), not the CSR view: the two can select different
+    // algorithms and therefore different workspace requirements.
     UnifiedVector<std::byte> workspace(syevx_buffer_size<test_utils::gpu_backend>(
-        *ctx, A_view, W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
+        *ctx, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
 
     syevx<test_utils::gpu_backend>(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params);
         ctx->wait();
@@ -367,6 +370,85 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */
 }
 
+// Exercises the Direct (full syev + select) algorithm explicitly, including the
+// eigenvector output and both orderings. n > 64 with neigs/n = 0.25 lands in the
+// Direct band of syevx_select_algorithm, but the method is forced here so the test
+// keeps testing Direct even if the thresholds are later retuned.
+class SyevxDirectTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
+    constexpr int n = 128;
+    constexpr int batch = 3;
+    constexpr int neig = 32;
+    const bool find_largest = GetParam();
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.find_largest = find_largest;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, JobType::EigenVectors, V.view(), params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
+    ctx->wait();
+
+    // Reference: full decomposition of an untouched copy of A.
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            // syev returns ascending; Direct returns descending when find_largest.
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-6f), 0.0f, 1e-4f)
+                << "Eigenvalue mismatch at batch " << b << ", index " << i
+                << ": direct=" << got << " vs syev=" << ref;
+        }
+        // Ordering must be monotone in the requested direction.
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) {
+                EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]) << "not descending at " << i;
+            } else {
+                EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]) << "not ascending at " << i;
+            }
+        }
+    }
+
+    // A must not have been modified by syevx.
+    auto ritz = ritz_values<test_utils::gpu_backend>(*ctx, A.view(), V.view());
+    ctx->wait();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const float lambda = W[b * neig + i];
+            const float r = ritz[b * neig + i];
+            EXPECT_NEAR(std::abs(r - lambda) / std::max(std::abs(lambda), 1e-6f), 0.0f, 1e-3f)
+                << "Ritz value of returned eigenvector disagrees with returned eigenvalue"
+                << " at batch " << b << ", index " << i;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
+                         SyevxDirectTest,
+                         ::testing::Values(true, false),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                             return info.param ? "Largest" : "Smallest";
+                         });
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

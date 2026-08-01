@@ -13,6 +13,8 @@ set(EXTENSIONS_EIGEN_SOURCES
     ortho.cc
     iluk.cc
     syevx.cc
+    syevx_direct.cc
+    syevx_lobpcg.cc
     syev_cta.cc
     syev_blocked.cc
     syev_two_stage.cc
