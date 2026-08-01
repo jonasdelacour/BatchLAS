@@ -46,19 +46,45 @@ inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
     return false;
 }
 
+// `kernel_max_wg` is the largest work-group this particular kernel can launch on
+// this device, which is generally smaller than the device maximum: the merge
+// kernel uses ~80 registers per work-item, so 1024 work-items would need 81920
+// registers against a 65536 limit and the launch throws outright. Callers pass
+// the kernel-specific bound; 0 means "unknown", in which case only the device
+// limit applies. This matters now that the tuning tables ask for wide
+// work-groups.
 inline int32_t choose_wg_size(const sycl::device& dev,
                               int32_t base_wg_size,
-                              int32_t requested_mul) {
+                              int32_t requested_mul,
+                              int32_t kernel_max_wg = 0) {
     int32_t wg_mul = std::max<int32_t>(1, requested_mul);
     int32_t wg_size = base_wg_size * wg_mul;
 
-    const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+    int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+    if (kernel_max_wg > 0) {
+        max_wg_size = std::min(max_wg_size, kernel_max_wg);
+    }
     if (wg_size > max_wg_size) {
         const int32_t max_mul = std::max<int32_t>(1, max_wg_size / base_wg_size);
         wg_mul = std::min(wg_mul, max_mul);
         wg_size = base_wg_size * wg_mul;
     }
     return wg_size;
+}
+
+// Largest work-group the given kernel can actually launch on `dev`. Returns 0 if
+// the runtime cannot answer, so the caller falls back to the device limit.
+template <typename KernelName>
+inline int32_t kernel_max_work_group_size(Queue& ctx, const sycl::device& dev) {
+    try {
+        auto bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(
+            ctx->get_context(), {dev}, {sycl::get_kernel_id<KernelName>()});
+        const auto kern = bundle.template get_kernel<KernelName>();
+        return static_cast<int32_t>(
+            kern.template get_info<sycl::info::kernel_device_specific::work_group_size>(dev));
+    } catch (const sycl::exception&) {
+        return 0;
+    }
 }
 
 template <typename T>
@@ -904,7 +930,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
     const auto dev = ctx->get_device();
     const int32_t base_wg_size = std::lcm<int32_t>(P, sg_size);
-    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
+    const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedCtaMerge<B, T, P>>(ctx, dev);
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
+                                           kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
 
@@ -997,7 +1025,9 @@ void stedc_merge_fused_wg(Queue& ctx,
 
     const int32_t max_sg = std::max<int32_t>(1, device_max_sub_group_size(ctx));
     const int32_t base_wg_size = max_sg;
-    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
+    const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedWgMerge<B, T>>(ctx, dev);
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
+                                           kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
 

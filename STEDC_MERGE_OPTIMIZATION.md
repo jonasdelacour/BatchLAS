@@ -162,35 +162,85 @@ documented in `stedc_merge_kernels.cc:44-52`, which changed *where the poles wer
 stored* during the solve and produced a bimodal orthogonality distribution.
 Regardless, orthogonality must be validated, not assumed — see §5.
 
-### 2.2 The Löwner rescale does not need to read `Q` at all — **[open]**
+### 2.2 Recomputing denominators instead of reading `Q` — **[tried, reverted: regression]**
 
-`maybe_rescale_vectors` reads `Q_bid(eid, j)` with `j` strided across lanes. The
-matrix is column-major (`include/blas/matrix.hh:75-80`,
-`data_[b*stride + j*ld + i]`), so this is an `ld`-stride row walk — the only
-uncoalesced access in the kernel.
+The idea: `maybe_rescale_vectors` read `Q_bid(eid, j)` with `j` strided across
+lanes — an `ld`-stride row walk of a column-major matrix, the only uncoalesced
+access in the kernel. That value is exactly
+`secular_denominator(d_eid, origin_j, tau_j)`, so it can be recomputed from
+shared memory instead, which also lets `write_denominator_column`'s global store
+disappear and the 2-norm fold into the write pass.
 
-It is also unnecessary. At that point `Q_bid(eid, j)` holds
-`(d_eid - origin_j) - tau_j`, i.e. `d_eid - lambda_j`, and the denominator is
-`d_eid - d_j`. Both operands are already in shared memory (`d_local`) or cheaply
-available (`temp_lambdas`). Recomputing instead of reloading turns the entire
-rescale into a shared-memory-only pass with **zero global traffic**. This is
-exactly LAPACK's `dlaed3` formulation.
+**It was implemented, verified bit-identical, and reverted — it is 5-10% slower.**
 
-Follow-on: `write_denominator_column` then no longer needs to materialize
-denominators to global `Q` purely so the next two phases can read them back.
-Combined, per-merge `Q` traffic drops from roughly 3 reads + 2 writes per element
-to a single write.
+| n | item 1 | with §2.2 | control: item 1 + 2 unused shared arrays |
+| --- | --- | --- | --- |
+| 64 | 0.840 | 0.981 | 0.990 |
+| 256 | 4.698 | 5.112 | 5.190 |
+| 512 | 12.704 | 13.807 | 14.105 |
 
-Caveat: recomputing changes rounding relative to the stored value (the stored
-denominator has a zero-clamp applied). Needs the same orthogonality validation.
+The control column is the decisive measurement: item 1's code with the two extra
+`local_accessor`s allocated and written but **never read** is just as slow as the
+full §2.2 change. So the entire regression is the shared-memory footprint, not
+the recompute — the recompute itself is worth ~1-2% (§2.2 beats the control at
+every size), it just cannot pay for the occupancy it costs.
 
-### 2.3 Re-tune work-group size — **[open]**
+Storing `origin` and `tau` per root doubles shared usage from `2*nloc*sizeof(T)`
+to `4*nloc*sizeof(T)`. At 32 threads per work-group that halves the blocks
+resident per SM.
 
-`params.secular_cta_wg_size_multiplier` / `choose_wg_size`. Widening the WG was
-previously useless because the serial rescale/normalize tail meant a 256-thread
-WG reduced over only `dd` elements, wasting most lanes. With §2.1 landed, more
-partitions per WG now translate into real concurrency, so this should be
-re-swept. **Do this after §2.1 and §2.2, not before.**
+**The lesson generalizes:** this kernel runs at **0.14% DRAM throughput**.
+Removing global traffic buys essentially nothing, while anything that grows the
+shared-memory footprint directly costs occupancy — which is the binding
+constraint. Optimizations here should *reduce* resident state, not trade memory
+for arithmetic. That is what pointed at §2.3, which turned out to be the real
+win.
+
+If revisited, it must not add shared memory: keep `tau` plus a 1-byte origin-pole
+selector, or stage the shifts in global scratch (coalesced, L1-resident, no
+occupancy cost). Expected upside is only the ~1-2% measured above.
+
+### 2.3 Re-tune work-group size — **[done]**
+
+`STEDC_WG_MULTIPLIER_*` was 1 / 1 / 2 / 2 / 4. It is now **8** across the board.
+
+This is the single largest win in this work, and it is only available *because*
+§2.1 removed the barriers — which the measurements show directly:
+
+| multiplier | baseline (serial rescale/normalize) | with §2.1 |
+| --- | --- | --- |
+| 1 | 0.919 | 0.880 |
+| 4 | 0.850 | 0.740 |
+| 8 | 0.877 (**worse than 4**) | 0.729 |
+
+(n = 64, batch 256, float, ms.) On baseline, widening past 4 *hurts*: a wide
+work-group reducing over only `dd` elements wastes most of its lanes. With the
+loops partition-parallel the extra width becomes extra concurrent columns, so it
+keeps improving. 16 was also tried — marginally better at n = 64, worse at
+n >= 256, so 8 is the pick.
+
+Also fixed here: `choose_wg_size` clamped only against
+`device::max_work_group_size` (1024), not against what the kernel can actually
+launch. At ~80 registers per work-item, 1024 work-items need 81920 registers
+against a 65536 limit, and the launch **throws**:
+
+```
+Exceeded the number of registers available on the hardware.
+The kernel uses 80 registers per work-item for a total of 1024 work-items.
+```
+
+It now also clamps to
+`kernel_device_specific::work_group_size` for the specific kernel, so an
+aggressive multiplier degrades to the largest launchable size instead of
+aborting. Pre-existing, but it matters much more now that wide work-groups are
+the default.
+
+Note on the benchmark: `stedc_benchmark` used to substitute fixed fallbacks
+(`threads_per_root = 32`, `wg_multiplier = 1`) when those args were 0, so it
+silently measured a configuration the library never runs by default. It now
+passes non-positive values through, where `StedcParams` resolves them from the
+tuning tables — so `... <n> 256 16 2 0 0` measures what a real caller such as
+`syev` actually gets.
 
 ### 2.4 Back-transform GEMM ignores deflation and block structure — **[open]**
 
@@ -267,22 +317,23 @@ rocSOLVER middle-way / fixed-weight hybrid with bound-clamped steps and a proper
 ## 4. Prioritized plan
 
 1. **[done]** Partition-parallelize rescale + normalize — all `2*dd` work-group
-   barriers removed from the phase. 4-9% end-to-end on the CTA path (§6).
-   Required fixing the pre-existing `dd == 1` out-of-range read in §2.1a.
-2. **[open]** Recompute denominators from `d_local`/`temp_lambdas` instead of
-   round-tripping through `Q` (kills the uncoalesced access and most global
-   traffic); then drop the `write_denominator_column` global store.
-3. **[open]** Re-sweep `wg_size` / `secular_cta_wg_size_multiplier` — only
-   meaningful after 1 and 2.
-4. **[open]** Deflation- and block-aware GEMM at `stedc.cc:424`.
+   barriers removed. Required fixing the pre-existing `dd == 1` out-of-range
+   read in §2.1a.
+2. **[tried, reverted]** Recompute denominators from shared memory. Bit-identical
+   but 5-10% slower; the extra shared memory costs more occupancy than the saved
+   global traffic is worth (§2.2). Do not retry without shrinking the footprint.
+3. **[done]** Raise `STEDC_WG_MULTIPLIER_*` to 8, unlocked by item 1, plus a
+   kernel-register clamp in `choose_wg_size` (§2.3). Largest single win.
+4. **[open]** Deflation- and block-aware GEMM at `stedc.cc:424` — now the
+   dominant term at large n.
 5. **[open]** `NoEigenVectors` short-circuit (+ boundary-row D&C from
    arXiv:2605.26599).
 
-Items 1–3 are contained within `stedc_merge_cta.cc`; 4–5 touch the driver.
-Given the 3.96% achieved occupancy, 1–3 should be the bulk of the merge-kernel
-win.
-
----
+**Where the remaining headroom is.** Items 1 and 3 addressed the merge kernel's
+serialization and occupancy. §2.2's control experiment shows the kernel is
+constrained by resident state, not memory traffic, so further merge-kernel work
+should reduce registers/shared memory rather than restructure data flow. The
+larger remaining win is §2.4: the back-transform GEMM is O(n^3) and untouched.
 
 ## 5. Validation protocol
 
@@ -303,13 +354,21 @@ orthogonality distribution for float STEDC at n <= 64.
 
 ## 6. Measurements (RTX 4090, sm_89, CUDA backend)
 
+**Measurement hygiene.** This box has two RTX 4090s and other benchmarks may be
+running. A contended GPU inflated an early reading of this work from 5.5% to
+8.6%. Pin to an idle device (`CUDA_VISIBLE_DEVICES=1`) and check
+`nvidia-smi --query-compute-apps=pid,process_name --format=csv` before trusting
+any number here.
+
 ### Correctness
 
-`stedc_acc --backend=CUDA --samples=64`, float and double, n = 16 / 32 / 64 /
-128 / 256 / 512: **0.00000 Fail% everywhere**, residual and orthogonality at
-machine-epsilon levels for both precisions.
+`stedc_acc --backend=CUDA --samples=64`, float and double, n = 16..512:
+**0.00000 Fail%** everywhere, residual and orthogonality at machine-epsilon
+levels. Every result in this document is **bit-identical** across §2.1, §2.2 and
+§2.3 — the refactors are numerically exact, and the work-group width does not
+enter the per-column math because the reductions are partition-local.
 
-Orthogonality `||Z^T Z - I||_F / n`, float, `--samples=256`, against baseline:
+Orthogonality `||Z^T Z - I||_F / n`, float, `--samples=256`, vs baseline:
 
 | n | baseline | with change |
 | --- | --- | --- |
@@ -317,45 +376,29 @@ Orthogonality `||Z^T Z - I||_F / n`, float, `--samples=256`, against baseline:
 | 32 | 9.36432e-08 | 9.38560e-08 |
 | 64 | 7.41322e-08 | 7.44386e-08 |
 
-Differences appear in the third significant digit, consistent with benign
-reassociation of a cancellation-free reduction.
+`stedc_tests` CUDA: 44 passed. `syev_tests` 8/8, `syev_cta_tests` 28/28,
+`syev_blocked_tests` 32/32.
 
-`stedc_tests` on the CUDA backend: 44 passed, 8 failed. The 8 failures are all
-`FlatTraceCollapsesByDepth[Ragged]`, which count trace entries in `stedc_flat.cc`
-and are **pre-existing** — verified to reproduce identically with this change
-reverted.
-
-`steqr_tests`: 32 passed, 4 failed, all on Backend 6 (host/CPU) and mostly
-double — also verified identical on baseline, and consistent with the known bad
-OpenBLAS dgemm on this machine. `syev_tests` 8/8 and `syev_cta_tests` 28/28 pass
-(checked because `stedc_secular.cc` was touched).
-
-New `StedcTest.FusedCtaConditionedHeavyDeflation` passes on all four CUDA type
-parameters, and reproduces the original illegal access when the §2.1a fix is
-reverted.
+Pre-existing failures, verified to reproduce identically with these changes
+reverted: 8 `FlatTraceCollapsesByDepth[Ragged]` in `stedc_tests`, and 4
+`steqr_tests` failures on Backend 6 (host/CPU).
 
 ### Performance
 
-`stedc_benchmark --backend=CUDA --type=float --warmup=5 --min_iters=30
---max_iters=30 <n> 256 16 2 4 1` (arg3=2 selects FusedCta, arg4=4 threads per
-root, arg5=1 wg multiplier), avg ms:
+End-to-end `stedc`, batch 256, float, idle GPU, **as a real caller gets it**
+(tuning-resolved parameters — `stedc_benchmark ... <n> 256 16 2 0 0`):
 
-| n | baseline | with change | speedup |
+| n | baseline (main) | this work | speedup |
 | --- | --- | --- | --- |
-| 64 | 0.91981 | 0.8403 | **8.6%** |
-| 128 | 2.0738 | 1.9148 | **7.7%** |
-| 256 | 4.9286 | 4.6982 | **4.7%** |
-| 512 | 13.240 | 12.704 | **4.0%** |
+| 64 | 0.930 | 0.782 | **15.9%** |
+| 128 | 2.042 | 1.633 | **20.0%** |
+| 256 | 4.885 | 3.967 | **18.8%** |
+| 512 | 13.144 | 11.162 | **15.1%** |
 
-The gain shrinks with n because the back-transform GEMM (§2.4) grows as O(n^3)
-and comes to dominate, so the merge kernel is a smaller share of the total.
-That makes §2.4 the natural next target for large n, and §2.2 for the merge
-kernel itself.
+Attribution at matched settings (multiplier 1, so §2.1 alone): 0.933 -> 0.882 at
+n = 64 and 4.948 -> 4.676 at n = 256, i.e. ~5.5%. The rest comes from §2.3, which
+§2.1 is what makes possible.
 
-Caution for future runs: **arg3 selects the merge variant**
-(`-1` Auto, `0` Baseline, `1` Fused, `2` FusedCta). An earlier measurement in
-this investigation used `arg3=0`, which runs the Baseline 3-kernel path and does
-not exercise the CTA merge at all -- it produced a spurious "7-8% speedup" that
-was pure run-to-run variance. Always pass `2` when benchmarking this work.
-Also warm up properly: a single n=64 run showed 1.66 ms with a std of 1.07
-before settling at 0.84 ms across repeats.
+Caution: **arg3 selects the merge variant** (`-1` Auto, `0` Baseline, `1` Fused,
+`2` FusedCta). An early measurement used `arg3=0`, the Baseline 3-kernel path,
+which does not exercise this code at all and produced a spurious result.

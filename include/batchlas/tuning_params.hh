@@ -50,11 +50,11 @@ inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 4;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 4;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_XLARGE = 8;
 
-inline constexpr int32_t STEDC_WG_MULTIPLIER_TINY = 1;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_SMALL = 1;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_MEDIUM = 2;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_LARGE = 2;
-inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 4;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_TINY = 8;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_SMALL = 8;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_MEDIUM = 8;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_LARGE = 8;
+inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 8;
 
 inline constexpr int32_t ormqr_block_size_for_n(int32_t n) {
     if (n <= 64) return ORMQR_BLOCK_SIZE_TINY;
