@@ -74,7 +74,29 @@ inline T group_sum(Group g, T v) {
 template <Backend B, typename T>
 class Sb2stHhChaseKernel;
 
-constexpr int kWg = 32;
+// Sub-group XOR shuffle that also works for std::complex.
+template <typename T>
+inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
+    using R = typename base_type<T>::type;
+    if constexpr (internal::is_complex<T>::value) {
+        const R re = sycl::permute_group_by_xor(sg, static_cast<R>(v.real()), mask);
+        const R im = sycl::permute_group_by_xor(sg, static_cast<R>(v.imag()), mask);
+        return T(re, im);
+    } else {
+        return sycl::permute_group_by_xor(sg, v, mask);
+    }
+}
+
+// The chase is sequential per matrix, so a work-group owns one problem and the
+// only parallelism inside it is the <= kd x kd window of the current step. With
+// a 32-thread work-group and kd=32 that means each lane loops 32x serially, and
+// at batch=128 the whole kernel occupies ~4096 threads on a GPU with ~196k
+// slots -- about 2% occupancy, which is what made the chase cost as much as the
+// back-transform. kWg=256 with a 2D (row, column-chunk) mapping puts 8 lanes on
+// each row of the window instead of 1.
+constexpr int kWg = 256;
+constexpr int kRowsPar = 32;          // max window extent == max kd
+constexpr int kTpr = kWg / kRowsPar;  // lanes cooperating on one row/column
 
 } // namespace
 
@@ -196,15 +218,39 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 // W <- H W H^H on the principal block [a..b], H = I - tau v v^H,
                 // v held in vloc with length m. Only the lower triangle is
                 // written; the update keeps the diagonal real by construction.
+                // 2D lane mapping: ti indexes the row (or column) of the window,
+                // ts indexes a chunk of the reduced dimension. Lanes sharing a ti
+                // are the kTpr contiguous lanes ti*kTpr .. ti*kTpr+kTpr-1, which
+                // sit inside one sub-group, so the partial sums reduce with XOR
+                // shuffles rather than through local memory.
+                const int32_t ti = lid / kTpr;
+                const int32_t ts = lid % kTpr;
+                const auto sg = it.get_sub_group();
+
+                // NOTE: this is a sub-group collective, so every lane in the
+                // work-group must call it -- out-of-range lanes contribute 0
+                // rather than branching around it.
+                auto reduce_tpr = [&](T v) -> T {
+                    for (uint32_t msk = 1; msk < static_cast<uint32_t>(kTpr); msk <<= 1) {
+                        v += shuffle_xor(sg, v, msk);
+                    }
+                    return v;
+                };
+
                 auto two_sided = [&](int32_t a, int32_t bb, T tau) {
                     const int32_t m = bb - a + 1;
                     if (m <= 0) return;
-                    for (int32_t i = lid; i < m; i += kWg) {
+
+                    // p = W v, one row per ti, reduced over ts.
+                    {
                         T acc = T(0);
-                        for (int32_t j = 0; j < m; ++j) {
-                            acc += bget(a + i, a + j) * vloc[j];
+                        if (ti < m) {
+                            for (int32_t j = ts; j < m; j += kTpr) {
+                                acc += bget(a + ti, a + j) * vloc[j];
+                            }
                         }
-                        wloc[i] = acc;
+                        acc = reduce_tpr(acc);
+                        if (ti < m && ts == 0) wloc[ti] = acc;
                     }
                     sycl::group_barrier(wg);
 
@@ -222,12 +268,14 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     }
                     sycl::group_barrier(wg);
 
-                    for (int32_t i = lid; i < m; i += kWg) {
-                        for (int32_t j = 0; j <= i; ++j) {
-                            T val = bget(a + i, a + j) - wloc[i] * conj_if(vloc[j]) -
-                                    vloc[i] * conj_if(wloc[j]);
-                            if (i == j) val = real_part_as_T(val);
-                            bset(a + i, a + j, val);
+                    // Rank-2 update of the lower triangle; no reduction, so ts
+                    // simply strides the inner index.
+                    if (ti < m) {
+                        for (int32_t j = ts; j <= ti; j += kTpr) {
+                            T val = bget(a + ti, a + j) - wloc[ti] * conj_if(vloc[j]) -
+                                    vloc[ti] * conj_if(wloc[j]);
+                            if (ti == j) val = real_part_as_T(val);
+                            bset(a + ti, a + j, val);
                         }
                     }
                     sycl::group_barrier(wg);
@@ -236,13 +284,17 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 // B <- B (I - tau v v^H), v of length (c1-c0+1) in vloc.
                 auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
-                    for (int32_t i = r0 + lid; i <= r1; i += kWg) {
-                        T y = T(0);
-                        for (int32_t j = c0; j <= c1; ++j) {
+                    const int32_t nr = r1 - r0 + 1;
+                    const int32_t i = r0 + ti;
+                    T y = T(0);
+                    if (ti < nr) {
+                        for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
                             y += bget(i, j) * vloc[j - c0];
                         }
-                        y = tau * y;
-                        for (int32_t j = c0; j <= c1; ++j) {
+                    }
+                    y = tau * reduce_tpr(y);
+                    if (ti < nr) {
+                        for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
                             bset(i, j, bget(i, j) - y * conj_if(vloc[j - c0]));
                         }
                     }
@@ -252,13 +304,17 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 // C <- (I - tau v v^H) C, v of length (r1-r0+1) in vloc.
                 auto left_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
-                    for (int32_t j = c0 + lid; j <= c1; j += kWg) {
-                        T z = T(0);
-                        for (int32_t i = r0; i <= r1; ++i) {
+                    const int32_t nc = c1 - c0 + 1;
+                    const int32_t j = c0 + ti;
+                    T z = T(0);
+                    if (ti < nc) {
+                        for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
                             z += conj_if(vloc[i - r0]) * bget(i, j);
                         }
-                        z = tau * z;
-                        for (int32_t i = r0; i <= r1; ++i) {
+                    }
+                    z = tau * reduce_tpr(z);
+                    if (ti < nc) {
+                        for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
                             bset(i, j, bget(i, j) - vloc[i - r0] * z);
                         }
                     }
@@ -381,18 +437,6 @@ class Sb2stHhBackTiledKernel;
 
 constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
 
-// Sub-group XOR shuffle that also works for std::complex.
-template <typename T>
-inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
-    using R = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const R re = sycl::permute_group_by_xor(sg, static_cast<R>(v.real()), mask);
-        const R im = sycl::permute_group_by_xor(sg, static_cast<R>(v.imag()), mask);
-        return T(re, im);
-    } else {
-        return sycl::permute_group_by_xor(sg, v, mask);
-    }
-}
 }
 
 // Resident-tile back-transform.
