@@ -409,11 +409,68 @@ struct Bandr1Schedule {
     std::vector<int32_t> block_size_seq;
 };
 
+// Debug-dump configuration. Reading this from the environment is surprisingly
+// expensive relative to the work of a single chase step (getenv + std::string +
+// std::stoi, six times), and a full reduction executes O(n^2/(nb*b)) steps, so
+// it is resolved once per `sytrd_band_reduction` call and passed down.
+//
+// Note: it is deliberately *not* cached in a function-local static -- tests set
+// these variables at runtime (ScopedEnvVar) around individual calls.
+struct Bandr1DumpConfig {
+    bool enabled = false;
+    bool abw_only = false;
+    int step_index = -1;
+    int sweep_index = -1;
+    int step_in_sweep = -1;
+    int batch_index = -1;
+};
+
+inline int env_int_or(const char* name, int fallback) {
+    if (const char* v = std::getenv(name)) {
+        try {
+            return std::stoi(std::string(v));
+        } catch (...) {
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
+inline Bandr1DumpConfig read_bandr1_dump_config() {
+    Bandr1DumpConfig cfg;
+    cfg.enabled = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_STEP"));
+    if (!cfg.enabled) return cfg;
+    cfg.abw_only = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_ABW_ONLY"));
+    cfg.step_index = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_INDEX", -1);
+    cfg.sweep_index = env_int_or("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX", -1);
+    cfg.step_in_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP", -1);
+    cfg.batch_index = env_int_or("BATCHLAS_DUMP_BANDR1_BATCH", -1);
+    return cfg;
+}
+
+// Default working-band semibandwidth.
+//
+// A single chase step factors a panel spanning rows i1..i2 with
+// m = i2-i1+1 <= b+nb, then applies A <- Q^H A Q. The right-hand application
+// touches columns i1..i2, and column i2 of a band-b matrix reaches down to row
+// i2+b, so the deepest entry the step can fill is (i2+b, i1) -- a band distance
+// of (m-1)+b <= 2b+nb-1 from the diagonal. Anything deeper than kd_work is
+// dropped, which would silently destroy the similarity, so kd_work must cover
+// that bound for the widest band we ever process (b = kd).
+inline int32_t default_kd_work(int32_t n, int32_t kd, int32_t nb_max) {
+    const int64_t needed = 2LL * static_cast<int64_t>(kd) + static_cast<int64_t>(nb_max);
+    return static_cast<int32_t>(std::min<int64_t>(std::max<int64_t>(1, n - 1), needed));
+}
+
 inline Bandr1Schedule make_bandr1_schedule(SytrdBandReductionParams params,
                                            const char* callsite) {
     if (params.d_seq.empty() && params.block_size_seq.empty()) {
-        params.d_seq = {1};
-        params.block_size_seq = {1};
+        // Match the declared defaults of SytrdBandReductionParams. The previous
+        // fallback of {1},{1} was the worst possible schedule: one diagonal per
+        // sweep with a single-column panel needs kd-1 sweeps of O(n^2) steps
+        // each (~1.9M chase steps for n=1024, kd=64).
+        params.d_seq = {0};
+        params.block_size_seq = {32};
     } else {
         if (params.d_seq.empty()) {
             params.d_seq.assign(params.block_size_seq.size(), 1);
@@ -448,6 +505,22 @@ inline int32_t max_block_size_in_schedule(const std::vector<int32_t>& block_size
     return std::max<int32_t>(1, max_nb);
 }
 
+// Resolve the working-band semibandwidth for a given params/schedule pair.
+// Must produce identical results in the *_buffer_size and execution paths, so
+// both go through here.
+inline int32_t resolve_kd_work(const SytrdBandReductionParams& params,
+                               const Bandr1Schedule& schedule,
+                               int32_t n,
+                               int32_t kd) {
+    int32_t kd_work = params.kd_work;
+    if (kd_work <= 0) {
+        const int32_t nb_target = max_block_size_in_schedule(schedule.block_size_seq);
+        const int32_t nb_max = std::min(nb_target, std::max(1, kd - 1));
+        kd_work = default_kd_work(n, kd, nb_max);
+    }
+    return std::min(kd_work, std::max(1, n - 1));
+}
+
 template <typename T>
 inline Span<T> alloc_from_ws(Queue& ctx,
                             Span<std::byte> ws,
@@ -477,7 +550,6 @@ template <typename T>
 struct BandrBuffers {
     MatrixView<T, MatrixFormat::Dense> Bmat;
     MatrixView<T, MatrixFormat::Dense> Symmat;
-    MatrixView<T, MatrixFormat::Dense> Postmat;
     MatrixView<T, MatrixFormat::Dense> Premat;
     MatrixView<T, MatrixFormat::Dense> Rightmat;
     Span<T> tau_buf;
@@ -502,67 +574,25 @@ inline void bandr1_one_qr_step(Queue& ctx,
                                int32_t j2,
                                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                                const MatrixView<T, MatrixFormat::Dense>& Symmat,
-                               const MatrixView<T, MatrixFormat::Dense>& Postmat,
                                const MatrixView<T, MatrixFormat::Dense>& Premat,
                                const MatrixView<T, MatrixFormat::Dense>& Rightmat,
                                Span<T> tau_buf,
-                               Span<std::byte> ws_backend) {
+                               Span<std::byte> ws_backend,
+                               const Bandr1DumpConfig& dump_cfg) {
     const int n = ABw.cols();
-    (void)Postmat;
 
-    bool dump_enabled = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_STEP"));
-    const bool dump_abw_only = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_ABW_ONLY"));
-    const int dump_step = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_STEP_INDEX")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
-    if (dump_step >= 0 && dump_step != step_index) {
+    bool dump_enabled = dump_cfg.enabled;
+    const bool dump_abw_only = dump_cfg.abw_only;
+    const int dump_batch = dump_cfg.batch_index;
+    if (dump_cfg.step_index >= 0 && dump_cfg.step_index != step_index) {
         dump_enabled = false;
     }
-
-    const int dump_sweep = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
-    if (dump_sweep >= 0 && dump_sweep != sweep_index) {
+    if (dump_cfg.sweep_index >= 0 && dump_cfg.sweep_index != sweep_index) {
         dump_enabled = false;
     }
-
-    const int dump_step_in_sweep = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
-    if (dump_step_in_sweep >= 0 && dump_step_in_sweep != step_in_sweep) {
+    if (dump_cfg.step_in_sweep >= 0 && dump_cfg.step_in_sweep != step_in_sweep) {
         dump_enabled = false;
     }
-    const int dump_batch = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_BATCH")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
 
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
@@ -593,12 +623,19 @@ inline void bandr1_one_qr_step(Queue& ctx,
     const int post_r1 = std::min(i2 + kd_work, n - 1) + 1;
     const int post_rows = std::max(0, post_r1 - post_r0);
 
-    const int pre_r0 = std::max(0, i1 - kd_work);
-    const int pre_rows = std::max(0, i1 - pre_r0);
-
-    const int right_c0 = i2 + 1;
-    const int right_c1 = std::min(n, i2 + kd_work + 1);
-    const int right_cols = std::max(0, right_c1 - right_c0);
+    // The former "Right" block  (rows i1..i2, cols i2+1..i2+kd_work) and
+    // "Pre" block (rows i1-kd_work..i1-1, cols i1..i2) are deliberately absent.
+    //
+    // Both lie strictly *above* the diagonal (Right: i <= i2 < i2+1 <= j;
+    // Pre: i <= i1-1 < i1 <= j), and both were written back with
+    // band_scatter_block_lower, whose first statement is `if (i < j) return;`.
+    // They therefore wrote zero entries to ABw -- every extract, ormqr and
+    // scatter for them was pure overhead (two of the seven blocks per step).
+    //
+    // They are also mathematically redundant: A is Hermitian and stored lower-
+    // only, and each is the conjugate mirror of a block we *do* update --
+    // Right == Post^H and Pre == Mid^H -- so the information is already carried
+    // by Post's and Mid's Hermitian scatters.
 
     // Left-of-panel block: rows i1..i2, columns within the work band and strictly
     // left of the QR panel (cols < j1). This must be updated as part of the left
@@ -633,7 +670,12 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
     const int k = std::min(m, r);
     Span<T> tau_span(tau_buf.data(), static_cast<size_t>(k) * static_cast<size_t>(ABw.batch_size()));
-    geqrf<B, T>(ctx, Bsub, tau_span, ws_backend).wait();
+    // No .wait() on any of the geqrf/ormqr calls below. Both entrypoints reject
+    // out-of-order queues, so submission order already establishes the required
+    // dependencies -- including the reuse of the shared `ws_backend` scratch by
+    // consecutive backend calls, which an in-order queue serialises for us.
+    // Each wait() was a full host-device round trip, six per chase step.
+    geqrf<B, T>(ctx, Bsub, tau_span, ws_backend);
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
@@ -657,8 +699,8 @@ inline void bandr1_one_qr_step(Queue& ctx,
         }
     }
 
-    ormqr<B, T>(ctx, Bsub, Symsub, Side::Left, trans_left, tau_span, ws_backend).wait();
-    ormqr<B, T>(ctx, Bsub, Symsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
+    ormqr<B, T>(ctx, Bsub, Symsub, Side::Left, trans_left, tau_span, ws_backend);
+    ormqr<B, T>(ctx, Bsub, Symsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend);
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
@@ -676,7 +718,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
         auto Leftsub = Rightmat({0, m}, {0, left_cols});
         band_extract_block<T>(ctx, ABw, kd_work, Leftsub, i1, left_c0);
 
-        ormqr<B, T>(ctx, Bsub, Leftsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+        ormqr<B, T>(ctx, Bsub, Leftsub, Side::Left, trans_left, tau_span, ws_backend);
 
         band_scatter_block<T>(ctx, Leftsub, ABw, kd_work, i1, left_c0);
     }
@@ -697,7 +739,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Midsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+        ormqr<B, T>(ctx, Bsub, Midsub, Side::Left, trans_left, tau_span, ws_backend);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
@@ -710,38 +752,6 @@ inline void bandr1_one_qr_step(Queue& ctx,
         }
 
         band_scatter_block<T>(ctx, Midsub, ABw, kd_work, i1, mid_c0);
-    }
-
-    if (right_cols > 0) {
-        auto Rightsub = Rightmat({0, m}, {0, right_cols});
-        band_extract_block<T>(ctx, ABw, kd_work, Rightsub, i1, right_c0);
-
-        if (dump_enabled && !dump_abw_only) {
-            if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
-            } else {
-                for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
-                }
-            }
-        }
-
-        ormqr<B, T>(ctx, Bsub, Rightsub, Side::Left, trans_left, tau_span, ws_backend).wait();
-
-        if (dump_enabled && !dump_abw_only) {
-            if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
-            } else {
-                for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
-                }
-            }
-        }
-
-        // Rightsub is above the diagonal (rows i1..i2, cols i2+1..), so it is not
-        // stored in our lower-band representation. Do NOT hermitian-scatter it into
-        // the lower band (that would overwrite the Post block which we update explicitly).
-        band_scatter_block_lower<T>(ctx, Rightsub, ABw, kd_work, i1, right_c0);
     }
 
     if (post_rows > 0) {
@@ -759,7 +769,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Postsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
+        ormqr<B, T>(ctx, Bsub, Postsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
@@ -772,37 +782,6 @@ inline void bandr1_one_qr_step(Queue& ctx,
         }
 
         band_scatter_block<T>(ctx, Postsub, ABw, kd_work, post_r0, i1);
-    }
-
-    if (pre_rows > 0) {
-        auto Presub = Premat({0, pre_rows}, {0, m});
-        band_extract_block<T>(ctx, ABw, kd_work, Presub, pre_r0, i1);
-
-        if (dump_enabled && !dump_abw_only) {
-            if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
-            } else {
-                for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
-                }
-            }
-        }
-
-        ormqr<B, T>(ctx, Bsub, Presub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
-
-        if (dump_enabled && !dump_abw_only) {
-            if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
-            } else {
-                for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
-                }
-            }
-        }
-
-        // Presub is above the diagonal (rows < cols); it is not stored in the lower band.
-        // Avoid hermitian-scattering into the lower band (it would overwrite the Mid block).
-        band_scatter_block_lower<T>(ctx, Presub, ABw, kd_work, pre_r0, i1);
     }
 
     dense_keep_qr_R_only<T>(ctx, Bsub, r);
@@ -883,9 +862,6 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
     auto Sym_buf = alloc_from_ws<T>(ctx, ws, off,
                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     auto Sym_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Post_buf = alloc_from_ws<T>(ctx, ws, off,
-                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Post_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
     auto Pre_buf = alloc_from_ws<T>(ctx, ws, off,
                                     static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     auto Pre_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
@@ -896,7 +872,6 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
 
     MatrixView<T, MatrixFormat::Dense> Bmat(B_buf.data(), m_max, nb_max, m_max, m_max * nb_max, batch, B_ptrs.data());
     MatrixView<T, MatrixFormat::Dense> Symmat(Sym_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Sym_ptrs.data());
-    MatrixView<T, MatrixFormat::Dense> Postmat(Post_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Post_ptrs.data());
     MatrixView<T, MatrixFormat::Dense> Premat(Pre_buf.data(), kd_work, m_max, kd_work, static_cast<int64_t>(kd_work) * m_max, batch, Pre_ptrs.data());
     MatrixView<T, MatrixFormat::Dense> Rightmat(Right_buf.data(), m_max, kd_work, m_max, static_cast<int64_t>(m_max) * kd_work, batch, Right_ptrs.data());
 
@@ -904,14 +879,12 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
     // potentially consume them.
     (void)Bmat.data_ptrs(ctx);
     (void)Symmat.data_ptrs(ctx);
-    (void)Postmat.data_ptrs(ctx);
     (void)Premat.data_ptrs(ctx);
     (void)Rightmat.data_ptrs(ctx);
 
     return BandrBuffers<T>{
         .Bmat = Bmat,
         .Symmat = Symmat,
-        .Postmat = Postmat,
         .Premat = Premat,
         .Rightmat = Rightmat,
         .tau_buf = tau_buf,
@@ -934,6 +907,34 @@ inline int bandr1_run_chase_sweeps(
     const BandrBuffers<T>& buffers) {
     int b = kd_initial;
     int steps_done = 0;
+
+    // Resolved once per call rather than once per chase step.
+    const Bandr1DumpConfig dump_cfg = read_bandr1_dump_config();
+
+    // Whether to drain the queue once per chase step.
+    //
+    // The step itself never needs a host sync for correctness: the entrypoints
+    // reject out-of-order queues, so submission order already orders every
+    // dependency. Dropping the syncs is a large win when the queue is otherwise
+    // left alone (batch_size == 1: ~1.8x).
+    //
+    // For batched runs it is not, because the batched backend path still forces
+    // a sync per step that we do not control: geqrf_vendor's batch_size > 1
+    // branch calls MatrixView::data_ptrs(), whose init_data_ptr_array() ends in
+    // a blocking wait (src/matrix.cc). That wait is load-bearing -- it flushes
+    // pending SYCL submissions before cuBLAS/cuSOLVER calls are enqueued
+    // straight onto the backing stream, which are not otherwise ordered against
+    // them. Removing it makes the band tests fail.
+    //
+    // So at batch_size > 1 the sync count per step is fixed by that path
+    // regardless; letting the queue run deep between those forced drains only
+    // makes each one longer, measured at 10-14% slower. Draining once per step
+    // keeps the queue shallow while still replacing the six per-step round
+    // trips the original code paid.
+    //
+    // The proper fix is a non-blocking SYCL->native flush so data_ptrs() does
+    // not have to block; then this can go away for every batch size.
+    const bool drain_each_step = (abw.batch_size() > 1);
 
     for (int sweep = 0; sweep < max_sweeps && b > 1 && steps_done < max_steps; ++sweep) {
         const int seq_idx = std::min(sweep, static_cast<int>(d_seq.size()) - 1);
@@ -969,11 +970,15 @@ inline int bandr1_run_chase_sweeps(
                 }
 
                 bandr1_one_qr_step<B, T>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         buffers.Bmat, buffers.Symmat, buffers.Postmat, 
+                                         buffers.Bmat, buffers.Symmat,
                                          buffers.Premat, buffers.Rightmat,
-                                         buffers.tau_buf, buffers.ws_backend);
+                                         buffers.tau_buf, buffers.ws_backend, dump_cfg);
                 ++steps_done;
                 ++step_in_sweep;
+
+                if (drain_each_step) {
+                    ctx.wait();
+                }
 
                 if (steps_done >= max_steps) {
                     hit_step_limit = true;
@@ -1072,8 +1077,6 @@ size_t sytrd_band_reduction_single_step_buffer_size_core(Queue& ctx,
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
@@ -1151,16 +1154,12 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
         return ctx.get_event();
     }
 
-    int kd_work = params.kd_work;
-    if (kd_work <= 0) {
-        kd_work = std::min(n - 1, 3 * kd);
-    }
-    kd_work = std::min(kd_work, n - 1);
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step");
+    const int kd_work = resolve_kd_work(params, schedule, n, kd);
     if (abw_out.rows() != kd_work + 1) {
         throw std::runtime_error("sytrd_band_reduction_single_step: abw_out.rows() must equal kd_work+1");
     }
 
-    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step");
     const int nb_target = std::max<int>(1, schedule.block_size_seq.front());
     const std::vector<int32_t> d_seq_single{schedule.d_seq.front()};
     const std::vector<int32_t> nb_seq_single{schedule.block_size_seq.front()};
@@ -1215,8 +1214,6 @@ size_t sytrd_band_reduction_bandr1_buffer_size_core(Queue& ctx,
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
@@ -1230,7 +1227,6 @@ size_t sytrd_band_reduction_bandr1_buffer_size_core(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> dummySym(nullptr, m_max, m_max, m_max, m_max * m_max, batch);
     bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
     bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Right, Transpose::NoTrans, dummyTau);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Right, Transpose::ConjTrans, dummyTau);
 
     MatrixView<T, MatrixFormat::Dense> dummyPre(nullptr, kd_work, m_max, kd_work, static_cast<int64_t>(kd_work) * m_max, batch);
     bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummyPre, Side::Right, Transpose::NoTrans, dummyTau);
@@ -1392,11 +1388,8 @@ size_t sytrd_band_reduction_buffer_size(Queue& ctx,
 
     (void)uplo;
     const int n = ab_in.cols();
-    int kd_work = params.kd_work;
-    if (kd_work <= 0) {
-        kd_work = std::min(n - 1, 3 * kd);
-    }
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_buffer_size");
+    const int kd_work = resolve_kd_work(params, schedule, n, kd);
     const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
     return sytrd_band_reduction_bandr1_buffer_size_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, kd, nb_target, kd_work);
 }
@@ -1431,10 +1424,7 @@ Event sytrd_band_reduction(Queue& ctx,
 
     const int n = ab_in.cols();
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction");
-    int kd_work = params.kd_work;
-    if (kd_work <= 0) {
-        kd_work = std::min(n - 1, 3 * kd);
-    }
+    const int kd_work = resolve_kd_work(params, schedule, n, kd);
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
     return sytrd_band_reduction_bandr1_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws,
                                                   schedule.d_seq, schedule.block_size_seq, kd_work, max_sweeps);
@@ -1464,15 +1454,11 @@ size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
     }
     const int n = ab_in.cols();
     const int batch = ab_in.batch_size();
-    int kd_work = params.kd_work;
-    if (kd_work <= 0) {
-        kd_work = std::min(n - 1, 3 * kd);
-    }
-    kd_work = std::min(kd_work, n - 1);
+    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step_buffer_size");
+    const int kd_work = resolve_kd_work(params, schedule, n, kd);
     if (abw_out.rows() != kd_work + 1 || abw_out.cols() != n || abw_out.batch_size() != batch) {
         throw std::runtime_error("sytrd_band_reduction_single_step_buffer_size: abw_out must be (kd_work+1) x n with matching batch");
     }
-    const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step_buffer_size");
     const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
     return sytrd_band_reduction_single_step_buffer_size_core<B, T>(ctx, kd, nb_target, kd_work, n, batch);
 }
