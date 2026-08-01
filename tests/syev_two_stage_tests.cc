@@ -289,4 +289,95 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
 }
 #endif
 
+// Isolates stage 1: sy2sb must be a similarity, so the band it produces has to
+// have the same spectrum as the input. sytrd_sy2sb_tests covers only float and
+// double, and eigenvector mode is the first caller to use kd>1, so this is the
+// first complex coverage sy2sb has had.
+//
+// DISABLED: it currently FAILS, and the bug is real and pre-existing. float and
+// double are clean; complex<float> is off by ~8e-2 and complex<double> by ~1e-5
+// at n=129 with kd=16, while n=128 passes. The pattern is exactly "n not a
+// multiple of kd" -- the full pipeline shows the same signature (n=96/128/160
+// accurate to ~1e-6, n=127/129/130/200 wrong), which is why syev_two_stage
+// falls back to syev_blocked for complex eigenvectors. Re-enable, with the
+// fallback removed, once stage 1's complex tail-panel handling is fixed.
+TYPED_TEST(SyevTwoStageTest, DISABLED_Sy2sbBandPreservesSpectrum) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+
+    auto& ctx = *this->ctx;
+    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
+    const int kd = 16;
+
+    for (int n : {128, 129}) {
+        const int batch = 2;
+
+        Matrix<T, MatrixFormat::Dense> A =
+            Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/31);
+        Matrix<T, MatrixFormat::Dense> Acopy(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) Acopy(i, j, b) = A(i, j, b);
+
+        Matrix<T, MatrixFormat::Dense> ab(kd + 1, n, batch);
+        Vector<T> tau1(std::max(1, n - kd), batch);
+        UnifiedVector<std::byte> ws1(sytrd_sy2sb_buffer_size<B, T>(
+            ctx, A.view(), ab.view(), tau1, Uplo::Lower, kd));
+        sytrd_sy2sb<B, T>(ctx, A.view(), ab.view(), tau1, Uplo::Lower, kd, ws1.to_span())
+            .wait();
+
+        // Expand the band back to a dense Hermitian matrix.
+        Matrix<T, MatrixFormat::Dense> Bdense(n, n, batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) Bdense(i, j, b) = T(0);
+            for (int j = 0; j < n; ++j)
+                for (int r = 0; r <= kd; ++r) {
+                    const int i = j + r;
+                    if (i >= n) continue;
+                    const T v = ab(r, j, b);
+                    if (r == 0) {
+                        // Hermitian diagonal must be real; writing v then
+                        // conj(v) would flip the sign of any imaginary residue.
+                        if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                      std::is_same_v<T, std::complex<double>>) {
+                            Bdense(j, j, b) = T(v.real(), typename base_type<T>::type(0));
+                        } else {
+                            Bdense(j, j, b) = v;
+                        }
+                    } else {
+                        Bdense(i, j, b) = v;
+                        Bdense(j, i, b) = conj_if(v);
+                    }
+                }
+        }
+
+        UnifiedVector<Real> wA(static_cast<size_t>(n) * batch);
+        UnifiedVector<Real> wB(static_cast<size_t>(n) * batch);
+        UnifiedVector<std::byte> wsA(syev_blocked_buffer_size<B, T>(
+            ctx, Acopy.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked<B, T>(ctx, Acopy.view(), wA.to_span(), JobType::EigenVectors,
+                           Uplo::Lower, wsA.to_span(), StedcParams<Real>{}).wait();
+        UnifiedVector<std::byte> wsB(syev_blocked_buffer_size<B, T>(
+            ctx, Bdense.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked<B, T>(ctx, Bdense.view(), wB.to_span(), JobType::EigenVectors,
+                           Uplo::Lower, wsB.to_span(), StedcParams<Real>{}).wait();
+
+        for (int b = 0; b < batch; ++b) {
+            std::vector<Real> x(wA.begin() + static_cast<ptrdiff_t>(b) * n,
+                                wA.begin() + static_cast<ptrdiff_t>(b + 1) * n);
+            std::vector<Real> y(wB.begin() + static_cast<ptrdiff_t>(b) * n,
+                                wB.begin() + static_cast<ptrdiff_t>(b + 1) * n);
+            std::sort(x.begin(), x.end());
+            std::sort(y.begin(), y.end());
+            Real scale = Real(1);
+            for (Real v : x) scale = std::max(scale, std::abs(v));
+            for (int i = 0; i < n; ++i)
+                EXPECT_NEAR(x[i], y[i], tol * scale)
+                    << "sy2sb band eigenvalue " << i << " n=" << n << " b=" << b;
+        }
+    }
+}
+
 } // namespace

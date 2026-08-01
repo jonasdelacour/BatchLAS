@@ -258,13 +258,19 @@ Event syev_two_stage(Queue& ctx,
         }
     }
 
-    if constexpr (B == Backend::CUDA) {
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            if (jobz == JobType::EigenVectors) {
-                // Temporary guard: CUDA zhe eigvec path in two-stage currently
-                // exhibits a backend runtime crash for some sizes.
-                return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
-            }
+    if constexpr (is_std_complex_v<T>) {
+        if (jobz == JobType::EigenVectors) {
+            // sytrd_sy2sb is not accurate for complex input when n is not a
+            // multiple of kd: an isolated spectrum-preservation check on stage 1
+            // alone (SyevTwoStageTest.Sy2sbBandPreservesSpectrum) is clean for
+            // float and double but fails for complex<float> (~8e-2) and
+            // complex<double> (~1e-5) at n=129/kd=16, while n=128 passes.
+            // sytrd_sy2sb_tests covers only float and double, so this was never
+            // caught; eigenvector mode is the first caller to use kd>1.
+            //
+            // Falling back keeps complex results correct. Remove this once
+            // stage 1's complex path is fixed.
+            return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
         }
     }
 
@@ -572,11 +578,10 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         }
     }
 
-    if constexpr (B == Backend::CUDA) {
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            if (jobz == JobType::EigenVectors) {
-                return syev_blocked_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
-            }
+    if constexpr (is_std_complex_v<T>) {
+        if (jobz == JobType::EigenVectors) {
+            // Mirrors the fallback in syev_two_stage (stage-1 complex accuracy).
+            return syev_blocked_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
         }
     }
 
