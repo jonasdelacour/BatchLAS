@@ -45,13 +45,22 @@ The public C++ headers under `include/` currently expose these main groups of fu
 
 When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`.
 
+Runnable, self-checking examples covering the whole Python surface live in `python/examples/`:
+
+```bash
+cd python/examples
+PYTHONPATH=../../build/python python3 run_all.py
+```
+
+See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.
+
 ## Repository Layout
 
 - `include/`: public C++ headers
 - `src/`: library implementation and backend/component targets
 - `tests/`: GoogleTest-based unit tests and smoke-test subset
 - `benchmarks/`: performance and accuracy benchmark executables
-- `python/`: pybind11 bindings, Python facade, and Python tests
+- `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
 - `scripts/`: benchmark campaign helpers and result-processing scripts
 - `playground/`: notebooks and exploratory scripts for algorithm work
 - `docs/`: architecture notes and design documentation
