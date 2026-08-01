@@ -50,6 +50,7 @@ set(TEST_TARGETS
     ritz_values_tests
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
+    sytrd_sb2st_hh_tests
     sytrd_cta_tests
     sytrd_blocked_tests
     syev_cta_tests
