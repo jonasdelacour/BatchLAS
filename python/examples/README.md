@@ -1,14 +1,32 @@
 # BatchLAS Python examples
 
-Runnable, self-checking examples for the `batchlas` Python package. Each script
-prints what it computed and verifies it against NumPy/SciPy, so a clean run is
-also a smoke test:
+Twelve self-checking notebooks for the `batchlas` Python package. Each one
+explains a slice of the API in prose, then computes something and verifies it
+against NumPy/SciPy — so a clean run doubles as a smoke test:
 
 ```
    [ok  ] |Q^T Q - I|: 4.441e-16  (tol 1.0e-08)
 ```
 
 Lines marked `[FAIL]` mean a check did not hold on your machine.
+
+## Two files per example
+
+Each example exists as a matched pair:
+
+| File | What it is |
+|---|---|
+| `NN_name.py` | the **source of truth** — a notebook in "percent" cell format |
+| `NN_name.ipynb` | the rendered notebook, with output from a reference run |
+
+The `.py` files use the widely supported percent format (`# %%` for a code cell,
+`# %% [markdown]` for a prose cell). Jupyter, JupyterLab, VS Code and PyCharm all
+open them directly as notebooks, they diff cleanly in review, and they are still
+ordinary Python scripts you can run with `python`.
+
+The `.ipynb` files are generated from them so the examples render with formatted
+prose, tables and math — with output already captured — on GitHub and in any
+plain notebook viewer.
 
 ## Running them
 
@@ -23,38 +41,62 @@ cd python/examples
 PYTHONPATH=../../build/python python3 01_getting_started.py
 ```
 
-Run everything at once, or a subset by number:
+Or open the notebooks, having pointed the kernel at the same `PYTHONPATH`:
+
+```bash
+PYTHONPATH=../../build/python jupyter lab 01_getting_started.ipynb
+```
+
+Validate everything at once — this runs the `.py` files, so it needs no Jupyter
+kernel and takes seconds:
 
 ```bash
 PYTHONPATH=../../build/python python3 run_all.py
-PYTHONPATH=../../build/python python3 run_all.py 05 06
+PYTHONPATH=../../build/python python3 run_all.py 05 06   # just these
 ```
 
 `run_all.py` exits non-zero if any example raises or reports a failed check.
 
-Requirements: NumPy for everything, SciPy for the sparse example (09). A GPU is
-optional -- the examples fall back to whatever device the library picks -- but a
-few routines are GPU-only, as noted below.
+## Regenerating the notebooks
+
+After editing a `.py`, rebuild its `.ipynb`:
+
+```bash
+PYTHONPATH=../../build/python python3 build_notebooks.py          # all, executed
+PYTHONPATH=../../build/python python3 build_notebooks.py 07       # just this one
+python3 build_notebooks.py --no-execute                           # convert only
+```
+
+Requires `nbformat`; executing additionally needs `nbclient` and `ipykernel`.
+Committed outputs come from a reference run on an RTX 4090, so timings and
+device names in notebook 12 will differ from yours.
 
 ## The examples
 
-| # | File | What it covers |
+| # | Notebook | What it covers |
 |---|------|----------------|
-| 01 | `01_getting_started.py` | Backends, devices, features, first `gemm`, the batching convention, dtypes, `out=` |
-| 02 | `02_dense_blas.py` | `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`, heterogeneous batches, mixed precision |
-| 03 | `03_linear_solvers.py` | `potrf`, `getrf`/`getrs`, `getri`, `inv`, triangular solves, complex input |
-| 04 | `04_qr_and_orthogonalization.py` | `geqrf`, `orgqr`, `ormqr`, `ortho` algorithms, `ortho_metric` |
-| 05 | `05_svd.py` | `gesvd`, `gesvd_blocked`, `gesvd_cta`, `gebrd_*`, `bdsqr`, `ormbr` |
-| 06 | `06_symmetric_eigensolvers.py` | The whole `syev` family incl. `syev_jacobi_cta`, `syev_variant_support`, options objects |
-| 07 | `07_tridiagonal_reduction.py` | `sytrd_cta`, `sytrd_blocked`, `sytrd_sy2sb`, `sytrd_sb2st`, `hetrd_hb2st`, `sytrd_band_reduction` |
-| 08 | `08_tridiagonal_eigensolvers.py` | `steqr`, `steqr_cta`, `stedc`, `stedc_flat`, `tridiagonal_solver` |
-| 09 | `09_sparse_and_iterative.py` | `spmm`, `syevx` (+ convergence history), `lanczos`, `ritz_values`, ILU(k) |
-| 10 | `10_jacobi_relative_accuracy.py` | Why `syev_jacobi_cta` exists: relative accuracy on graded matrices |
-| 11 | `11_generators_and_utilities.py` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
-| 12 | `12_choosing_a_variant.py` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
+| 01 | `01_getting_started` | Backends, devices, features, first `gemm`, the batching convention, dtypes, `out=` |
+| 02 | `02_dense_blas` | `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`, heterogeneous batches, mixed precision |
+| 03 | `03_linear_solvers` | `potrf`, `getrf`/`getrs`, `getri`, `inv`, triangular solves, complex input |
+| 04 | `04_qr_and_orthogonalization` | `geqrf`, `orgqr`, `ormqr`, `ortho` algorithms, `ortho_metric` |
+| 05 | `05_svd` | `gesvd`, `gesvd_blocked`, `gesvd_cta`, `gebrd_*`, `bdsqr`, `ormbr` |
+| 06 | `06_symmetric_eigensolvers` | The whole `syev` family incl. `syev_jacobi_cta`, `syev_variant_support`, options objects |
+| 07 | `07_tridiagonal_reduction` | `sytrd_cta`, `sytrd_blocked`, `sytrd_sy2sb`, `sytrd_sb2st`, `hetrd_hb2st`, `sytrd_band_reduction` |
+| 08 | `08_tridiagonal_eigensolvers` | `steqr`, `steqr_cta`, `stedc`, `stedc_flat`, `tridiagonal_solver` |
+| 09 | `09_sparse_and_iterative` | `spmm`, `syevx` (+ convergence history), `lanczos`, `ritz_values`, ILU(k) |
+| 10 | `10_jacobi_relative_accuracy` | Why `syev_jacobi_cta` exists: relative accuracy on graded matrices |
+| 11 | `11_generators_and_utilities` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
+| 12 | `12_choosing_a_variant` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
+
+Between them they exercise 77 of the 78 names exported by `batchlas` (the 78th is
+`ILUKPreconditioner`, the handle type returned by `iluk_factorize`).
 
 `_common.py` holds shared helpers (device selection, reporting, reference
 constructions). It is not part of the library API.
+
+Requirements: NumPy for everything, SciPy for notebook 09. A GPU is optional —
+the examples fall back to whatever device the library picks — but a few routines
+are GPU-only, as noted below.
 
 ## Conventions worth knowing
 
@@ -80,14 +122,14 @@ constructions). It is not part of the library API.
 ## Known issues visible in these examples
 
 These are library-level problems, not mistakes in the examples. They are called
-out in comments where the examples touch them.
+out in the notebooks where they come up.
 
 - **`ortho(algorithm="householder")` on CUDA.** Returns a non-orthonormal result
   if any earlier call in the same process consumed a `geqrf` workspace.
   `ortho_buffer_size` sizes its `geqrf`/`orgqr` sub-workspaces from a placeholder
   view rather than the real `A` (`src/extensions/ortho.cc`), so the bump
   allocator can hand out overlapping blocks. The other algorithms are unaffected;
-  example 04 uses those.
+  notebook 04 uses those.
 - **`stedc` / `stedc_flat` with `JobType::NoEigenVectors`.** Returns wrong
   eigenvalues, and slices an eigenvector output it was told not to produce. The
   Python bindings work around this by always requesting vectors internally and
@@ -95,7 +137,7 @@ out in comments where the examples touch them.
   same defect is why `syev_two_stage(compute_vectors=False)` needed the same
   workaround.
 - **`stedc_flat` eigenvectors.** Eigenvalues are correct; the eigenvectors do not
-  satisfy `A V = V diag(w)`. Example 08 reports this residual without a
+  satisfy `A V = V diag(w)`. Notebook 08 reports this residual without a
   tolerance so it stays visible.
 - **`tridiagonal_solver` accuracy.** Its QR iteration does not converge reliably;
   accuracy varies with `n` and with the data. Prefer `steqr` or `stedc`.
@@ -104,7 +146,7 @@ out in comments where the examples touch them.
   only the lower triangle filled, but not for `uplo="upper"` with only the upper
   triangle filled. `syev_jacobi_cta` and the CPU path handle it correctly.
 - **Unpreconditioned `syevx` on hard problems.** Can stagnate rather than
-  converge; example 09 shows both the stalling case and the preconditioned fix.
+  converge; notebook 09 shows both the stalling case and the preconditioned fix.
 
 ## Device requirements
 

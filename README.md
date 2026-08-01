@@ -45,11 +45,11 @@ The public C++ headers under `include/` currently expose these main groups of fu
 
 When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`.
 
-Runnable, self-checking examples covering the whole Python surface live in `python/examples/`:
+Twelve self-checking example notebooks covering the whole Python surface live in `python/examples/`. Each exists as a percent-format `.py` (the source of truth, also runnable as a plain script) and a rendered `.ipynb` with captured output:
 
 ```bash
 cd python/examples
-PYTHONPATH=../../build/python python3 run_all.py
+PYTHONPATH=../../build/python python3 run_all.py     # validate all twelve
 ```
 
 See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.

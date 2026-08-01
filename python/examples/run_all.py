@@ -1,8 +1,14 @@
 """Run every example in order and summarise the result.
 
+The examples are notebooks written in the "percent" cell format, which means
+they are also ordinary Python scripts. This runner executes the `.py` files
+directly, so validating them needs no Jupyter kernel and takes seconds.
+
+To rebuild the rendered `.ipynb` files instead, use `build_notebooks.py`.
+
 Usage:
     python run_all.py            # run all examples
-    python run_all.py 05 06      # run only the examples whose name starts with 05/06
+    python run_all.py 05 06      # only the examples whose name starts with 05/06
 
 Exits non-zero if any example raises or prints a failed check.
 """
