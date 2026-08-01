@@ -242,15 +242,67 @@ passes non-positive values through, where `StedcParams` resolves them from the
 tuning tables — so `... <n> 256 16 2 0 0` measures what a real caller such as
 `syev` actually gets.
 
-### 2.4 Back-transform GEMM ignores deflation and block structure — **[open]**
+### 2.4 Deflation-aware back-transform GEMM — **[done]**
 
-`src/extensions/stedc.cc:424` issues a full dense `n x n x n` GEMM per merge
-level. LAPACK's `dlaed2`/`dlaed3` permute columns by `CTOT` into those touching
-only block 1, only block 2, or both, and issue two smaller GEMMs — roughly a
-**2x FLOP saving** — and deflated columns are skipped entirely (`dd =
-n_reduced[bid] <= n`). The `perm_map` machinery already exists to make this
-tractable. Only 4.9% of time at n=256, but it is the term that dominates as n
-grows.
+`stedc.cc` issued a full dense `n x n x n` GEMM per merge level. The structure it
+ignored: `Qprime` is identity-filled and only its first `n_reduced` columns carry
+secular eigenvectors, so as a block it is `M = [W | I]`.
+
+The algebra that makes this exploitable without a scatter:
+
+```
+eigvects = A * M[:, perm] = (A * M)[:, perm]
+A * M    = [ A*W | A(:, dd:) ]
+```
+
+Permuting `M`'s columns permutes the product's columns identically, so the sort
+can be applied *after* the multiply — and then the deflated columns of the
+product are literally columns of `A`, needing no multiply at all. Only the first
+`dd` columns need a GEMM.
+
+**Keeping it on cuBLAS.** `dd` varies per batch item, and a per-item GEMM would
+be ragged — which would drop off the vendor batched kernel onto the homemade
+heterogeneous path and almost certainly lose. Instead a single batch-wide
+`dd_max` is used, which keeps one uniform batched call. This is still exact: for
+an item with `dd < dd_max`, columns `dd..dd_max-1` of `M` genuinely are identity
+columns, so the GEMM reproduces `A` there.
+
+No extra workspace: `A` goes into `temp_Q`, which frees `eigvects` to receive the
+narrow GEMM result, which is then folded back over `A`'s head.
+
+**How much deflation is there?** Measured on random tridiagonals (batch 64):
+
+| merge size | mean `dd` | kept | min–max |
+| --- | --- | --- | --- |
+| 256 | 43.8 | 17.1% | 25–61 |
+| 128 | 43.9 | 34.3% | 19–69 |
+| 64 | 41.3 | 64.5% | 21–57 |
+| 32 | 29.0 | 90.6% | 10–32 |
+
+Deflation is heaviest exactly where the GEMM is most expensive, and the batch is
+homogeneous enough that `dd_max` is close to the mean — so the uniform-width
+compromise costs little.
+
+**The catch: it needs a host sync.** `dd_max` must be known host-side to size the
+GEMM, and that stalls the enqueue pipeline. Measured (feature off vs on,
+interleaved, idle GPU, batch 256, float, ms):
+
+| n | off | on | delta |
+| --- | --- | --- | --- |
+| 256 | 3.998 | 4.020 | -0.5% (noise) |
+| 512 | 11.166 | 10.525 | **+5.8%** |
+| 1024 | 39.388 | 29.937 | **+24.0%** |
+
+So it is gated at `n >= 512` (`stedc_deflation_gemm_min_n`). Below that the
+recursion has many small merge nodes and the syncs cost more than the saved
+flops — at a threshold of 128 the n=256 case regressed ~5%. A second guard skips
+the narrow path unless deflation removed at least 25% of the columns, so weak
+deflation cannot make it a loss beyond the single sync.
+
+The remaining structure LAPACK exploits (`dlaed2`/`dlaed3`'s `CTOT` split of the
+non-deflated columns into two blocks, for a further ~2x) is **not** implemented:
+it would split the one uniform GEMM into two smaller ones with per-item widths,
+which is exactly the ragged shape that would leave the vendor kernel.
 
 ### 2.5 Eigenvalues-only still pays for eigenvectors — **[open]**
 
@@ -324,16 +376,19 @@ rocSOLVER middle-way / fixed-weight hybrid with bound-clamped steps and a proper
    global traffic is worth (§2.2). Do not retry without shrinking the footprint.
 3. **[done]** Raise `STEDC_WG_MULTIPLIER_*` to 8, unlocked by item 1, plus a
    kernel-register clamp in `choose_wg_size` (§2.3). Largest single win.
-4. **[open]** Deflation- and block-aware GEMM at `stedc.cc:424` — now the
-   dominant term at large n.
+4. **[done]** Deflation-aware back-transform GEMM (§2.4). Gated at n >= 512;
+   +24% at n = 1024. The further `CTOT` two-block split is deliberately not
+   done — it would make the GEMM ragged and lose the vendor kernel.
 5. **[open]** `NoEigenVectors` short-circuit (+ boundary-row D&C from
    arXiv:2605.26599).
 
 **Where the remaining headroom is.** Items 1 and 3 addressed the merge kernel's
-serialization and occupancy. §2.2's control experiment shows the kernel is
-constrained by resident state, not memory traffic, so further merge-kernel work
-should reduce registers/shared memory rather than restructure data flow. The
-larger remaining win is §2.4: the back-transform GEMM is O(n^3) and untouched.
+serialization and occupancy; item 4 addressed the back-transform. §2.2's control
+experiment shows the merge kernel is constrained by resident state, not memory
+traffic, so further work there should reduce registers/shared memory rather than
+restructure data flow. The largest remaining item is §2.5 (eigenvalues-only).
+`SteqrCTAKernel` is now the biggest single kernel at ~25% of GPU time and has not
+been looked at.
 
 ## 5. Validation protocol
 
