@@ -2,6 +2,10 @@
 
 #include <blas/functions/iluk.hh>
 #include <util/mempool.hh>
+#include <atomic>
+#include <cstdlib>
+#include <exception>
+#include <thread>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -128,38 +132,42 @@ bool has_identical_batch_sparsity(const MatrixView<T, MatrixFormat::CSR>& A) {
 }
 
 template <typename T>
-RealT<T> row_scale(const std::vector<T>& values, const std::vector<uint8_t>& keep_flags) {
+RealT<T> row_scale(const T* values, const uint8_t* keep_flags, int len) {
     RealT<T> scale = RealT<T>(0);
-    for (std::size_t idx = 0; idx < values.size(); ++idx) {
-        if (!keep_flags.empty() && keep_flags[idx] == 0) continue;
+    for (int idx = 0; idx < len; ++idx) {
+        if (keep_flags != nullptr && keep_flags[idx] == 0) continue;
         scale = std::max(scale, abs_value(values[idx]));
     }
     return scale;
 }
 
+// `candidates` is caller-owned scratch reused across rows. Allocating it per row
+// put a heap allocation in the innermost loop, which became the limiting factor
+// once the batch loop was parallelised.
 template <typename T>
-void apply_drop_and_fill_control(std::vector<T>& row_values,
-                                 std::vector<uint8_t>& keep_flags,
+void apply_drop_and_fill_control(T* row_values,
+                                 uint8_t* keep_flags,
+                                 int len,
                                  int diag_index,
                                  int original_row_nnz,
-                                 const ILUKParams<T>& params) {
-    const auto scale = row_scale(row_values, keep_flags);
+                                 const ILUKParams<T>& params,
+                                 std::vector<std::pair<RealT<T>, int>>& candidates) {
+    const auto scale = row_scale(row_values, keep_flags, len);
     const auto drop_threshold = params.drop_tolerance * std::max(scale, RealT<T>(1));
 
-    std::vector<std::pair<RealT<T>, int>> candidates;
-    candidates.reserve(row_values.size());
-    for (int idx = 0; idx < static_cast<int>(row_values.size()); ++idx) {
-        keep_flags[static_cast<std::size_t>(idx)] = 1;
+    candidates.clear();
+    for (int idx = 0; idx < len; ++idx) {
+        keep_flags[idx] = 1;
         if (idx == diag_index) continue;
-        if (abs_value(row_values[static_cast<std::size_t>(idx)]) <= drop_threshold) {
+        if (abs_value(row_values[idx]) <= drop_threshold) {
             if (params.modified_ilu) {
-                row_values[static_cast<std::size_t>(diag_index)] += row_values[static_cast<std::size_t>(idx)];
+                row_values[diag_index] += row_values[idx];
             }
-            row_values[static_cast<std::size_t>(idx)] = T(0);
-            keep_flags[static_cast<std::size_t>(idx)] = 0;
+            row_values[idx] = T(0);
+            keep_flags[idx] = 0;
             continue;
         }
-        candidates.emplace_back(abs_value(row_values[static_cast<std::size_t>(idx)]), idx);
+        candidates.emplace_back(abs_value(row_values[idx]), idx);
     }
 
     const int offdiag_quota = std::max(0, static_cast<int>(std::ceil(params.fill_factor * static_cast<RealT<T>>(original_row_nnz))) - 1);
@@ -170,14 +178,14 @@ void apply_drop_and_fill_control(std::vector<T>& row_values,
         for (int drop_idx = offdiag_quota; drop_idx < static_cast<int>(candidates.size()); ++drop_idx) {
             const int idx = candidates[static_cast<std::size_t>(drop_idx)].second;
             if (params.modified_ilu) {
-                row_values[static_cast<std::size_t>(diag_index)] += row_values[static_cast<std::size_t>(idx)];
+                row_values[diag_index] += row_values[idx];
             }
-            row_values[static_cast<std::size_t>(idx)] = T(0);
-            keep_flags[static_cast<std::size_t>(idx)] = 0;
+            row_values[idx] = T(0);
+            keep_flags[idx] = 0;
         }
     }
 
-    keep_flags[static_cast<std::size_t>(diag_index)] = 1;
+    keep_flags[diag_index] = 1;
 }
 
 std::vector<std::vector<int>> symbolic_iluk_pattern_single(const Span<int>& row_offsets,
@@ -275,6 +283,28 @@ LevelSchedule build_level_schedule(const std::vector<int>& row_offsets,
     return out;
 }
 
+// How many host threads the numeric phase may use. A library that unilaterally
+// grabs every core fights a caller that is already parallel over its own work, so
+// this stays modest by default and BATCHLAS_ILUK_THREADS overrides it (1 = serial).
+//
+// The batch floor is measured, not guessed: below 64 elements threading was a net
+// loss (0.55-0.74x at batch 16), and above it a gain of 1.4-1.8x. The gain is
+// modest because the phase is memory-bound rather than compute-bound, so this
+// narrows the large-batch formation cost without eliminating it -- doing that
+// means factorizing on the device.
+constexpr int kILUKMinBatchForThreads = 64;
+
+int iluk_factor_thread_count(int batch_size) {
+    if (batch_size < kILUKMinBatchForThreads) return 1;
+    if (const char* v = std::getenv("BATCHLAS_ILUK_THREADS")) {
+        const int requested = std::atoi(v);
+        if (requested >= 1) return std::min(requested, batch_size);
+    }
+    const unsigned hw = std::thread::hardware_concurrency();
+    const int cap = hw == 0 ? 1 : static_cast<int>(hw / 2);
+    return std::max(1, std::min(cap, batch_size));
+}
+
 // Everything ILU(k) computes on the host, in a storage-agnostic form. The
 // sparsity pattern (row_offsets/col_indices/diag_offsets) and both level
 // schedules are shared across the batch; only `values` varies per batch element.
@@ -332,108 +362,159 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
 
     const auto ro = A.row_offsets();
     const auto ci = A.col_indices();
-    auto symbolic_rows = symbolic_iluk_pattern_single(ro, ci, n, 0, 0, params.levels_of_fill);
-    std::vector<int> diag_local(n, -1);
-    std::vector<int> original_row_nnz(n, 0);
+    const auto symbolic_rows = symbolic_iluk_pattern_single(ro, ci, n, 0, 0, params.levels_of_fill);
+
+    // Flatten the symbolic pattern into CSR-style arrays shared by the whole batch.
+    // Keeping it as vector<vector<int>>, and the per-batch values as
+    // vector<vector<T>>, meant one heap allocation per row per batch element --
+    // n * batch_size of them. That is invisible at batch 1 and is the dominant cost
+    // once the batch loop below runs on several threads, since they all contend on
+    // the same allocator.
+    std::vector<int> sym_ro(static_cast<std::size_t>(n) + 1, 0);
+    for (int i = 0; i < n; ++i) {
+        sym_ro[static_cast<std::size_t>(i + 1)] =
+            sym_ro[static_cast<std::size_t>(i)] + static_cast<int>(symbolic_rows[static_cast<std::size_t>(i)].size());
+    }
+    const int sym_nnz = sym_ro[static_cast<std::size_t>(n)];
+    std::vector<int> sym_ci(static_cast<std::size_t>(sym_nnz));
+    for (int i = 0; i < n; ++i) {
+        std::copy(symbolic_rows[static_cast<std::size_t>(i)].begin(), symbolic_rows[static_cast<std::size_t>(i)].end(),
+                  sym_ci.begin() + sym_ro[static_cast<std::size_t>(i)]);
+    }
+
+    // diag_local[i] is the diagonal's offset within row i of the symbolic pattern.
+    std::vector<int> diag_local(static_cast<std::size_t>(n), -1);
+    std::vector<int> original_row_nnz(static_cast<std::size_t>(n), 0);
     for (int i = 0; i < n; ++i) {
         original_row_nnz[static_cast<std::size_t>(i)] = ro[i + 1] - ro[i];
-        const int re = static_cast<int>(symbolic_rows[static_cast<std::size_t>(i)].size());
+        const int rs = sym_ro[static_cast<std::size_t>(i)];
+        const int re = sym_ro[static_cast<std::size_t>(i + 1)];
         int pos = -1;
-        for (int p = 0; p < re; ++p) {
-            if (symbolic_rows[static_cast<std::size_t>(i)][static_cast<std::size_t>(p)] == i) {
-                pos = p;
-                break;
-            }
+        for (int p = rs; p < re; ++p) {
+            if (sym_ci[static_cast<std::size_t>(p)] == i) { pos = p - rs; break; }
         }
         if (pos < 0) {
             throw std::runtime_error("ILU(k): symbolic phase produced a row without diagonal");
         }
-        diag_local[i] = pos;
+        diag_local[static_cast<std::size_t>(i)] = pos;
     }
 
     UnifiedVector<int32_t> factor_status(static_cast<std::size_t>(batch_size), 0);
 
-    std::vector<std::vector<std::vector<T>>> batch_values(static_cast<std::size_t>(batch_size));
-    std::vector<std::vector<std::vector<uint8_t>>> batch_keep(static_cast<std::size_t>(batch_size));
+    const std::size_t stride = static_cast<std::size_t>(sym_nnz);
+    std::vector<T> sym_values(stride * static_cast<std::size_t>(batch_size), T(0));
+    std::vector<uint8_t> sym_keep(stride * static_cast<std::size_t>(batch_size), 1);
 
     const auto a_vals = A.data();
 
-    // Scatter workspace mapping a column index to its slot in the row currently
-    // being assembled. Replaces a binary search per touched entry with an O(1)
-    // lookup; -1 means the column is outside this row's symbolic pattern.
-    std::vector<int> col_to_slot(static_cast<std::size_t>(n), -1);
-
-    for (int b = 0; b < batch_size; ++b) {
-        auto& values_by_row = batch_values[static_cast<std::size_t>(b)];
-        auto& keep_by_row = batch_keep[static_cast<std::size_t>(b)];
-        values_by_row.resize(static_cast<std::size_t>(n));
-        keep_by_row.resize(static_cast<std::size_t>(n));
+    // Batch elements share a sparsity pattern but nothing else: each one's numeric
+    // phase reads only its own slice of A and writes only its own slice of
+    // sym_values, so the batch loop is embarrassingly parallel. It is also the part
+    // that scales with batch size -- at batch 1024 it dominated everything else the
+    // solver did.
+    //
+    // `col_to_slot` and `candidates` are per-thread scratch. col_to_slot maps a
+    // column index to its slot in the row being assembled: an O(1) lookup in place
+    // of a binary search per touched entry, with -1 meaning the column is outside
+    // this row's pattern.
+    auto factor_batch_element = [&](int b, std::vector<int>& col_to_slot,
+                                    std::vector<std::pair<RealT<T>, int>>& candidates) {
+        T* values = sym_values.data() + static_cast<std::size_t>(b) * stride;
+        uint8_t* keep = sym_keep.data() + static_cast<std::size_t>(b) * stride;
 
         const int ro_base = b * A.offset_stride();
         const int val_base = b * A.matrix_stride();
         for (int i = 0; i < n; ++i) {
-            const auto& row_cols = symbolic_rows[static_cast<std::size_t>(i)];
-            auto& row_vals = values_by_row[static_cast<std::size_t>(i)];
-            auto& row_keep = keep_by_row[static_cast<std::size_t>(i)];
-            row_vals.assign(row_cols.size(), T(0));
-            row_keep.assign(row_cols.size(), 1);
-
-            const int row_nnz = static_cast<int>(row_cols.size());
-            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = p;
+            const int rs = sym_ro[static_cast<std::size_t>(i)];
+            const int row_nnz = sym_ro[static_cast<std::size_t>(i + 1)] - rs;
+            for (int p = 0; p < row_nnz; ++p) {
+                values[rs + p] = T(0);
+                keep[rs + p] = 1;
+                col_to_slot[static_cast<std::size_t>(sym_ci[static_cast<std::size_t>(rs + p)])] = p;
+            }
 
             const int ars = ro[ro_base + i];
             const int are = ro[ro_base + i + 1];
             for (int p = ars; p < are; ++p) {
                 const int slot = col_to_slot[static_cast<std::size_t>(ci[val_base + p])];
-                if (slot >= 0) {
-                    row_vals[static_cast<std::size_t>(slot)] = a_vals[val_base + p];
-                }
+                if (slot >= 0) values[rs + slot] = a_vals[val_base + p];
             }
 
-            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = -1;
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(sym_ci[static_cast<std::size_t>(rs + p)])] = -1;
         }
 
         for (int i = 0; i < n; ++i) {
-            auto& row_vals = values_by_row[static_cast<std::size_t>(i)];
-            auto& row_keep = keep_by_row[static_cast<std::size_t>(i)];
-            const auto& row_cols = symbolic_rows[static_cast<std::size_t>(i)];
+            const int rs = sym_ro[static_cast<std::size_t>(i)];
+            const int row_nnz = sym_ro[static_cast<std::size_t>(i + 1)] - rs;
+            T* row_vals = values + rs;
 
-            const int row_nnz = static_cast<int>(row_cols.size());
-            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = p;
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(sym_ci[static_cast<std::size_t>(rs + p)])] = p;
 
             for (int p = 0; p < row_nnz; ++p) {
-                const int j = row_cols[static_cast<std::size_t>(p)];
+                const int j = sym_ci[static_cast<std::size_t>(rs + p)];
                 if (j >= i) break;
 
-                const auto& pivot_row_vals = values_by_row[static_cast<std::size_t>(j)];
-                const auto& pivot_row_keep = keep_by_row[static_cast<std::size_t>(j)];
+                const int prs = sym_ro[static_cast<std::size_t>(j)];
+                const int pivot_nnz = sym_ro[static_cast<std::size_t>(j + 1)] - prs;
+                const T* pivot_vals = values + prs;
+                const uint8_t* pivot_keep = keep + prs;
                 const int diag_j = diag_local[static_cast<std::size_t>(j)];
 
                 // Row j < i is already finalized: its diagonal was stabilized when row j
                 // was processed and the row has not changed since. Stabilization is
                 // idempotent, so re-deriving the row scale here (an O(nnz_j) scan on every
                 // elimination step) would recompute the value already stored.
-                const T lij = row_vals[static_cast<std::size_t>(p)] / pivot_row_vals[static_cast<std::size_t>(diag_j)];
-                row_vals[static_cast<std::size_t>(p)] = lij;
+                const T lij = row_vals[p] / pivot_vals[diag_j];
+                row_vals[p] = lij;
 
                 // Columns are sorted, so the strict upper part of row j starts past its diagonal.
-                const auto& pivot_cols = symbolic_rows[static_cast<std::size_t>(j)];
-                const int pivot_nnz = static_cast<int>(pivot_cols.size());
                 for (int q = diag_j + 1; q < pivot_nnz; ++q) {
-                    if (pivot_row_keep[static_cast<std::size_t>(q)] == 0) continue;
-                    const int slot = col_to_slot[static_cast<std::size_t>(pivot_cols[static_cast<std::size_t>(q)])];
-                    if (slot >= 0) {
-                        row_vals[static_cast<std::size_t>(slot)] -= lij * pivot_row_vals[static_cast<std::size_t>(q)];
-                    }
+                    if (pivot_keep[q] == 0) continue;
+                    const int slot = col_to_slot[static_cast<std::size_t>(sym_ci[static_cast<std::size_t>(prs + q)])];
+                    if (slot >= 0) row_vals[slot] -= lij * pivot_vals[q];
                 }
             }
 
-            apply_drop_and_fill_control(row_vals, row_keep, diag_local[static_cast<std::size_t>(i)], original_row_nnz[static_cast<std::size_t>(i)], params);
-            const auto final_scale = row_scale(row_vals, row_keep);
-            row_vals[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])] = stabilize_pivot_or_mark(
-                row_vals[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])], final_scale, params, &factor_status[static_cast<std::size_t>(b)]);
+            const int diag_i = diag_local[static_cast<std::size_t>(i)];
+            apply_drop_and_fill_control(row_vals, keep + rs, row_nnz, diag_i,
+                                        original_row_nnz[static_cast<std::size_t>(i)], params, candidates);
+            const auto final_scale = row_scale(row_vals, keep + rs, row_nnz);
+            row_vals[diag_i] = stabilize_pivot_or_mark(row_vals[diag_i], final_scale, params,
+                                                       &factor_status[static_cast<std::size_t>(b)]);
 
-            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(row_cols[static_cast<std::size_t>(p)])] = -1;
+            for (int p = 0; p < row_nnz; ++p) col_to_slot[static_cast<std::size_t>(sym_ci[static_cast<std::size_t>(rs + p)])] = -1;
+        }
+    };
+
+    const int num_threads = iluk_factor_thread_count(batch_size);
+    if (num_threads <= 1) {
+        std::vector<int> col_to_slot(static_cast<std::size_t>(n), -1);
+        std::vector<std::pair<RealT<T>, int>> candidates;
+        for (int b = 0; b < batch_size; ++b) factor_batch_element(b, col_to_slot, candidates);
+    } else {
+        // A pivot failure throws from inside the worker; letting that escape a
+        // std::thread would call std::terminate, so it is captured and rethrown on
+        // the calling thread after every worker has been joined.
+        std::atomic<int> next_element{0};
+        std::vector<std::exception_ptr> errors(static_cast<std::size_t>(num_threads));
+        std::vector<std::thread> workers;
+        workers.reserve(static_cast<std::size_t>(num_threads));
+        for (int t = 0; t < num_threads; ++t) {
+            workers.emplace_back([&, t]() {
+                std::vector<int> col_to_slot(static_cast<std::size_t>(n), -1);
+                std::vector<std::pair<RealT<T>, int>> candidates;
+                try {
+                    for (int b = next_element.fetch_add(1); b < batch_size; b = next_element.fetch_add(1)) {
+                        factor_batch_element(b, col_to_slot, candidates);
+                    }
+                } catch (...) {
+                    errors[static_cast<std::size_t>(t)] = std::current_exception();
+                }
+            });
+        }
+        for (auto& w : workers) w.join();
+        for (auto& e : errors) {
+            if (e) std::rethrow_exception(e);
         }
     }
 
@@ -444,63 +525,52 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
         }
     }
 
-    std::vector<std::vector<uint8_t>> union_keep(static_cast<std::size_t>(n));
-    std::vector<std::vector<int>> compact_rows(static_cast<std::size_t>(n));
-    std::vector<std::vector<int>> compact_index(static_cast<std::size_t>(n));
-
+    // Compaction: an entry survives if any batch element kept it, so the batch keeps
+    // sharing one pattern. compact_pos maps a symbolic slot to its compacted slot.
     HostFactor<T> out;
     out.n = n;
     out.batch_size = batch_size;
     out.row_offsets.assign(static_cast<std::size_t>(n) + 1, 0);
+    std::vector<int> compact_pos(static_cast<std::size_t>(sym_nnz), -1);
 
     for (int i = 0; i < n; ++i) {
-        const auto& row_cols = symbolic_rows[static_cast<std::size_t>(i)];
-        auto& row_union = union_keep[static_cast<std::size_t>(i)];
-        row_union.assign(row_cols.size(), 0);
-        row_union[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])] = 1;
-        for (int b = 0; b < batch_size; ++b) {
-            const auto& row_keep = batch_keep[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
-            for (int p = 0; p < static_cast<int>(row_cols.size()); ++p) {
-                row_union[static_cast<std::size_t>(p)] = static_cast<uint8_t>(row_union[static_cast<std::size_t>(p)] | row_keep[static_cast<std::size_t>(p)]);
+        const int rs = sym_ro[static_cast<std::size_t>(i)];
+        const int row_nnz = sym_ro[static_cast<std::size_t>(i + 1)] - rs;
+        int kept = 0;
+        for (int p = 0; p < row_nnz; ++p) {
+            bool keep_entry = (p == diag_local[static_cast<std::size_t>(i)]);
+            for (int b = 0; b < batch_size && !keep_entry; ++b) {
+                if (sym_keep[static_cast<std::size_t>(b) * stride + static_cast<std::size_t>(rs + p)] != 0) keep_entry = true;
+            }
+            if (keep_entry) {
+                compact_pos[static_cast<std::size_t>(rs + p)] = kept++;
+                out.col_indices.push_back(sym_ci[static_cast<std::size_t>(rs + p)]);
             }
         }
-
-        auto& compact_row = compact_rows[static_cast<std::size_t>(i)];
-        auto& compact_pos = compact_index[static_cast<std::size_t>(i)];
-        compact_pos.assign(row_cols.size(), -1);
-        for (int p = 0; p < static_cast<int>(row_cols.size()); ++p) {
-            if (row_union[static_cast<std::size_t>(p)] == 0) continue;
-            compact_pos[static_cast<std::size_t>(p)] = static_cast<int>(compact_row.size());
-            compact_row.push_back(row_cols[static_cast<std::size_t>(p)]);
-        }
-        out.row_offsets[static_cast<std::size_t>(i + 1)] = out.row_offsets[static_cast<std::size_t>(i)] + static_cast<int>(compact_row.size());
-    }
-
-    out.col_indices.reserve(static_cast<std::size_t>(out.row_offsets.back()));
-    for (int i = 0; i < n; ++i) {
-        const auto& compact_row = compact_rows[static_cast<std::size_t>(i)];
-        out.col_indices.insert(out.col_indices.end(), compact_row.begin(), compact_row.end());
+        out.row_offsets[static_cast<std::size_t>(i + 1)] = out.row_offsets[static_cast<std::size_t>(i)] + kept;
     }
     out.nnz = static_cast<int>(out.col_indices.size());
 
     out.diag_offsets.assign(static_cast<std::size_t>(n), 0);
-    out.values.assign(static_cast<std::size_t>(out.nnz) * static_cast<std::size_t>(batch_size), T(0));
     for (int i = 0; i < n; ++i) {
         out.diag_offsets[static_cast<std::size_t>(i)] =
-            out.row_offsets[static_cast<std::size_t>(i)] + compact_index[static_cast<std::size_t>(i)][static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])];
+            out.row_offsets[static_cast<std::size_t>(i)] +
+            compact_pos[static_cast<std::size_t>(sym_ro[static_cast<std::size_t>(i)] + diag_local[static_cast<std::size_t>(i)])];
     }
+
+    out.values.assign(static_cast<std::size_t>(out.nnz) * static_cast<std::size_t>(batch_size), T(0));
     for (int b = 0; b < batch_size; ++b) {
-        const std::size_t vbase = static_cast<std::size_t>(b) * static_cast<std::size_t>(out.nnz);
+        const std::size_t src_base = static_cast<std::size_t>(b) * stride;
+        const std::size_t dst_base = static_cast<std::size_t>(b) * static_cast<std::size_t>(out.nnz);
         for (int i = 0; i < n; ++i) {
-            const auto& row_vals = batch_values[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
-            const auto& row_keep = batch_keep[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
-            const auto& compact_pos = compact_index[static_cast<std::size_t>(i)];
-            for (int p = 0; p < static_cast<int>(row_vals.size()); ++p) {
-                const int new_pos = compact_pos[static_cast<std::size_t>(p)];
+            const int rs = sym_ro[static_cast<std::size_t>(i)];
+            const int row_nnz = sym_ro[static_cast<std::size_t>(i + 1)] - rs;
+            for (int p = 0; p < row_nnz; ++p) {
+                const int new_pos = compact_pos[static_cast<std::size_t>(rs + p)];
                 if (new_pos < 0) continue;
-                if (row_keep[static_cast<std::size_t>(p)] == 0 && p != diag_local[static_cast<std::size_t>(i)]) continue;
-                out.values[vbase + static_cast<std::size_t>(out.row_offsets[static_cast<std::size_t>(i)] + new_pos)] =
-                    row_vals[static_cast<std::size_t>(p)];
+                if (sym_keep[src_base + static_cast<std::size_t>(rs + p)] == 0 && p != diag_local[static_cast<std::size_t>(i)]) continue;
+                out.values[dst_base + static_cast<std::size_t>(out.row_offsets[static_cast<std::size_t>(i)] + new_pos)] =
+                    sym_values[src_base + static_cast<std::size_t>(rs + p)];
             }
         }
     }
