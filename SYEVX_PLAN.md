@@ -451,6 +451,112 @@ Two workable variants:
   convergence is correlated across the batch, which it usually is for
   same-distribution batches.
 
+**Status: variant (a) implemented, default OFF. Variant (b) not attempted —
+see the blockers below.**
+
+#### (a) Column masking — implemented, `BATCHLAS_SYEVX_SOFT_LOCK=1`
+
+The residual kernel now writes a per-column `col_converged[bid][j]` flag
+(`residual_j <= 0.1 * tol`; the 0.1 is `BATCHLAS_SYEVX_LOCK_FACTOR`). Masking then
+happens in *two* places around `ortho`, and that is the one non-obvious thing about
+the feature:
+
+> `ortho` mixes columns. Householder QR and the Chol/Chol2 triangular solve both
+> replace `R` by `R * U^-1` with `U` upper triangular, so column `j` of the
+> orthonormalised block spans `r_0..r_j`, not `r_j`.
+
+Neither one-sided placement works:
+
+- Masking **only after** `ortho` deletes `span(r_0..r_j)` content that the
+  *unconverged* columns were orthogonalised against, and they lose their correction
+  directions. Measured (`n=128, k=8, tol=1e-4`): convergence froze at the first
+  locking iteration — residuals stuck at their iteration-13 values for the whole
+  run — and went NaN by iteration 26, where the unlocked run converged at
+  iteration 14.
+- Masking **only before** `ortho` makes `R^T R` singular, and the Cholesky
+  algorithms produce NaN from `potrf` rather than raising. A fully converged batch
+  member would hand `ortho` an all-zero block every iteration.
+
+What is implemented: **before** `ortho`, each converged column is overwritten with
+a deterministic pseudo-random vector scaled to the largest surviving residual
+column (keeps full rank, keeps the Gram matrix well scaled, and cannot produce an
+all-zero block even with no guard block); **after** `ortho`, those same columns are
+zeroed so the filler never reaches `AR` or `StAS`. The unconverged columns lose
+only their component along a few random directions in `n` dimensions.
+
+Because a masked column makes its row and column of `StAS` exactly zero, the
+projected problem would gain a spurious eigenvalue 0 — fatal for `find_largest =
+false` on a positive-definite `A`, where those zeros sort below the wanted spectrum
+and get selected as Ritz pairs. A sentinel of `±(||StAS||_F + 1)` is planted on each
+locked diagonal, which is provably outside the real spectrum, so the spurious pairs
+sort to the unwanted end.
+
+**Measured result: no win, small cost — hence default OFF.** Iterations to converge,
+`BATCHLAS_SYEVX_CHECK_EVERY=1`, versus locking disabled:
+
+| case | off | on (f=0.1) |
+|---|---|---|
+| n128 b4 k8 largest tol1e-4 | 16 | 16 |
+| n128 b4 k16 largest tol1e-5 | 14 | 14 |
+| n256 b4 k16 largest tol1e-5 | 19 | 20 |
+| n256 b8 k32 largest tol1e-5 | 14 | 14 |
+| n256 b4 k16 largest tol1e-5 (dense off-diag) | 19 | 20 |
+| n512 b2 k16 largest tol1e-5 | 28 | 28 |
+
+Two reasons it does not pay:
+
+1. **It saves no flops.** Shapes are fixed, so a masked column is still multiplied
+   by `A` and still occupies its row/column of `StAS`. Only variant (b) recovers
+   that.
+2. **The regime where it should help is unreachable on a CPU build.**
+   `Backend::NETLIB` forces `OrthoAlgorithm::Householder`
+   (`src/extensions/ortho.cc:42-44, 337-339`), which is precisely the algorithm
+   that handles a near-null column gracefully. The conditioning argument is about
+   Chol2, the GPU default. **This needs a GPU A/B before the default is flipped.**
+
+The locking threshold must be stricter than the requested tolerance. A masked
+column is not frozen — its Ritz vector is still recombined every iteration — so a
+column sitting right at `tol` loses its correction direction, drifts back above
+`tol`, unlocks, and oscillates. Locking at exactly `tol` made the final residual
+worse on 3 of 8 cases of the ILU(k) convergence sweep in `tests/iluk_tests.cc`.
+
+#### (b) Batch-wide staircase — not attempted, and why
+
+The idea is sound and it is where the actual speedup lives (the per-iteration
+`A*R` and `S^T A S` widths drop from `3k` toward `k`). It was not attempted here
+because it is not a localised change in this file:
+
+- **The active blocks stop being contiguous.** Locked columns are the leading ones,
+  and soft locking must *keep* the converged `X` columns in the basis while dropping
+  only their `P`/`R` counterparts. The trial basis becomes `[X(k) | P(k') | R(k')]`,
+  which is no longer the single `S({0,n},{0,Nvecs})` slice every gemm in the loop
+  takes. Either the loop grows to 3x3 block gemms (9 calls where there is now 1,
+  four times over: `StAS`, `X_new`, `AX_new`, `P_new`, `AP_new`), or `X/AX/P/AP` get
+  physically permuted on each shrink so the active columns stay contiguous — which
+  also requires the converged set to be a contiguous prefix, which is not guaranteed
+  (measured: at the first locking iteration of the `n=128, k=8` case, columns
+  0,1,2,4 were locked and 3,5,6,7 were not).
+- **`Nvecs` is computed in three places that must agree.** The host loop, the
+  residual kernel (`num_eigvals = it < 2 ? (it+1)*block_vectors : 3*block_vectors`)
+  and the instrumentation block each rebuild it independently, and the residual
+  kernel uses it for the `find_largest` reverse indexing into `lambdas`. Getting one
+  of the three out of step silently returns wrong eigenvalues rather than failing.
+- **Workspace sizing is not monotone in `Nvecs`.** The file already documents this:
+  `syev` picks its provider from the matrix shape, so the `3k` figure does not bound
+  the `2k` one — that omission previously threw "insufficient workspace for chosen
+  provider". A staircase of step 8 introduces `k/8` distinct projected shapes, every
+  one of which has to be covered in both the runtime max *and* the mirrored
+  `syevx_lobpcg_buffer_size`. This is the exact class of bug the file's comments say
+  has bitten twice.
+- **It reintroduces a host-side shape decision inside the loop**, which §7.1 just
+  removed. Affordable if folded into the existing periodic convergence check, but it
+  is a structural constraint on that optimisation.
+
+**Recommended prerequisite before attempting (b):** collapse the three duplicated
+`Nvecs`/`num_eigvals` computations into one value, and turn the hard-coded block
+offsets (`k`, `2k`) into named quantities. After that the staircase is a contained
+change; before it, it is a rewrite of the loop with several silent-failure modes.
+
 ### 7.6 `extra_directions` defaults to 0
 
 A guard block (`extra_directions ≈ 0.1–0.25 · neigs`) is standard practice and
