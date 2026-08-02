@@ -472,13 +472,10 @@ INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
 // both JobType values.
 class SyevxDirectSubsetTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
 
-TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
-    constexpr int n = 96;
-    constexpr int batch = 3;
-    constexpr int neig = 8;
-    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
-    const bool find_largest = std::get<0>(GetParam());
-    const bool want_vectors = std::get<1>(GetParam());
+void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_vectors) {
+    SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
+                                      << " find_largest=" << find_largest
+                                      << " want_vectors=" << want_vectors);
     const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
 
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
@@ -553,6 +550,34 @@ TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
             }
         }
     }
+}
+
+TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    CheckDirectSubset(96, 3, 8, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+// The stage-2 Householder chase schedule depends on (n, kd), so sizes that are
+// not clean multiples of the band width exercise different reflector layouts:
+// partial final windows, chases that hit the bottom early, and n small enough
+// that choose_two_stage_kd clamps kd below its default. n <= 64 also crosses the
+// dispatcher's small-n threshold, so these pin the algorithm explicitly.
+TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = std::get<0>(GetParam());
+    const bool want_vectors = std::get<1>(GetParam());
+    for (int n : {5, 17, 33, 64, 65, 97, 130}) {
+        const int neig = std::min(n, 6);
+        CheckDirectSubset(n, 2, neig, find_largest, want_vectors);
+    }
+}
+
+// k == n asks the subset path for the entire spectrum. The back-transform then
+// runs on a square block, which is the shape syev_two_stage uses, so a
+// disagreement here isolates the subset machinery from the reduction.
+TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    CheckDirectSubset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
