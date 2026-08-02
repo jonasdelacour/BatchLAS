@@ -52,6 +52,11 @@ namespace batchlas {
         // A and find_largest = false, and is mutually exclusive with the pointer above.
         bool build_preconditioner = false;
         ILUKParams<T> iluk_params{};
+        // Chebyshev filter degree for SyevxAlgorithm::Filtered. 0 selects a
+        // default. Higher degrees separate the wanted end of the spectrum more
+        // aggressively per outer iteration, at one matvec each; the useful range
+        // is roughly 8-25 and the optimum depends on the spectral gap.
+        size_t filter_degree = 0;
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 
@@ -408,6 +413,34 @@ namespace batchlas {
 
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_lobpcg_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Chebyshev-filtered subspace iteration (SYEVX_PLAN.md Tier 3).
+     *
+     * Applies a Chebyshev polynomial in A to a block of vectors so that the
+     * wanted end of the spectrum is amplified relative to the rest, then does a
+     * Rayleigh-Ritz extraction. Needs no preconditioner and no factorization --
+     * only matvecs -- so unlike LOBPCG it does not depend on having a good
+     * preconditioner to make progress. Works for dense and CSR input.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_filtered(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_filtered_buffer_size(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
                 Span<typename base_type<T>::type> W,
                 size_t neigs,

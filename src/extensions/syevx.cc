@@ -81,9 +81,7 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
             case SyevxAlgorithm::LOBPCG:       return SyevxAlgorithm::LOBPCG;
             case SyevxAlgorithm::DirectSubset:
                 return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::Direct;
-            // Tier 3 is not implemented yet; degrade to the nearest implemented
-            // neighbour rather than failing.
-            case SyevxAlgorithm::Filtered:     return SyevxAlgorithm::LOBPCG;
+            case SyevxAlgorithm::Filtered:     return SyevxAlgorithm::Filtered;
             default:                           break;
         }
     }
@@ -96,10 +94,13 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     if (fraction > kSyevxIterativeFraction) {
         return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::Direct;
     }
-    // Filtered (Tier 3) would go here. Until it exists the subset solver is a
-    // better default than LOBPCG even below the iterative threshold, because it
-    // is direct: no convergence risk, no tuning, and its cost is what the model
-    // says it is. LOBPCG remains reachable explicitly.
+    // Below the iterative threshold, Filtered (Tier 3) is the algorithm the cost
+    // model favours -- but Auto still picks the subset solver where it is
+    // available, because that one is direct: no convergence risk, no degree to
+    // tune, and its cost is exactly what the model says. Filtered has a
+    // convergence failure mode the direct path does not, and the crossover has
+    // not been measured on real hardware (SYEVX_PLAN.md §2.4). Promote it to the
+    // Auto default for this band once it has been.
     return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::LOBPCG;
 }
 
@@ -120,6 +121,9 @@ Event syevx(Queue& ctx,
     if (chosen == SyevxAlgorithm::DirectSubset) {
         return syevx_direct_subset<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
     }
+    if (chosen == SyevxAlgorithm::Filtered) {
+        return syevx_filtered<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+    }
     return syevx_lobpcg<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
 }
 
@@ -138,6 +142,9 @@ size_t syevx_buffer_size(Queue& ctx,
     }
     if (chosen == SyevxAlgorithm::DirectSubset) {
         return syevx_direct_subset_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
+    }
+    if (chosen == SyevxAlgorithm::Filtered) {
+        return syevx_filtered_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
     }
     return syevx_lobpcg_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
 }

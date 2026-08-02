@@ -589,6 +589,149 @@ INSTANTIATE_TEST_SUITE_P(
         return name;
     });
 
+// Tier 3: Chebyshev-filtered subspace iteration.
+//
+// Checked against a full reference syev. A filtered solver can converge to the
+// wrong end of the spectrum or stall, so these assert on the eigenvalues
+// themselves rather than only on residuals: a self-consistent (lambda, v) pair
+// proves nothing about whether it is one of the *wanted* pairs.
+class SyevxFilteredTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
+
+void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vectors,
+                   float eig_tol = 1e-3f) {
+    SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
+                                      << " find_largest=" << find_largest
+                                      << " want_vectors=" << want_vectors);
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Filtered;
+    params.find_largest = find_largest;
+    params.absolute_tolerance = 1e-5f;
+    params.iterations = 200;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, eig_tol)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": filtered=" << got << " syev=" << ref;
+        }
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
+            else              EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]);
+        }
+    }
+
+    if (!want_vectors) return;
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 5e-3f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+        for (int i = 0; i < neig; ++i) {
+            for (int j = i + 1; j < neig; ++j) {
+                float dot = 0.0f;
+                for (int r = 0; r < n; ++r) dot += V.view()(r, i, b) * V.view()(r, j, b);
+                EXPECT_LE(std::abs(dot), 1e-3f)
+                    << "columns " << i << "," << j << " not orthogonal in batch " << b;
+            }
+        }
+    }
+}
+
+TEST_P(SyevxFilteredTest, MatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    CheckFiltered(64, 3, 4, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+TEST_P(SyevxFilteredTest, SmallFractionOfSpectrum) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    // k/n = 2%, the band Tier 3 exists to serve.
+    CheckFiltered(150, 2, 3, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+// The scaled recurrence exists so that high degrees do not overflow. A degree
+// that reaches float infinity in the unscaled form must still converge here.
+TEST_P(SyevxFilteredTest, HighDegreeDoesNotOverflow) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = std::get<0>(GetParam());
+    const bool want_vectors = std::get<1>(GetParam());
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+    constexpr int n = 80, batch = 2, neig = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Filtered;
+    params.find_largest = find_largest;
+    params.filter_degree = 40;
+    params.absolute_tolerance = 1e-5f;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            EXPECT_TRUE(std::isfinite(W[b * neig + i]))
+                << "degree-40 filter produced a non-finite eigenvalue at batch " << b
+                << " index " << i;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OrderAndJob, SyevxFilteredTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    [](const ::testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+        std::string name = std::get<0>(info.param) ? "Largest" : "Smallest";
+        name += std::get<1>(info.param) ? "WithVectors" : "ValuesOnly";
+        return name;
+    });
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

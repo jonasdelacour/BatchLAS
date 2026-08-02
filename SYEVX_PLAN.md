@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1 and 2 implemented.**
+Status: **Tiers 0, 1, 2 and 3 implemented.**
 Tiers 3–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
@@ -776,9 +776,62 @@ forced wholesale onto one algorithm. Tests that pin an algorithm now skip under 
 conflicting override instead of failing, which keeps "run the suite under every
 algorithm" sweeps meaningful.
 
-Tests: `syevx_tests` is 11, covering both orderings × both `JobType` values for
-the subset path, with residuals checked against the *original* A (which is what
-actually validates the back-transform) plus orthonormality.
+Tests: `syevx_tests` covers both orderings × both `JobType` values for the subset
+path, with residuals checked against the *original* A (which is what actually
+validates the back-transform) plus orthonormality.
+
+**Later revision: the kd = 1 clamp is gone.** The above describes the path as
+first landed, where eigenvector mode forced `kd = 1` so the Givens `sytrd_sb2st`
+had no Q₂ to discard. That made stage 1 an unblocked BLAS-2 reduction — the
+dominant cost, done the slow way. Once `sytrd_sb2st_hh` landed on main (PR #45)
+retaining Q₂, the subset path moved onto it: eigenvector mode now reduces at the
+tuned band width and applies Q₂ to the `k` selected columns via `unmqr_hb2st`
+before the existing Q₁ `ormqr`. Both back-transforms run on `k` columns rather
+than `n`. Eigenvalue-only solves keep the cheaper Givens chase, which needs no
+back-transform at all. Verified correct at `BATCHLAS_SYEV_TWO_STAGE_KD` ∈
+{1, 2, 8, 32, 64}, not just the default.
+
+### Tier 3 — done
+
+`syevx_filtered` (`src/extensions/syevx_filtered.cc`): Gershgorin bounds →
+Chebyshev filter → `ortho` → Rayleigh–Ritz, looping until the wanted residuals
+converge. Works for dense and CSR, real and complex. Needs no preconditioner and
+no factorization, which is the point: it covers the case where LOBPCG has no good
+preconditioner available, and unlike the ILU(k) path it is not restricted to the
+smallest eigenpairs.
+
+Two numerical findings, both caught by tests rather than reasoning:
+
+1. **Normalise the scaled recurrence at the extreme Ritz value, not at the
+   Gershgorin bound.** Gershgorin overestimates the spectral radius of a random
+   symmetric matrix by roughly O(n) versus the true O(√n). Dividing by `T_m` of a
+   point that far outside the spectrum underflows the entire block to zero, and
+   orthogonalizing a zero block yields NaN. Normalising at the wanted end keeps
+   p ≈ 1 exactly where the wanted vectors live.
+
+2. **The filter degree has to be bounded by precision, and the bound is tightest
+   exactly where it is most tempting to skip it.** A sharp filter drives every
+   column of the block toward the dominant direction; once the amplification ratio
+   between most- and least-wanted exceeds what the working precision can hold, the
+   block is numerically rank-deficient and the Cholesky-based orthogonalization
+   returns NaN rather than a merely slow answer. The degree is therefore capped per
+   iteration from the Ritz values, then reduced across the batch so the recurrence
+   length stays uniform and the GEMM shapes stay batched. The first version waived
+   the cap when the least-wanted direction fell inside the damped band — precisely
+   the worst case, where growth is the full `cosh(d·acosh(y_far))` — and an
+   `eps^-1/2` ratio budget was measured to still be too generous; `eps^-1/4` holds.
+
+`Auto` does **not** route to `Filtered` yet. Below the iterative threshold the
+cost model favours it, but it has a convergence failure mode the direct subset
+solver does not, and the crossover is unmeasured. Promote it once there are
+numbers. It is reachable explicitly via `SyevxParams::method` or
+`BATCHLAS_SYEVX_ALGORITHM=filtered`.
+
+Tests: `syevx_tests` is 31. The filtered tests assert on the eigenvalues against a
+reference `syev`, not only on residuals — a self-consistent (λ, v) pair proves
+nothing about whether it is one of the *wanted* pairs, which is the specific way a
+filtered solver fails. The whole suite also passes when forced onto each algorithm
+in turn, which is what exercises `Filtered` on the CSR and complex inputs.
 
 ### Not yet measured
 
