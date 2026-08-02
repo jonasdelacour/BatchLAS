@@ -55,19 +55,21 @@ PYTHONPATH=../../build/python python3 run_all.py     # execute and check all twe
 
 See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.
 
-## Getting Started in C++
+## C++ Examples
 
-`examples/cpp/01_getting_started.cc` is a self-checking program covering the C++ conventions: compile-time backend selection, `Queue` and device pairing, `Matrix`/`MatrixView`, column-major storage, the batching convention, the `*_buffer_size` workspace contract, and asynchrony.
+Twelve self-checking C++ programs in `examples/cpp/` cover the same ground as the Python notebooks, from `01_getting_started.cc` through the dense BLAS, factorizations, the SVD and eigensolver families, the tridiagonal reduction stages, sparse and iterative solvers, and a measurement example for picking a variant. Each verifies its results against an independent host-side reference and exits non-zero if a check fails.
 
 ```bash
 cmake -B build -S . -DBATCHLAS_BUILD_EXAMPLES=ON
 cmake --build build -j"$(nproc)"
 
 ./build/examples/cpp/01_getting_started        # prints [ok  ]/[FAIL] per check
-./build/examples/cpp/01_getting_started cpu    # force the host backend
+./build/examples/cpp/06_symmetric_eigensolvers cpu    # force the host backend
 ```
 
-`examples/cpp/CMakeLists.txt` also builds standalone against an installed BatchLAS, so it doubles as a template for consuming the exported `BatchLAS::batchlas` target. See `examples/cpp/README.md`.
+With `BATCHLAS_BUILD_TESTS=ON` as well, each example is registered with CTest as `example_<name>`. `examples/cpp/CMakeLists.txt` also builds standalone against an installed BatchLAS, so it doubles as a template for consuming the exported `BatchLAS::batchlas` target.
+
+See `examples/cpp/README.md` for the index, the C++ conventions the Python facade hides (compile-time backend selection, column-major storage, the `*_buffer_size` workspace contract), and the current known issues.
 
 ## Repository Layout
 

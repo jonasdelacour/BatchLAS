@@ -12,6 +12,17 @@ cmake_minimum_required(VERSION 3.14)
 
 set(BATCHLAS_EXAMPLE_TARGETS
     01_getting_started
+    02_dense_blas
+    03_linear_solvers
+    04_qr_and_orthogonalization
+    05_svd
+    06_symmetric_eigensolvers
+    07_tridiagonal_reduction
+    08_tridiagonal_eigensolvers
+    09_sparse_and_iterative
+    10_jacobi_relative_accuracy
+    11_generators_and_utilities
+    12_choosing_a_variant
 )
 
 if(TARGET batchlas)

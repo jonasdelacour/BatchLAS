@@ -84,6 +84,18 @@ inline void report_error(const std::string& name, double error, double tol) {
     detail::print(ok ? "ok  " : "FAIL", name, os.str());
 }
 
+// Report a magnitude with no pass/fail semantics — for numbers whose value is
+// the point (a spread between algorithms, a timing) rather than a threshold.
+inline void report_magnitude(const std::string& name, double value) {
+    detail::print("ok  ", name, detail::format_error(value));
+}
+
+// Note something that could not be run here (a GPU-only routine on a CPU
+// device, say). Not a failure.
+inline void report_skip(const std::string& name, const std::string& why) {
+    detail::print("skip", name, why);
+}
+
 // Exit code for main(): 0 when every check held.
 inline int exit_code() {
     const int failures = failure_count();
