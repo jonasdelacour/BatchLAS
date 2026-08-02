@@ -56,6 +56,7 @@ set(BENCHMARK_TARGETS
     sytrd_sy2sb_benchmark
     sytrd_sb2st_benchmark
     sb2st_hh_benchmark
+    syev_two_stage_benchmark
     cusolverdx_heev_benchmark
     cusolverdx_htev_benchmark
     htev_compare_benchmark

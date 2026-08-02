@@ -129,6 +129,65 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
     }
 }
 
+// sytrd_sy2sb is numerically wrong unless n % kd <= 1 (see sy2sb_kd_is_safe in
+// syev_two_stage.cc). These sizes are all awkward for the nominal band width --
+// none of 100/130/150/200/250 satisfies the rule at kd=32 -- so they only pass
+// if kd selection actually backs off to a safe width, or falls back to
+// syev_blocked. Before that logic existed every one of them returned garbage
+// with a residual around 0.1-0.8 rather than failing loudly.
+TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+
+    auto& ctx = *this->ctx;
+    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
+
+    for (int n : {100, 130, 150, 200, 250}) {
+        const int batch = 2;
+
+        Matrix<T, MatrixFormat::Dense> A0 =
+            Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/29);
+
+        std::vector<T> Aref(static_cast<size_t>(batch) * n * n);
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j)
+                    Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
+
+        UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
+        UnifiedVector<std::byte> ws(syev_two_stage_buffer_size<B, T>(
+            ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+
+        syev_two_stage<B, T>(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+                             Uplo::Lower, ws.to_span(), StedcParams<Real>{})
+            .wait();
+
+        for (int b = 0; b < batch; ++b) {
+            Real anorm = Real(0);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    const Real m = std::abs(Aref[(static_cast<size_t>(b) * n + i) * n + j]);
+                    anorm += m * m;
+                }
+            anorm = std::max(std::sqrt(anorm), Real(1));
+
+            Real resid = Real(0);
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    T acc = T(0);
+                    for (int l = 0; l < n; ++l)
+                        acc += Aref[(static_cast<size_t>(b) * n + i) * n + l] * A0(l, j, b);
+                    const T diff = acc - A0(i, j, b) * T(w[static_cast<size_t>(b) * n + j]);
+                    resid += std::abs(diff) * std::abs(diff);
+                }
+            }
+            EXPECT_LT(std::sqrt(resid) / anorm, tol)
+                << "residual n=" << n << " b=" << b;
+        }
+    }
+}
+
 // Baseline: the identical residual check run through syev_blocked. If both this
 // and the two-stage test fail at a given size/type, the fault is shared
 // machinery (ormqr_blocked, stedc), not the two-stage path.

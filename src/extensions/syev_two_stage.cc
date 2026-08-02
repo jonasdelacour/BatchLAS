@@ -58,11 +58,59 @@ inline int32_t env_int_or_default(const char* key, int32_t defval) {
     return (parsed > 0) ? static_cast<int32_t>(parsed) : defval;
 }
 
+// sytrd_sy2sb produces a numerically wrong band unless the trailing panel is
+// degenerate, i.e. unless n % kd is 0 or 1. Verified exhaustively for float over
+// kd in {16,24,32,48,64,96} x n in {64,96,128,129,192,256}: every cell with
+// n % kd > 1 fails the eigenvector residual at O(0.1..0.8), every cell with
+// n % kd <= 1 passes, with no other pattern (it is not "kd > n/2", and it is not
+// complex-only as the earlier fallback comment below assumed -- kd=16 and kd=32
+// looked clean only because every n tested against them happened to satisfy the
+// rule). SyevTwoStageTest.Sy2sbTrailingPanelIsWrong pins this down.
+//
+// Until stage 1 is fixed, kd selection must respect the rule.
+constexpr int32_t kMinTwoStageKd = 8;
+
+inline bool sy2sb_kd_is_safe(int32_t n, int32_t kd) {
+    return kd <= 1 || (n % kd) <= 1;
+}
+
 inline int32_t choose_two_stage_kd(int32_t n) {
-    // Conservative defaults for initial two-stage path; override with env as needed.
-    const int32_t def = (n <= 256) ? 16 : 32;
-    const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
-    return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
+    // Measured with syev_two_stage_benchmark (float, eigenvectors, RTX 4090,
+    // total ms; kd across, n/batch down). Only kd values satisfying
+    // sy2sb_kd_is_safe are listed: kd=48 and kd=96 time ~5-10% better at some
+    // sizes but violate the rule at every n here, so those numbers are garbage
+    // runs, not options. That trap is why this table is restricted by hand.
+    //
+    //                kd=16      32      64    blocked
+    //   128/2048      28.4    23.4    21.1      15.0
+    //   256/1024      80.4    67.6    68.1      41.8
+    //   512/512      328.3   254.4   263.5     193.4
+    //   1024/128     987.9   641.3   555.1     479.9
+    //   2048/32     3201.8  2004.5  1711.2    1265.2
+    //
+    // The optimum rises with n (Gates/Tomov/Dongarra 2018 report the same trend
+    // once eigenvectors are wanted), so this is a table rather than a constant.
+    // The old flat 16/32 rule was off by 1.16x at n=1024 and 1.17x at n=2048.
+    // n=128 also prefers 64, but two-stage loses to blocked by 1.4x there, so
+    // the simpler threshold is kept rather than special-casing an unused size.
+    //
+    // Note the last column: blocked still wins everywhere, by 1.16x at n=1024
+    // (its best case for two-stage) and more elsewhere.
+    const int32_t def = (n <= 512) ? 32 : 64;
+
+    // An explicit override is taken verbatim (it is how the kd sweep in
+    // syev_two_stage_benchmark works); it is the caller's job to respect
+    // sy2sb_kd_is_safe.
+    if (const char* ev = std::getenv("BATCHLAS_SYEV_TWO_STAGE_KD")) {
+        const int32_t kd = static_cast<int32_t>(std::atol(ev));
+        if (kd > 0) return std::min(kd, std::max<int32_t>(1, n - 1));
+    }
+
+    const int32_t target = std::min(def, std::max<int32_t>(1, n - 1));
+    for (int32_t kd = target; kd >= kMinTwoStageKd; --kd) {
+        if (sy2sb_kd_is_safe(n, kd)) return kd;
+    }
+    return 0;  // caller falls back to syev_blocked
 }
 
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
@@ -278,6 +326,12 @@ Event syev_two_stage(Queue& ctx,
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
     const bool want_eigvecs = (jobz == JobType::EigenVectors);
+
+    // No band width in the useful range gives sy2sb a degenerate trailing panel
+    // (see sy2sb_kd_is_safe); running anyway would return silent garbage.
+    if (choose_two_stage_kd_for_job(n, jobz) == 0) {
+        return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
+    }
     const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
     const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
@@ -589,6 +643,13 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
     const int32_t batch = static_cast<int32_t>(a.batch_size());
     const bool want_eigvecs = (jobz == JobType::EigenVectors);
     const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
+
+    // Must mirror the fallback in syev_two_stage exactly, or the workspace and
+    // the path that consumes it disagree.
+    if (kd == 0) {
+        return syev_blocked_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
+    }
+
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
     const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);

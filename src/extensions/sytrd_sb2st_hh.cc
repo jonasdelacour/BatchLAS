@@ -94,9 +94,15 @@ inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
 // slots -- about 2% occupancy, which is what made the chase cost as much as the
 // back-transform. kWg=256 with a 2D (row, column-chunk) mapping puts 8 lanes on
 // each row of the window instead of 1.
+//
+// kRowsPar is a pure split of the 256 lanes between window rows and the reduced
+// dimension, NOT a bound on kd: windows taller than kRowsPar are walked in
+// row-blocks. kTpr must stay <= 32 so the lanes sharing a row are inside one
+// sub-group.
 constexpr int kWg = 256;
-constexpr int kRowsPar = 32;          // max window extent == max kd
+constexpr int kRowsPar = 32;          // window rows resident at once
 constexpr int kTpr = kWg / kRowsPar;  // lanes cooperating on one row/column
+static_assert(kTpr <= 32 && kRowsPar * kTpr == kWg);
 
 } // namespace
 
@@ -241,16 +247,22 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     const int32_t m = bb - a + 1;
                     if (m <= 0) return;
 
-                    // p = W v, one row per ti, reduced over ts.
+                    // p = W v, one row per ti, reduced over ts. The row-block
+                    // count is derived from m (uniform) so every lane makes the
+                    // same number of reduce_tpr calls.
                     {
-                        T acc = T(0);
-                        if (ti < m) {
-                            for (int32_t j = ts; j < m; j += kTpr) {
-                                acc += bget(a + ti, a + j) * vloc[j];
+                        const int32_t nrb = (m + kRowsPar - 1) / kRowsPar;
+                        for (int32_t rb = 0; rb < nrb; ++rb) {
+                            const int32_t r = rb * kRowsPar + ti;
+                            T acc = T(0);
+                            if (r < m) {
+                                for (int32_t j = ts; j < m; j += kTpr) {
+                                    acc += bget(a + r, a + j) * vloc[j];
+                                }
                             }
+                            acc = reduce_tpr(acc);
+                            if (r < m && ts == 0) wloc[r] = acc;
                         }
-                        acc = reduce_tpr(acc);
-                        if (ti < m && ts == 0) wloc[ti] = acc;
                     }
                     sycl::group_barrier(wg);
 
@@ -270,12 +282,12 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                     // Rank-2 update of the lower triangle; no reduction, so ts
                     // simply strides the inner index.
-                    if (ti < m) {
-                        for (int32_t j = ts; j <= ti; j += kTpr) {
-                            T val = bget(a + ti, a + j) - wloc[ti] * conj_if(vloc[j]) -
-                                    vloc[ti] * conj_if(wloc[j]);
-                            if (ti == j) val = real_part_as_T(val);
-                            bset(a + ti, a + j, val);
+                    for (int32_t r = ti; r < m; r += kRowsPar) {
+                        for (int32_t j = ts; j <= r; j += kTpr) {
+                            T val = bget(a + r, a + j) - wloc[r] * conj_if(vloc[j]) -
+                                    vloc[r] * conj_if(wloc[j]);
+                            if (r == j) val = real_part_as_T(val);
+                            bset(a + r, a + j, val);
                         }
                     }
                     sycl::group_barrier(wg);
@@ -285,17 +297,21 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
                     const int32_t nr = r1 - r0 + 1;
-                    const int32_t i = r0 + ti;
-                    T y = T(0);
-                    if (ti < nr) {
-                        for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
-                            y += bget(i, j) * vloc[j - c0];
+                    const int32_t nrb = (nr + kRowsPar - 1) / kRowsPar;
+                    for (int32_t rb = 0; rb < nrb; ++rb) {
+                        const int32_t rr = rb * kRowsPar + ti;
+                        const int32_t i = r0 + rr;
+                        T y = T(0);
+                        if (rr < nr) {
+                            for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
+                                y += bget(i, j) * vloc[j - c0];
+                            }
                         }
-                    }
-                    y = tau * reduce_tpr(y);
-                    if (ti < nr) {
-                        for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
-                            bset(i, j, bget(i, j) - y * conj_if(vloc[j - c0]));
+                        y = tau * reduce_tpr(y);
+                        if (rr < nr) {
+                            for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
+                                bset(i, j, bget(i, j) - y * conj_if(vloc[j - c0]));
+                            }
                         }
                     }
                     sycl::group_barrier(wg);
@@ -305,17 +321,21 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 auto left_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
                     const int32_t nc = c1 - c0 + 1;
-                    const int32_t j = c0 + ti;
-                    T z = T(0);
-                    if (ti < nc) {
-                        for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
-                            z += conj_if(vloc[i - r0]) * bget(i, j);
+                    const int32_t ncb = (nc + kRowsPar - 1) / kRowsPar;
+                    for (int32_t cb = 0; cb < ncb; ++cb) {
+                        const int32_t cc = cb * kRowsPar + ti;
+                        const int32_t j = c0 + cc;
+                        T z = T(0);
+                        if (cc < nc) {
+                            for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
+                                z += conj_if(vloc[i - r0]) * bget(i, j);
+                            }
                         }
-                    }
-                    z = tau * reduce_tpr(z);
-                    if (ti < nc) {
-                        for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
-                            bset(i, j, bget(i, j) - vloc[i - r0] * z);
+                        z = tau * reduce_tpr(z);
+                        if (cc < nc) {
+                            for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
+                                bset(i, j, bget(i, j) - vloc[i - r0] * z);
+                            }
                         }
                     }
                     sycl::group_barrier(wg);
@@ -420,8 +440,9 @@ Event sytrd_sb2st_hh(Queue& ctx,
 // completely independent. Each work-group takes one (batch item, column chunk)
 // and walks the entire reflector list itself -- no inter-work-group
 // synchronisation and no launch per sweep. Within a work-group the 32 lanes map
-// to *rows* of the reflector (len <= kd <= 32), which keeps the Z accesses
-// contiguous since Z is column-major; the dot product is a sub-group reduction.
+// to *rows* of the reflector (row-blocked when kd > 32), which keeps the Z
+// accesses contiguous since Z is column-major; the dot product is a sub-group
+// reduction.
 //
 // This is flop-optimal (2n^3 total, versus ~4n^3 for a larft/larfb formulation
 // whose V panels are zero-padded) but memory bound. Wang et al. (PPoPP'25)
@@ -658,13 +679,16 @@ streaming:
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
 
-                    const T vj = (lane < L) ? V(lane, k) : T(0);
-
+                    // L may exceed the 32 lanes (kd > 32), so walk the reflector
+                    // in row-blocks and accumulate across them before the update.
                     for (int32_t c = c0; c < c1; ++c) {
-                        const T zj = (lane < L) ? Z(s + lane, c) : T(0);
-                        const T sum = group_sum(sg, conj_if(vj) * zj);
-                        if (lane < L) {
-                            Z(s + lane, c) = zj - tau * vj * sum;
+                        T part = T(0);
+                        for (int32_t r = lane; r < L; r += 32) {
+                            part += conj_if(V(r, k)) * Z(s + r, c);
+                        }
+                        const T sum = group_sum(sg, part);
+                        for (int32_t r = lane; r < L; r += 32) {
+                            Z(s + r, c) -= tau * V(r, k) * sum;
                         }
                     }
                 }

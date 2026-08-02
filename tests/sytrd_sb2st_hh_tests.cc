@@ -112,8 +112,8 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
 
     const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-10);
 
-    for (int n : {16, 24, 32, 48, 129}) {
-        for (int kd : {2, 3, 4, 8, 16}) {
+    for (int n : {16, 24, 32, 48, 129, 200}) {
+        for (int kd : {2, 3, 4, 8, 16, 33, 48, 64}) {
             if (kd >= n) continue;
             const int batch = 3;
 
@@ -257,8 +257,8 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
     auto& ctx = *this->ctx;
     const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-10);
 
-    for (int n : {16, 32, 48}) {
-        for (int kd : {2, 4, 8}) {
+    for (int n : {16, 32, 48, 160}) {
+        for (int kd : {2, 4, 8, 40, 64}) {
             if (kd >= n) continue;
             const int batch = 2;
 
