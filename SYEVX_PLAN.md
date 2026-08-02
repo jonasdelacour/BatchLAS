@@ -1,7 +1,7 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
 Status: **Tiers 0-3 implemented; Tier 4 §7.1-7.10 done (7.5 opt-in, 7.10 Jacobi only), §7.11 needs GPU.**
-Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
+Only §7.11 (a projected-`syev` sweep, needs GPU hardware) and Tier 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
 user asked about separately — *batches of small matrices* and *batches of medium
