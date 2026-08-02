@@ -324,7 +324,9 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Left, trans_left, tau_span);
         const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Right, Transpose::NoTrans, tau_span);
-        const size_t panel_ws = std::max(geqrf_ws, std::max(ormqr_l_ws, ormqr_r_ws));
+        auto strip0 = a_in({kd_i, SliceEnd()}, {0, std::min(kd_i, n)});
+        const size_t ormqr_strip_ws = ormqr_buffer_size<B, T>(ctx, V0, strip0, Side::Left, trans_left, tau_span);
+        const size_t panel_ws = std::max(std::max(geqrf_ws, ormqr_strip_ws), std::max(ormqr_l_ws, ormqr_r_ws));
 
         sycl::free(tau_tmp, ctx->get_context());
         size += BumpAllocator::allocation_size<std::byte>(ctx, panel_ws);
@@ -382,7 +384,13 @@ Event sytrd_sy2sb(Queue& ctx,
                                                            Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const size_t ormqr_r_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Right, Transpose::NoTrans,
                                                            Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
-    const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
+    // Upper bound for the trailing-partial-panel strip update below: its C has
+    // at most pn0 rows and kd-1 columns, both bounded by this query's shapes.
+    auto strip0 = a_in({kd_i, SliceEnd()}, {0, std::min(kd_i, n)});
+    const size_t ormqr_strip_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, strip0, Side::Left, trans_left,
+                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
+    const size_t panel_ws_bytes = std::max(std::max(geqrf_ws_bytes, ormqr_strip_ws_bytes),
+                                           std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
     
     
@@ -409,6 +417,22 @@ Event sytrd_sy2sb(Queue& ctx,
         const Transpose trans_left_it = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         ormqr<B, T>(ctx, V, A22, Side::Left, trans_left_it, tau_panel_span, panel_ws);
         ormqr<B, T>(ctx, V, A22, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws);
+
+        // Trailing partial panel (pk < kd): Q acts on rows i+kd..n-1, so the
+        // similarity Q^H A Q also touches the columns between the panel and
+        // A22, i.e. cols i+pk..i+kd-1. Columns i..i+pk-1 are handled in place
+        // by GEQRF and columns < i are already zero at these rows, but this
+        // strip is neither -- without the update the transform is not a
+        // similarity and the spectrum shifts (observed error ~1e-1).
+        //
+        // Only the lower-triangular half needs updating: every strip entry has
+        // row >= i+kd > i+kd-1 >= col, and the symmetric counterpart above the
+        // diagonal is never read again (later panels and A22 blocks start at
+        // column i+kd, and the AB copy reads the lower band only).
+        if (pk < kd_i) {
+            auto strip = a_in({i + kd_i, SliceEnd()}, {i + pk, i + kd_i});
+            ormqr<B, T>(ctx, V, strip, Side::Left, trans_left_it, tau_panel_span, panel_ws);
+        }
 
         // Store tau panel into output tau at offset i.
         (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);

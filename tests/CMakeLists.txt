@@ -56,6 +56,7 @@ set(TEST_TARGETS
     syev_jacobi_cta_tests
     syev_cta_fused_tests
     syev_blocked_tests
+    syev_band_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS

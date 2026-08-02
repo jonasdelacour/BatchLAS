@@ -1088,6 +1088,57 @@ namespace batchlas {
                                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     /**
+     * @brief Tuning knobs for the band-reduction eigensolver (`syev_band`).
+     */
+    struct SyevBandParams {
+        // Semibandwidth of the intermediate band form produced by stage 1.
+        // kd <= 0 selects the implementation default (see choose_syev_band_kd).
+        int32_t kd = 0;
+
+        // Schedule for the stage-2 BANDR1 bulge-chase (band -> tridiagonal).
+        // Left default-constructed, the implementation picks a schedule from n
+        // and kd rather than using SytrdBandReductionParams' own defaults.
+        SytrdBandReductionParams bandr{};
+
+        // When true, `bandr` is used verbatim instead of the auto-tuned
+        // schedule. Set this only when deliberately overriding the defaults.
+        bool bandr_explicit = false;
+    };
+
+    /**
+     * @brief Symmetric/Hermitian eigensolver built on band reduction.
+     *
+     * Pipeline:
+     *  1) sytrd_sy2sb:           dense -> band (semibandwidth kd), GEMM-rich
+     *  2) sytrd_band_reduction:  band  -> tridiagonal via BANDR1 bulge-chasing
+     *  3) stedc:                 tridiagonal eigensolve
+     *
+     * EIGENVALUES ONLY. Stage 2 discards the bulge-chasing reflectors (see the
+     * contract on `sytrd_band_reduction`), so the similarity transform cannot be
+     * replayed and `JobType::EigenVectors` is rejected. Use `syev_blocked` or
+     * `syev_two_stage` when eigenvectors are required.
+     *
+     * Only `Uplo::Lower` is implemented, matching stages 1 and 2.
+     */
+    template <Backend B, typename T>
+    Event syev_band(Queue& ctx,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    Span<typename base_type<T>::type> eigenvalues,
+                    JobType jobz,
+                    Uplo uplo,
+                    const Span<std::byte>& ws,
+                    StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                    SyevBandParams params = SyevBandParams());
+
+    template <Backend B, typename T>
+    size_t syev_band_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 JobType jobz,
+                                 Uplo uplo,
+                                 StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                                 SyevBandParams params = SyevBandParams());
+
+    /**
      * @brief Unblocked GEBRD-like reduction to real bidiagonal form.
      *
      * Reduces each square matrix A to bidiagonal form in-place while returning

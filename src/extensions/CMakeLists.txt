@@ -16,6 +16,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     syev_cta.cc
     syev_blocked.cc
     syev_two_stage.cc
+    syev_band.cc
     lanczos.cc
     ritz_values.cc
 )
