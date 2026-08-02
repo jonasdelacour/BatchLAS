@@ -45,6 +45,8 @@ set(TEST_TARGETS
     syev_tests
     gesvd_tests
     steqr_tests
+    stebz_tests
+    stein_tests
     trmm_tests
     stedc_tests
     ritz_values_tests

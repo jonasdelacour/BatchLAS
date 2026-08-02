@@ -32,6 +32,7 @@ namespace batchlas {
     template <typename T>
     struct SyevxParams {
         using float_type = typename base_type<T>::type;
+        SyevxAlgorithm method = SyevxAlgorithm::Auto;      // Algorithm family (see SyevxAlgorithm)
         OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;  // Default orthogonalization algorithm
         size_t ortho_iterations = 2;                       // Number of orthogonalization iterations
         size_t iterations = 100;                           // Default number of iterations
@@ -45,12 +46,34 @@ namespace batchlas {
         // components being sought and amplifies the rest, so syevx rejects that
         // combination rather than silently converging more slowly.
         const ILUKPreconditioner<T>* preconditioner = nullptr;
+        // Which preconditioner family the LOBPCG path should use. `Auto` keeps the
+        // pre-existing behaviour exactly: ILU(k) when a factor is supplied or
+        // requested below, otherwise none (unless BATCHLAS_SYEVX_PRECONDITIONER
+        // names a default). See SyevxPreconditioner and
+        // `syevx_select_preconditioner`.
+        SyevxPreconditioner preconditioner_type = SyevxPreconditioner::Auto;
         // Build the ILU(k) factor inside syevx instead of supplying one. The factor
         // is carved out of the same workspace the caller passes to syevx, so an
         // end-to-end timing covers formation as well as application. Requires a CSR
         // A and find_largest = false, and is mutually exclusive with the pointer above.
         bool build_preconditioner = false;
         ILUKParams<T> iluk_params{};
+        // Chebyshev filter degree for SyevxAlgorithm::Filtered. 0 selects a
+        // default. Higher degrees separate the wanted end of the spectrum more
+        // aggressively per outer iteration, at one matvec each; the useful range
+        // is roughly 8-25 and the optimum depends on the spectral gap.
+        size_t filter_degree = 0;
+        // LOBPCG only: number of block power-iteration steps applied to the random
+        // starting block before the first Rayleigh-Ritz. Each step is one matvec plus
+        // one orthogonalization and biases the start toward the largest eigenpairs.
+        // -1 selects the built-in default, 0 disables.
+        //
+        // Ignored unless find_largest is true: powers of A amplify the largest
+        // eigendirections, so with find_largest = false they would drive the start
+        // away from what is wanted. The shifted operator that would fix that was
+        // measured and gave no useful speedup, so it is not implemented -- see the
+        // measurements in src/extensions/syevx_lobpcg.cc.
+        int init_power_iterations = -1;
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 
@@ -312,6 +335,161 @@ namespace batchlas {
     }
 
     /**
+     * @brief Resolves SyevxParams::method (and the BATCHLAS_SYEVX_ALGORITHM override)
+     *        to a concrete, implemented algorithm.
+     *
+     * Never returns `Auto`, `DirectSubset` or `Filtered`: unimplemented tiers fall
+     * back to their nearest implemented neighbour. Deterministic in its inputs so
+     * that `syevx` and `syevx_buffer_size` always agree on the choice.
+     *
+     * @param format Matrix format of A (sparse formats always use LOBPCG)
+     * @param n Matrix dimension
+     * @param neigs Number of requested eigenpairs
+     * @param requested Algorithm requested via SyevxParams::method
+     * @param subset_supported Whether DirectSubset is available for this T/format
+     * @param jobz Whether eigenvectors are wanted -- load-bearing, because the
+     *        subset solver's only measured advantage is the narrowed
+     *        back-transform, which does not exist in eigenvalues-only mode.
+     * @return SyevxAlgorithm A concrete, implemented algorithm
+     */
+    SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
+                                          int64_t n,
+                                          size_t neigs,
+                                          SyevxAlgorithm requested,
+                                          bool subset_supported,
+                                          JobType jobz = JobType::EigenVectors);
+
+    /**
+     * @brief Resolves SyevxParams::preconditioner_type to a concrete family.
+     *
+     * Never returns `Auto`. Deterministic in its inputs so that `syevx`,
+     * `syevx_buffer_size` and `syevx_lobpcg` always agree -- the Jacobi path adds a
+     * pool allocation, and the sizing call has to make the same decision the solve
+     * will. Legality (e.g. ILU(k) requested with no factor supplied) is checked by
+     * `syevx`, not here.
+     *
+     * @param requested SyevxParams::preconditioner_type
+     * @param iluk_configured Whether an ILU(k) factor was supplied or requested
+     * @param find_largest SyevxParams::find_largest; an environment-supplied default
+     *        that is illegal for the requested end degrades to `None` instead of
+     *        throwing (an explicit request still throws -- see `syevx`).
+     */
+    SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
+                                                    bool iluk_configured,
+                                                    bool find_largest);
+
+    /**
+     * @brief Partial eigensolve by full decomposition followed by selection.
+     *
+     * Runs `syev` on a private copy of A (A is not modified) and extracts the
+     * `neigs` extreme eigenpairs. Ordering matches the LOBPCG path: descending
+     * when `params.find_largest`, ascending otherwise. Dense input only.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_direct(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_direct_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Partial eigensolve by two-stage reduction plus a subset tridiagonal
+     *        solve (`stebz` + `stein`) and a back-transform narrowed to the
+     *        requested eigenvectors.
+     *
+     * Real scalar types and dense input only; callers should route complex or
+     * sparse input elsewhere (`syevx` does this automatically).
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_direct_subset(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_direct_subset_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Whether `syevx_direct_subset` supports this scalar type and format.
+     */
+    template <typename T, MatrixFormat MFormat>
+    inline constexpr bool syevx_direct_subset_supported() {
+        return MFormat == MatrixFormat::Dense && std::is_same_v<T, typename base_type<T>::type>;
+    }
+
+    /**
+     * @brief Partial eigensolve by LOBPCG. Supports dense and sparse input.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_lobpcg(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_lobpcg_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
+     * @brief Chebyshev-filtered subspace iteration (SYEVX_PLAN.md Tier 3).
+     *
+     * Applies a Chebyshev polynomial in A to a block of vectors so that the
+     * wanted end of the spectrum is amplified relative to the rest, then does a
+     * Rayleigh-Ritz extraction. Needs no preconditioner and no factorization --
+     * only matvecs -- so unlike LOBPCG it does not depend on having a good
+     * preconditioner to make progress. Works for dense and CSR input.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx_filtered(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t syevx_filtered_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params);
+
+    /**
      * @brief Computes eigenvalues and optionally eigenvectors of a sparse matrix using the Lanczos algorithm
      * 
      * @param ctx Execution context/device queue
@@ -413,6 +591,142 @@ namespace batchlas {
                                T zero_threshold = std::numeric_limits<T>::epsilon()) {
         return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
     }
+
+    /**
+     * @brief How a subset of the spectrum is selected.
+     */
+    enum class EigenRangeType {
+        All,    // Every eigenvalue
+        Index,  // Eigenvalues il..iu inclusive, 0-based, in ascending order
+        Value   // Eigenvalues in the half-open interval (vl, vu]
+    };
+
+    /**
+     * @brief Parameters for `stebz` (bisection on a symmetric tridiagonal matrix).
+     */
+    template <typename T>
+    struct StebzParams {
+        EigenRangeType range = EigenRangeType::All;
+        int64_t il = 0;    // First wanted index (0-based, inclusive), range == Index
+        int64_t iu = -1;   // Last wanted index (0-based, inclusive), range == Index
+        T vl = T(0);       // Lower bound (exclusive), range == Value
+        T vu = T(0);       // Upper bound (inclusive), range == Value
+        // Absolute tolerance on each eigenvalue. Non-positive means "use
+        // eps * ||T||", which yields eigenvalues to full working precision.
+        T abstol = T(0);
+        SortOrder order = SortOrder::Ascending;
+        // Safety cap on bisection steps per eigenvalue. The loop also exits on
+        // interval convergence, so this only bounds pathological cases.
+        int32_t max_iterations = 128;
+    };
+
+    /**
+     * @brief Computes selected eigenvalues of a batch of symmetric tridiagonal
+     *        matrices by bisection on Sturm sequence sign counts.
+     *
+     * Every eigenvalue is independent of every other, so this is embarrassingly
+     * parallel: one work-item bisects one eigenvalue. Unlike QR iteration or
+     * divide-and-conquer it can compute a subset at proportionally reduced cost,
+     * which is what makes it the tridiagonal kernel for `syevx`. Eigenvalues only;
+     * use `stein` for the corresponding eigenvectors.
+     *
+     * @param ctx Execution context/device queue
+     * @param d Diagonal, n entries per batch item
+     * @param e Off-diagonal, n-1 entries per batch item
+     * @param w Output eigenvalues; must hold at least the number selected
+     * @param m Output count of eigenvalues found, per batch item
+     * @param ws Pre-allocated workspace buffer
+     * @param params Selection range, tolerance and ordering
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T>
+    Event stebz(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                const VectorView<T>& w,
+                Span<int32_t> m,
+                const Span<std::byte>& ws,
+                StebzParams<T> params = StebzParams<T>());
+
+    /**
+     * @brief Required workspace size, in bytes, for `stebz`.
+     */
+    template <Backend B, typename T>
+    size_t stebz_buffer_size(Queue& ctx,
+                             size_t n,
+                             size_t batch_size,
+                             StebzParams<T> params = StebzParams<T>());
+
+    // Forwarding overload taking owning Vectors.
+    template <Backend B, typename T>
+    inline Event stebz(Queue& ctx,
+                       const Vector<T>& d,
+                       const Vector<T>& e,
+                       const Vector<T>& w,
+                       Span<int32_t> m,
+                       const Span<std::byte>& ws,
+                       StebzParams<T> params = StebzParams<T>()) {
+        return stebz<B, T>(ctx,
+                           static_cast<VectorView<T>>(d),
+                           static_cast<VectorView<T>>(e),
+                           static_cast<VectorView<T>>(w),
+                           m, ws, params);
+    }
+
+    /**
+     * @brief Parameters for `stein` (inverse iteration on a symmetric tridiagonal).
+     */
+    template <typename T>
+    struct SteinParams {
+        // Inverse iteration steps per vector. With eigenvalues accurate to working
+        // precision (as `stebz` produces) two to three steps are sufficient.
+        int32_t max_iterations = 3;
+        // Eigenvalues closer than ortho_threshold * ||T|| are treated as one
+        // cluster and the corresponding vectors are explicitly reorthogonalized.
+        // This is the mechanism that keeps inverse iteration usable on clustered
+        // spectra; it matches LAPACK dstein's default of 1e-3.
+        T ortho_threshold = T(1e-3);
+        uint32_t seed = 0x5eed1234u;
+    };
+
+    /**
+     * @brief Computes eigenvectors of a batch of symmetric tridiagonal matrices by
+     *        inverse iteration, given previously computed eigenvalues.
+     *
+     * Pairs with `stebz`. Each vector is obtained by solving (T - lambda*I) x = b
+     * with a tridiagonal LU factorization (partial pivoting), repeated a few times
+     * from a pseudo-random start. Vectors whose eigenvalues form a cluster are
+     * reorthogonalized against each other afterwards.
+     *
+     * @param ctx Execution context/device queue
+     * @param d Diagonal, n entries per batch item
+     * @param e Off-diagonal, n-1 entries per batch item
+     * @param w Eigenvalues, k per batch item, in ascending order
+     * @param k Number of eigenvectors to compute
+     * @param Z Output eigenvectors, n x k per batch item, columns matching w
+     * @param ws Pre-allocated workspace buffer
+     * @param params Iteration count and clustering threshold
+     * @return Event Event to track operation completion
+     */
+    template <Backend B, typename T>
+    Event stein(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                const VectorView<T>& w,
+                size_t k,
+                const MatrixView<T, MatrixFormat::Dense>& Z,
+                const Span<std::byte>& ws,
+                SteinParams<T> params = SteinParams<T>());
+
+    /**
+     * @brief Required workspace size, in bytes, for `stein`.
+     */
+    template <Backend B, typename T>
+    size_t stein_buffer_size(Queue& ctx,
+                             size_t n,
+                             size_t k,
+                             size_t batch_size,
+                             SteinParams<T> params = SteinParams<T>());
 
     enum class SteqrShiftStrategy {
         // LAPACK-style implicit shift (stable formulation used by dsteqr-style iterations).

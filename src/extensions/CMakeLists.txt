@@ -13,6 +13,10 @@ set(EXTENSIONS_EIGEN_SOURCES
     ortho.cc
     iluk.cc
     syevx.cc
+    syevx_direct.cc
+    syevx_direct_subset.cc
+    syevx_lobpcg.cc
+    syevx_filtered.cc
     syev_cta.cc
     syev_blocked.cc
     syev_two_stage.cc
@@ -41,6 +45,8 @@ set(EXTENSIONS_SYMMETRIC_SOURCES
 set(EXTENSIONS_TRIDIAG_SOURCES
     tridiag_solver.cc
     steqr.cc
+    stebz.cc
+    stein.cc
     steqr_wg.cc
     steqr_legacy.cc
     latrd_lower_panel.cc

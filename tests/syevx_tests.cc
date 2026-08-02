@@ -9,6 +9,10 @@
 #include <blas/extra.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
+#include <tuple>
+#include <cstdlib>
+#include <string>
+#include <limits>
 
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -344,8 +348,11 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     params.iterations = 30;
 
     UnifiedVector<double> W(neig * batch);
+    // Size the workspace against the matrix actually passed to syevx (the dense
+    // shift-inverted operator), not the CSR view: the two can select different
+    // algorithms and therefore different workspace requirements.
     UnifiedVector<std::byte> workspace(syevx_buffer_size<test_utils::gpu_backend>(
-        *ctx, A_view, W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
+        *ctx, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
 
     syevx<test_utils::gpu_backend>(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params);
         ctx->wait();
@@ -367,6 +374,1070 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */
 }
 
+
+namespace {
+// BATCHLAS_SYEVX_ALGORITHM takes precedence over SyevxParams::method (matching the
+// BATCHLAS_SYEV_PROVIDER convention), so a test that pins one algorithm cannot run
+// meaningfully while a different one is forced. Skip rather than fail: this keeps
+// "run the suite under every algorithm" sweeps honest.
+inline bool syevx_algorithm_overridden_to_other(const char* pinned) {
+    const char* v = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
+    if (!v || !*v) return false;
+    return std::string(v) != std::string(pinned);
+}
+} // namespace
+
+// Exercises the Direct (full syev + select) algorithm explicitly, including the
+// eigenvector output and both orderings. n > 64 with neigs/n = 0.25 lands in the
+// Direct band of syevx_select_algorithm, but the method is forced here so the test
+// keeps testing Direct even if the thresholds are later retuned.
+class SyevxDirectTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
+    constexpr int n = 128;
+    constexpr int batch = 3;
+    constexpr int neig = 32;
+    if (syevx_algorithm_overridden_to_other("direct")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.find_largest = find_largest;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, JobType::EigenVectors, V.view(), params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
+    ctx->wait();
+
+    // Reference: full decomposition of an untouched copy of A.
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            // syev returns ascending; Direct returns descending when find_largest.
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-6f), 0.0f, 1e-4f)
+                << "Eigenvalue mismatch at batch " << b << ", index " << i
+                << ": direct=" << got << " vs syev=" << ref;
+        }
+        // Ordering must be monotone in the requested direction.
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) {
+                EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]) << "not descending at " << i;
+            } else {
+                EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]) << "not ascending at " << i;
+            }
+        }
+    }
+
+    // A must not have been modified by syevx.
+    auto ritz = ritz_values<test_utils::gpu_backend>(*ctx, A.view(), V.view());
+    ctx->wait();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const float lambda = W[b * neig + i];
+            const float r = ritz[b * neig + i];
+            EXPECT_NEAR(std::abs(r - lambda) / std::max(std::abs(lambda), 1e-6f), 0.0f, 1e-3f)
+                << "Ritz value of returned eigenvector disagrees with returned eigenvalue"
+                << " at batch " << b << ", index " << i;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
+                         SyevxDirectTest,
+                         ::testing::Values(true, false),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                             return info.param ? "Largest" : "Smallest";
+                         });
+
+// Tier 2: two-stage reduction + subset tridiagonal solve + narrowed back-transform.
+// Checked against a full reference syev on the same input, for both orderings and
+// both JobType values.
+class SyevxDirectSubsetTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
+
+void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_vectors) {
+    SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
+                                      << " find_largest=" << find_largest
+                                      << " want_vectors=" << want_vectors);
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::DirectSubset;
+    params.find_largest = find_largest;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
+    ctx->wait();
+
+    // Reference: full decomposition of an untouched copy.
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, 1e-3f)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": subset=" << got << " syev=" << ref;
+        }
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
+            else              EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]);
+        }
+    }
+
+    if (!want_vectors) return;
+
+    // Residual against the ORIGINAL A: this is what proves the back-transform.
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 2e-3f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+        // Orthonormality of the returned block.
+        for (int i = 0; i < neig; ++i) {
+            for (int j = i + 1; j < neig; ++j) {
+                float dot = 0.0f;
+                for (int r = 0; r < n; ++r) dot += V.view()(r, i, b) * V.view()(r, j, b);
+                EXPECT_LE(std::abs(dot), 1e-3f)
+                    << "columns " << i << "," << j << " not orthogonal in batch " << b;
+            }
+        }
+    }
+}
+
+TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    CheckDirectSubset(96, 3, 8, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+// The stage-2 Householder chase schedule depends on (n, kd), so sizes that are
+// not clean multiples of the band width exercise different reflector layouts:
+// partial final windows, chases that hit the bottom early, and n small enough
+// that choose_two_stage_kd clamps kd below its default. n <= 64 also crosses the
+// dispatcher's small-n threshold, so these pin the algorithm explicitly.
+TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = std::get<0>(GetParam());
+    const bool want_vectors = std::get<1>(GetParam());
+    for (int n : {5, 17, 33, 64, 65, 97, 130}) {
+        const int neig = std::min(n, 6);
+        CheckDirectSubset(n, 2, neig, find_largest, want_vectors);
+    }
+}
+
+// k == n asks the subset path for the entire spectrum. The back-transform then
+// runs on a square block, which is the shape syev_two_stage uses, so a
+// disagreement here isolates the subset machinery from the reduction.
+TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    CheckDirectSubset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OrderAndJob, SyevxDirectSubsetTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    [](const ::testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+        std::string name = std::get<0>(info.param) ? "Largest" : "Smallest";
+        name += std::get<1>(info.param) ? "WithVectors" : "ValuesOnly";
+        return name;
+    });
+
+// Tier 3: Chebyshev-filtered subspace iteration.
+//
+// Checked against a full reference syev. A filtered solver can converge to the
+// wrong end of the spectrum or stall, so these assert on the eigenvalues
+// themselves rather than only on residuals: a self-consistent (lambda, v) pair
+// proves nothing about whether it is one of the *wanted* pairs.
+class SyevxFilteredTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
+
+void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vectors,
+                   float eig_tol = 1e-3f) {
+    SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
+                                      << " find_largest=" << find_largest
+                                      << " want_vectors=" << want_vectors);
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Filtered;
+    params.find_largest = find_largest;
+    params.absolute_tolerance = 1e-5f;
+    params.iterations = 200;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, eig_tol)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": filtered=" << got << " syev=" << ref;
+        }
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
+            else              EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]);
+        }
+    }
+
+    if (!want_vectors) return;
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 5e-3f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+        for (int i = 0; i < neig; ++i) {
+            for (int j = i + 1; j < neig; ++j) {
+                float dot = 0.0f;
+                for (int r = 0; r < n; ++r) dot += V.view()(r, i, b) * V.view()(r, j, b);
+                EXPECT_LE(std::abs(dot), 1e-3f)
+                    << "columns " << i << "," << j << " not orthogonal in batch " << b;
+            }
+        }
+    }
+}
+
+TEST_P(SyevxFilteredTest, MatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    CheckFiltered(64, 3, 4, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+TEST_P(SyevxFilteredTest, SmallFractionOfSpectrum) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    // k/n = 2%, the band Tier 3 exists to serve.
+    CheckFiltered(150, 2, 3, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+// The scaled recurrence exists so that high degrees do not overflow. A degree
+// that reaches float infinity in the unscaled form must still converge here.
+TEST_P(SyevxFilteredTest, HighDegreeDoesNotOverflow) {
+    if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = std::get<0>(GetParam());
+    const bool want_vectors = std::get<1>(GetParam());
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+    constexpr int n = 80, batch = 2, neig = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Filtered;
+    params.find_largest = find_largest;
+    params.filter_degree = 40;
+    params.absolute_tolerance = 1e-5f;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            EXPECT_TRUE(std::isfinite(W[b * neig + i]))
+                << "degree-40 filter produced a non-finite eigenvalue at batch " << b
+                << " index " << i;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OrderAndJob, SyevxFilteredTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    [](const ::testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+        std::string name = std::get<0>(info.param) ? "Largest" : "Smallest";
+        name += std::get<1>(info.param) ? "WithVectors" : "ValuesOnly";
+        return name;
+    });
+
+// LOBPCG with eigenvector output. The other LOBPCG tests all ask for
+// JobType::NoEigenVectors, so nothing pinned the *pairing* of returned columns to
+// returned eigenvalues -- and that pairing is exactly what the find_largest ordering
+// logic can get subtly wrong (correct-looking values, mismatched vectors). Checks
+// residuals per pair, not just values.
+class SyevxLobpcgVectorsTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+    constexpr int n = 64, batch = 3, neig = 4;
+    SCOPED_TRACE(::testing::Message() << "find_largest=" << find_largest);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.algorithm = OrthoAlgorithm::Chol2;
+    params.find_largest = find_largest;
+    params.extra_directions = 8;
+    params.iterations = 300;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, JobType::EigenVectors, V.view(), params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, 5e-3f)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": lobpcg=" << got << " syev=" << ref;
+        }
+        // Ordering: largest-first for find_largest, ascending otherwise.
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
+            else              EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]);
+        }
+        // The load-bearing check: column j must be an eigenvector for W[j], not for
+        // some other member of the returned block.
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 1e-2f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Order, SyevxLobpcgVectorsTest, ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) {
+        return std::string(info.param ? "Largest" : "Smallest");
+    });
+
+// SYEVX_PLAN.md 7.2: the LOBPCG instrumentation histories used to be filled by a
+// host loop over batch x neigs after a forced pipeline drain every iteration.
+// They are now stored device-side into a pool staging buffer and scattered into
+// the caller's spans once, at the end.
+//
+// Two things this pins down:
+//   * The caller's buffers may be plain host memory. Everything here is
+//     std::vector -- if any of it were written from a kernel this test would
+//     fault (or silently corrupt) on a discrete device.
+//   * The values are unchanged. BATCHLAS_SYEVX_INSTR_HOST=1 forces the old
+//     host-read path, and the two runs are compared entry by entry.
+namespace {
+
+struct InstrumentationRun {
+    std::vector<float> best;
+    std::vector<float> current;
+    std::vector<float> rate;
+    std::vector<float> ritz;
+    std::vector<int32_t> iters_done;
+};
+
+constexpr float kInstrSentinel = -1.0f;
+
+} // namespace
+
+TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+
+    constexpr int n = 64;
+    constexpr int batch = 3;
+    constexpr int neig = 4;
+    constexpr int iters = 16;
+    // Deliberately non-default strides with padding between blocks: the scatter
+    // has to honour them, and must not touch the padding.
+    constexpr size_t batch_stride = neig + 2;
+    constexpr size_t iter_stride = batch * batch_stride + 3;
+    constexpr size_t history_size = iters * iter_stride;
+
+    // A tight cluster at the wanted end, with the guard block cut to one vector:
+    // the block quality then does *not* improve on every iteration, so the "best
+    // so far" and "current" histories genuinely diverge. On a well-separated
+    // spectrum they coincide and the test cannot tell the two channels apart.
+    UnifiedVector<float> diagonal(n);
+    for (int i = 0; i < n; ++i) diagonal[i] = 1.0f + 0.01f * static_cast<float>(i);
+    auto dense = Matrix<float, MatrixFormat::Dense>::Diagonal(diagonal.to_span(), batch);
+
+    UnifiedVector<float> W(neig * batch, 0.0f);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.iterations = iters;
+    params.extra_directions = 1;
+    params.find_largest = true;
+    // Zero tolerance: never converges early, so all `iters` samples are stored
+    // and the two runs are directly comparable.
+    params.absolute_tolerance = 0.0f;
+    params.relative_tolerance = 0.0f;
+
+    auto solve = [&](bool force_host_path) {
+        InstrumentationRun run;
+        run.best.assign(history_size, kInstrSentinel);
+        run.current.assign(history_size, kInstrSentinel);
+        run.rate.assign(history_size, kInstrSentinel);
+        run.ritz.assign(history_size, kInstrSentinel);
+        run.iters_done.assign(batch, 0);
+
+        SyevxInstrumentation<float> instr;
+        instr.best_residual_history = Span<float>(run.best.data(), run.best.size());
+        instr.current_residual_history = Span<float>(run.current.data(), run.current.size());
+        instr.convergence_rate_history = Span<float>(run.rate.data(), run.rate.size());
+        instr.ritz_value_history = Span<float>(run.ritz.data(), run.ritz.size());
+        instr.iterations_done = run.iters_done.data();
+        instr.max_iterations = iters;
+        instr.store_every = 1;
+        instr.iteration_stride = iter_stride;
+        instr.batch_stride = batch_stride;
+        instr.store_current_residual = true;
+        instr.store_convergence_rate = true;
+        instr.store_ritz_values = true;
+
+        SyevxParams<float> local = params;
+        local.instrumentation = &instr;
+
+        if (force_host_path) {
+            setenv("BATCHLAS_SYEVX_INSTR_HOST", "1", 1);
+        } else {
+            unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
+        }
+
+        UnifiedVector<std::byte> workspace(syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, dense.view(), W, neig, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), local));
+        syevx<test_utils::gpu_backend>(
+            *ctx, dense.view(), W, neig, workspace, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), local);
+        ctx->wait_and_throw();
+        unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
+        return run;
+    };
+
+    const auto staged = solve(false);
+    const auto host = solve(true);
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(staged.iters_done[b], iters) << "batch " << b;
+        EXPECT_EQ(host.iters_done[b], iters) << "batch " << b;
+    }
+
+    for (int s = 0; s < iters; ++s) {
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < neig; ++i) {
+                const size_t dst = static_cast<size_t>(s) * iter_stride
+                                 + static_cast<size_t>(b) * batch_stride + i;
+
+                EXPECT_TRUE(std::isfinite(staged.best[dst])) << "best at " << dst;
+                EXPECT_GT(staged.best[dst], 0.0f) << "best at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.current[dst])) << "current at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.ritz[dst])) << "ritz at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.rate[dst])) << "rate at " << dst;
+
+                // The rate is this sample's best over the previous sample's best.
+                const float expected_rate = (s == 0)
+                    ? 1.0f
+                    : (staged.best[dst - iter_stride] > 0.0f
+                           ? staged.best[dst] / staged.best[dst - iter_stride]
+                           : 1.0f);
+                EXPECT_NEAR(staged.rate[dst], expected_rate, 1e-5f * std::max(1.0f, expected_rate))
+                    << "convergence rate inconsistent with the best-residual series at " << dst;
+
+                // Same values as the host-read path. Not bitwise: the residual
+                // kernel accumulates through work-group atomics, so repeated runs
+                // differ in the last few ulps regardless of this change.
+                const float ref = host.best[dst];
+                EXPECT_NEAR(staged.best[dst], ref, 1e-3f * std::max(1e-30f, std::abs(ref)))
+                    << "best residual differs from host path at " << dst;
+                EXPECT_NEAR(staged.current[dst], host.current[dst],
+                            1e-3f * std::max(1e-30f, std::abs(host.current[dst])))
+                    << "current residual differs from host path at " << dst;
+                EXPECT_NEAR(staged.ritz[dst], host.ritz[dst],
+                            1e-3f * std::max(1e-30f, std::abs(host.ritz[dst])))
+                    << "ritz value differs from host path at " << dst;
+            }
+
+            // Padding inside a batch block, and the tail of an iteration block,
+            // must be untouched.
+            const size_t pad = static_cast<size_t>(s) * iter_stride
+                             + static_cast<size_t>(b) * batch_stride + neig;
+            EXPECT_EQ(staged.best[pad], kInstrSentinel) << "scatter wrote into batch padding at " << pad;
+            EXPECT_EQ(staged.rate[pad], kInstrSentinel) << "scatter wrote into batch padding at " << pad;
+        }
+        const size_t tail = static_cast<size_t>(s) * iter_stride + batch * batch_stride;
+        EXPECT_EQ(staged.best[tail], kInstrSentinel) << "scatter wrote into iteration padding at " << tail;
+    }
+
+    // The stored block is the best seen so far and its quality is the worst of
+    // its columns, so max_i best[s] is non-increasing in s, and it equals the
+    // running minimum of max_i current[s]. That second identity is what pins the
+    // two channels to different values: feeding the current residual into the
+    // best-residual history passes every other check here.
+    int divergences = 0;
+    for (int b = 0; b < batch; ++b) {
+        float previous = std::numeric_limits<float>::infinity();
+        float running_min = std::numeric_limits<float>::infinity();
+        for (int s = 0; s < iters; ++s) {
+            float worst_best = 0.0f;
+            float worst_current = 0.0f;
+            for (int i = 0; i < neig; ++i) {
+                const size_t dst = static_cast<size_t>(s) * iter_stride
+                                 + static_cast<size_t>(b) * batch_stride + i;
+                worst_best = std::max(worst_best, staged.best[dst]);
+                worst_current = std::max(worst_current, staged.current[dst]);
+            }
+            running_min = std::min(running_min, worst_current);
+
+            EXPECT_LE(worst_best, previous * (1.0f + 1e-5f))
+                << "best-residual block quality increased at sample " << s << ", batch " << b;
+            EXPECT_NEAR(worst_best, running_min, 1e-5f * std::max(1.0f, running_min))
+                << "best-residual history is not the running best of the current residuals"
+                << " at sample " << s << ", batch " << b;
+            if (worst_current > worst_best * (1.0f + 1e-4f)) ++divergences;
+            previous = worst_best;
+        }
+    }
+    // Guards the check above: if the problem converged monotonically the two
+    // histories would be identical and none of this would be discriminating.
+    EXPECT_GT(divergences, 0)
+        << "best and current residual histories never diverged -- this problem no longer "
+           "distinguishes the two channels, so the test has lost its teeth";
+}
+
+// -----------------------------------------------------------------------------
+// Jacobi preconditioner (SYEVX_PLAN.md 7.10)
+//
+// (diag(A) - lambda I)^{-1} applied to the LOBPCG residual. Unlike ILU(k) it needs
+// no factorization and is defined for dense and CSR alike, and unlike ILU(k) it is
+// legal at both ends of the spectrum -- the shift comes from the current Ritz
+// value, so it targets whichever end is being sought.
+// -----------------------------------------------------------------------------
+namespace {
+
+// A symmetric matrix with a controllable amount of diagonal dominance. `spread`
+// scales the diagonal against the off-diagonal noise; a large spread is the regime
+// a diagonal preconditioner is supposed to serve, a spread of 0 is a plain random
+// symmetric matrix where it should do little.
+Matrix<float, MatrixFormat::Dense> MakeGradedSymmetric(int n, int batch, float spread,
+                                                       unsigned seed = 12345u) {
+    Matrix<float, MatrixFormat::Dense> A(n, n, batch);
+    // Deterministic: an iteration-count comparison across two runs is only
+    // meaningful on identical input.
+    unsigned state = seed;
+    auto next = [&]() {
+        state = state * 1664525u + 1013904223u;
+        return (float(state >> 8) / float(1u << 24)) - 0.5f;  // [-0.5, 0.5)
+    };
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = j; i < n; ++i) {
+                const float v = next();
+                A.view()(i, j, b) = v;
+                A.view()(j, i, b) = v;
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            A.view()(i, i, b) += spread * float(i + 1) / float(n);
+        }
+    }
+    return A;
+}
+
+struct JacobiRunResult {
+    std::vector<float> W;
+    int32_t iterations = 0;
+};
+
+template <MatrixFormat MFormat, typename AView>
+JacobiRunResult RunLobpcg(Queue& ctx, const AView& A_view, int n, int batch, int neig,
+                          bool find_largest, SyevxPreconditioner precond,
+                          Matrix<float, MatrixFormat::Dense>* V = nullptr,
+                          float tol = 1e-6f, size_t max_iters = 200) {
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.preconditioner_type = precond;
+    params.find_largest = find_largest;
+    params.algorithm = OrthoAlgorithm::SVQB2;
+    params.iterations = max_iters;
+    params.absolute_tolerance = tol;
+    params.relative_tolerance = tol;
+
+    std::vector<int32_t> iters(batch, 0);
+    SyevxInstrumentation<float> instr;
+    instr.iterations_done = iters.data();
+    params.instrumentation = &instr;
+
+    UnifiedVector<float> W(neig * batch, 0.0f);
+    const JobType jobz = V ? JobType::EigenVectors : JobType::NoEigenVectors;
+    auto V_view = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        ctx, A_view, W.to_span(), neig, jobz, V_view, params));
+    syevx<test_utils::gpu_backend>(ctx, A_view, W.to_span(), neig, ws, jobz, V_view, params);
+    ctx.wait();
+
+    JacobiRunResult out;
+    out.W.assign(W.begin(), W.end());
+    out.iterations = iters[0];
+    return out;
+}
+
+// Full reference spectrum of A, ascending.
+std::vector<float> ReferenceSpectrum(Queue& ctx, const Matrix<float, MatrixFormat::Dense>& A,
+                                     int n, int batch) {
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(ctx, A_ref.view(), A.view());
+    ctx.wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors,
+                                 Uplo::Lower, syev_ws);
+    ctx.wait();
+    return std::vector<float>(W_ref.begin(), W_ref.end());
+}
+
+void CheckAgainstReference(const std::vector<float>& W, const std::vector<float>& W_ref,
+                           int n, int batch, int neig, bool find_largest, float tol) {
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, tol)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": jacobi=" << got << " syev=" << ref;
+        }
+    }
+}
+
+// ||A v - lambda v|| / max(|lambda|, 1) for every returned pair, against the
+// ORIGINAL A rather than anything the solver produced.
+void CheckResiduals(const Matrix<float, MatrixFormat::Dense>& A,
+                    const Matrix<float, MatrixFormat::Dense>& V,
+                    const std::vector<float>& W, int n, int batch, int neig, float tol) {
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1.0f), tol)
+                << "residual too large, batch " << b << " column " << j;
+        }
+    }
+}
+
+// Unshifted diag(A)^{-1} approximates A^{-1} and is rejected for the largest end;
+// the shifted form is legal at both. The correctness tests want whichever is
+// applicable so that both kernels are exercised.
+SyevxPreconditioner LegalJacobi(bool find_largest) {
+    return find_largest ? SyevxPreconditioner::JacobiShifted : SyevxPreconditioner::Jacobi;
+}
+
+} // namespace
+
+class SyevxJacobiTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SyevxJacobiTest, DenseMatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+    constexpr int n = 120, batch = 2, neig = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto run = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, find_largest,
+                                              LegalJacobi(find_largest), &V);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(run.W, W_ref, n, batch, neig, find_largest, 1e-3f);
+    CheckResiduals(A, V, run.W, n, batch, neig, 5e-3f);
+}
+
+TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+    constexpr int n = 120, batch = 2, neig = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    auto A_csr = A.convert_to<MatrixFormat::CSR>();
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig, find_largest,
+                                            LegalJacobi(find_largest), &V);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(run.W, W_ref, n, batch, neig, find_largest, 1e-3f);
+    // Residual against the dense original: the CSR view is a conversion of it, so
+    // this also checks that the CSR diagonal search found the right entries.
+    CheckResiduals(A, V, run.W, n, batch, neig, 5e-3f);
+}
+
+// A structurally sparse matrix whose diagonal entries are not the first entry of
+// their row, so a CSR diagonal extraction that assumed a position rather than
+// searching would pick up an off-diagonal value.
+TEST_P(SyevxJacobiTest, CsrWithUnsortedDiagonalPosition) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+    constexpr int n = 100, batch = 2, neig = 3;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    // Tridiagonal: row i holds columns i-1, i, i+1, so the diagonal is the second
+    // entry for every interior row.
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 4.0f, -1.0f, -1.0f, batch);
+    auto A_csr = A.convert_to<MatrixFormat::CSR>();
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig, find_largest,
+                                            LegalJacobi(find_largest), &V);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(run.W, W_ref, n, batch, neig, find_largest, 2e-3f);
+    CheckResiduals(A, V, run.W, n, batch, neig, 5e-3f);
+}
+
+INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest, SyevxJacobiTest, ::testing::Values(true, false),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                             return info.param ? "Largest" : "Smallest";
+                         });
+
+// The whole point of the unshifted preconditioner: on a strongly graded (nearly
+// diagonal) matrix diag(A)^{-1} is close to A^{-1}, and the iteration count must
+// drop substantially. Measured 70 -> 11 at n=512, k=2 (see DISABLED_IterationSweep);
+// the assertion asks only for a 2x improvement so that it is not a tuning tripwire.
+TEST(SyevxJacobiIterations, HelpsOnGradedMatrix) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 200, batch = 1, neig = 4;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 400.0f);
+    ctx->wait();
+
+    // A tolerance both runs can actually reach in single precision, so that the
+    // comparison is between two converged solves and not between two runs that both
+    // hit the iteration cap.
+    const float tol = 1e-4f;
+    const auto plain = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                                      SyevxPreconditioner::None, nullptr, tol);
+    const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                                    SyevxPreconditioner::Jacobi, nullptr, tol);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(jac.W, W_ref, n, batch, neig, false, 1e-3f);
+
+    EXPECT_LE(jac.iterations * 2, plain.iterations)
+        << "Jacobi did not halve the iteration count on a strongly graded matrix: "
+        << jac.iterations << " vs " << plain.iterations;
+    std::cout << "[ jacobi   ] graded n=" << n << " neig=" << neig
+              << ": none=" << plain.iterations << " jacobi=" << jac.iterations << std::endl;
+}
+
+// The complement: a random symmetric matrix has neither a dominant nor a
+// sign-definite diagonal, so diag(A)^{-1} is not a valid preconditioner there. It
+// must degrade to the identity rather than to divergence -- without the
+// per-batch-item definiteness test this case ran to the iteration cap.
+TEST(SyevxJacobiIterations, DegradesGracefullyOnRandomSymmetric) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 200, batch = 1, neig = 4;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 0.0f);
+    ctx->wait();
+
+    const float tol = 1e-4f;
+    const auto plain = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                                      SyevxPreconditioner::None, nullptr, tol);
+    const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                                    SyevxPreconditioner::Jacobi, nullptr, tol);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(jac.W, W_ref, n, batch, neig, false, 1e-3f);
+    EXPECT_EQ(jac.iterations, plain.iterations)
+        << "an indefinite diag(A) should have disabled the preconditioner entirely: "
+        << jac.iterations << " vs " << plain.iterations;
+}
+
+// A constant diagonal makes (diag(A) - lambda I)^{-1} a per-column scalar, and
+// LOBPCG's Rayleigh-Ritz is invariant to per-column scaling of the search block.
+// The shifted form must therefore be an exact no-op here -- which is the sharpest
+// available check that the shift is indexed to the right Ritz value per column.
+TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    // Soft locking (SYEVX_PLAN.md §7.5) substitutes filler vectors for converged
+    // columns, which perturbs the trajectory and breaks the exact equality this
+    // test is built on. The invariant is real but only holds without locking, and
+    // loosening the comparison would throw away precisely the sharpness that makes
+    // this test worth having -- so skip instead.
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
+        if (!(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F')) {
+            GTEST_SKIP() << "soft locking perturbs the iteration trajectory";
+        }
+    }
+    constexpr int n = 128, batch = 1, neig = 4;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 4.0f, -1.0f, -1.0f, batch);
+    auto A_csr = A.convert_to<MatrixFormat::CSR>();
+    ctx->wait();
+
+    const float tol = 1e-4f;
+    for (bool find_largest : {false, true}) {
+        const auto plain = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig,
+                                                        find_largest, SyevxPreconditioner::None,
+                                                        nullptr, tol);
+        const auto shifted = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig,
+                                                          find_largest,
+                                                          SyevxPreconditioner::JacobiShifted,
+                                                          nullptr, tol);
+        EXPECT_EQ(shifted.iterations, plain.iterations)
+            << "constant-diagonal shifted Jacobi changed the iteration count (find_largest="
+            << find_largest << "): " << shifted.iterations << " vs " << plain.iterations;
+    }
+}
+
+// Iteration-count sweep. Disabled by default (it is a measurement, not an
+// assertion); run with
+//   BATCHLAS_SYEVX_CHECK_EVERY=1 ./build/tests/syevx_tests \
+//       --gtest_also_run_disabled_tests --gtest_filter='*IterationSweep*'
+// BATCHLAS_SYEVX_CHECK_EVERY=1 matters: the default convergence check every 4
+// iterations quantizes the reported counts.
+TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    const float tol = 1e-4f;
+    const size_t cap = 300;
+
+    struct Case { const char* name; float spread; };
+    const Case cases[] = {
+        {"random-symmetric", 0.0f},
+        {"graded(x40)",     40.0f},
+        {"graded(x400)",   400.0f},
+    };
+
+    std::printf("%-18s %6s %6s %9s %8s %8s %7s %8s %7s\n", "matrix", "n", "neig", "end",
+                "none", "jacobi", "ratio", "shifted", "ratio");
+    // "jacobi" is blank where the unshifted form is illegal (largest end).
+    auto emit = [](const char* name, int n, int neig, bool find_largest, int none, int jac,
+                   int shi) {
+        char jac_cell[16], jac_ratio[16];
+        if (jac > 0) {
+            std::snprintf(jac_cell, sizeof(jac_cell), "%d", jac);
+            std::snprintf(jac_ratio, sizeof(jac_ratio), "%.2f", double(none) / jac);
+        } else {
+            std::snprintf(jac_cell, sizeof(jac_cell), "-");
+            std::snprintf(jac_ratio, sizeof(jac_ratio), "-");
+        }
+        std::printf("%-18s %6d %6d %9s %8d %8s %7s %8d %7.2f\n", name, n, neig,
+                    find_largest ? "largest" : "smallest", none, jac_cell, jac_ratio, shi,
+                    double(none) / std::max(1, shi));
+    };
+    for (const auto& c : cases) {
+        for (int n : {64, 128, 256, 512}) {
+            for (int neig : {2, 8, 16}) {
+                auto A = MakeGradedSymmetric(n, 1, c.spread);
+                ctx->wait();
+                for (bool find_largest : {false, true}) {
+                    const auto none = RunLobpcg<MatrixFormat::Dense>(
+                        *ctx, A.view(), n, 1, neig, find_largest, SyevxPreconditioner::None,
+                        nullptr, tol, cap);
+                    // Unshifted Jacobi is rejected for the largest end; report it only
+                    // where it is legal.
+                    const int jac_iters = find_largest ? 0 : RunLobpcg<MatrixFormat::Dense>(
+                        *ctx, A.view(), n, 1, neig, find_largest, SyevxPreconditioner::Jacobi,
+                        nullptr, tol, cap).iterations;
+                    const auto shi = RunLobpcg<MatrixFormat::Dense>(
+                        *ctx, A.view(), n, 1, neig, find_largest,
+                        SyevxPreconditioner::JacobiShifted, nullptr, tol, cap);
+                    emit(c.name, n, neig, find_largest, none.iterations, jac_iters,
+                         shi.iterations);
+                }
+            }
+        }
+    }
+    // Tridiagonal Toeplitz, sparse (CSR) path.
+    for (int n : {128, 512}) {
+        for (int neig : {2, 8}) {
+            auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 4.0f, -1.0f, -1.0f, 1);
+            auto A_csr = A.convert_to<MatrixFormat::CSR>();
+            ctx->wait();
+            for (bool find_largest : {false, true}) {
+                const auto none = RunLobpcg<MatrixFormat::CSR>(
+                    *ctx, A_csr.view(), n, 1, neig, find_largest, SyevxPreconditioner::None,
+                    nullptr, tol, cap);
+                const int jac_iters = find_largest ? 0 : RunLobpcg<MatrixFormat::CSR>(
+                    *ctx, A_csr.view(), n, 1, neig, find_largest, SyevxPreconditioner::Jacobi,
+                    nullptr, tol, cap).iterations;
+                const auto shi = RunLobpcg<MatrixFormat::CSR>(
+                    *ctx, A_csr.view(), n, 1, neig, find_largest,
+                    SyevxPreconditioner::JacobiShifted, nullptr, tol, cap);
+                emit("csr-tridiag", n, neig, find_largest, none.iterations, jac_iters,
+                     shi.iterations);
+            }
+        }
+    }
+}
+
+// Argument validation lives in the dispatcher (src/extensions/syevx.cc), because
+// dense input does not reach syevx_lobpcg.
+TEST(SyevxJacobiValidation, RejectsInconsistentPreconditionerRequests) {
+    constexpr int n = 96, batch = 1, neig = 3;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 10.0f);
+    auto A_csr = A.convert_to<MatrixFormat::CSR>();
+    ctx->wait();
+    UnifiedVector<float> W(neig * batch);
+    auto no_v = MatrixView<float, MatrixFormat::Dense>();
+
+    // ILU(k) asked for with nothing to apply.
+    {
+        SyevxParams<float> params;
+        params.preconditioner_type = SyevxPreconditioner::ILUK;
+        params.find_largest = false;
+        EXPECT_THROW(syevx_buffer_size<test_utils::gpu_backend>(
+                         *ctx, A_csr.view(), W.to_span(), neig, JobType::NoEigenVectors, no_v, params),
+                     std::invalid_argument);
+    }
+    // A factor supplied but a different family requested.
+    {
+        SyevxParams<float> params;
+        params.build_preconditioner = true;
+        params.preconditioner_type = SyevxPreconditioner::Jacobi;
+        params.find_largest = false;
+        EXPECT_THROW(syevx_buffer_size<test_utils::gpu_backend>(
+                         *ctx, A_csr.view(), W.to_span(), neig, JobType::NoEigenVectors, no_v, params),
+                     std::invalid_argument);
+    }
+    // Unshifted Jacobi is diag(A)^{-1}, an approximate A^{-1}: same restriction as
+    // ILU(k), rejected for the largest end.
+    {
+        SyevxParams<float> params;
+        params.method = SyevxAlgorithm::LOBPCG;
+        params.preconditioner_type = SyevxPreconditioner::Jacobi;
+        params.find_largest = true;
+        EXPECT_THROW(syevx_buffer_size<test_utils::gpu_backend>(
+                         *ctx, A_csr.view(), W.to_span(), neig, JobType::NoEigenVectors, no_v, params),
+                     std::invalid_argument);
+    }
+    // The shifted form takes its shift from the Ritz value, so it is legal at both
+    // ends -- the deliberate difference from ILU(k).
+    {
+        SyevxParams<float> params;
+        params.method = SyevxAlgorithm::LOBPCG;
+        params.preconditioner_type = SyevxPreconditioner::JacobiShifted;
+        params.find_largest = true;
+        EXPECT_NO_THROW(syevx_buffer_size<test_utils::gpu_backend>(
+                            *ctx, A_csr.view(), W.to_span(), neig, JobType::NoEigenVectors, no_v, params));
+    }
+}
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

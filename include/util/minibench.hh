@@ -929,6 +929,58 @@ inline void SyevxBenchSizesNetlib(Benchmark* b) {
     }
 }
 
+// Crossover sweep for syevx: (n, batch, neigs, algorithm).
+//
+// neigs is generated as a fraction of n so the cost model in SYEVX_PLAN.md §2 can
+// be checked directly. The 4th argument is a batchlas::SyevxAlgorithm value:
+// Direct = 1, DirectSubset = 2, Filtered = 3, LOBPCG = 4 — all four are now
+// implemented, and comparing them is the whole point of the sweep.
+//
+// LOBPCG's search space is [X,P,R], i.e. 3*block_vectors columns of length n, and
+// `ortho` requires the operand and its metric to fit: it throws outright once they
+// exceed n. So the iterative entry is skipped where it cannot run at all rather
+// than aborting the sweep — which is what it did, at n = 64, k/n = 0.5, where 3*40
+// columns do not fit in 64 dimensions. That regime is far past the point where the
+// cost model says LOBPCG loses anyway.
+template <typename Benchmark>
+inline bool SyevxLobpcgFits(int n, int ne) {
+    const int block_vectors = ne + (ne / 4 > 1 ? ne / 4 : 1);
+    return 3 * block_vectors <= n;
+}
+
+template <typename Benchmark>
+inline void SyevxCrossoverSizes(Benchmark* b) {
+    for (int n : {64, 128, 256, 512, 1024}) {
+        for (int bs : {1, 8, 64}) {
+            for (double frac : {0.01, 0.02, 0.05, 0.1, 0.25, 0.5}) {
+                const int ne = static_cast<int>(n * frac);
+                if (ne < 1) continue;
+                for (int algo : {1, 2, 3, 4}) {
+                    if (algo == 4 && !SyevxLobpcgFits<Benchmark>(n, ne)) continue;
+                    b->Args({n, bs, ne, algo});
+                }
+            }
+        }
+    }
+}
+
+
+// Reduced crossover sweep for the CPU/NETLIB backend.
+template <typename Benchmark>
+inline void SyevxCrossoverSizesNetlib(Benchmark* b) {
+    for (int n : {64, 128, 256}) {
+        for (int bs : {1, 8}) {
+            for (double frac : {0.02, 0.05, 0.1, 0.25, 0.5}) {
+                const int ne = static_cast<int>(n * frac);
+                if (ne < 1) continue;
+                for (int algo : {1, 2, 3, 4}) {
+                    if (algo == 4 && !SyevxLobpcgFits<Benchmark>(n, ne)) continue;
+                    b->Args({n, bs, ne, algo});
+                }
+            }
+        }
+    }
+}
 
 template <typename Benchmark>
 inline void OrthoBenchSizes(Benchmark* b) {
