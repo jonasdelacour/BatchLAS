@@ -55,12 +55,27 @@ PYTHONPATH=../../build/python python3 run_all.py     # execute and check all twe
 
 See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.
 
+## Getting Started in C++
+
+`examples/cpp/01_getting_started.cc` is a self-checking program covering the C++ conventions: compile-time backend selection, `Queue` and device pairing, `Matrix`/`MatrixView`, column-major storage, the batching convention, the `*_buffer_size` workspace contract, and asynchrony.
+
+```bash
+cmake -B build -S . -DBATCHLAS_BUILD_EXAMPLES=ON
+cmake --build build -j"$(nproc)"
+
+./build/examples/cpp/01_getting_started        # prints [ok  ]/[FAIL] per check
+./build/examples/cpp/01_getting_started cpu    # force the host backend
+```
+
+`examples/cpp/CMakeLists.txt` also builds standalone against an installed BatchLAS, so it doubles as a template for consuming the exported `BatchLAS::batchlas` target. See `examples/cpp/README.md`.
+
 ## Repository Layout
 
 - `include/`: public C++ headers
 - `src/`: library implementation and backend/component targets
 - `tests/`: GoogleTest-based unit tests and smoke-test subset
 - `benchmarks/`: performance and accuracy benchmark executables
+- `examples/cpp/`: self-checking C++ examples (`BATCHLAS_BUILD_EXAMPLES=ON`)
 - `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
 - `scripts/`: benchmark campaign helpers and result-processing scripts
 - `playground/`: notebooks and exploratory scripts for algorithm work
