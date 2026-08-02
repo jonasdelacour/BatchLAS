@@ -90,6 +90,63 @@ inline int64_t lobpcg_check_every() {
     return 4;
 }
 
+// Instrumentation staging plan -- SYEVX_PLAN.md §7.2.
+//
+// The SyevxInstrumentation spans and `iterations_done` are caller-supplied and
+// carry no guarantee of being device-accessible (the Python binding, for one,
+// hands us a plain std::vector<int32_t> for iterations_done). Writing to them
+// from a kernel would crash such callers. So the residual kernel stores into a
+// compact, pool-allocated staging buffer instead, and a single host pass after
+// the iteration loop scatters it into the caller's spans honouring their
+// strides. One host round-trip per solve instead of one per iteration, and the
+// caller's memory is only ever touched from the host, exactly as before.
+//
+// convergence_rate_history is derived from the previous sample, so it is not
+// staged at all: the scatter computes it from the staged best-residual series,
+// which is the same series the old code read back out of the caller's span.
+struct LobpcgInstrumentationPlan {
+    bool active = false;         // instrumentation requested at all
+    size_t samples = 0;          // upper bound on stored samples
+    size_t slot = 0;             // values per sample (batch_size * neigs)
+    bool stage_current = false;  // current_residual_history wanted
+    bool stage_ritz = false;     // ritz_value_history wanted
+
+    // Bytes the staging buffers need. Must be identical in syevx_lobpcg and
+    // syevx_lobpcg_buffer_size -- see the allocation-mirroring warning there.
+    template <typename Real>
+    size_t staging_bytes(Queue& ctx) const {
+        if (!active) return 0;
+        const size_t one = BumpAllocator::allocation_size<Real>(ctx, samples * slot);
+        return one * (1 + (stage_current ? 1 : 0) + (stage_ritz ? 1 : 0));
+    }
+};
+
+// Escape hatch for A/B-ing the two instrumentation paths against each other; the
+// device-staged path is meant to produce exactly the values the host path did,
+// and tests/syevx_tests.cc checks that by running both.
+inline bool lobpcg_instrumentation_force_host() {
+    const char* v = std::getenv("BATCHLAS_SYEVX_INSTR_HOST");
+    return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
+}
+
+template <typename T>
+LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& params,
+                                                      size_t neigs,
+                                                      int64_t batch_size) {
+    LobpcgInstrumentationPlan plan;
+    const auto* instr = params.instrumentation;
+    if (instr == nullptr || instr->max_iterations == 0 || instr->store_every == 0) return plan;
+    if (neigs == 0 || batch_size <= 0 || params.iterations == 0) return plan;
+    const size_t reachable = (params.iterations + instr->store_every - 1) / instr->store_every;
+    plan.samples = std::min(instr->max_iterations, reachable);
+    if (plan.samples == 0) return plan;
+    plan.active = true;
+    plan.slot = neigs * static_cast<size_t>(batch_size);
+    plan.stage_current = instr->store_current_residual && instr->current_residual_history.size() > 0;
+    plan.stage_ritz = instr->store_ritz_values && instr->ritz_value_history.size() > 0;
+    return plan;
+}
+
 } // namespace
 
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -287,7 +344,26 @@ inline int64_t lobpcg_check_every() {
                           ortho_buffer_size<B>(ctx, X, Transpose::NoTrans, params.algorithm),
                           std::max(ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
                           ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
-        
+
+        // Device-side instrumentation staging (§7.2). Allocated last so that the
+        // "does it fit?" test below sees everything else already claimed. A caller
+        // that filled in params.instrumentation only *after* calling
+        // syevx_lobpcg_buffer_size would otherwise hit a hard allocation failure;
+        // instead we notice there is no room and fall back to the old host-read
+        // path, which is correct but pays a pipeline drain per iteration.
+        const auto instr_plan = lobpcg_instrumentation_plan(params, neigs, batch_size);
+        Span<float_type> stage_best, stage_current, stage_ritz;
+        bool stage_device_side = false;
+        if (instr_plan.active && !lobpcg_instrumentation_force_host() &&
+            pool.remaining().size() >= instr_plan.template staging_bytes<float_type>(ctx)) {
+            stage_best = pool.allocate<float_type>(ctx, instr_plan.samples * instr_plan.slot);
+            if (instr_plan.stage_current) stage_current = pool.allocate<float_type>(ctx, instr_plan.samples * instr_plan.slot);
+            if (instr_plan.stage_ritz) stage_ritz = pool.allocate<float_type>(ctx, instr_plan.samples * instr_plan.slot);
+            stage_device_side = true;
+        }
+        size_t staged_samples = 0;
+
+
         //Double buffering pointer swap approach as opposed to copying data unnecessarily                                                                        
         auto swap_subspace = [&](){
             std::swap(X, X_new);
@@ -441,6 +517,24 @@ inline int64_t lobpcg_check_every() {
             const float_type abs_tol = static_cast<float_type>(std::abs(params.absolute_tolerance));
             const float_type rel_tol = static_cast<float_type>(std::abs(params.relative_tolerance));
             const float_type tol = std::max(abs_tol, rel_tol);
+
+            // Is this iteration a stored instrumentation sample? Purely a function
+            // of `it`, so it is decided on the host and handed to the kernel as
+            // pre-offset pointers -- null means "do not store".
+            const bool store_this_iteration =
+                stage_device_side &&
+                (static_cast<size_t>(it) % params.instrumentation->store_every) == 0 &&
+                staged_samples < instr_plan.samples;
+            float_type* stage_best_ptr = nullptr;
+            float_type* stage_current_ptr = nullptr;
+            float_type* stage_ritz_ptr = nullptr;
+            if (store_this_iteration) {
+                const size_t off = staged_samples * instr_plan.slot;
+                stage_best_ptr = stage_best.data() + off;
+                if (!stage_current.empty()) stage_current_ptr = stage_current.data() + off;
+                if (!stage_ritz.empty()) stage_ritz_ptr = stage_ritz.data() + off;
+            }
+
             auto residual_evt = ctx -> submit([&](sycl::handler& h){
                 auto Rdata = R.data_ptr();
                 auto Xdata = X.data_ptr();
@@ -568,6 +662,21 @@ inline int64_t lobpcg_check_every() {
                     }
 
                     sycl::group_barrier(cta);
+                    // Instrumentation history, stored device-side (§7.2). The
+                    // values are exactly what the host loop used to read back:
+                    // best_residuals / residuals as this kernel just wrote them,
+                    // and the Ritz value under the same find_largest indexing the
+                    // residual above used.
+                    if (stage_best_ptr != nullptr) {
+                        for (size_t i = tid; i < neigs; i += local_size) {
+                            const size_t dst = static_cast<size_t>(bid) * neigs + i;
+                            stage_best_ptr[dst] = blockbestresiduals[i];
+                            if (stage_current_ptr != nullptr) stage_current_ptr[dst] = blockresiduals[i];
+                            if (stage_ritz_ptr != nullptr) {
+                                stage_ritz_ptr[dst] = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                            }
+                        }
+                    }
                     if (want_eigenvectors && update_best[0] != 0) {
                         auto* blockXbest = Xbest_data + bid * (n * neigs);
                         // This copy is where the largest-first presentation happens: slot
@@ -594,25 +703,30 @@ inline int64_t lobpcg_check_every() {
                     }
                 });
             });
+            if (store_this_iteration) {
+                ++staged_samples;
+            }
+
             // Only drain the pipeline when a host-side reader actually needs the
             // results this iteration: the convergence check (every check_every
-            // iterations) or instrumentation (which still reads on the host --
-            // SYEVX_PLAN.md §7.2). Previously this waited unconditionally, so a
-            // 30-iteration solve paid 30 full round-trips; for small n and large
-            // batch that dominated the run. Overshooting the stopping point by a
-            // few iterations is far cheaper than the drains it replaces.
-            const bool instrumentation_active =
-                params.instrumentation && params.instrumentation->max_iterations > 0 &&
-                params.instrumentation->store_every > 0;
+            // iterations), or instrumentation when it could not be staged on the
+            // device (SYEVX_PLAN.md §7.2). Previously this waited unconditionally,
+            // so a 30-iteration solve paid 30 full round-trips; for small n and
+            // large batch that dominated the run. Overshooting the stopping point
+            // by a few iterations is far cheaper than the drains it replaces.
+            const bool instrumentation_host_readback = instr_plan.active && !stage_device_side;
             const bool last_iteration = (it + 1 >= static_cast<int64_t>(params.iterations));
             const bool check_convergence =
                 (it % convergence_check_every == 0) || last_iteration;
-            if (instrumentation_active || check_convergence) {
+            if (instrumentation_host_readback || check_convergence) {
                 residual_evt.wait_and_throw();
             }
             trace("syevx: residual kernel done");
 
-            if (params.instrumentation && params.instrumentation->max_iterations > 0 && params.instrumentation->store_every > 0 &&
+            // Fallback path only: the device staging buffer did not fit, so the
+            // histories are filled the old way, with a host read of unified memory
+            // (and the forced drain above) every stored iteration.
+            if (instrumentation_host_readback &&
                 (static_cast<size_t>(it) % params.instrumentation->store_every) == 0) {
                 const auto& instr = *params.instrumentation;
                 using real_t = typename base_type<T>::type;
@@ -826,6 +940,53 @@ inline int64_t lobpcg_check_every() {
             }
         }
 
+        // One host round-trip for the whole run: drain once, then scatter the
+        // staged history into the caller's spans. The caller's memory is only
+        // ever written from the host, so it may be a plain std::vector.
+        if (stage_device_side && staged_samples > 0) {
+            ctx.wait_and_throw();
+            const auto& instr = *params.instrumentation;
+            const size_t batch_stride = instr.batch_stride == 0 ? neigs : instr.batch_stride;
+            const size_t iter_stride = instr.iteration_stride == 0 ? batch_size * batch_stride : instr.iteration_stride;
+            for (size_t sample_id = 0; sample_id < staged_samples; ++sample_id) {
+                const size_t src_base = sample_id * instr_plan.slot;
+                for (int64_t b = 0; b < batch_size; ++b) {
+                    for (size_t i = 0; i < neigs; ++i) {
+                        const size_t src = src_base + static_cast<size_t>(b) * neigs + i;
+                        const size_t dst = sample_id * iter_stride + static_cast<size_t>(b) * batch_stride + i;
+                        const auto best = stage_best[src];
+
+                        if (instr.best_residual_history.size() > dst) {
+                            instr.best_residual_history[dst] = best;
+                        }
+                        if (!stage_current.empty() && instr.current_residual_history.size() > dst) {
+                            instr.current_residual_history[dst] = stage_current[src];
+                        }
+                        if (!stage_ritz.empty() && instr.ritz_value_history.size() > dst) {
+                            instr.ritz_value_history[dst] = stage_ritz[src];
+                        }
+                        // Cross-iteration term: the rate is this sample's best over
+                        // the previous sample's best. It reads the staged series
+                        // rather than the caller's span, which is the same series
+                        // the old code read back -- unless the caller sized
+                        // best_residual_history smaller than convergence_rate_history,
+                        // in which case the old code was reading whatever the caller
+                        // had left in an unwritten slot.
+                        if (instr.store_convergence_rate && instr.convergence_rate_history.size() > dst) {
+                            float_type rate = float_type(1);
+                            if (sample_id > 0 && instr.best_residual_history.size() > (dst - iter_stride)) {
+                                const auto prev = stage_best[src - instr_plan.slot];
+                                if (prev > float_type(0)) {
+                                    rate = best / prev;
+                                }
+                            }
+                            instr.convergence_rate_history[dst] = rate;
+                        }
+                    }
+                }
+            }
+        }
+
         return ctx.get_event();
     }
 
@@ -925,6 +1086,11 @@ inline int64_t lobpcg_check_every() {
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, batch_size);                      //best block quality
+            // Instrumentation staging (§7.2). Mirrors the conditional allocation in
+            // syevx_lobpcg exactly -- same plan, same per-channel predicates. Zero
+            // when no instrumentation is attached to params.
+            work_size += lobpcg_instrumentation_plan(params, neigs, batch_size)
+                             .template staging_bytes<typename base_type<T>::type>(ctx);
 
             return work_size;
     }

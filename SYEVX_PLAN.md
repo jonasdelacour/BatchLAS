@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7, 7.8, 7.9).**
+Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.2, 7.3, 7.4, 7.6, 7.7, 7.8, 7.9).**
 Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
@@ -886,7 +886,7 @@ nothing about whether it is one of the *wanted* pairs, which is the specific way
 filtered solver fails. The whole suite also passes when forced onto each algorithm
 in turn, which is what exercises `Filtered` on the CSR and complex inputs.
 
-### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7, 7.8, 7.9)
+### Tier 4 — partially done (§7.1, 7.2, 7.3, 7.4, 7.6, 7.7, 7.8, 7.9)
 
 **§7.6 guard vectors — the one thing here with real measured numbers.**
 `extra_directions == 0` now means "choose one" (`max(2, neigs/4)`), matching the
@@ -971,8 +971,37 @@ the same values, one third of the traffic), and a 4-step block power-iteration s
 runs when `find_largest` is true — 12–44% fewer iterations, table in §7.9. The
 equivalent for the smallest end was measured and gave nothing, so it was not shipped.
 
-**Still open in §7:** 7.2 (instrumentation host reads), 7.5 (locking/deflation),
-7.10 (Jacobi and Chebyshev preconditioners), 7.11 (projected-`syev` sweep).
+**§7.2 instrumentation host reads.** The histories are now stored from the
+residual kernel into a compact staging buffer carved out of the same pool
+everything else uses, and scattered into the caller's spans by one host pass
+after the loop. Turning instrumentation on no longer forces a pipeline drain per
+iteration, so it no longer changes the performance of the thing it measures.
+
+The constraint that shaped this: `SyevxInstrumentation`'s spans and its
+`iterations_done` pointer are caller-supplied and carry **no guarantee of being
+device-accessible**. The two C++ benchmarks pass `UnifiedVector`, but the Python
+binding passes a plain `std::vector<int32_t>` for `iterations_done`
+(`python/batchlas/bindings/ops_spectral.cc`), and nothing in the public type says
+it may not. Writing to them from a kernel would fault on a discrete device. So
+the kernel only ever touches pool memory, and the caller's buffers are still
+written exclusively from the host — the staging buffer is what makes that cheap
+instead of per-iteration. `convergence_rate_history` is not staged at all: it is
+a ratio against the previous sample, and the scatter computes it from the staged
+best-residual series, which is the same series the old code read back out of the
+caller's span.
+
+Two consequences worth knowing. A caller that fills in
+`params.instrumentation` only *after* calling `syevx_buffer_size` would get a
+workspace with no room for the staging buffer; rather than throw, `syevx_lobpcg`
+notices and falls back to the old host-read path (`BATCHLAS_SYEVX_INSTR_HOST=1`
+forces the same fallback, which is how `tests/syevx_tests.cc` A/Bs the two paths
+against each other). And the values are identical to the host path only up to the
+run-to-run noise of the residual kernel's work-group atomics — around 6–7
+significant figures in float, which is what two runs of the *unmodified* build
+already differed by.
+
+**Still open in §7:** 7.5 (locking/deflation), 7.10 (Jacobi and Chebyshev
+preconditioners), 7.11 (projected-`syev` sweep).
 
 ### Not yet measured
 
