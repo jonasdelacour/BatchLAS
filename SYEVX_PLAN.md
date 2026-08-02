@@ -1,7 +1,7 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
 Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7).**
-Tiers 3–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
+Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
 user asked about separately — *batches of small matrices* and *batches of medium
