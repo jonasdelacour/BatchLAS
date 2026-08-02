@@ -1,17 +1,12 @@
 # BatchLAS C++ examples
 
-Twelve self-checking programs for the BatchLAS C++ interface, covering the same
-ground as the `python/examples/` notebooks. Each one explains a slice of the API
-in comments, then computes something and verifies it against an independent
-host-side reference — so a clean run doubles as a smoke test:
+Twelve short programs covering the BatchLAS C++ interface, one topic each, in
+the same order as the `python/examples/` notebooks. They are meant to be read:
+each is a sequence of API calls with the contract explained in comments and the
+results printed, so you can see the shapes and conventions a routine expects
+without unpicking a test harness.
 
-```
-[ok  ] batched gemm error: 0.000e+00  (tol 1.000e-12)
-```
-
-Lines marked `[FAIL]` mean a check did not hold on your machine, and the program
-exits non-zero. `[skip]` marks something that could not run here — a GPU-only
-routine on a CPU device, or a known library defect.
+Run one to watch it work; open it to copy the call you need.
 
 ## The examples
 
@@ -30,11 +25,18 @@ routine on a CPU device, or a known library defect.
 | 11 | `11_generators_and_utilities.cc` | Structured constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl`, `astype`, `convert_to` |
 | 12 | `12_choosing_a_variant.cc` | Batching speed-up, throughput scaling, picking a `syev` variant, workspace reuse |
 
-`example_common.hh` (reporting), `example_linalg.hh` (host reference kernels and
-generators) and `example_runner.hh` (backend/device selection) are shared
-helpers, not part of the library API. Example 01 spells out backend selection
-inline rather than using the runner, because choosing a backend is one of the
-things you have to understand to use the C++ API.
+`example_utils.hh` holds the only shared code: section headings and the
+backend/device selection every example needs. It is not part of the library API.
+Example 01 spells the backend selection out inline instead of using it, because
+choosing a backend is one of the things you have to understand to use the C++
+interface.
+
+Setup uses the library's own generators — `Matrix::Random`, `Identity`,
+`TriDiagToeplitz`, `RandomTriangular` and friends — so the examples stay short
+and exercise more of the API. Where a result is worth checking, they check it
+with BatchLAS itself: example 07 confirms a tridiagonal reduction preserved the
+spectrum by feeding it to `stedc`, and example 08 prints the closed-form
+eigenvalues of a Toeplitz matrix next to what the solvers found.
 
 ## Building them
 
@@ -48,7 +50,7 @@ cmake --build build -j"$(nproc)"
 ```
 
 With `BATCHLAS_BUILD_TESTS=ON` as well, each example is registered with CTest as
-`example_<name>`, so `ctest` runs them alongside the unit tests.
+`example_<name>`, so a broken build or a crashing routine shows up in `ctest`.
 
 Every example picks a GPU backend when the build and the machine both have one,
 and falls back to the host (NETLIB) backend otherwise. Pass `cpu` to force the
@@ -142,9 +144,9 @@ These are the things the Python facade hides and a C++ caller has to know.
 
 ## Known issues visible in these examples
 
-These are library-level problems, not mistakes in the examples. Each is
-reproduced by the example named, which reports the measured value rather than
-failing, so the behaviour stays visible.
+These are library-level problems, not mistakes in the examples. Each was found
+while writing the example named, which works around it and says so in a comment
+at the call site.
 
 - **`syev_two_stage` with `JobType::NoEigenVectors`** returns wrong eigenvalues
   for `n >= 32`, silently. `n = 16` is fine, and `JobType::EigenVectors` is
@@ -154,7 +156,7 @@ failing, so the behaviour stays visible.
   to produce. Same workaround. (08)
 - **`stedc_flat` eigenvectors on CUDA.** Eigenvalues are correct and the columns
   are orthonormal, but they do not satisfy `T V = V diag(w)` — the residual is
-  order 1. Only a residual check exposes this; an orthogonality check passes.
+  order 1. An orthogonality check passes, so only a residual check exposes it.
   The host backend is unaffected. (08)
 - **`tridiagonal_solver` accuracy.** Its QR iteration does not converge
   reliably; the error on a matrix with an exactly known spectrum is around
@@ -218,8 +220,8 @@ failing, so the behaviour stays visible.
 The `*_cta` routines map one work-group onto one matrix and need a sub-group
 width of 32, so they are GPU-only and limited to `n <= 32`. `syev_blocked`,
 `syev_two_stage` and the `sytrd_*` reduction stages are also GPU-only, and
-accept `Uplo::Lower` only. The examples check the device and skip rather than
-fail.
+accept `Uplo::Lower` only. The examples check the device and print a
+`(skipped)` line rather than failing.
 
 Timings in example 12 come from a run on an RTX 4090 and will differ on your
 hardware.

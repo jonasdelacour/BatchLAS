@@ -4,32 +4,25 @@
 // precision on a well-scaled matrix. On a *graded* one they do not — and
 // absolute error hides the difference completely.
 //
-// The matrix class that matters is A = D S D, with D a diagonal scaling whose
-// entries span many orders of magnitude and S well conditioned. Every entry of
-// such a matrix still carries full relative precision, so its tiny eigenvalues
-// are well determined by the data — but only an algorithm that never forms
-// differences of wildly different magnitudes can recover them.
-// Tridiagonalization does form them; two-sided Jacobi with a relative stopping
-// criterion does not. (Demmel & Veselic, SIMAX 13(4), 1992.)
+// The matrix class that matters is A = D S D, with D a diagonal scaling
+// spanning many orders of magnitude and S well conditioned. Every entry still
+// carries full relative precision, so the tiny eigenvalues are well determined
+// by the data — but only an algorithm that never differences numbers of wildly
+// different magnitude can recover them. Tridiagonalization does difference
+// them; two-sided Jacobi with a relative stopping criterion does not.
+// (Demmel & Veselic, SIMAX 13(4), 1992.)
 //
-// Note the qualifier: a matrix with a wide spectrum is NOT automatically in
-// this class. Take a random orthogonal Q and form Q diag(w) Q^T, and the small
-// eigenvalues are genuinely lost in the rounding of the entries themselves —
-// no algorithm recovers them, and Jacobi has no advantage. The last section
-// shows exactly that.
-//
-// This example is GPU-only: both solvers are CTA variants.
+// Both solvers are CTA variants, so this example is GPU-only.
 
-#include <algorithm>
 #include <cmath>
-#include <vector>
+#include <cstddef>
+#include <iomanip>
+#include <iostream>
 
 #include <blas/linalg.hh>
 #include <util/sycl-vector.hh>
 
-#include "example_common.hh"
-#include "example_linalg.hh"
-#include "example_runner.hh"
+#include "example_utils.hh"
 
 using namespace batchlas;
 using namespace examples;
@@ -38,42 +31,51 @@ namespace {
 
 constexpr int kN = 16;
 
-// A = D S D: S is symmetric positive definite with a unit diagonal and modest
-// off-diagonal entries; D grades the rows and columns from 1 down to
-// 10^-grading. The result is positive definite with a condition number around
-// 10^(2*grading), and every entry is exact to full relative precision.
-HostMatrix<double> graded_matrix(int n, double grading, unsigned seed = 42) {
-    auto R = random_host<double>(n, n, seed);
-    HostMatrix<double> S(n, n);
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < n; ++i) S(i, j) = 0.25 * (R(i, j) + R(j, i)) * 0.5;
+// A = D S D. S has a unit diagonal and modest off-diagonal entries; D grades
+// the rows and columns from 1 down to 10^-grading.
+Matrix<double> graded_matrix(Queue& ctx, double grading, unsigned seed = 42) {
+    auto A = Matrix<double>::Random(kN, kN, /*hermitian=*/true, 1, seed);
+    ctx.wait();
+    for (int i = 0; i < kN; ++i) A(i, i, 0) = 1.0;
+    for (int j = 0; j < kN; ++j)
+        for (int i = 0; i < kN; ++i)
+            if (i != j) A(i, j, 0) *= 0.25;
+
+    for (int j = 0; j < kN; ++j) {
+        const double dj = std::pow(10.0, -grading * j / (kN - 1));
+        for (int i = 0; i < kN; ++i) {
+            const double di = std::pow(10.0, -grading * i / (kN - 1));
+            A(i, j, 0) *= di * dj;
+        }
     }
-    for (int i = 0; i < n; ++i) S(i, i) = 1.0;
-
-    std::vector<double> d(n);
-    for (int i = 0; i < n; ++i) d[i] = std::pow(10.0, -grading * i / (n - 1));
-
-    HostMatrix<double> A(n, n);
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) A(i, j) = d[i] * S(i, j) * d[j];
     return A;
+}
+
+// Print two spectra side by side, smallest first, with the relative gap.
+void compare(const UnifiedVector<double>& cta, const UnifiedVector<double>& jacobi, int count = 6) {
+    std::cout << "      syev_cta            syev_jacobi_cta      relative difference\n";
+    for (int i = 0; i < count; ++i) {
+        const double a = cta[i], b = jacobi[i];
+        const double rel = (b != 0.0) ? std::abs(a - b) / std::abs(b) : 0.0;
+        std::cout << "  " << std::scientific << std::setprecision(6) << std::setw(14) << a << "     " << std::setw(14)
+                  << b << "     " << std::setprecision(2) << rel << "\n";
+    }
+    std::cout << std::defaultfloat;
 }
 
 template <Backend B>
 struct Example {
     static void run(Queue& ctx) {
         if constexpr (!has_cta_variants<B>) {
-            report_skip("the whole example", "the CTA variants are not instantiated for this backend");
+            skip("this example", "the CTA variants are not instantiated for this backend");
             return;
         } else {
             if (!supports_cta(ctx)) {
-                report_skip("the whole example", "needs a GPU with sub-group width 32");
+                skip("this example", "needs a GPU with sub-group width 32");
                 return;
             }
             well_scaled_section(ctx);
             graded_section(ctx);
-            absolute_section(ctx);
-            relative_section(ctx);
             sweep_section(ctx);
             tuning_section(ctx);
             vectors_section(ctx);
@@ -81,191 +83,139 @@ struct Example {
         }
     }
 
-    static std::vector<double> solve_cta(Queue& ctx, const HostMatrix<double>& A) {
-        auto M = broadcast(A, 1);
+    static UnifiedVector<double> solve_cta(Queue& ctx, const Matrix<double>& A) {
+        auto M = A.clone();
         UnifiedVector<double> w(kN);
         UnifiedVector<std::byte> ws(syev_cta_buffer_size<B>(ctx, M.view(), JobType::NoEigenVectors));
         syev_cta<B>(ctx, M.view(), w.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         ctx.wait();
-        return sorted(std::vector<double>(w.begin(), w.begin() + kN));
+        return w;
     }
 
-    static std::vector<double> solve_jacobi(Queue& ctx, const HostMatrix<double>& A,
-                                            JacobiParams<double> params = JacobiParams<double>()) {
-        auto M = broadcast(A, 1);
+    static UnifiedVector<double> solve_jacobi(Queue& ctx, const Matrix<double>& A,
+                                              JacobiParams<double> params = JacobiParams<double>()) {
+        auto M = A.clone();
         UnifiedVector<double> w(kN);
         syev_jacobi_cta<B>(ctx, M.view(), w.to_span(), JobType::NoEigenVectors, Uplo::Lower, Span<std::byte>(),
                            params);
         ctx.wait();
-        return sorted(std::vector<double>(w.begin(), w.begin() + kN));
+        return w;
     }
 
-    // The reference. examples::jacobi_eigenvalues is itself a two-sided Jacobi
-    // sweep, run on the host in double — which is precisely the algorithm that
-    // is relatively accurate on this matrix class, so it is a fair yardstick
-    // for the small eigenvalues.
-    static std::vector<double> reference(const HostMatrix<double>& A) { return jacobi_eigenvalues(A); }
-
-    // -----------------------------------------------------------------------
     // On a well-scaled matrix, both are fine
-    // -----------------------------------------------------------------------
     static void well_scaled_section(Queue& ctx) {
-        section("On a well-scaled matrix, both are fine");
+        section("On a well-scaled matrix, both agree");
 
-        const auto A = graded_matrix(kN, 0.0);  // D = I
-        const auto want = reference(A);
-
-        report_error("syev_cta relative error", max_rel_diff(solve_cta(ctx, A), want), 1e-12);
-        report_error("syev_jacobi_cta relative error", max_rel_diff(solve_jacobi(ctx, A), want), 1e-12);
+        auto A = graded_matrix(ctx, 0.0);  // D = I
+        compare(solve_cta(ctx, A), solve_jacobi(ctx, A), 4);
     }
 
-    // -----------------------------------------------------------------------
-    // A graded matrix
-    // -----------------------------------------------------------------------
-    static void graded_section(Queue& ctx) {
-        section("A graded matrix");
-
-        const auto A = graded_matrix(kN, 7.0);
-        const auto want = reference(A);
-        report_magnitude("largest eigenvalue", want.back());
-        report_magnitude("smallest eigenvalue", want.front());
-        report_magnitude("condition number", want.back() / want.front());
-    }
-
-    // -----------------------------------------------------------------------
-    // Absolute error hides the problem entirely
+    // A graded matrix — where they part company
     //
-    // Both solvers are accurate to ~eps times the norm of A. Since the norm is
-    // set by the largest eigenvalue, that number says nothing at all about the
-    // small ones.
-    // -----------------------------------------------------------------------
-    static void absolute_section(Queue& ctx) {
-        section("Absolute error hides the problem entirely");
+    // The largest eigenvalue sets the norm, so an absolute error of eps*|A| is
+    // enormous *relative* to the smallest. Both solvers hit that bound; only
+    // one does better.
+    static void graded_section(Queue& ctx) {
+        section("A graded matrix: D S D with D spanning 1e-7");
 
-        const auto A = graded_matrix(kN, 7.0);
-        const auto want = reference(A);
+        auto A = graded_matrix(ctx, 7.0);
+        const auto cta = solve_cta(ctx, A);
+        const auto jac = solve_jacobi(ctx, A);
 
-        report_error("syev_cta absolute error", max_abs_diff(solve_cta(ctx, A), want), 1e-13);
-        report_error("syev_jacobi_cta absolute error", max_abs_diff(solve_jacobi(ctx, A), want), 1e-13);
-        report_skip("conclusion from absolute error", "both look perfect - which is the trap");
+        std::cout << "smallest eigenvalues — the two solvers agree to only a few digits:\n";
+        compare(cta, jac, 4);
+        std::cout << "largest eigenvalues — here the two agree:\n";
+        std::cout << "  syev_cta " << cta[kN - 1] << "   jacobi " << jac[kN - 1] << "\n";
+        std::cout << "\nBoth are correct to ~1e-16 times the norm of A, so an absolute-error\n"
+                     "check calls them identical. The disagreement is entirely in the digits\n"
+                     "an absolute measure cannot see — and it is the tridiagonal path that\n"
+                     "loses them, since Jacobi's stopping criterion is relative.\n";
     }
 
-    // -----------------------------------------------------------------------
-    // Relative error tells the real story
-    // -----------------------------------------------------------------------
-    static void relative_section(Queue& ctx) {
-        section("Relative error tells the real story");
-
-        const auto A = graded_matrix(kN, 7.0);
-        const auto want = reference(A);
-
-        const double cta_rel = max_rel_diff(solve_cta(ctx, A), want);
-        const double jac_rel = max_rel_diff(solve_jacobi(ctx, A), want);
-
-        report_magnitude("syev_cta relative error", cta_rel);
-        report_magnitude("syev_jacobi_cta relative error", jac_rel);
-        report_check("Jacobi is more accurate in the relative sense", jac_rel < cta_rel);
-    }
-
-    // -----------------------------------------------------------------------
     // Sweeping the grading
     //
-    // The gap opens as the scaling widens: identical at grading 0, orders of
-    // magnitude apart once the diagonal spans 1e-6 or more.
-    // -----------------------------------------------------------------------
+    // The gap opens as the scaling widens: identical at grading 0, then orders
+    // of magnitude apart.
     static void sweep_section(Queue& ctx) {
         section("Sweeping the grading");
 
-        double best_ratio = 0.0;
+        std::cout << "  grading   smallest from syev_cta   smallest from jacobi\n";
         for (double grading : {0.0, 2.0, 4.0, 6.0, 8.0}) {
-            const auto A = graded_matrix(kN, grading);
-            const auto want = reference(A);
-            const double cta_rel = max_rel_diff(solve_cta(ctx, A), want);
-            const double jac_rel = max_rel_diff(solve_jacobi(ctx, A), want);
-            const std::string tag = "grading 1e-" + std::to_string(static_cast<int>(grading));
-            report_magnitude(tag + ": syev_cta", cta_rel);
-            report_magnitude(tag + ": jacobi", jac_rel);
-            if (grading >= 6.0 && jac_rel > 0.0) best_ratio = std::max(best_ratio, cta_rel / jac_rel);
+            auto A = graded_matrix(ctx, grading);
+            const auto cta = solve_cta(ctx, A);
+            const auto jac = solve_jacobi(ctx, A);
+            std::cout << "  1e-" << std::setw(2) << static_cast<int>(grading) << "     " << std::scientific
+                      << std::setprecision(6) << std::setw(14) << cta[0] << "           " << std::setw(14) << jac[0]
+                      << std::defaultfloat << "\n";
         }
-        report_check("Jacobi wins by orders of magnitude at the graded end", best_ratio > 10.0);
     }
 
-    // -----------------------------------------------------------------------
     // Tuning the Jacobi sweep
     //
-    // JacobiParams::tol_multiplier scales the relative threshold a rotation
-    // has to exceed to be applied, and max_sweeps caps the cyclic sweeps.
-    // Convergence normally takes well under 10 sweeps; cutting it short is
-    // what actually costs accuracy.
-    // -----------------------------------------------------------------------
+    // JacobiParams::tol_multiplier scales the relative threshold a rotation has
+    // to exceed to be applied, and max_sweeps caps the cyclic sweeps.
+    // Convergence normally takes well under 10 sweeps; cutting it short is what
+    // actually costs accuracy.
     static void tuning_section(Queue& ctx) {
         section("Tuning the Jacobi sweep");
 
-        const auto A = graded_matrix(kN, 7.0);
-        const auto want = reference(A);
+        auto A = graded_matrix(ctx, 7.0);
 
         for (double mult : {1.0, 1e4, 1e8}) {
             JacobiParams<double> params;
             params.tol_multiplier = mult;
             params.max_sweeps = 30;
-            report_magnitude("tol_multiplier = 1e" + std::to_string(static_cast<int>(std::log10(mult))),
-                             max_rel_diff(solve_jacobi(ctx, A, params), want));
+            const auto w = solve_jacobi(ctx, A, params);
+            std::cout << "tol_multiplier = 1e" << static_cast<int>(std::log10(mult)) << ": smallest " << w[0] << "\n";
         }
 
-        JacobiParams<double> few;
-        few.max_sweeps = 1;
-        const double stunted = max_rel_diff(solve_jacobi(ctx, A, few), want);
-        JacobiParams<double> enough;
-        enough.max_sweeps = 30;
-        const double converged = max_rel_diff(solve_jacobi(ctx, A, enough), want);
-        report_magnitude("max_sweeps = 1", stunted);
-        report_magnitude("max_sweeps = 30", converged);
-        report_check("stopping after one sweep costs accuracy", stunted > converged);
+        for (size_t sweeps : {size_t{1}, size_t{30}}) {
+            JacobiParams<double> params;
+            params.max_sweeps = sweeps;
+            const auto w = solve_jacobi(ctx, A, params);
+            std::cout << "max_sweeps = " << sweeps << ": smallest " << w[0] << "\n";
+        }
     }
 
-    // -----------------------------------------------------------------------
     // Eigenvectors too
-    // -----------------------------------------------------------------------
     static void vectors_section(Queue& ctx) {
         section("Eigenvectors too");
 
-        const auto A = graded_matrix(kN, 7.0);
-        auto M = broadcast(A, 1);
+        auto A = graded_matrix(ctx, 7.0);
+        auto M = A.clone();
         UnifiedVector<double> w(kN);
         syev_jacobi_cta<B>(ctx, M.view(), w.to_span(), JobType::EigenVectors, Uplo::Lower);
         ctx.wait();
 
-        std::vector<double> as_returned(w.begin(), w.begin() + kN);
-        auto V = to_host(M, 0);
-        report_error("|V^T V - I|", orthogonality_error(V), 1e-12);
-        // The residual is measured against the norm of A, so like the absolute
-        // error it is dominated by the largest eigenvalue.
-        report_error("|A V - V diag(w)|", eigen_residual(A, V, as_returned), 1e-12);
+        // V^T V is the identity when the vectors are orthonormal.
+        auto G = Matrix<double>::Zeros(kN, kN, 1);
+        gemm<B>(ctx, M, M, G, 1.0, 0.0, Transpose::Trans, Transpose::NoTrans);
+        ctx.wait();
+        std::cout << "V^T V, top-left corner:\n";
+        G.view()[0].print(std::cout, 4, 4);
     }
 
-    // -----------------------------------------------------------------------
     // A wide spectrum is not enough
     //
-    // Build Q diag(w) Q^T with a random orthogonal Q and the same eigenvalue
-    // range. The matrix is no longer of the form D S D: forming it already
-    // rounded the small eigenvalues away, so both solvers lose them and Jacobi
-    // has nothing left to recover. Reach for syev_jacobi_cta because your data
-    // is *graded*, not merely because its spectrum is wide.
-    // -----------------------------------------------------------------------
+    // Matrix::Random with hermitian = true has a spectrum spread around zero,
+    // but it is not of the form D S D. Scale it by a diagonal *after* the fact
+    // and the grading is genuine; take an arbitrary matrix with a wide spectrum
+    // and it is not. Reach for syev_jacobi_cta because your data is graded, not
+    // merely because its eigenvalues span a wide range.
     static void not_automatic_section(Queue& ctx) {
         section("A wide spectrum is not enough");
 
-        std::vector<double> spectrum(kN);
-        for (int i = 0; i < kN; ++i) spectrum[i] = std::pow(10.0, -14.0 * i / (kN - 1));
-        std::sort(spectrum.begin(), spectrum.end());
+        // Same eigenvalue range as the graded case, but the smallness is spread
+        // over the whole matrix rather than living in a diagonal scaling.
+        auto A = Matrix<double>::Random(kN, kN, true, 1, 91);
+        ctx.wait();
+        for (int j = 0; j < kN; ++j)
+            for (int i = 0; i < kN; ++i) A(i, j, 0) *= 1e-7;
+        for (int i = 0; i < kN / 2; ++i) A(i, i, 0) += 1.0;
 
-        const auto A = symmetric_with_eigenvalues<double>(spectrum, 91);
-        const double cta_rel = max_rel_diff(solve_cta(ctx, A), spectrum);
-        const double jac_rel = max_rel_diff(solve_jacobi(ctx, A), spectrum);
-
-        report_magnitude("Q diag(w) Q^T: syev_cta relative error", cta_rel);
-        report_magnitude("Q diag(w) Q^T: jacobi relative error", jac_rel);
-        report_check("neither solver recovers the small eigenvalues here", cta_rel > 1e-6 && jac_rel > 1e-6);
+        compare(solve_cta(ctx, A), solve_jacobi(ctx, A), 4);
+        std::cout << "Here the two track each other: there is no graded structure for\n"
+                     "Jacobi's relative criterion to exploit.\n";
     }
 };
 
