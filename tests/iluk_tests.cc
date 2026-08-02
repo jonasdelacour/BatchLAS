@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -952,6 +953,68 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
         syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
+}
+
+// Two numeric implementations exist -- host for small batches, device beyond the
+// crossover -- so they must not drift apart. Forcing each in turn and comparing the
+// factor entry by entry is what keeps them honest.
+TEST_F(ILUKTests, HostAndDeviceFactorizationsAgree) {
+    struct Case { int m; int batch; int level; float drop; float fill; };
+    const std::vector<Case> cases = {
+        {8, 1, 0, 1e-4f, 10.0f},
+        {8, 3, 1, 1e-4f, 10.0f},
+        {12, 5, 2, 1e-4f, 10.0f},
+        {8, 4, 1, 1e-2f, 10.0f},   // drop tolerance actually bites
+        {8, 4, 2, 0.0f, 1.0f},     // fill quota actually bites
+    };
+
+    for (const auto& c : cases) {
+        auto csr = make_laplacian_2d(c.m, c.batch);
+        auto view = csr.view();
+        ILUKParams<float> params;
+        params.levels_of_fill = c.level;
+        params.drop_tolerance = c.drop;
+        params.fill_factor = c.fill;
+
+        auto factor_with = [&](const char* mode) {
+            setenv("BATCHLAS_ILUK_DEVICE", mode, 1);
+            auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, params);
+            ctx->wait_and_throw();
+            unsetenv("BATCHLAS_ILUK_DEVICE");
+            return M;
+        };
+
+        auto host = factor_with("0");
+        auto device = factor_with("1");
+
+        const std::string label = "m=" + std::to_string(c.m) + " batch=" + std::to_string(c.batch) +
+                                  " level=" + std::to_string(c.level);
+        ASSERT_EQ(host.lu.nnz(), device.lu.nnz()) << label << ": compacted patterns differ";
+        ASSERT_EQ(host.l_levels, device.l_levels) << label;
+        ASSERT_EQ(host.u_levels, device.u_levels) << label;
+        EXPECT_EQ(host.u_diagonals_usable, device.u_diagonals_usable) << label;
+
+        auto hv = host.lu.view();
+        auto dv = device.lu.view();
+        const int n = c.m * c.m;
+        for (int b = 0; b < c.batch; ++b) {
+            for (int i = 0; i <= n; ++i) {
+                ASSERT_EQ(hv.row_offsets()[b * hv.offset_stride() + i],
+                          dv.row_offsets()[b * dv.offset_stride() + i]) << label << " row " << i;
+            }
+            for (int p = 0; p < host.lu.nnz(); ++p) {
+                ASSERT_EQ(hv.col_indices()[b * hv.matrix_stride() + p],
+                          dv.col_indices()[b * dv.matrix_stride() + p]) << label << " entry " << p;
+                const float a = hv.data()[b * hv.matrix_stride() + p];
+                const float d = dv.data()[b * dv.matrix_stride() + p];
+                EXPECT_NEAR(a, d, 1e-4f * std::max(1.0f, std::abs(a)))
+                    << label << " batch " << b << " entry " << p;
+            }
+            for (int i = 0; i < n; ++i) {
+                EXPECT_EQ(host.diag_positions[b * n + i], device.diag_positions[b * n + i]) << label;
+            }
+        }
+    }
 }
 
 // Dense counterpart of make_laplacian_2d, for timing a full eigendecomposition
