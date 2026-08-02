@@ -569,7 +569,11 @@ Event btrd_lower_inplace(Queue& q,
                         sycl::group_barrier(it.get_group());
 
                         if (nr > 2 * kd - 1) {
-                            // Keep the l-loop sequential, but parallelize across rotations within each l.
+                            // Iteration l touches band elements (kd-1-l, c) and (kd-l, c) with
+                            // c = j-kd1+l+1, so successive l values address distinct columns and
+                            // distinct rows; across t the columns are kd1 apart. The whole (l,t)
+                            // nest therefore writes disjoint locations and needs only one barrier
+                            // at the end (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
                                 for (int t = lid; t < nr; t += lsize) {
                                     const int j = j1 + t * kd1;
@@ -578,8 +582,8 @@ Event btrd_lower_inplace(Queue& q,
                                                   C[j],
                                                   WORK[j]);
                                 }
-                                sycl::group_barrier(it.get_group());
                             }
+                            sycl::group_barrier(it.get_group());
                         } else {
                             if (lid == 0) {
                                 const int jend = j1 + (nr - 1) * kd1;
@@ -656,6 +660,9 @@ Event btrd_lower_inplace(Queue& q,
                         }
 
                         if (nr > 2 * kd - 1) {
+                            // Iteration l touches (l+2, j-1) and (l+1, j); iteration l+1 touches
+                            // (l+3, j-1) and (l+2, j) -- disjoint in both row and column, and the
+                            // t values are kd1 columns apart. One trailing barrier suffices.
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
@@ -666,9 +673,9 @@ Event btrd_lower_inplace(Queue& q,
                                                       C[j],
                                                       WORK[j]);
                                     }
-                                    sycl::group_barrier(it.get_group());
                                 }
                             }
+                            sycl::group_barrier(it.get_group());
                         } else {
                             if (lid == 0) {
                                 const int j1end = j1 + kd1 * (nr - 2);

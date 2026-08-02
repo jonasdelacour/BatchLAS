@@ -50,12 +50,14 @@ set(TEST_TARGETS
     ritz_values_tests
     sytrd_sy2sb_tests
     sytrd_sb2st_tests
+    sytrd_sb2st_hh_tests
     sytrd_cta_tests
     sytrd_blocked_tests
     syev_cta_tests
     syev_jacobi_cta_tests
     syev_cta_fused_tests
     syev_blocked_tests
+    syev_two_stage_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS

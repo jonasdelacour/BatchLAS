@@ -366,13 +366,21 @@ Event btrd_lower_inplace_subgroup(Queue& q,
         size_t(cw_len_host) * (sizeof(Real) + sizeof(T)) * size_t(probs_per_wg);
 
     // Leave headroom (25%) for compiler/runtime usage.
-    const bool use_local_ab = (ab_bytes_per_wg > 0) && ((ab_bytes_per_wg + cw_bytes_per_wg) <= (lmem_bytes * 3) / 4);
+    const size_t lmem_budget = (lmem_bytes * 3) / 4;
+
+    // The C/WORK rotation scratch is the *first* claim on local memory: it is touched
+    // every chase step, whereas AB staging only pays off if the whole band also fits.
+    // Both are optional -- global fallbacks (the `c` / `work` parameters) are always
+    // allocated by the caller, so exceeding local memory must degrade, not fail to launch.
+    const bool use_local_cw = (cw_bytes_per_wg > 0) && (cw_bytes_per_wg <= lmem_budget);
+    const bool use_local_ab = (ab_bytes_per_wg > 0) &&
+                              ((ab_bytes_per_wg + (use_local_cw ? cw_bytes_per_wg : size_t(0))) <= lmem_budget);
 
     // local_accessor must be non-zero sized.
     const size_t ab_local_elems = use_local_ab
                                       ? (size_t(ldab_local_host) * size_t(n) * size_t(probs_per_wg))
                                       : size_t(1);
-    const size_t cw_local_elems = (cw_len_host > 0)
+    const size_t cw_local_elems = use_local_cw
                                       ? (size_t(cw_len_host) * size_t(probs_per_wg))
                                       : size_t(1);
     (void)q->submit([&](sycl::handler& h) {
@@ -422,8 +430,18 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 T* AB = ABv.data();
                 T* ABg = AB; // original global pointer for copy-back
 
-                Real* C = c_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (n + kd + 2);
-                T* WORK = work_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (n + kd + 2);
+                // C/WORK live in local memory when the per-work-group footprint fits,
+                // otherwise in the caller-provided global scratch. Indexing is identical.
+                Real* C = nullptr;
+                T* WORK = nullptr;
+                if (use_local_cw) {
+                    C = c_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (n + kd + 2);
+                    WORK = work_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (n + kd + 2);
+                } else {
+                    // Cv/WORKv are built with inc=1, so the batch base pointer is contiguous.
+                    C = c.batch_item(prob_id).data().data();
+                    WORK = work.batch_item(prob_id).data().data();
+                }
 
                 auto& D = Dv;
                 auto& E = Ev;

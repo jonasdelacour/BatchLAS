@@ -1061,7 +1061,8 @@ namespace batchlas {
      * Notes:
     * - JobType::EigenVectors is supported via two-stage reduction with
     *   explicit phase/sign recovery and reflector backtransform.
-    * - Eigenvector mode currently uses kd=1 for stage-2 extraction.
+    * - Both modes use a real band width (choose_two_stage_kd, env-overridable
+    *   via BATCHLAS_SYEV_TWO_STAGE_KD); eigenvector mode no longer forces kd=1.
      * - Currently supports only Uplo::Lower.
      */
     template <Backend B, typename T>

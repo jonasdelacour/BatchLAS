@@ -47,6 +47,7 @@ set(EXTENSIONS_TRIDIAG_SOURCES
     sytrd_blocked.cc
     sytrd_sy2sb.cc
     sytrd_sb2st.cc
+    sytrd_sb2st_hh.cc
     band_reduction.cc
     stedc.cc
     stedc_secular.cc

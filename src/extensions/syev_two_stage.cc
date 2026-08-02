@@ -10,6 +10,7 @@
 
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
+#include "sytrd_sb2st_hh.hh"
 
 #include <algorithm>
 #include <complex>
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 namespace batchlas {
 
@@ -57,18 +59,41 @@ inline int32_t env_int_or_default(const char* key, int32_t defval) {
 }
 
 inline int32_t choose_two_stage_kd(int32_t n) {
-    // Conservative defaults for initial two-stage path; override with env as needed.
-    const int32_t def = (n <= 256) ? 16 : 32;
+    // Measured with syev_two_stage_benchmark (float, eigenvectors, RTX 4090,
+    // total ms; kd across, n/batch down):
+    //
+    //                kd=16      32      48      64      96   blocked
+    //   128/2048      27.8    23.4    22.8    21.9    19.6     15.0
+    //   256/1024      78.9    65.3    66.9    66.7    72.2     42.4
+    //   512/512      249.5   203.9   223.1   240.0   298.6    193.3
+    //   1024/128     500.1   425.8   443.9   470.0   546.6    481.4
+    //   2048/32     1275.3  1183.4  1259.0  1353.8  1614.0   1265.7
+    //
+    // kd=32 is optimal at every n >= 256. This supersedes an earlier 32/64 split
+    // measured before the wave back-transform landed: back then Q2 dominated and
+    // its cost fell with kd, which pulled the optimum up to 64 at large n. Now
+    // that Q2 is ~3x cheaper the balance is set by stage 1 and the chase, whose
+    // O(n^2 kd) work favours a narrow band, so the optimum came back down.
+    //
+    // Two-stage now *wins* at n >= 1024 (1.13x at n=1024, 1.06x at n=2048) and
+    // still loses below that, where blocked's lower fixed overhead dominates.
+    const int32_t def = 32;
+
     const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
 }
 
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
-    // Eigenvector mode currently requires kd=1 so stage-2 is a pure extract,
-    // then Q from stage-1 reflectors can be applied explicitly.
-    if (jobz == JobType::EigenVectors) {
-        return 1;
-    }
+    // Eigenvector mode used to force kd=1 because the Givens stage-2 discards
+    // Q2. sytrd_sb2st_hh retains it, so both modes now use a real band width.
+    //
+    // Note the tuning literature has the optimum going *up*, not down, when
+    // eigenvectors are wanted (Gates/Tomov/Dongarra 2018 measure GPU 32/64
+    // without vectors -> 96/128 with; MAGMA's get_nb.cpp uses band nb=128),
+    // because the extra back-transform favours large nb while only stage 2's
+    // O(n^2 nb) work favours small. choose_two_stage_kd is left shared for now;
+    // splitting it is a tuning question, not a correctness one.
+    (void)jobz;
     return choose_two_stage_kd(n);
 }
 
@@ -173,6 +198,37 @@ inline void apply_phase_rows(Queue& ctx,
     });
 }
 
+// Same as lift_real_eigvecs_with_phase but also valid for real T, where the
+// phase is just a sign. Used by the eigenvector path, which is now shared
+// between the real and complex cases.
+template <typename T>
+inline void lift_eigvecs_with_phase(Queue& ctx,
+                                    const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
+                                    const VectorView<T>& phase,
+                                    const MatrixView<T, MatrixFormat::Dense>& z_out) {
+    using Real = typename base_type<T>::type;
+    const int32_t n = static_cast<int32_t>(z_real.rows());
+    const int32_t batch = static_cast<int32_t>(z_real.batch_size());
+    const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(n) * static_cast<int64_t>(n);
+    ctx->submit([&](sycl::handler& cgh) {
+        auto Zr = z_real.kernel_view();
+        auto Zo = z_out.kernel_view();
+        auto P = phase;
+        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+            const int64_t idx = static_cast<int64_t>(tid[0]);
+            const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * n));
+            const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
+            const int32_t row = static_cast<int32_t>(rem % n);
+            const int32_t col = static_cast<int32_t>(rem / n);
+            if constexpr (is_std_complex_v<T>) {
+                Zo(row, col, b) = P(row, b) * T(Zr(row, col, b), Real(0));
+            } else {
+                Zo(row, col, b) = P(row, b) * Zr(row, col, b);
+            }
+        });
+    });
+}
+
 template <typename T>
 inline void lift_real_eigvecs_with_phase(Queue& ctx,
                                          const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
@@ -217,16 +273,6 @@ Event syev_two_stage(Queue& ctx,
     if constexpr (B == Backend::NETLIB) {
         if (jobz == JobType::EigenVectors) {
             return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
-        }
-    }
-
-    if constexpr (B == Backend::CUDA) {
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            if (jobz == JobType::EigenVectors) {
-                // Temporary guard: CUDA zhe eigvec path in two-stage currently
-                // exhibits a backend runtime crash for some sizes.
-                return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
-            }
         }
     }
 
@@ -285,11 +331,6 @@ Event syev_two_stage(Queue& ctx,
         sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, uplo, kd, sy2sb_ws);
     }
 
-    if (want_eigvecs) {
-        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.phase_from_band");
-        build_phase_from_kd1_band<T>(ctx, ab_view, phase_view);
-    }
-
     // Stage 2 outputs: band -> tridiagonal (real d,e).
     using Real = typename base_type<T>::type;
     auto d_span = pool.allocate<Real>(ctx,
@@ -310,7 +351,66 @@ Event syev_two_stage(Queue& ctx,
                                  1,
                                  std::max(0, n - 1));
 
-    {
+    // Stage 2. Eigenvector mode uses the Householder chase so that Q2 is
+    // retained; eigenvalues-only keeps the cheaper Givens chase, which discards
+    // it. This is the whole reason kd no longer has to be clamped to 1.
+    const auto sb2st_sched = want_eigvecs ? internal::build_sb2st_hh_schedule(n, kd)
+                                          : std::vector<internal::Sb2stHhRefl>{};
+    const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
+
+    UnifiedVector<int32_t> sb2st_starts(static_cast<std::size_t>(nrefl));
+    UnifiedVector<int32_t> sb2st_lens(static_cast<std::size_t>(nrefl));
+    for (int32_t k = 0; k < nrefl; ++k) {
+        sb2st_starts[k] = sb2st_sched[k].start;
+        sb2st_lens[k] = sb2st_sched[k].len;
+    }
+
+    // Commuting runs of reflectors, so the back-transform can apply a whole run
+    // at once. Lives until the back-transform's event completes.
+    const auto sb2st_wave_host = want_eigvecs
+                                     ? internal::build_sb2st_hh_wave_offsets(sb2st_sched, n)
+                                     : std::vector<int32_t>{};
+    UnifiedVector<int32_t> sb2st_waves(sb2st_wave_host.size());
+    for (std::size_t k = 0; k < sb2st_wave_host.size(); ++k) {
+        sb2st_waves[k] = sb2st_wave_host[k];
+    }
+
+    Span<T> v_sb2st_span;
+    Span<T> tau_sb2st_hh_span;
+    Span<T> ab_tri_span;
+    MatrixView<T, MatrixFormat::Dense> v_sb2st_view;
+    VectorView<T> tau_sb2st_hh_view;
+    MatrixView<T, MatrixFormat::Dense> ab_tri_view;
+
+    if (want_eigvecs) {
+        const int32_t nr = std::max<int32_t>(1, nrefl);
+        v_sb2st_span = pool.allocate<T>(ctx,
+                                        static_cast<std::size_t>(kd) *
+                                            static_cast<std::size_t>(nr) *
+                                            static_cast<std::size_t>(batch));
+        tau_sb2st_hh_span = pool.allocate<T>(ctx,
+                                             static_cast<std::size_t>(nr) *
+                                                 static_cast<std::size_t>(batch));
+        ab_tri_span = pool.allocate<T>(ctx,
+                                       static_cast<std::size_t>(2) *
+                                           static_cast<std::size_t>(n) *
+                                           static_cast<std::size_t>(batch));
+        v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
+            v_sb2st_span.data(), kd, nr, kd,
+            static_cast<int64_t>(kd) * static_cast<int64_t>(nr), batch);
+        tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr);
+        ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
+            ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch);
+
+        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st_hh");
+        const size_t ws_bytes = internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
+        auto hh_ws = pool.allocate<std::byte>(ctx, ws_bytes);
+        internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
+                                       v_sb2st_view, tau_sb2st_hh_view, uplo, kd,
+                                       hh_ws);
+
+        build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
+    } else {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st");
         const size_t sb2st_ws_bytes = sytrd_sb2st_buffer_size<B, T>(ctx,
                                                                      ab_view,
@@ -365,47 +465,27 @@ Event syev_two_stage(Queue& ctx,
         return ctx.get_event();
     }
 
-    auto aq_span = pool.allocate<T>(ctx,
-                                    static_cast<std::size_t>(p) *
-                                        static_cast<std::size_t>(p) *
-                                        static_cast<std::size_t>(batch));
-    auto tau_q_span = pool.allocate<T>(ctx,
-                                       static_cast<std::size_t>(p) *
-                                           static_cast<std::size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> aq_view(aq_span.data(),
-                                               p,
-                                               p,
-                                               p,
-                                               static_cast<int64_t>(p) * static_cast<int64_t>(p),
-                                               batch);
-    VectorView<T> tau_q_view(tau_q_span, p, batch, 1, p);
-    pack_sytrd_lower_to_qsub_qr_layout<T>(ctx, a, aq_view, tau_sy2sb_view, tau_q_view, n);
+    // ---- Eigenvector path -------------------------------------------------
+    //
+    // Stage 2 ran the Householder chase, so Q2 exists and kd was NOT clamped to
+    // 1. The back-transform is Z := Q1 (Q2 Z). That ordering costs ~4n^3;
+    // forming (Q1 Q2) explicitly first would be ~5.3n^3 (it needs Q1
+    // materialised) and is only worth it if the extra work can be overlapped
+    // with stedc, which the in-order queue does not currently allow.
+    const int32_t p1 = std::max<int32_t>(0, n - kd);
 
-    Span<T> tau_q_flat(tau_q_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-
-    if constexpr (is_std_complex_v<T>) {
-        auto z_real_span = pool.allocate<Real>(ctx,
+    auto z_real_span = pool.allocate<Real>(ctx,
+                                           static_cast<std::size_t>(n) *
                                                static_cast<std::size_t>(n) *
-                                                   static_cast<std::size_t>(n) *
-                                                   static_cast<std::size_t>(batch));
-        MatrixView<Real, MatrixFormat::Dense> z_real_view(z_real_span.data(),
-                                                          n,
-                                                          n,
-                                                          n,
-                                                          static_cast<int64_t>(n) * static_cast<int64_t>(n),
-                                                          batch);
+                                               static_cast<std::size_t>(batch));
+    MatrixView<Real, MatrixFormat::Dense> z_real_view(z_real_span.data(),
+                                                      n,
+                                                      n,
+                                                      n,
+                                                      static_cast<int64_t>(n) * static_cast<int64_t>(n),
+                                                      batch);
 
-        auto zc_span = pool.allocate<T>(ctx,
-                                        static_cast<std::size_t>(n) *
-                                            static_cast<std::size_t>(n) *
-                                            static_cast<std::size_t>(batch));
-        MatrixView<T, MatrixFormat::Dense> zc_view(zc_span.data(),
-                                                   n,
-                                                   n,
-                                                   n,
-                                                   static_cast<int64_t>(n) * static_cast<int64_t>(n),
-                                                   batch);
-
+    {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stedc_eigvecs");
         const size_t stedc_ws_bytes = stedc_workspace_size<B, Real>(ctx,
                                                                      static_cast<std::size_t>(n),
@@ -421,135 +501,70 @@ Event syev_two_stage(Queue& ctx,
                        JobType::EigenVectors,
                        stedc_params,
                        z_real_view);
-
-        lift_real_eigvecs_with_phase<T>(ctx, z_real_view, phase_view, zc_view);
-
-        if (p > 0) {
-            BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q");
-            auto zc_sub = zc_view({1, SliceEnd()}, Slice{});
-            size_t ormqr_ws_bytes = 0;
-            if constexpr (B == Backend::NETLIB) {
-                ormqr_ws_bytes = backend::ormqr_vendor_buffer_size<B, T>(ctx,
-                                                                          aq_view,
-                                                                          zc_sub,
-                                                                          Side::Left,
-                                                                          Transpose::NoTrans,
-                                                                          tau_q_flat);
-            } else {
-                ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
-                                                                  aq_view,
-                                                                  zc_sub,
-                                                                  Side::Left,
-                                                                  Transpose::NoTrans,
-                                                                  tau_q_flat,
-                                                                  ormqr_block_size);
-            }
-            auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
-            if constexpr (B == Backend::NETLIB) {
-                backend::ormqr_vendor<B, T>(ctx,
-                                            aq_view,
-                                            zc_sub,
-                                            Side::Left,
-                                            Transpose::NoTrans,
-                                            tau_q_flat,
-                                            ormqr_ws);
-            } else {
-                ormqr_blocked<B, T>(ctx,
-                                    aq_view,
-                                    zc_sub,
-                                    Side::Left,
-                                    Transpose::NoTrans,
-                                    tau_q_flat,
-                                    ormqr_ws,
-                                    ormqr_block_size);
-            }
-        }
-
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
-    } else {
-        auto z_span = pool.allocate<Real>(ctx,
-                                          static_cast<std::size_t>(n) *
-                                              static_cast<std::size_t>(n) *
-                                              static_cast<std::size_t>(batch));
-        MatrixView<Real, MatrixFormat::Dense> z_view(z_span.data(),
-                                                     n,
-                                                     n,
-                                                     n,
-                                                     static_cast<int64_t>(n) * static_cast<int64_t>(n),
-                                                     batch);
-
-        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stedc_eigvecs");
-        const size_t stedc_ws_bytes = stedc_workspace_size<B, Real>(ctx,
-                                                                     static_cast<std::size_t>(n),
-                                                                     static_cast<std::size_t>(batch),
-                                                                     JobType::EigenVectors,
-                                                                     stedc_params);
-        auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-        stedc<B, Real>(ctx,
-                       d_view,
-                       e_view,
-                       evals_view,
-                       stedc_ws,
-                       JobType::EigenVectors,
-                       stedc_params,
-                       z_view);
-
-        apply_phase_rows<Real>(ctx, z_view, VectorView<Real>(phase_span.data(), n, batch, 1, n));
-
-        if (p > 0) {
-            BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q");
-            auto z_sub = z_view({1, SliceEnd()}, Slice{});
-            MatrixView<Real, MatrixFormat::Dense> aq_real_view(aq_span.data(),
-                                                               p,
-                                                               p,
-                                                               p,
-                                                               static_cast<int64_t>(p) * static_cast<int64_t>(p),
-                                                               batch);
-            Span<Real> tau_q_real(reinterpret_cast<Real*>(tau_q_span.data()),
-                                  static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-
-            size_t ormqr_ws_bytes = 0;
-            if constexpr (B == Backend::NETLIB) {
-                ormqr_ws_bytes = backend::ormqr_vendor_buffer_size<B, Real>(ctx,
-                                                                             aq_real_view,
-                                                                             z_sub,
-                                                                             Side::Left,
-                                                                             Transpose::NoTrans,
-                                                                             tau_q_real);
-            } else {
-                ormqr_ws_bytes = ormqr_blocked_buffer_size<B, Real>(ctx,
-                                                                     aq_real_view,
-                                                                     z_sub,
-                                                                     Side::Left,
-                                                                     Transpose::NoTrans,
-                                                                     tau_q_real,
-                                                                     ormqr_block_size);
-            }
-            auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
-            if constexpr (B == Backend::NETLIB) {
-                backend::ormqr_vendor<B, Real>(ctx,
-                                               aq_real_view,
-                                               z_sub,
-                                               Side::Left,
-                                               Transpose::NoTrans,
-                                               tau_q_real,
-                                               ormqr_ws);
-            } else {
-                ormqr_blocked<B, Real>(ctx,
-                                       aq_real_view,
-                                       z_sub,
-                                       Side::Left,
-                                       Transpose::NoTrans,
-                                       tau_q_real,
-                                       ormqr_ws,
-                                       ormqr_block_size);
-            }
-        }
-
-        MatrixView<Real, MatrixFormat::Dense>::copy(ctx,
-                                                    MatrixView<Real, MatrixFormat::Dense>(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size()),
-                                                    z_view);
     }
+
+    // stedc solves the *real* tridiagonal built from |subdiagonal|. Lifting by
+    // the accumulated phase converts its eigenvectors back to those of the
+    // signed/Hermitian tridiagonal that stage 2 actually produced.
+    auto z_span = pool.allocate<T>(ctx,
+                                   static_cast<std::size_t>(n) *
+                                       static_cast<std::size_t>(n) *
+                                       static_cast<std::size_t>(batch));
+    MatrixView<T, MatrixFormat::Dense> z_view(z_span.data(),
+                                              n,
+                                              n,
+                                              n,
+                                              static_cast<int64_t>(n) * static_cast<int64_t>(n),
+                                              batch);
+    lift_eigvecs_with_phase<T>(ctx, z_real_view, phase_view, z_view);
+
+    // Z := Q2 Z
+    if (nrefl > 0) {
+        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q2");
+        internal::unmqr_hb2st<B, T>(ctx,
+                                    v_sb2st_view,
+                                    tau_sb2st_hh_view,
+                                    z_view,
+                                    n,
+                                    kd,
+                                    Span<const int32_t>(sb2st_starts.data(), sb2st_starts.size()),
+                                    Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()),
+                                    Span<const int32_t>(sb2st_waves.data(), sb2st_waves.size()));
+    }
+
+    // Z(kd:, :) := Q1 Z(kd:, :).
+    //
+    // sy2sb factors panel i with GEQRF starting at row i+kd, so the aggregate
+    // a(kd:, 0:n-kd) is already exactly a GEQRF-style reflector layout: panel i
+    // sits at local (row i, col i). ormqr_blocked's V packing only reads the
+    // strictly lower triangle, so the sliced view suffices -- no packed copy,
+    // matching what syev_blocked does (sytrd_lower_qsub_reflector_view).
+    if (p1 > 0) {
+        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q1");
+        auto v1_view = a({kd, SliceEnd()}, {0, p1});
+        auto z_sub = z_view({kd, SliceEnd()}, Slice{});
+        Span<T> tau1_flat(tau_sy2sb_span.data(),
+                          static_cast<std::size_t>(p1) * static_cast<std::size_t>(batch));
+
+        size_t ormqr_ws_bytes = 0;
+        if constexpr (B == Backend::NETLIB) {
+            ormqr_ws_bytes = backend::ormqr_vendor_buffer_size<B, T>(
+                ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat);
+        } else {
+            ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(
+                ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat, ormqr_block_size);
+        }
+        auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
+        if constexpr (B == Backend::NETLIB) {
+            backend::ormqr_vendor<B, T>(
+                ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat, ormqr_ws);
+        } else {
+            ormqr_blocked<B, T>(ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans,
+                                tau1_flat, ormqr_ws, ormqr_block_size);
+        }
+    }
+
+    MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
 
     return ctx.get_event();
 }
@@ -576,18 +591,11 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         }
     }
 
-    if constexpr (B == Backend::CUDA) {
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            if (jobz == JobType::EigenVectors) {
-                return syev_blocked_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
-            }
-        }
-    }
-
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
     const bool want_eigvecs = (jobz == JobType::EigenVectors);
     const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
+
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
     const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);
@@ -619,22 +627,30 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
                                                       static_cast<std::size_t>(n) *
                                                       static_cast<std::size_t>(batch)); // stedc scratch/result
     if (want_eigvecs) {
+        const int32_t nr = std::max<int32_t>(1, internal::sb2st_hh_num_reflectors(n, kd));
+        const int32_t kdw = internal::sb2st_hh_work_bandwidth(n, kd);
         bytes += BumpAllocator::allocation_size<T>(ctx,
                                                    static_cast<std::size_t>(n) *
                                                        static_cast<std::size_t>(batch)); // phase/sign chain
         bytes += BumpAllocator::allocation_size<T>(ctx,
-                                                   static_cast<std::size_t>(p) *
-                                                       static_cast<std::size_t>(p) *
-                                                       static_cast<std::size_t>(batch)); // packed Qsub reflectors
+                                                   static_cast<std::size_t>(kd) *
+                                                       static_cast<std::size_t>(nr) *
+                                                       static_cast<std::size_t>(batch)); // stage-2 reflectors V
         bytes += BumpAllocator::allocation_size<T>(ctx,
-                                                   static_cast<std::size_t>(p) *
-                                                       static_cast<std::size_t>(batch)); // tau for packed Qsub
-        if constexpr (is_std_complex_v<T>) {
-            bytes += BumpAllocator::allocation_size<T>(ctx,
+                                                   static_cast<std::size_t>(nr) *
+                                                       static_cast<std::size_t>(batch)); // stage-2 tau
+        bytes += BumpAllocator::allocation_size<T>(ctx,
+                                                   static_cast<std::size_t>(2) *
                                                        static_cast<std::size_t>(n) *
-                                                           static_cast<std::size_t>(n) *
-                                                           static_cast<std::size_t>(batch)); // lifted complex eigenvectors
-        }
+                                                       static_cast<std::size_t>(batch)); // tridiagonal band (signed)
+        bytes += BumpAllocator::allocation_size<T>(ctx,
+                                                   static_cast<std::size_t>(kdw + 1) *
+                                                       static_cast<std::size_t>(n) *
+                                                       static_cast<std::size_t>(batch)); // sb2st_hh working band
+        bytes += BumpAllocator::allocation_size<T>(ctx,
+                                                   static_cast<std::size_t>(n) *
+                                                       static_cast<std::size_t>(n) *
+                                                       static_cast<std::size_t>(batch)); // Z in T (post phase-lift)
     }
 
     MatrixView<T, MatrixFormat::Dense> ab_dummy(nullptr,
