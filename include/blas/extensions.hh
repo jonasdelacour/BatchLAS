@@ -57,6 +57,17 @@ namespace batchlas {
         // aggressively per outer iteration, at one matvec each; the useful range
         // is roughly 8-25 and the optimum depends on the spectral gap.
         size_t filter_degree = 0;
+        // LOBPCG only: number of block power-iteration steps applied to the random
+        // starting block before the first Rayleigh-Ritz. Each step is one matvec plus
+        // one orthogonalization and biases the start toward the largest eigenpairs.
+        // -1 selects the built-in default, 0 disables.
+        //
+        // Ignored unless find_largest is true: powers of A amplify the largest
+        // eigendirections, so with find_largest = false they would drive the start
+        // away from what is wanted. The shifted operator that would fix that was
+        // measured and gave no useful speedup, so it is not implemented -- see the
+        // measurements in src/extensions/syevx_lobpcg.cc.
+        int init_power_iterations = -1;
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 

@@ -25,7 +25,34 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsStasKernel;
 
+    template <Backend B, typename T, MatrixFormat MFormat>
+    struct SyevxLobpcgInitKernel;
+
 namespace {
+
+// Block power-iteration steps applied to the random start (SYEVX_PLAN.md §7.9).
+// Only meaningful when searching for the largest eigenpairs -- see the block that
+// uses this for the measurements that set the default.
+//
+// 4 rather than a larger number: the gain keeps growing with the step count on the
+// matrices measured, but every step compresses the block further toward the
+// dominant directions, and an over-compressed block is rank-deficient in floating
+// point, at which point the Cholesky-based ortho returns NaN rather than an error
+// (the failure mode documented in syevx_filtered.cc). 4 buys most of the win with
+// margin; BATCHLAS_SYEVX_INIT_POWER exists for A/B-ing that choice.
+constexpr int kDefaultInitPowerIterations = 4;
+
+inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
+    int steps = from_params < 0 ? kDefaultInitPowerIterations : from_params;
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_INIT_POWER")) {
+        const int parsed = std::atoi(v);
+        if (parsed >= 0) steps = parsed;
+    }
+    // Powers of A amplify the *largest* eigendirections. With find_largest = false
+    // that drives the start away from what is wanted, so the steps are dropped
+    // rather than applied backwards.
+    return find_largest ? steps : 0;
+}
 
 // Search-space width. `extra_directions == 0` means "choose one", matching the
 // convention SyevxParams::filter_degree uses.
@@ -277,7 +304,79 @@ inline int64_t lobpcg_check_every() {
 
         auto trans = (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) ? Transpose::ConjTrans : Transpose::Trans;
 
-        S.fill_random(ctx);
+        // Only the X block of S is read before the rest is overwritten (P and R are
+        // both recomputed from the first Rayleigh-Ritz onwards), so filling all of
+        // S was 3x the random generation and 3x the write traffic for nothing.
+        //
+        // The linear index below reproduces MatrixView::fill_random's exactly --
+        // fill_random ignores ld/stride and walks the buffer flat, so for the X
+        // block of a contiguous S that index is b*(3k*n) + c*n + r. Keeping it
+        // identical means the starting block is bit-for-bit what it used to be:
+        // this change is pure waste elimination, not a behaviour change, and stays
+        // reproducible across runs.
+        {
+            auto Xk = X.kernel_view();
+            const int64_t nn = n;
+            const int64_t kk = block_vectors;
+            const unsigned int seed = 42; // fill_random's default
+            ctx->submit([&](sycl::handler& h) {
+                h.parallel_for<SyevxLobpcgInitKernel<B, T, MFormat>>(
+                    sycl::range<1>(static_cast<size_t>(batch_size * nn * kk)), [=](sycl::id<1> tid) {
+                        const int64_t local = static_cast<int64_t>(tid[0]);
+                        const int b = static_cast<int>(local / (nn * kk));
+                        const int64_t rem = local - static_cast<int64_t>(b) * nn * kk;
+                        const int r = static_cast<int>(rem % nn);
+                        const int c = static_cast<int>(rem / nn);
+                        const size_t idx = static_cast<size_t>(b) * (3 * kk * nn) +
+                                           static_cast<size_t>(c) * nn + static_cast<size_t>(r);
+                        oneapi::dpl::uniform_real_distribution<float_type> dist(-1.0, 1.0);
+                        oneapi::dpl::minstd_rand engine(seed, idx);
+                        const auto r1 = dist(engine);
+                        if constexpr (is_std_complex_v<T>) {
+                            const auto r2 = dist(engine);
+                            Xk(r, c, b) = T(r1, r2);
+                        } else {
+                            Xk(r, c, b) = T(r1);
+                        }
+                    });
+            });
+        }
+
+        // Block power-iteration start (SYEVX_PLAN.md §7.9): X <- ortho(A X), a few
+        // times. Powers of A amplify the largest eigendirections, so this is a valid
+        // improvement *only* for find_largest; lobpcg_init_power_iterations returns 0
+        // otherwise and the block below does not run.
+        //
+        // MEASURED (NETLIB/CPU, double, dense random Hermitian, batch 4, tol 1e-5,
+        // BATCHLAS_SYEVX_CHECK_EVERY=1, mean iterations over 3 seeds), p = steps:
+        //
+        //   n    k   find_largest      p=0    p=1    p=2    p=4    p=8
+        //   64   4   true            22.67  20.67  20.00  18.67  16.00
+        //   64  16   true             8.33   7.00   6.00   4.67   3.00
+        //  128  16   true            19.00  17.33  16.00  15.00  12.67
+        //  256   8   true            36.00  35.33  34.33  31.00  27.33
+        //  256  16   true            27.67  26.33  25.33  24.00  21.00
+        //
+        // i.e. 12-44% fewer iterations at p = 4, and wall time moved the same way
+        // (n=64,k=16: 23.4 -> 11.3 ms; n=256,k=16: 146.6 -> 124.7 ms).
+        //
+        // The smallest end was measured too, using sigma*I - A with sigma a Gershgorin
+        // upper bound (whose largest eigenpairs are A's smallest). It was flat --
+        // 23.00 -> 21.67 at n=64,k=4 and unchanged at 8.00 / 19.00 / 26.33 elsewhere,
+        // inside run-to-run noise -- because the amplification ratio
+        // (sigma - l_1)/(sigma - l_{k+1}) is ~1 for a wide spectrum. That variant paid
+        // matvecs for nothing, so it is not implemented; the restriction above stands.
+        const int init_power_steps =
+            lobpcg_init_power_iterations(params.init_power_iterations, params.find_largest);
+        for (int step = 0; step < init_power_steps; ++step) {
+            ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
+            if constexpr (MFormat == MatrixFormat::Dense) {
+                gemm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            } else {
+                spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+            }
+            MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, AX);
+        }
 
         //Orthonormalize initial vectors
         trace("syevx: ortho init");

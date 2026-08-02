@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7).**
+Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7, 7.9).**
 Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
@@ -488,12 +488,39 @@ Fixes, in increasing order of effort: (a) index `Z`'s columns in reverse when
 forming the view, so no data movement happens at all; (b) have the projected `syev`
 emit descending order; (c) fold the permutation into the subsequent GEMM.
 
-### 7.9 `S.fill_random` fills 3× more than needed
+### 7.9 `S.fill_random` fills 3× more than needed — **done**
 
 Line 187 fills the whole `n × 3k × batch` buffer when only the `X` block is read.
 Beyond the wasted bandwidth, random initialization is a weak start: a few block
 power-iteration steps, or reuse of the previous solution when solving a sequence of
 related problems (the ChASE use case), converge markedly faster.
+
+Landed:
+- The fill is now an `X`-block-only kernel reproducing `fill_random`'s linear index,
+  so the starting block is bit-for-bit unchanged while two thirds of the random
+  generation and write traffic disappear.
+- A block power-iteration start (`SyevxParams::init_power_iterations`, default 4,
+  `BATCHLAS_SYEVX_INIT_POWER` to override) runs `X ← ortho(A X)` before the first
+  Rayleigh-Ritz. Measured on NETLIB/CPU, double, dense random Hermitian, batch 4,
+  tol 1e-5, `CHECK_EVERY=1`, mean iterations over 3 seeds:
+
+  | n | k | p=0 | p=1 | p=2 | p=4 | p=8 |
+  |---|---|-----|-----|-----|-----|-----|
+  | 64 | 4 | 22.67 | 20.67 | 20.00 | 18.67 | 16.00 |
+  | 64 | 16 | 8.33 | 7.00 | 6.00 | 4.67 | 3.00 |
+  | 128 | 16 | 19.00 | 17.33 | 16.00 | 15.00 | 12.67 |
+  | 256 | 8 | 36.00 | 35.33 | 34.33 | 31.00 | 27.33 |
+  | 256 | 16 | 27.67 | 26.33 | 25.33 | 24.00 | 21.00 |
+
+  12–44% fewer iterations at `p = 4`, wall time moving the same way (n=64, k=16:
+  23.4 → 11.3 ms). `p = 8` was better still on this family; 4 was kept as the
+  default for margin against block collapse.
+- **Negative result:** the same experiment for `find_largest = false`, using
+  `σI − A` with a Gershgorin `σ`, was flat (23.00 → 21.67 at n=64,k=4; unchanged at
+  n=64,k=16, n=128,k=16 and n=256,k=16) — the ratio `(σ−λ₁)/(σ−λ_{k+1})` is ≈1 for a
+  wide spectrum. That variant is not implemented, and the steps are skipped entirely
+  when `find_largest` is false.
+- Not done: reuse of a previous solution across a sequence of related problems.
 
 ### 7.10 No cheap preconditioner
 
@@ -833,7 +860,7 @@ nothing about whether it is one of the *wanted* pairs, which is the specific way
 filtered solver fails. The whole suite also passes when forced onto each algorithm
 in turn, which is what exercises `Filtered` on the CSR and complex inputs.
 
-### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7)
+### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7, 7.9)
 
 **§7.6 guard vectors — the one thing here with real measured numbers.**
 `extra_directions == 0` now means "choose one" (`max(2, neigs/4)`), matching the
@@ -897,8 +924,13 @@ still reading `rhs`, so aliasing them would corrupt the solve.
    solver that ignores it instead of being rejected. Moved to the dispatcher,
    where it belongs — these describe the problem, not the algorithm.
 
+**§7.9 initialization.** The random fill covers only the `X` block now (bit-for-bit
+the same values, one third of the traffic), and a 4-step block power-iteration start
+runs when `find_largest` is true — 12–44% fewer iterations, table in §7.9. The
+equivalent for the smallest end was measured and gave nothing, so it was not shipped.
+
 **Still open in §7:** 7.2 (instrumentation host reads), 7.5 (locking/deflation),
-7.8 (column-reversal kernels), 7.9 (`fill_random` over-fills), 7.10 (Jacobi and
+7.8 (column-reversal kernels), 7.10 (Jacobi and
 Chebyshev preconditioners), 7.11 (projected-`syev` sweep). 7.8's suggested fixes
 all need either a reverse-indexed view or descending-order output from the
 projected `syev`; neither exists yet, so it is more than the "small" the ordering
