@@ -69,10 +69,25 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
             "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
             "mutually exclusive; supply a factor or ask syevx to build one, not both");
     }
-    const bool use_preconditioner = params.preconditioner != nullptr || params.build_preconditioner;
+    const bool iluk_configured = params.preconditioner != nullptr || params.build_preconditioner;
     // An ILU(k) factorization approximates A^{-1}, so it only accelerates the
     // smallest eigenpairs; for the largest it damps exactly what is being sought.
-    if (use_preconditioner && params.find_largest) {
+    //
+    // Whether the same restriction applies to Jacobi depends on which Jacobi.
+    //
+    // `Jacobi` = diag(A)^{-1} is an approximate A^{-1} just as ILU(k) is, differing
+    // only in how crude it is, so it inherits the restriction verbatim. That is not
+    // a theoretical concern: forcing it on with find_largest turned 21-47 iterations
+    // into 127-300 (i.e. non-convergence at the cap) across the sweep in
+    // tests/syevx_tests.cc, in the same direction and for the same reason as ILU(k).
+    //
+    // `JacobiShifted` = (diag(A) - lambda I)^{-1} is a different operator: its shift
+    // comes from the *current Ritz value*, so it is a diagonal approximation to
+    // (A - lambda I)^{-1} and amplifies whatever is near lambda -- the wanted end by
+    // construction, at either end of the spectrum. Allowing find_largest with it is
+    // a deliberate decision backed by the same sweep (0.85-1.2x on random symmetric
+    // input either way), not an oversight.
+    if (iluk_configured && params.find_largest) {
         throw std::invalid_argument(
             "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
             "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
@@ -85,6 +100,41 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
                 "only defined for sparse input");
         }
     }
+    // An explicit preconditioner_type has to be consistent with the ILU(k) fields.
+    // Anything else silently drops one of the two requests: either a factor the
+    // caller built at real cost is never applied, or a family is asked for that has
+    // nothing behind it.
+    if (params.preconditioner_type == SyevxPreconditioner::ILUK && !iluk_configured) {
+        throw std::invalid_argument(
+            "syevx: SyevxPreconditioner::ILUK requires SyevxParams::preconditioner or "
+            "SyevxParams::build_preconditioner to be set");
+    }
+    if (iluk_configured && params.preconditioner_type != SyevxPreconditioner::Auto &&
+        params.preconditioner_type != SyevxPreconditioner::ILUK) {
+        throw std::invalid_argument(
+            "syevx: an ILU(k) factor was supplied or requested but "
+            "SyevxParams::preconditioner_type asks for a different family; clear one of them");
+    }
+    if (params.preconditioner_type == SyevxPreconditioner::Jacobi && params.find_largest) {
+        throw std::invalid_argument(
+            "syevx: SyevxPreconditioner::Jacobi is diag(A)^{-1}, an approximate A^{-1}, and is "
+            "only valid when searching for the smallest eigenpairs; set "
+            "SyevxParams::find_largest = false or use SyevxPreconditioner::JacobiShifted, "
+            "whose shift makes it valid at either end");
+    }
+}
+
+SyevxPreconditioner parse_syevx_preconditioner(const char* v) {
+    if (!v || !*v) return SyevxPreconditioner::Auto;
+    std::string s(v);
+    for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+    if (s == "auto") return SyevxPreconditioner::Auto;
+    if (s == "none" || s == "off") return SyevxPreconditioner::None;
+    if (s == "jacobi" || s == "diagonal" || s == "diag") return SyevxPreconditioner::Jacobi;
+    if (s == "jacobi_shifted" || s == "jacobi-shifted") return SyevxPreconditioner::JacobiShifted;
+    if (s == "iluk" || s == "ilu") return SyevxPreconditioner::ILUK;
+    return SyevxPreconditioner::Auto;
 }
 
 SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback) {
@@ -133,6 +183,28 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     // not been measured on real hardware (SYEVX_PLAN.md §2.4). Promote it to the
     // Auto default for this band once it has been.
     return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::LOBPCG;
+}
+
+SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
+                                                bool iluk_configured,
+                                                bool find_largest) {
+    if (requested != SyevxPreconditioner::Auto) return requested;
+    // A configured ILU(k) factor is the strongest signal of intent there is, and it
+    // was paid for before the call, so it wins over any environment default.
+    if (iluk_configured) return SyevxPreconditioner::ILUK;
+    const SyevxPreconditioner from_env =
+        parse_syevx_preconditioner(std::getenv("BATCHLAS_SYEVX_PRECONDITIONER"));
+    // ILUK from the environment is not actionable: there is no factor and syevx
+    // will not silently build one behind the caller's back (that needs CSR input and
+    // find_largest = false, neither of which the environment can know).
+    //
+    // An environment default degrades where an explicit request would throw. The
+    // point of the variable is "run this whole application/suite with X" for
+    // diagnosis; making it abort on the first call that happens to want the largest
+    // eigenpairs would make that sweep impossible rather than informative.
+    if (from_env == SyevxPreconditioner::Jacobi && !find_largest) return SyevxPreconditioner::Jacobi;
+    if (from_env == SyevxPreconditioner::JacobiShifted) return SyevxPreconditioner::JacobiShifted;
+    return SyevxPreconditioner::None;
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>

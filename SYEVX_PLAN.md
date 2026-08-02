@@ -495,12 +495,40 @@ Beyond the wasted bandwidth, random initialization is a weak start: a few block
 power-iteration steps, or reuse of the previous solution when solving a sequence of
 related problems (the ChASE use case), converge markedly faster.
 
-### 7.10 No cheap preconditioner
+### 7.10 No cheap preconditioner — **Jacobi landed; Chebyshev still open**
 
-The only preconditioner is ILU(k). Two additions, both nearly free:
-- **Jacobi/diagonal** `(diag(A) − λI)⁻¹` — one kernel, works for dense and CSR.
-- **Chebyshev "preconditioner"** — apply a low-degree `p(A)` to `R`. Pure GEMM/SpMM,
-  no factorization, and it is the natural bridge to the Tier 3 filtered solver.
+The only preconditioner was ILU(k). Two additions, both nearly free:
+- **Jacobi/diagonal** — **done**. `SyevxParams::preconditioner_type` selects a family
+  (`SyevxPreconditioner`, `Auto` = the old behaviour). `diag(A)` is extracted once,
+  by a search per row for CSR; the apply is one in-place kernel over `R`.
+
+  Two forms were implemented, because the one this section originally specified is
+  not the one that pays. Measured iteration counts (fp32, `BATCHLAS_SYEVX_CHECK_EVERY=1`,
+  n ∈ {64,128,256,512}, k ∈ {2,8,16}; `DISABLED_IterationSweep` in
+  `tests/syevx_tests.cc` reproduces the table):
+
+  - `Jacobi` = `diag(A)⁻¹`. Like ILU(k) it approximates `A⁻¹`, so `find_largest` is
+    rejected — forcing it anyway turned 21–47 iterations into 127–300. Where the
+    diagonal is dominant and positive it is worth **2.1–7.3×** (e.g. 70 → 11 at
+    n = 512, k = 2). Where `diag(A)` is not positive definite it is not a valid
+    preconditioner at all, so a per-batch-item test disables it there rather than
+    diverging; on random symmetric input that makes it an exact no-op.
+  - `JacobiShifted` = `(diag(A) − λI)⁻¹`, the form named above. Legal at both ends,
+    since the shift tracks the wanted Ritz value. But it **degenerates precisely
+    where the unshifted form wins**: as `diag(A) → A` it becomes the exact inverse of
+    `(A − λI)`, so `Tr → x` and the new search direction is annihilated by the
+    orthogonalization against `X`. Measured 0.85–1.2× on random symmetric input and
+    0.2–0.9× on graded input — i.e. neutral at best. It is retained because it is
+    the only Jacobi form legal for `find_largest`, not because it was found to pay.
+
+  Neither is selected by `Auto`. A constant diagonal makes `JacobiShifted` a
+  per-column scalar, and LOBPCG is invariant to per-column scaling of the search
+  block; the measured iteration counts on `csr-tridiag` are identical to the
+  unpreconditioned ones, which is the sharpest available check that the shift is
+  indexed to the right Ritz value per column.
+- **Chebyshev "preconditioner"** — **not attempted**. Apply a low-degree `p(A)` to `R`.
+  Pure GEMM/SpMM, no factorization, and it is the natural bridge to the Tier 3
+  filtered solver.
 
 ### 7.11 The projected `syev` is worth benchmarking as-is
 
@@ -577,7 +605,7 @@ right default for `k/n ≲ 2 %`.
 
 Apply §7 in order: 7.1 (async convergence), 7.6 (`extra_directions` default), 7.3
 (residual kernel), 7.4 (criterion), 7.7 (ILU copies), 7.8 (reversal kernels), 7.5
-(locking), 7.10 (Jacobi preconditioner), 7.2, 7.9.
+(locking), 7.10's Chebyshev half (Jacobi landed), 7.2, 7.9.
 
 7.1, 7.6, 7.7 and 7.8 are small and independently landable; do them first and
 measure each.
@@ -898,8 +926,8 @@ still reading `rhs`, so aliasing them would corrupt the solve.
    where it belongs — these describe the problem, not the algorithm.
 
 **Still open in §7:** 7.2 (instrumentation host reads), 7.5 (locking/deflation),
-7.8 (column-reversal kernels), 7.9 (`fill_random` over-fills), 7.10 (Jacobi and
-Chebyshev preconditioners), 7.11 (projected-`syev` sweep). 7.8's suggested fixes
+7.8 (column-reversal kernels), 7.9 (`fill_random` over-fills), 7.10's Chebyshev
+half (its Jacobi half landed), 7.11 (projected-`syev` sweep). 7.8's suggested fixes
 all need either a reverse-indexed view or descending-order output from the
 projected `syev`; neither exists yet, so it is more than the "small" the ordering
 in §8 implies.

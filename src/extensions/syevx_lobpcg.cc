@@ -25,6 +25,12 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsStasKernel;
 
+    template <Backend B, typename T, MatrixFormat MFormat>
+    struct SyevxJacobiDiagonalKernel;
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    struct SyevxJacobiApplyKernel;
+
 namespace {
 
 // Search-space width. `extra_directions == 0` means "choose one", matching the
@@ -64,6 +70,33 @@ inline int64_t lobpcg_check_every() {
     return 4;
 }
 
+// Relative floor below which a Jacobi shift is treated as singular and the column
+// entry is left unpreconditioned. `d_ii - lambda` genuinely reaches zero: for a
+// nearly diagonal A the wanted Ritz value converges *to* some d_ii, so the entry
+// the preconditioner would amplify most is exactly the one whose divisor vanishes.
+// Passing the residual through unchanged there costs one badly-scaled entry;
+// dividing by it costs the whole block, since the subsequent Cholesky-based ortho
+// returns NaN on a rank-deficient input rather than failing loudly.
+template <typename R>
+inline constexpr R jacobi_singular_tolerance() {
+    return std::sqrt(std::numeric_limits<R>::epsilon());
+}
+
+// The unshifted diag(A)^{-1} is a valid LOBPCG preconditioner only where it is SPD,
+// i.e. where every diagonal entry is strictly positive. A random symmetric matrix is
+// not, and applying it anyway does not merely fail to help: every such case in the
+// sweep went from ~20 iterations to the 300-iteration cap.
+//
+// Positivity is the real condition; this floor exists only to keep the amplification
+// finite when some d_ii is positive but negligible against the largest. It is
+// deliberately loose (1e-6, i.e. up to a 10^6 spread is accepted) because tightening
+// it to 1e-3 also disabled the preconditioner on graded matrices whose diagonal is
+// perfectly positive, throwing away a measured 6x.
+template <typename R>
+inline constexpr R jacobi_definiteness_floor() {
+    return R(1e-6);
+}
+
 } // namespace
 
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -98,7 +131,17 @@ inline int64_t lobpcg_check_every() {
                 "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
                 "mutually exclusive; supply a factor or ask syevx to build one, not both");
         }
-        const bool use_preconditioner = params.preconditioner != nullptr || params.build_preconditioner;
+        const bool iluk_configured = params.preconditioner != nullptr || params.build_preconditioner;
+        // Resolved identically in syevx_lobpcg_buffer_size -- the Jacobi path adds a
+        // pool allocation, so the two must not be able to disagree.
+        const auto precond_kind =
+            syevx_select_preconditioner(params.preconditioner_type, iluk_configured, params.find_largest);
+        // The `&& iluk_configured` is defensive rather than redundant: the dispatcher
+        // rejects ILUK-without-a-factor, but syevx_lobpcg is a public entry point too.
+        const bool use_preconditioner =
+            (precond_kind == SyevxPreconditioner::ILUK) && iluk_configured;
+        const bool jacobi_shifted = (precond_kind == SyevxPreconditioner::JacobiShifted);
+        const bool use_jacobi = (precond_kind == SyevxPreconditioner::Jacobi) || jacobi_shifted;
         // An ILU(k) factorization approximates A^{-1}. Applying it to the LOBPCG
         // residual accelerates convergence toward the smallest eigenpairs, but for
         // the largest eigenpairs it suppresses the wanted directions and boosts the
@@ -207,6 +250,18 @@ inline int64_t lobpcg_check_every() {
             batch_size,
             pool.allocate<T*>(ctx, batch_size).data());
 
+        // diag(A), extracted once. For CSR this is a search through each row, which is
+        // not something to repeat every iteration; for dense it is a strided gather.
+        // Kept as T (not float_type) so the Hermitian complex case needs no special
+        // storage -- the imaginary part is zero for a valid input and the shift
+        // arithmetic below is done in T anyway.
+        Span<T> jacobi_diag;
+        Span<int32_t> jacobi_usable;
+        if (use_jacobi) {
+            jacobi_diag = pool.allocate<T>(ctx, n * batch_size);
+            jacobi_usable = pool.allocate<int32_t>(ctx, batch_size);
+        }
+
         auto AS_new = MatrixView(Stempdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto AX_new = AS_new({0,n}, {0,block_vectors});                       //First block of AS_new
         auto AP_new = AS_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS_new
@@ -276,6 +331,61 @@ inline int64_t lobpcg_check_every() {
         };
 
         auto trans = (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) ? Transpose::ConjTrans : Transpose::Trans;
+
+        if (use_jacobi) {
+            trace("syevx: extract diag(A) for Jacobi");
+            auto Akv = A.kernel_view();
+            auto diag_ptr = jacobi_diag.data();
+            auto usable_ptr = jacobi_usable.data();
+            const float_type def_floor = jacobi_definiteness_floor<float_type>();
+            constexpr size_t wg = 256;
+            ctx->submit([&](sycl::handler& h) {
+                h.parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(
+                    sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
+                    [=](sycl::nd_item<1> item) {
+                        const int bid = int(item.get_group_linear_id());
+                        const int64_t tid = int64_t(item.get_local_linear_id());
+                        const int64_t local_size = int64_t(item.get_local_range(0));
+                        sycl::group<1> cta = item.get_group();
+                        const auto Ab = Akv.batch_item(bid);
+                        T* dst = diag_ptr + int64_t(bid) * n;
+                        float_type local_max = float_type(0);
+                        float_type local_min = std::numeric_limits<float_type>::max();
+                        for (int64_t i = tid; i < n; i += local_size) {
+                            T d;
+                            if constexpr (MFormat == MatrixFormat::Dense) {
+                                d = Ab(int(i), int(i));
+                            } else {
+                                // Absent diagonal entry reads back as 0, which both
+                                // the definiteness test and the singularity guard
+                                // then treat as unusable -- the right outcome for a
+                                // structural zero on the diagonal.
+                                d = Ab.get(int(i), int(i));
+                            }
+                            dst[i] = d;
+                            // Real part only: a Hermitian A has a real diagonal, and
+                            // the sign of that real part is what decides whether
+                            // diag(A)^{-1} is positive definite.
+                            float_type dr;
+                            if constexpr (internal::is_complex<T>::value) dr = d.real();
+                            else                                          dr = d;
+                            local_max = sycl::max(local_max, sycl::fabs(dr));
+                            local_min = sycl::min(local_min, dr);
+                        }
+                        const float_type dmax = sycl::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
+                        const float_type dmin = sycl::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
+                        if (tid == 0) {
+                            // diag(A)^{-1} is a valid (SPD) LOBPCG preconditioner only
+                            // if every diagonal entry is positive and not negligible
+                            // against the largest one. Decided once per batch item,
+                            // not per entry: a mixed-sign diagonal makes the whole
+                            // operator indefinite, which no per-entry guard repairs.
+                            usable_ptr[bid] = (dmax > float_type(0) && dmin > def_floor * dmax) ? 1 : 0;
+                        }
+                    });
+            });
+            trace_wait("syevx: diag(A) extracted");
+        }
 
         S.fill_random(ctx);
 
@@ -590,6 +700,68 @@ inline int64_t lobpcg_check_every() {
                 trace("syevx: ILU(k) apply done");
             }
 
+            if (use_jacobi) {
+                trace("syevx: Jacobi apply on residuals");
+                // In-place on R: the operator is diagonal, so unlike the ILU(k) solve
+                // there is no read-after-write hazard and no staging buffer is needed.
+                //
+                // For JacobiShifted the shift is the Ritz value of the column being
+                // preconditioned, so the operator differs per column and per batch
+                // item. Column j's Ritz value sits at the same index the residual
+                // kernel uses -- mirrored here rather than shared, because the two
+                // kernels run at different points in the iteration and `lambdas`
+                // holds a different number of values early on.
+                const int64_t num_eigvals = it < 2 ? int64_t(it + 1) * block_vectors : 3 * block_vectors;
+                const bool find_largest = params.find_largest;
+                const bool shifted = jacobi_shifted;
+                const float_type sing_tol = jacobi_singular_tolerance<float_type>();
+                ctx->submit([&](sycl::handler& h) {
+                    auto Rdata = R.data_ptr();
+                    auto diag_ptr = jacobi_diag.data();
+                    auto usable_ptr = jacobi_usable.data();
+                    auto lambdas_span = lambdas;
+                    h.parallel_for<SyevxJacobiApplyKernel<B, T, MFormat>>(
+                        sycl::nd_range<1>(sycl::range{size_t(batch_size * residual_wg_size)},
+                                          sycl::range{size_t(residual_wg_size)}),
+                        [=](sycl::nd_item<1> item) {
+                            const int64_t tid = int64_t(item.get_local_linear_id());
+                            const int64_t bid = int64_t(item.get_group_linear_id());
+                            const int64_t local_size = int64_t(item.get_local_range(0));
+                            // R is the third block of S; R.data_ptr() already carries
+                            // that offset, so only the batch stride is applied here.
+                            // Unshifted diag(A)^{-1} needs a positive definite
+                            // diagonal; where it is not, leave the residual alone
+                            // rather than applying an indefinite operator.
+                            if (!shifted && usable_ptr[bid] == 0) return;
+                            T* blockR = Rdata + bid * block_vectors * n * 3;
+                            const T* blockD = diag_ptr + bid * n;
+                            auto blockLambdas = lambdas_span.subspan(bid * num_eigvals, num_eigvals);
+
+                            for (int64_t idx = tid; idx < n * block_vectors; idx += local_size) {
+                                const int64_t col = idx / n;
+                                const int64_t row = idx - col * n;
+                                const float_type lam =
+                                    shifted ? blockLambdas[find_largest ? (num_eigvals - 1 - col) : col]
+                                            : float_type(0);
+                                const T d = blockD[row];
+                                const T denom = d - T(lam);
+                                const float_type denom2 = internal::norm_squared(denom);
+                                const float_type scale = sycl::max(sycl::fabs(lam), internal::abs(d));
+                                const float_type floor_sq = (scale * sing_tol) * (scale * sing_tol);
+                                if (denom2 <= floor_sq || !(denom2 > float_type(0))) continue;
+                                if constexpr (internal::is_complex<T>::value) {
+                                    const T inv = T(denom.real(), -denom.imag()) *
+                                                  (float_type(1) / denom2);
+                                    blockR[idx] = blockR[idx] * inv;
+                                } else {
+                                    blockR[idx] = blockR[idx] * (float_type(1) / denom);
+                                }
+                            }
+                        });
+                });
+                trace_wait("syevx: Jacobi apply done");
+            }
+
             trace("syevx: ortho R vs (X or XP)");
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             trace_wait("syevx: ortho R done");
@@ -822,6 +994,19 @@ inline int64_t lobpcg_check_every() {
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);                            //R_preconditioned_data
+            // Mirrors the runtime `if (use_jacobi)` allocations. Resolved through the
+            // same function, on the same inputs, so the two cannot drift apart.
+            {
+                const auto precond_kind = syevx_select_preconditioner(
+                    params.preconditioner_type,
+                    params.preconditioner != nullptr || params.build_preconditioner,
+                    params.find_largest);
+                if (precond_kind == SyevxPreconditioner::Jacobi ||
+                    precond_kind == SyevxPreconditioner::JacobiShifted) {
+                    work_size += BumpAllocator::allocation_size<T>(ctx, n * batch_size);           //jacobi_diag
+                    work_size += BumpAllocator::allocation_size<int32_t>(ctx, batch_size);         //jacobi_usable
+                }
+            }
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, (block_vectors)*3 * batch_size);  //lambdas
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals

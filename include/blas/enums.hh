@@ -138,6 +138,53 @@ namespace batchlas {
         LOBPCG          // Locally Optimal Block Preconditioned Conjugate Gradient
     };
 
+    // Preconditioner family used by the LOBPCG path of `syevx`. Set per call via
+    // SyevxParams::preconditioner_type; `Auto` picks ILU(k) when a factor has been
+    // supplied (or requested via SyevxParams::build_preconditioner) and otherwise
+    // takes the default from BATCHLAS_SYEVX_PRECONDITIONER
+    // (auto|none|jacobi|jacobi_shifted|iluk), defaulting to `None`.
+    //
+    // The two Jacobi forms are different operators despite the shared name, and the
+    // difference is not cosmetic (measured iteration counts, single precision,
+    // n = 64..512, k = 2..16):
+    //
+    //   `Jacobi` = diag(A)^{-1} approximates A^{-1}, so -- exactly like ILU(k) -- it
+    //   is only valid for the SMALLEST eigenpairs, and `find_largest` is rejected
+    //   with it. On strongly graded (nearly diagonal) matrices it is worth 2-7x
+    //   fewer iterations; on a random symmetric matrix, whose diagonal is neither
+    //   dominant nor sign-definite, it is not a valid preconditioner at all, so the
+    //   implementation falls back to the identity per batch item whose diagonal is
+    //   not uniformly positive rather than diverging.
+    //
+    //   `JacobiShifted` = (diag(A) - lambda I)^{-1} takes its shift from the current
+    //   Ritz value, which makes it valid at BOTH ends -- it targets whatever is near
+    //   lambda. But it degenerates precisely where the unshifted form wins: as
+    //   diag(A) -> A the operator becomes the exact inverse of (A - lambda I) and
+    //   the preconditioned residual converges to X itself, so the new search
+    //   direction is annihilated by the subsequent orthogonalization against X.
+    //   Measured neutral (0.85-1.2x) on random symmetric input and 0.2-0.9x on
+    //   graded input. It is offered because the constant-diagonal case is provably
+    //   a no-op and the general case is safe, not because it was found to pay.
+    //
+    // Neither is chosen by `Auto`: on the matrices measured here neither is a free
+    // win, so picking one implicitly would be a regression for somebody.
+    //
+    // Precedence differs deliberately from SyevxAlgorithm: the environment variable
+    // only supplies the *default*, it does not override an explicit request. An
+    // algorithm can always be substituted for another; a preconditioner cannot --
+    // an ILU(k) factor a caller built and handed in has no substitute, and silently
+    // ignoring it (or, worse, silently ignoring a request for it) would be a
+    // correctness surprise rather than a performance one.
+    //
+    // Only the LOBPCG algorithm uses this; the direct and filtered paths ignore it.
+    enum class SyevxPreconditioner {
+        Auto,           // ILU(k) if configured, else the environment default, else None
+        None,           // Unpreconditioned
+        Jacobi,         // diag(A)^{-1}; dense and CSR, smallest-first only
+        JacobiShifted,  // (diag(A) - lambda I)^{-1}; dense and CSR, either end
+        ILUK            // Supplied or syevx-built ILU(k) factor; CSR and smallest-first only
+    };
+
     enum class OrthoAlgorithm {
         Chol2,          //Default
         Cholesky,       //Rarely sufficient
