@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.2, 7.3, 7.4, 7.6, 7.7, 7.8, 7.9).**
+Status: **Tiers 0-3 implemented; Tier 4 §7.1-7.10 done (7.5 opt-in, 7.10 Jacobi only), §7.11 needs GPU.**
 Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
