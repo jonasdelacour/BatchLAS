@@ -553,6 +553,76 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
     }
 }
 
+// Regression: a merge subproblem of size dd == 1 used to make the extremal-root
+// secular solver index d_prob(dd - 2) == d_prob(-1). Because d_prob aliases the
+// shared-memory d_local through a generic pointer, that negative offset faults
+// with CUDA_ERROR_ILLEGAL_ADDRESS rather than reading harmless garbage.
+//
+// Plain random tridiagonals essentially never deflate that far, which is why
+// FusedCtaPartitionWidths below did not catch it. Conditioned matrices from
+// random_hermitian_tridiagonal_with_log10_cond_metric do -- this mirrors the
+// benchmarks/stedc_acc case that originally exposed the bug.
+TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "CTA merge is GPU-only"; }
+    using float_type = typename base_type<T>::type;
+
+    const int n = 64;
+    const int batch = 64;
+
+    for (float_type log10_cond : {float_type(1), float_type(3), float_type(5)}) {
+        auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, float_type>(
+            *this->ctx, n, log10_cond, NormType::Spectral, batch, 1234u);
+        this->ctx->wait();
+
+        Vector<float_type> diag(n, float_type(0), batch);
+        Vector<float_type> sub(n - 1, float_type(0), batch);
+        auto A_view = dense_A.view();
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) {
+                diag(i, b) = A_view.at(i, i, b);
+                if (i < n - 1) sub(i, b) = A_view.at(i + 1, i, b);
+            }
+        }
+
+        // secular_threads_per_root = 4 is what the tuning tables select for
+        // n <= 64, giving parts_per_wg = 8.
+        for (int P : {4, 8, 16, 32}) {
+            auto a_cta = diag;
+            auto b_cta = sub;
+            auto eigvals = Vector<float_type>::zeros(n, batch);
+            auto eigvecs = Matrix<float_type>::Identity(n, batch);
+
+            StedcParams<float_type> params{
+                .recursion_threshold = 16,
+                .merge_variant = StedcMergeVariant::FusedCta,
+                .enable_rescale = true,
+                .secular_threads_per_root = P,
+            };
+
+            UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
+            stedc<B>(*this->ctx, a_cta, b_cta, eigvals, ws, JobType::EigenVectors, params, eigvecs);
+            this->ctx->wait();
+
+            for (int j = 0; j < batch; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    const float_type got = eigvals(i, j);
+                    ASSERT_EQ(got, got) << "NaN eigenvalue, log10cond=" << log10_cond
+                                        << " P=" << P << " at (" << i << ", batch " << j << ")";
+                    ASSERT_TRUE(std::isfinite(got)) << "non-finite eigenvalue, log10cond=" << log10_cond
+                                                    << " P=" << P << " at (" << i << ", batch " << j << ")";
+                }
+                for (int i = 0; i + 1 < n; ++i) {
+                    ASSERT_LE(eigvals(i, j), eigvals(i + 1, j))
+                        << "eigenvalues not sorted, log10cond=" << log10_cond << " P=" << P
+                        << " at (" << i << ", batch " << j << ")";
+                }
+            }
+        }
+    }
+}
+
 TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;

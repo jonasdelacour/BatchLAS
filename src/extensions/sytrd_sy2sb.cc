@@ -311,7 +311,10 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         const int pn0 = n - kd_i;
         const int pk0 = std::min(pn0, kd_i);
         auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
-        auto A22_0 = a_in({kd_i, SliceEnd()}, {kd_i, SliceEnd()});
+        // Widest blocks the loop can pass to ormqr (see the main loop): both
+        // shrink with i, so the i = 0 panel bounds every later one.
+        auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
+        auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
 
         const size_t tau_elems = static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         T* tau_tmp = sycl::malloc_shared<T>(tau_elems, ctx->get_device(), ctx->get_context());
@@ -322,8 +325,8 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
 
         const size_t geqrf_ws = geqrf_buffer_size<B, T>(ctx, V0, tau_span);
         const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Left, trans_left, tau_span);
-        const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Right, Transpose::NoTrans, tau_span);
+        const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span);
+        const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span);
         const size_t panel_ws = std::max(geqrf_ws, std::max(ormqr_l_ws, ormqr_r_ws));
 
         sycl::free(tau_tmp, ctx->get_context());
@@ -375,12 +378,14 @@ Event sytrd_sy2sb(Queue& ctx,
     const int pn0 = n - kd_i;
     const int pk0 = std::min(pn0, kd_i);
     auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
-    auto A22_0 = a_in({kd_i, SliceEnd()}, {kd_i, SliceEnd()});
+    // Must match the shapes queried in sytrd_sy2sb_buffer_size exactly.
+    auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
+    auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
     const size_t geqrf_ws_bytes = geqrf_buffer_size<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-    const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Left, trans_left,
+    const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left,
                                                            Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
-    const size_t ormqr_r_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A22_0, Side::Right, Transpose::NoTrans,
+    const size_t ormqr_r_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans,
                                                            Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
@@ -393,7 +398,25 @@ Event sytrd_sy2sb(Queue& ctx,
         const int pk = std::min(pn, kd_i);
 
         auto V = a_in({i + kd_i, SliceEnd()}, {i, i + pk});           // (pn x pk)
-        auto A22 = a_in({i + kd_i, SliceEnd()}, {i + kd_i, SliceEnd()}); // (pn x pn)
+
+        // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), so Q^H
+        // must hit *every* column left of the trailing block as well, not just
+        // A22. Columns < i are already zero below row i+kd (they were banded by
+        // earlier panels) and columns [i, i+pk) become R inside geqrf, so when
+        // pk == kd the trailing block is genuinely all that is left.
+        //
+        // On the final panel pk = min(pn, kd) can be < kd, and then columns
+        // [i+pk, i+kd) are neither zero nor part of the panel -- they used to be
+        // skipped entirely, silently corrupting the band. Widening the left
+        // apply to start at column i+pk (and the right apply, its transpose, to
+        // start at row i+pk) covers them; both reduce to the old A22-only calls
+        // when pk == kd. Those leftover columns are exactly the tail columns
+        // [n-kd, n), which the copy after the loop picks up afterwards.
+        //
+        // This is why the failure needed n % kd >= 2: at n % kd == 1 the
+        // leftover Q is 1x1 with tau = 0, i.e. the identity.
+        auto A_left = a_in({i + kd_i, SliceEnd()}, {i + pk, SliceEnd()});
+        auto A_right = a_in({i + pk, SliceEnd()}, {i + kd_i, SliceEnd()});
 
         // tau panel span is packed with per-batch stride = pk.
         Span<T> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
@@ -404,11 +427,12 @@ Event sytrd_sy2sb(Queue& ctx,
         // Copy band portion into AB for columns i..i+pk-1.
         (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i);
 
-        // Apply the orthogonal/unitary transform to the trailing block:
-        //   A22 := Q^H * A22 * Q, where Q is defined by GEQRF(V).
+        // A := Q^H A Q on the rows/columns Q acts on. The two ranges overlap
+        // exactly on the trailing block, so it gets both sides and everything
+        // else gets one.
         const Transpose trans_left_it = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        ormqr<B, T>(ctx, V, A22, Side::Left, trans_left_it, tau_panel_span, panel_ws);
-        ormqr<B, T>(ctx, V, A22, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws);
+        ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws);
+        ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws);
 
         // Store tau panel into output tau at offset i.
         (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);

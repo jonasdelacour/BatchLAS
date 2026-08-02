@@ -32,8 +32,12 @@ static void BM_STEDC(minibench::State& state) {
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
     const StedcMergeVariant merge_variant = static_cast<StedcMergeVariant>(state.range(3));
-    const int threads_per_root = state.range(4) > 0 ? state.range(4) : 32;
-    const int wg_multiplier = state.range(5) > 0 ? state.range(5) : 1;
+    // Pass non-positive values straight through: StedcParams treats <= 0 as
+    // "use the BatchLAS tuning tables", which is what real callers such as syev
+    // get. Substituting fixed fallbacks here silently benchmarked something the
+    // library never actually runs by default.
+    const int threads_per_root = static_cast<int>(state.range(4));
+    const int wg_multiplier = static_cast<int>(state.range(5));
     JobType jobz = JobType::EigenVectors;
 
     auto diags = Vector<T>::random(n, batch);

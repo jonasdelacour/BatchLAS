@@ -22,6 +22,14 @@
 // runs at kd = 1, so the band stage is a pure extract and there are no sb2st
 // reflectors to undo. Only the stage-1 Q is back-transformed. Eigenvalue-only
 // solves use a wide band and never need a back-transform at all.
+//
+// This path pins kd = 1 itself rather than taking choose_two_stage_kd_for_job's
+// answer. syev_two_stage's eigenvector path moved to sytrd_sb2st_hh, which retains
+// Q2 and so can afford a real band width; this path still uses the Givens
+// sytrd_sb2st, which discards Q2, and would silently produce wrong eigenvectors at
+// kd > 1. Porting the subset solver onto sytrd_sb2st_hh is worthwhile follow-up --
+// the reduction is the dominant cost here and a kd = 1 stage 1 is the slow way to
+// do it -- but it is a change to the algorithm, not to this merge.
 
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
@@ -58,6 +66,16 @@ inline WantedRange wanted_range(int64_t n, int64_t k, bool find_largest) {
     return find_largest ? WantedRange{n - k, n - 1} : WantedRange{0, k - 1};
 }
 
+// kd = 1 when eigenvectors are wanted, so the Givens sytrd_sb2st -- which discards
+// its reflectors -- has nothing to discard. Deliberately not
+// two_stage_detail::choose_two_stage_kd_for_job: that one now returns a wide band
+// for eigenvectors, which is correct only for the sytrd_sb2st_hh path. See the note
+// at the top of this file.
+inline int32_t subset_kd_for_job(int32_t n, JobType jobz) {
+    if (jobz == JobType::EigenVectors) return 1;
+    return two_stage_detail::choose_two_stage_kd(n);
+}
+
 } // namespace
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -89,7 +107,7 @@ Event syevx_direct_subset(Queue& ctx,
         }
 
         using namespace two_stage_detail;
-        const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
+        const int32_t kd = subset_kd_for_job(n, jobz);
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t p = std::max<int32_t>(0, n - 1);
@@ -275,7 +293,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
         using namespace two_stage_detail;
-        const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
+        const int32_t kd = subset_kd_for_job(n, jobz);
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t p = std::max<int32_t>(0, n - 1);

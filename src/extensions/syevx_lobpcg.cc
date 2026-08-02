@@ -52,6 +52,31 @@ namespace batchlas {
             std::cout << msg << std::endl;
             ctx.wait_and_throw();
         };
+        if (params.preconditioner != nullptr && params.build_preconditioner) {
+            throw std::invalid_argument(
+                "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
+                "mutually exclusive; supply a factor or ask syevx to build one, not both");
+        }
+        const bool use_preconditioner = params.preconditioner != nullptr || params.build_preconditioner;
+        // An ILU(k) factorization approximates A^{-1}. Applying it to the LOBPCG
+        // residual accelerates convergence toward the smallest eigenpairs, but for
+        // the largest eigenpairs it suppresses the wanted directions and boosts the
+        // unwanted ones -- measurably worse than running unpreconditioned. Reject the
+        // combination instead of silently degrading.
+        if (use_preconditioner && params.find_largest) {
+            throw std::invalid_argument(
+                "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
+                "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
+                "or clear SyevxParams::preconditioner / build_preconditioner");
+        }
+        if constexpr (MFormat != MatrixFormat::CSR) {
+            if (params.build_preconditioner) {
+                throw std::invalid_argument(
+                    "syevx: SyevxParams::build_preconditioner requires a CSR matrix; ILU(k) is "
+                    "only defined for sparse input");
+            }
+        }
+
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
         int64_t block_vectors = neigs + params.extra_directions;
@@ -108,8 +133,25 @@ namespace batchlas {
                 pool.allocate<T*>(ctx, batch_size).data());
         }
 
-        MatrixView<T, MatrixFormat::Dense> R_contiguous;
+        // Built either from the caller's factor or, when asked, from one formed here
+        // out of `workspace` -- no allocation of its own, so syevx stays pool-only.
+        ILUKView<T> precond;
         if (params.preconditioner != nullptr) {
+            precond = params.preconditioner->view();
+        } else if (params.build_preconditioner) {
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                // Hand ILU(k) the unclaimed tail of the pool and take back only what
+                // it used. Asking iluk_buffer_size first would work, but it costs a
+                // second symbolic factorization on the critical path for a number
+                // the factorization is about to compute anyway.
+                size_t iluk_bytes = 0;
+                precond = iluk_factorize<B, T>(ctx, A, pool.remaining(), params.iluk_params, &iluk_bytes);
+                pool.consume(iluk_bytes);
+            }
+        }
+
+        MatrixView<T, MatrixFormat::Dense> R_contiguous;
+        if (use_preconditioner) {
             auto R_contiguous_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
             R_contiguous = MatrixView(
                 R_contiguous_data.data(),
@@ -157,21 +199,23 @@ namespace batchlas {
         // The chosen SYEV provider can change with matrix size (e.g. CTA for n<=32
         // but blocked/vendor for larger n), so a single pre-sized workspace must cover
         // the maximum of the internal problems.
-        //
-        // The projected problems solved during the iteration are XtAX (block_vectors)
-        // and StAS at Nvecs = 2*block_vectors on the restart iteration and
-        // 3*block_vectors thereafter. All three must be covered: the provider is
-        // chosen per size (e.g. CTA only up to n=32), so the largest matrix does not
-        // necessarily need the largest workspace.
-        size_t ws_projected = 0;
-        for (int64_t nv : {block_vectors, 2 * block_vectors, 3 * block_vectors}) {
-            auto probe = MatrixView(StAS_base, nv, nv, StAS_base.ld(), StAS_base.stride());
+        // Restart iterations solve a 2*block_vectors projected problem rather than the
+        // full 3*block_vectors one (see Nvecs below). Because the provider is chosen
+        // from the shape, that intermediate size can demand *more* workspace than
+        // either the block_vectors or 3*block_vectors problem, so it has to be sized
+        // explicitly instead of assumed to be bounded by them.
+        auto StAS_restart = MatrixView(StAS_base, block_vectors * 2, block_vectors * 2,
+                                       StAS_base.ld(), StAS_base.stride());
+        const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+        size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
+        if (prefer_vendor_projected_syev) {
+            const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
             ws_projected = std::max(ws_projected,
-                syev_buffer_size<B>(ctx, probe, lambdas, JobType::EigenVectors, Uplo::Lower));
-            if (prefer_vendor_projected_syev) {
-                ws_projected = std::max(ws_projected,
-                    backend::syev_vendor_buffer_size<B, T>(ctx, probe, lambdas, JobType::EigenVectors, Uplo::Lower));
-            }
+                                    std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
         auto syev_workspace = pool.allocate<std::byte>(ctx, ws_projected);
         auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(  ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
@@ -440,11 +484,11 @@ namespace batchlas {
                 break;
             }
 
-            if (params.preconditioner != nullptr) {
+            if (use_preconditioner) {
                 trace("syevx: ILU(k) apply on residuals");
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R_contiguous, R);
                 ctx.wait_and_throw();
-                iluk_apply<B>(ctx, *params.preconditioner, R_contiguous, R_preconditioned);
+                iluk_apply<B, T>(ctx, precond, R_contiguous, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 ctx.wait_and_throw();
                 trace("syevx: ILU(k) apply done");
@@ -606,30 +650,42 @@ namespace batchlas {
             auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
 
             {
-                // Match runtime: the projected problems are views into the top-left
-                // corner of a (3*block_vectors x 3*block_vectors) backing buffer, at
-                // Nvecs = block_vectors (XtAX), 2*block_vectors (restart iteration)
-                // and 3*block_vectors (subsequent iterations). All three must be
-                // covered — the SYEV provider is chosen per size, so the largest
-                // matrix does not necessarily need the largest workspace.
-                size_t ws_projected = 0;
-                for (int64_t nv : {static_cast<int64_t>(block_vectors),
-                                   static_cast<int64_t>(2 * block_vectors),
-                                   static_cast<int64_t>(3 * block_vectors)}) {
-                    auto probe = MatrixView<T, MatrixFormat::Dense>(nullptr,
-                        static_cast<int>(nv), static_cast<int>(nv),
+                // Match runtime: XtAX is a (block_vectors x block_vectors) view into the
+                // top-left corner of a (3*block_vectors x 3*block_vectors) backing buffer.
+                auto XtAX_dummy = MatrixView<T, MatrixFormat::Dense>(nullptr,
+                    static_cast<int>(block_vectors), static_cast<int>(block_vectors),
+                    static_cast<int>(block_vectors * 3),
+                    static_cast<int>(3 * 3 * block_vectors * block_vectors),
+                    static_cast<int>(batch_size), nullptr);
+                // The projected problem is Nvecs x Nvecs with Nvecs = 2*block_vectors on
+                // restart iterations and 3*block_vectors otherwise, always viewed with the
+                // backing buffer's ld. Both must be sized: syev picks its provider from the
+                // matrix shape, so workspace demand is not monotone in Nvecs and the
+                // 3*block_vectors figure does not bound the 2*block_vectors one. Omitting
+                // the restart shape made syevx throw "insufficient workspace for chosen
+                // provider" at, for instance, block_vectors = 12 and 16.
+                auto projected_dummy = [&](int64_t nvecs) {
+                    return MatrixView<T, MatrixFormat::Dense>(nullptr,
+                        static_cast<int>(nvecs), static_cast<int>(nvecs),
                         static_cast<int>(block_vectors * 3),
                         static_cast<int>(3 * 3 * block_vectors * block_vectors),
                         static_cast<int>(batch_size), nullptr);
+                };
+                auto StAS_restart_dummy = projected_dummy(block_vectors * 2);
+                auto StAS_base_dummy = projected_dummy(block_vectors * 3);
 
+                const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
+
+                // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
+                if constexpr (B != Backend::NETLIB) {
+                    const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     ws_projected = std::max(ws_projected,
-                        syev_buffer_size<B>(ctx, probe, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower));
-
-                    // Match the runtime behavior: projected problems may prefer the vendor SYEV path on GPUs.
-                    if constexpr (B != Backend::NETLIB) {
-                        ws_projected = std::max(ws_projected,
-                            backend::syev_vendor_buffer_size<B, T>(ctx, probe, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower));
-                    }
+                                            std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
                 }
 
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx, ws_projected);
@@ -641,9 +697,18 @@ namespace batchlas {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
                         
-            if (params.preconditioner != nullptr) {
+            if (params.preconditioner != nullptr || params.build_preconditioner) {
                 work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);            //R_contiguous_data
                 work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);                               //R_contiguous ptrs
+            }
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                // This runs ILU(k)'s symbolic phase to get an upper bound on the fill.
+                // syevx itself does not repeat it -- it sub-allocates from the pool tail
+                // and reports back what it took -- so the cost lands here, on the sizing
+                // call a caller makes once and amortizes over every solve.
+                if (params.build_preconditioner) {
+                    work_size += BumpAllocator::allocation_size<std::byte>(ctx, iluk_buffer_size<B, T>(ctx, A, params.iluk_params));
+                }
             }
             work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
             if (jobz == JobType::EigenVectors) {

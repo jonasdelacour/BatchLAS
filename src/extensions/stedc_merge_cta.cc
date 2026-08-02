@@ -11,6 +11,7 @@
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
 
+#include <cassert>
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -45,19 +46,45 @@ inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
     return false;
 }
 
+// `kernel_max_wg` is the largest work-group this particular kernel can launch on
+// this device, which is generally smaller than the device maximum: the merge
+// kernel uses ~80 registers per work-item, so 1024 work-items would need 81920
+// registers against a 65536 limit and the launch throws outright. Callers pass
+// the kernel-specific bound; 0 means "unknown", in which case only the device
+// limit applies. This matters now that the tuning tables ask for wide
+// work-groups.
 inline int32_t choose_wg_size(const sycl::device& dev,
                               int32_t base_wg_size,
-                              int32_t requested_mul) {
+                              int32_t requested_mul,
+                              int32_t kernel_max_wg = 0) {
     int32_t wg_mul = std::max<int32_t>(1, requested_mul);
     int32_t wg_size = base_wg_size * wg_mul;
 
-    const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+    int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+    if (kernel_max_wg > 0) {
+        max_wg_size = std::min(max_wg_size, kernel_max_wg);
+    }
     if (wg_size > max_wg_size) {
         const int32_t max_mul = std::max<int32_t>(1, max_wg_size / base_wg_size);
         wg_mul = std::min(wg_mul, max_mul);
         wg_size = base_wg_size * wg_mul;
     }
     return wg_size;
+}
+
+// Largest work-group the given kernel can actually launch on `dev`. Returns 0 if
+// the runtime cannot answer, so the caller falls back to the device limit.
+template <typename KernelName>
+inline int32_t kernel_max_work_group_size(Queue& ctx, const sycl::device& dev) {
+    try {
+        auto bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(
+            ctx->get_context(), {dev}, {sycl::get_kernel_id<KernelName>()});
+        const auto kern = bundle.template get_kernel<KernelName>();
+        return static_cast<int32_t>(
+            kern.template get_info<sycl::info::kernel_device_specific::work_group_size>(dev));
+    } catch (const sycl::exception&) {
+        return 0;
+    }
 }
 
 template <typename T>
@@ -107,6 +134,19 @@ struct PartitionAdapter {
         }
         return value;
     }
+
+    template <typename T>
+    inline T reduce_product(T value) const {
+        const uint32_t w = static_cast<uint32_t>(partition.get_local_linear_range());
+        for (uint32_t offset = w / 2; offset > 0; offset >>= 1) {
+            value *= permute_group_by_xor(partition, value, offset);
+        }
+        return value;
+    }
+
+    // Partition-local reductions never need a work-group barrier: every lane of
+    // a partition executes the same trip count, so the shuffles are convergent.
+    inline void sync() const {}
 };
 
 struct WorkgroupAdapter {
@@ -120,6 +160,15 @@ struct WorkgroupAdapter {
 
     inline int32_t width() const {
         return bdim;
+    }
+
+    template <typename T>
+    inline T reduce_product(T value) const {
+        return sycl::reduce_over_group(wg, value, sycl::multiplies<T>());
+    }
+
+    inline void sync() const {
+        sycl::group_barrier(wg);
     }
 
     template <typename T>
@@ -404,6 +453,17 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
                                 T rho,
                                 int32_t max_iter) {
     const T rho_inv = T(1) / rho;
+
+    // dd == 1 has no second pole: `prev` below would be -1 and d_prob(prev)
+    // would read outside the shared-memory window (d_prob aliases d_local via a
+    // generic pointer, so a negative offset can fault). With a single pole the
+    // secular equation 1/rho + z0^2/(d0 - x) = 0 solves exactly:
+    //     x = d0 + rho * z0^2.
+    if (dd <= 1) {
+        const T z0 = z_prob(0);
+        return {d_prob(0), rho * z0 * z0};
+    }
+
     const int32_t last = dd - 1;
     const int32_t prev = dd - 2;
     const T d_last = d_prob(last);
@@ -637,11 +697,116 @@ inline void write_denominator_column(QBatch& Q_bid,
         Q_bid(i, root_ix) = denom;
     }}
 
-template <typename T, typename QBatch, typename VView>
+// Blue's-scaled 2-norm of a contiguous column, reduced through `adapter` so the
+// same code serves both the work-group-wide and the sub-group-partition variant.
+// Mirrors internal::nrm2 (src/math-helpers.hh) exactly; the only difference is
+// that the three accumulators are reduced as scalars instead of a sycl::vec<R,3>,
+// which is componentwise-identical.
+template <typename T, typename Adapter, typename QBatch>
+inline T nrm2_column(const Adapter& adapter,
+                     QBatch& Q_bid,
+                     int32_t dd,
+                     int32_t col) {
+    using R = internal::base_float_t<T>;
+
+    const int radix = std::numeric_limits<R>::radix;
+    const int p     = std::numeric_limits<R>::digits;
+    const int emin  = std::numeric_limits<R>::min_exponent;
+    const int emax  = std::numeric_limits<R>::max_exponent;
+
+    auto floor_div = [](int a, int b) {
+        int q = a / b;
+        if (((a ^ b) < 0) && (a % b)) --q;
+        return q;
+    };
+    auto ceil_div = [](int a, int b) {
+        int q = a / b;
+        if (((a ^ b) >= 0) && (a % b)) ++q;
+        return q;
+    };
+
+    const R tsml = sycl::pown(static_cast<R>(radix), ceil_div(emin - 1, 2));
+    const R tbig = sycl::pown(static_cast<R>(radix), floor_div(emax - p + 1, 2));
+    const R ssml = sycl::pown(static_cast<R>(radix), -floor_div(emin - p, 2));
+    const R sbig = sycl::pown(static_cast<R>(radix), -ceil_div(emax + p - 1, 2));
+
+    R abig = R(0), amed = R(0), asml = R(0);
+    for (int32_t i = adapter.lane_id(); i < dd; i += adapter.width()) {
+        const R ax = sycl::fabs(static_cast<R>(internal::abs(Q_bid(i, col))));
+        if (ax > tbig) {
+            const R t = ax * sbig;
+            abig += t * t;
+        } else if (ax < tsml) {
+            const R t = ax * ssml;
+            asml += t * t;
+        } else {
+            amed += ax * ax;
+        }
+    }
+
+    abig = adapter.reduce_sum(abig);
+    amed = adapter.reduce_sum(amed);
+    asml = adapter.reduce_sum(asml);
+
+    const R zero = R(0);
+    const R one  = R(1);
+    const R maxN = std::numeric_limits<R>::max();
+
+    R scl = one;
+    R sumsq = zero;
+
+    if (abig > zero) {
+        if ((amed > zero) || (amed > maxN) || (amed != amed)) {
+            abig += (amed * sbig) * sbig;
+        }
+        scl = one / sbig;
+        sumsq = abig;
+    } else if (asml > zero) {
+        if ((amed > zero) || (amed > maxN) || (amed != amed)) {
+            const R am = sycl::sqrt(amed);
+            const R as = sycl::sqrt(asml) / ssml;
+            const R ymin = sycl::fmin(am, as);
+            const R ymax = sycl::fmax(am, as);
+            scl   = one;
+            sumsq = ymax * ymax * (one + (ymin / ymax) * (ymin / ymax));
+        } else {
+            scl   = one / ssml;
+            sumsq = asml;
+        }
+    } else {
+        scl   = one;
+        sumsq = amed;
+    }
+
+    return scl * sycl::sqrt(sumsq);
+}
+
+// Löwner rescale. `first`/`stride` select which eigen-indices this reduction
+// group owns: (0, 1) makes the whole work-group walk every index sequentially
+// (the original behaviour, kept for the WG variant), while (part_id,
+// parts_per_wg) hands one index to each sub-group partition so all of them run
+// concurrently with no work-group barrier in the loop.
+//
+// The outer indices are independent: iteration `eid` reads row `eid` of Q (never
+// written here) and writes only v(eid).
+//
+// The product is accumulated as a (mantissa, exponent) pair rather than a plain
+// T. This is required, not cosmetic: a lane multiplies dd/width factors before
+// any reduction, so narrowing the reduction group from the work-group (width 32)
+// to a partition (width 4) lengthens each serial product 8x. At n=64 the naive
+// product overflows to Inf / underflows to 0, which poisons v, then Q, then the
+// eigenvalues, and the resulting invalid sort permutation faults downstream in
+// permuted_copy. frexp renormalization keeps the mantissa in [0.5, 1) so the
+// accumulation cannot leave range at any width.
+//
+// Because frexp scaling is by exact powers of two, mant * 2^expo reproduces the
+// naive product bit-for-bit wherever the naive product was in range, so the WG
+// reference path's values are unchanged.
+template <typename T, typename Adapter, typename QBatch, typename VView>
 inline void maybe_rescale_vectors(bool do_rescale,
-                                  const sycl::group<1>& wg,
-                                  int32_t lane,
-                                  int32_t width,
+                                  const Adapter& adapter,
+                                  int32_t first,
+                                  int32_t stride,
                                   int32_t dd,
                                   QBatch& Q_bid,
                                   const VectorView<T>& d_prob,
@@ -651,12 +816,28 @@ inline void maybe_rescale_vectors(bool do_rescale,
         return;
     }
 
+    const int32_t lane = adapter.lane_id();
+    const int32_t width = adapter.width();
+
+    // Trip count is deliberately identical for every reduction group: `dd` is
+    // rarely a multiple of `stride` (deflation makes it arbitrary), so a plain
+    // `eid < dd` bound would let some partitions run one iteration longer than
+    // others. The reductions below are sub-group shuffles, which require every
+    // lane of the warp to participate -- a partition that has already exited the
+    // loop makes the shuffle read garbage. Iterate a uniform number of times and
+    // mask the work instead.
+    const int32_t iters = (dd + stride - 1) / stride;
+
     // Löwner rescale: native T is sufficient once deflation uses the
     // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
-    for (int32_t eid = 0; eid < dd; ++eid) {
-        const T Di = d_prob(eid);
-        T partial = T(1);
-        for (int32_t j = lane; j < dd; j += width) {
+
+    for (int32_t it = 0; it < iters; ++it) {
+        const int32_t eid = first + it * stride;
+        const bool active = (eid < dd);
+        const T Di = active ? d_prob(eid) : T(0);
+        T mant = T(1);
+        int32_t expo = 0;
+        for (int32_t j = lane; active && j < dd; j += width) {
             const T q_elem = Q_bid(eid, j);
             T ratio;
             if (j == eid) {
@@ -665,38 +846,72 @@ inline void maybe_rescale_vectors(bool do_rescale,
                 const T denom = Di - d_prob(j);
                 ratio = q_elem / denom;
             }
-            partial *= ratio;
+            mant *= ratio;
+            // Renormalize every factor so |mant| stays in [0.5, 1); exact,
+            // since frexp only rescales by a power of two.
+            if (mant != T(0) && sycl::isfinite(mant)) {
+                int e = 0;
+                mant = sycl::frexp(mant, &e);
+                expo += e;
+            }
         }
 
-        const T valf = sycl::reduce_over_group(wg, partial, sycl::multiplies<T>());
-        if (lane == 0) {
-            const T mag = std::sqrt(std::fabs(valf));
+        // Each lane contributes |mant| < 1, so the butterfly product bottoms out
+        // at 0.5^width (>= 2e-10 for width 32) -- no underflow in the reduction.
+        const T mant_all = adapter.reduce_product(mant);
+        const int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
+
+        if (active && lane == 0) {
+            // mag = sqrt(|mant_all| * 2^expo_all), split so neither the square
+            // root's argument nor its result can leave range.
+            const int32_t half = expo_all >> 1;              // floor(expo_all / 2)
+            const int32_t rem = expo_all - 2 * half;         // 0 or 1
+            T mag = sycl::sqrt(sycl::fabs(mant_all) * (rem ? T(2) : T(1)));
+            mag = sycl::ldexp(mag, half);
             const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
             v(eid, bid) = sgn * mag;
         }
-        sycl::group_barrier(wg);
+        adapter.sync();
     }
 }
 
-template <typename T, typename QBatch, typename QView, typename VView>
-inline void normalize_vectors(const sycl::group<1>& wg,
-                              int32_t lane,
-                              int32_t width,
+// Reciprocate-and-normalize. Same `first`/`stride` convention as
+// maybe_rescale_vectors: columns are independent (column `eig` reads v and only
+// touches Q(:, eig)), so one column per partition removes the per-column
+// work-group barrier entirely.
+template <typename T, typename Adapter, typename QBatch, typename VView>
+inline void normalize_vectors(const Adapter& adapter,
+                              int32_t first,
+                              int32_t stride,
                               int32_t dd,
                               QBatch& Q_bid,
-                              const QView& Qview,
                               const VView& v,
                               int32_t bid) {
-    for (int32_t eig = 0; eig < dd; ++eig) {
-        for (int32_t i = lane; i < dd; i += width) {
+    const int32_t lane = adapter.lane_id();
+    const int32_t width = adapter.width();
+
+    // Uniform trip count across reduction groups -- see the note in
+    // maybe_rescale_vectors. nrm2_column reduces with sub-group shuffles, so a
+    // partition must not fall out of the loop while others are still inside it.
+    const int32_t iters = (dd + stride - 1) / stride;
+
+
+    for (int32_t it = 0; it < iters; ++it) {
+        const int32_t eig = first + it * stride;
+        const bool active = (eig < dd);
+
+        for (int32_t i = lane; active && i < dd; i += width) {
             Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
         }
-
-        const T nrm2 = internal::nrm2<T>(wg, Qview(Slice{0, dd}, eig));
-        for (int32_t i = lane; i < dd; i += width) {
+        // No sync needed here: nrm2_column walks the column with the same
+        // lane/width stride, so every lane only reads back what it just wrote.
+        // Inactive groups still call it (with an empty range) so the reduction
+        // stays warp-uniform.
+        const T nrm2 = nrm2_column<T>(adapter, Q_bid, active ? dd : 0, active ? eig : 0);
+        for (int32_t i = lane; active && i < dd; i += width) {
             Q_bid(i, eig) /= nrm2;
         }
-        sycl::group_barrier(wg);
+        adapter.sync();
     }
 }
 
@@ -715,7 +930,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
     const auto dev = ctx->get_device();
     const int32_t base_wg_size = std::lcm<int32_t>(P, sg_size);
-    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
+    const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedCtaMerge<B, T, P>>(ctx, dev);
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
+                                           kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
 
@@ -778,8 +995,17 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
                 sycl::group_barrier(wg);
 
-                maybe_rescale_vectors(do_rescale, wg, tid, bdim, dd, Q_bid, d_prob, v, bid);
-                normalize_vectors<T>(wg, tid, bdim, dd, Q_bid, Qview, v, bid);
+                // Rescale and normalize are parallel over their outer index, so
+                // hand one index to each partition instead of walking them
+                // sequentially behind a work-group reduction per index.
+                const PartitionAdapter<decltype(partition)> padapter{partition};
+                maybe_rescale_vectors(do_rescale, padapter, part_id, parts_per_wg, dd,
+                                      Q_bid, d_prob, v, bid);
+                // Rescale reads all of Q and writes all of v; normalize
+                // overwrites Q and reads all of v. One barrier separates the two
+                // phases -- the loops themselves no longer need any.
+                sycl::group_barrier(wg);
+                normalize_vectors<T>(padapter, part_id, parts_per_wg, dd, Q_bid, v, bid);
             });
     });
 }
@@ -799,7 +1025,9 @@ void stedc_merge_fused_wg(Queue& ctx,
 
     const int32_t max_sg = std::max<int32_t>(1, device_max_sub_group_size(ctx));
     const int32_t base_wg_size = max_sg;
-    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier);
+    const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedWgMerge<B, T>>(ctx, dev);
+    const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
+                                           kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
 
@@ -850,12 +1078,16 @@ void stedc_merge_fused_wg(Queue& ctx,
                         temp_lambdas(root_ix, bid) = root.origin + root.tau;
                     }
                     write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, tid, bdim);
+                    // (WG variant: kept sequential as the reference path.)
                 }
 
                 sycl::group_barrier(wg);
 
-                maybe_rescale_vectors(do_rescale, wg, tid, bdim, dd, Q_bid, d_prob, v, bid);
-                normalize_vectors<T>(wg, tid, bdim, dd, Q_bid, Qview, v, bid);
+                // WG variant keeps the original sequential-over-index walk with
+                // work-group-wide reductions: (first, stride) = (0, 1).
+                const WorkgroupAdapter wadapter{wg, tid, bdim};
+                maybe_rescale_vectors(do_rescale, wadapter, 0, 1, dd, Q_bid, d_prob, v, bid);
+                normalize_vectors<T>(wadapter, 0, 1, dd, Q_bid, v, bid);
             });
     });
 }

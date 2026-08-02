@@ -1176,6 +1176,16 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
     params.absolute_tolerance = py_scalar_or_default<T>(options, "absolute_tolerance", params.absolute_tolerance);
     params.relative_tolerance = py_scalar_or_default<T>(options, "relative_tolerance", params.relative_tolerance);
     params.preconditioner = preconditioner;
+    // Opt-in in-solver ILU(k): syevx forms the factor from its own workspace, so
+    // an end-to-end timing from Python covers formation as well as application.
+    params.build_preconditioner =
+        py_scalar_or_default<bool>(options, "build_preconditioner", params.build_preconditioner);
+    params.iluk_params.levels_of_fill =
+        py_scalar_or_default<int>(options, "iluk_levels_of_fill", params.iluk_params.levels_of_fill);
+    params.iluk_params.drop_tolerance = py_scalar_or_default<typename base_type<T>::type>(
+        options, "iluk_drop_tolerance", params.iluk_params.drop_tolerance);
+    params.iluk_params.fill_factor = py_scalar_or_default<typename base_type<T>::type>(
+        options, "iluk_fill_factor", params.iluk_params.fill_factor);
     params.instrumentation = instrumentation;
     return params;
 }

@@ -1,10 +1,16 @@
 // Helpers shared by the two-stage reduction paths (syev_two_stage, syevx_direct_subset).
 //
-// NOTE on kd: when eigenvectors are wanted these paths use kd = 1, which makes the
-// band->tridiagonal stage a pure extract. That is why the sb2st reflectors
-// (tau_sb2st) are computed but never applied anywhere in the tree -- with kd = 1
-// there is no bulge chasing to undo. Any future kd > 1 eigenvector path must add a
-// back-transform through those reflectors first.
+// NOTE on kd: syev_two_stage's eigenvector path no longer forces kd = 1 -- since
+// sytrd_sb2st_hh retains Q2, it reduces at a real band width and then applies the
+// stage-2 reflectors explicitly. syevx_direct_subset has NOT been ported to that
+// path: it still uses the Givens sytrd_sb2st, which discards Q2, so it pins kd = 1
+// locally to make the band stage a pure extract. Do not assume the value returned by
+// choose_two_stage_kd_for_job is safe for a path that never applies stage-2
+// reflectors.
+//
+// build_phase_from_kd1_band and apply_phase_rows operate on a kd = 1 band regardless
+// of the reduction width -- in syev_two_stage that band is sb2st_hh's tridiagonal
+// output, in syevx_direct_subset it is the sy2sb output directly.
 
 #pragma once
 
@@ -29,18 +35,41 @@ inline int32_t env_int_or_default(const char* key, int32_t defval) {
 }
 
 inline int32_t choose_two_stage_kd(int32_t n) {
-    // Conservative defaults for initial two-stage path; override with env as needed.
-    const int32_t def = (n <= 256) ? 16 : 32;
+    // Measured with syev_two_stage_benchmark (float, eigenvectors, RTX 4090,
+    // total ms; kd across, n/batch down):
+    //
+    //                kd=16      32      48      64      96   blocked
+    //   128/2048      27.8    23.4    22.8    21.9    19.6     15.0
+    //   256/1024      78.9    65.3    66.9    66.7    72.2     42.4
+    //   512/512      249.5   203.9   223.1   240.0   298.6    193.3
+    //   1024/128     500.1   425.8   443.9   470.0   546.6    481.4
+    //   2048/32     1275.3  1183.4  1259.0  1353.8  1614.0   1265.7
+    //
+    // kd=32 is optimal at every n >= 256. This supersedes an earlier 32/64 split
+    // measured before the wave back-transform landed: back then Q2 dominated and
+    // its cost fell with kd, which pulled the optimum up to 64 at large n. Now
+    // that Q2 is ~3x cheaper the balance is set by stage 1 and the chase, whose
+    // O(n^2 kd) work favours a narrow band, so the optimum came back down.
+    //
+    // Two-stage now *wins* at n >= 1024 (1.13x at n=1024, 1.06x at n=2048) and
+    // still loses below that, where blocked's lower fixed overhead dominates.
+    const int32_t def = 32;
+
     const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
 }
 
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
-    // Eigenvector mode currently requires kd=1 so stage-2 is a pure extract,
-    // then Q from stage-1 reflectors can be applied explicitly.
-    if (jobz == JobType::EigenVectors) {
-        return 1;
-    }
+    // Eigenvector mode used to force kd=1 because the Givens stage-2 discards
+    // Q2. sytrd_sb2st_hh retains it, so both modes now use a real band width.
+    //
+    // Note the tuning literature has the optimum going *up*, not down, when
+    // eigenvectors are wanted (Gates/Tomov/Dongarra 2018 measure GPU 32/64
+    // without vectors -> 96/128 with; MAGMA's get_nb.cpp uses band nb=128),
+    // because the extra back-transform favours large nb while only stage 2's
+    // O(n^2 nb) work favours small. choose_two_stage_kd is left shared for now;
+    // splitting it is a tuning question, not a correctness one.
+    (void)jobz;
     return choose_two_stage_kd(n);
 }
 
@@ -149,6 +178,37 @@ inline void apply_phase_rows(Queue& ctx,
     });
 }
 
+// Same as lift_real_eigvecs_with_phase but also valid for real T, where the
+// phase is just a sign. Used by the eigenvector path, which is now shared
+// between the real and complex cases.
+template <typename T>
+inline void lift_eigvecs_with_phase(Queue& ctx,
+                                    const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
+                                    const VectorView<T>& phase,
+                                    const MatrixView<T, MatrixFormat::Dense>& z_out) {
+    using Real = typename base_type<T>::type;
+    const int32_t n = static_cast<int32_t>(z_real.rows());
+    const int32_t batch = static_cast<int32_t>(z_real.batch_size());
+    const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(n) * static_cast<int64_t>(n);
+    ctx->submit([&](sycl::handler& cgh) {
+        auto Zr = z_real.kernel_view();
+        auto Zo = z_out.kernel_view();
+        auto P = phase;
+        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+            const int64_t idx = static_cast<int64_t>(tid[0]);
+            const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * n));
+            const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
+            const int32_t row = static_cast<int32_t>(rem % n);
+            const int32_t col = static_cast<int32_t>(rem / n);
+            if constexpr (is_std_complex_v<T>) {
+                Zo(row, col, b) = P(row, b) * T(Zr(row, col, b), Real(0));
+            } else {
+                Zo(row, col, b) = P(row, b) * Zr(row, col, b);
+            }
+        });
+    });
+}
+
 template <typename T>
 inline void lift_real_eigvecs_with_phase(Queue& ctx,
                                          const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
@@ -172,5 +232,6 @@ inline void lift_real_eigvecs_with_phase(Queue& ctx,
         });
     });
 }
+
 
 } // namespace batchlas::two_stage_detail

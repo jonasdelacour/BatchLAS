@@ -5,6 +5,7 @@
 #include <batchlas/tuning_params.hh>
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
+#include <blas/functions/iluk.hh>
 #include <numeric>
 #include <limits>
 #include <cstddef>
@@ -14,9 +15,6 @@
 
 namespace batchlas {
     // Forward declarations for interface compatibility
-
-    template <typename T>
-    struct ILUKPreconditioner;
 
     template <typename T>
     struct SyevxInstrumentation;
@@ -42,7 +40,18 @@ namespace batchlas {
         bool find_largest = true;                          // Whether to find largest eigenvalues
         T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Absolute tolerance
         T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Relative tolerance
-        const ILUKPreconditioner<T>* preconditioner = nullptr;                 // Optional ILU(k) preconditioner
+        // Optional ILU(k) preconditioner. An ILU(k) factorization of A approximates
+        // A^{-1}, which is the correct LOBPCG preconditioner only when searching for
+        // the *smallest* eigenpairs. With find_largest = true it damps exactly the
+        // components being sought and amplifies the rest, so syevx rejects that
+        // combination rather than silently converging more slowly.
+        const ILUKPreconditioner<T>* preconditioner = nullptr;
+        // Build the ILU(k) factor inside syevx instead of supplying one. The factor
+        // is carved out of the same workspace the caller passes to syevx, so an
+        // end-to-end timing covers formation as well as application. Requires a CSR
+        // A and find_largest = false, and is mutually exclusive with the pointer above.
+        bool build_preconditioner = false;
+        ILUKParams<T> iluk_params{};
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 
@@ -1292,7 +1301,8 @@ namespace batchlas {
      * Notes:
     * - JobType::EigenVectors is supported via two-stage reduction with
     *   explicit phase/sign recovery and reflector backtransform.
-    * - Eigenvector mode currently uses kd=1 for stage-2 extraction.
+    * - Both modes use a real band width (choose_two_stage_kd, env-overridable
+    *   via BATCHLAS_SYEV_TWO_STAGE_KD); eigenvector mode no longer forces kd=1.
      * - Currently supports only Uplo::Lower.
      */
     template <Backend B, typename T>

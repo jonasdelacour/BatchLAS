@@ -154,6 +154,20 @@ SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
     const int32_t last_index = dd - 1;
     const int32_t prev_index = dd - 2;
 
+    // dd == 1 has no second pole: prev_index would be -1 and D(prev_index)
+    // would read out of bounds. With a single pole the secular equation
+    // 1/p + z0^2/(D0 - x) = 0 solves exactly as x = D0 + p*z0^2. D is updated
+    // in place to the denominator D0 - x = -p*z0^2, matching what the general
+    // path leaves behind via apply_shift_to_poles.
+    if(dd <= 1)
+    {
+        const T z0 = z(0);
+        const T tau = p * z0 * z0;
+        const T eigenvalue = D(0) + tau;
+        D(0) = -tau;
+        return eigenvalue;
+    }
+
     // initialize
     last_pole = D(last_index);
     prev_pole = D(prev_index);
