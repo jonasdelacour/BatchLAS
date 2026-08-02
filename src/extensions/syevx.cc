@@ -199,13 +199,23 @@ namespace batchlas {
         // The chosen SYEV provider can change with matrix size (e.g. CTA for n<=32
         // but blocked/vendor for larger n), so a single pre-sized workspace must cover
         // the maximum of the internal problems.
+        // Restart iterations solve a 2*block_vectors projected problem rather than the
+        // full 3*block_vectors one (see Nvecs below). Because the provider is chosen
+        // from the shape, that intermediate size can demand *more* workspace than
+        // either the block_vectors or 3*block_vectors problem, so it has to be sized
+        // explicitly instead of assumed to be bounded by them.
+        auto StAS_restart = MatrixView(StAS_base, block_vectors * 2, block_vectors * 2,
+                                       StAS_base.ld(), StAS_base.stride());
         const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
         const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
-        size_t ws_projected = std::max(ws_xtax, ws_stas);
+        size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
             const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
             const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
-            ws_projected = std::max(ws_projected, std::max(ws_xtax_vendor, ws_stas_vendor));
+            ws_projected = std::max(ws_projected,
+                                    std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
         auto syev_workspace = pool.allocate<std::byte>(ctx, ws_projected);
         auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(  ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
@@ -647,20 +657,35 @@ namespace batchlas {
                     static_cast<int>(block_vectors * 3),
                     static_cast<int>(3 * 3 * block_vectors * block_vectors),
                     static_cast<int>(batch_size), nullptr);
-                auto StAS_base_dummy = MatrixView<T, MatrixFormat::Dense>(nullptr,
-                    static_cast<int>(block_vectors * 3), static_cast<int>(block_vectors * 3),
-                    static_cast<int>(block_vectors * 3), static_cast<int>(3 * 3 * block_vectors * block_vectors),
-                    static_cast<int>(batch_size), nullptr);
+                // The projected problem is Nvecs x Nvecs with Nvecs = 2*block_vectors on
+                // restart iterations and 3*block_vectors otherwise, always viewed with the
+                // backing buffer's ld. Both must be sized: syev picks its provider from the
+                // matrix shape, so workspace demand is not monotone in Nvecs and the
+                // 3*block_vectors figure does not bound the 2*block_vectors one. Omitting
+                // the restart shape made syevx throw "insufficient workspace for chosen
+                // provider" at, for instance, block_vectors = 12 and 16.
+                auto projected_dummy = [&](int64_t nvecs) {
+                    return MatrixView<T, MatrixFormat::Dense>(nullptr,
+                        static_cast<int>(nvecs), static_cast<int>(nvecs),
+                        static_cast<int>(block_vectors * 3),
+                        static_cast<int>(3 * 3 * block_vectors * block_vectors),
+                        static_cast<int>(batch_size), nullptr);
+                };
+                auto StAS_restart_dummy = projected_dummy(block_vectors * 2);
+                auto StAS_base_dummy = projected_dummy(block_vectors * 3);
 
                 const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                size_t ws_projected = std::max(ws_xtax, ws_stas);
+                size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
                 // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
                 if constexpr (B != Backend::NETLIB) {
                     const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    ws_projected = std::max(ws_projected, std::max(ws_xtax_vendor, ws_stas_vendor));
+                    ws_projected = std::max(ws_projected,
+                                            std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
                 }
 
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx, ws_projected);
