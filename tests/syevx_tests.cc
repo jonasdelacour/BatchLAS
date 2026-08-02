@@ -12,6 +12,7 @@
 #include <tuple>
 #include <cstdlib>
 #include <string>
+#include <limits>
 
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -731,6 +732,198 @@ INSTANTIATE_TEST_SUITE_P(
         name += std::get<1>(info.param) ? "WithVectors" : "ValuesOnly";
         return name;
     });
+
+// SYEVX_PLAN.md 7.2: the LOBPCG instrumentation histories used to be filled by a
+// host loop over batch x neigs after a forced pipeline drain every iteration.
+// They are now stored device-side into a pool staging buffer and scattered into
+// the caller's spans once, at the end.
+//
+// Two things this pins down:
+//   * The caller's buffers may be plain host memory. Everything here is
+//     std::vector -- if any of it were written from a kernel this test would
+//     fault (or silently corrupt) on a discrete device.
+//   * The values are unchanged. BATCHLAS_SYEVX_INSTR_HOST=1 forces the old
+//     host-read path, and the two runs are compared entry by entry.
+namespace {
+
+struct InstrumentationRun {
+    std::vector<float> best;
+    std::vector<float> current;
+    std::vector<float> rate;
+    std::vector<float> ritz;
+    std::vector<int32_t> iters_done;
+};
+
+constexpr float kInstrSentinel = -1.0f;
+
+} // namespace
+
+TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+
+    constexpr int n = 64;
+    constexpr int batch = 3;
+    constexpr int neig = 4;
+    constexpr int iters = 16;
+    // Deliberately non-default strides with padding between blocks: the scatter
+    // has to honour them, and must not touch the padding.
+    constexpr size_t batch_stride = neig + 2;
+    constexpr size_t iter_stride = batch * batch_stride + 3;
+    constexpr size_t history_size = iters * iter_stride;
+
+    // A tight cluster at the wanted end, with the guard block cut to one vector:
+    // the block quality then does *not* improve on every iteration, so the "best
+    // so far" and "current" histories genuinely diverge. On a well-separated
+    // spectrum they coincide and the test cannot tell the two channels apart.
+    UnifiedVector<float> diagonal(n);
+    for (int i = 0; i < n; ++i) diagonal[i] = 1.0f + 0.01f * static_cast<float>(i);
+    auto dense = Matrix<float, MatrixFormat::Dense>::Diagonal(diagonal.to_span(), batch);
+
+    UnifiedVector<float> W(neig * batch, 0.0f);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.iterations = iters;
+    params.extra_directions = 1;
+    params.find_largest = true;
+    // Zero tolerance: never converges early, so all `iters` samples are stored
+    // and the two runs are directly comparable.
+    params.absolute_tolerance = 0.0f;
+    params.relative_tolerance = 0.0f;
+
+    auto solve = [&](bool force_host_path) {
+        InstrumentationRun run;
+        run.best.assign(history_size, kInstrSentinel);
+        run.current.assign(history_size, kInstrSentinel);
+        run.rate.assign(history_size, kInstrSentinel);
+        run.ritz.assign(history_size, kInstrSentinel);
+        run.iters_done.assign(batch, 0);
+
+        SyevxInstrumentation<float> instr;
+        instr.best_residual_history = Span<float>(run.best.data(), run.best.size());
+        instr.current_residual_history = Span<float>(run.current.data(), run.current.size());
+        instr.convergence_rate_history = Span<float>(run.rate.data(), run.rate.size());
+        instr.ritz_value_history = Span<float>(run.ritz.data(), run.ritz.size());
+        instr.iterations_done = run.iters_done.data();
+        instr.max_iterations = iters;
+        instr.store_every = 1;
+        instr.iteration_stride = iter_stride;
+        instr.batch_stride = batch_stride;
+        instr.store_current_residual = true;
+        instr.store_convergence_rate = true;
+        instr.store_ritz_values = true;
+
+        SyevxParams<float> local = params;
+        local.instrumentation = &instr;
+
+        if (force_host_path) {
+            setenv("BATCHLAS_SYEVX_INSTR_HOST", "1", 1);
+        } else {
+            unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
+        }
+
+        UnifiedVector<std::byte> workspace(syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, dense.view(), W, neig, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), local));
+        syevx<test_utils::gpu_backend>(
+            *ctx, dense.view(), W, neig, workspace, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), local);
+        ctx->wait_and_throw();
+        unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
+        return run;
+    };
+
+    const auto staged = solve(false);
+    const auto host = solve(true);
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(staged.iters_done[b], iters) << "batch " << b;
+        EXPECT_EQ(host.iters_done[b], iters) << "batch " << b;
+    }
+
+    for (int s = 0; s < iters; ++s) {
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < neig; ++i) {
+                const size_t dst = static_cast<size_t>(s) * iter_stride
+                                 + static_cast<size_t>(b) * batch_stride + i;
+
+                EXPECT_TRUE(std::isfinite(staged.best[dst])) << "best at " << dst;
+                EXPECT_GT(staged.best[dst], 0.0f) << "best at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.current[dst])) << "current at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.ritz[dst])) << "ritz at " << dst;
+                EXPECT_TRUE(std::isfinite(staged.rate[dst])) << "rate at " << dst;
+
+                // The rate is this sample's best over the previous sample's best.
+                const float expected_rate = (s == 0)
+                    ? 1.0f
+                    : (staged.best[dst - iter_stride] > 0.0f
+                           ? staged.best[dst] / staged.best[dst - iter_stride]
+                           : 1.0f);
+                EXPECT_NEAR(staged.rate[dst], expected_rate, 1e-5f * std::max(1.0f, expected_rate))
+                    << "convergence rate inconsistent with the best-residual series at " << dst;
+
+                // Same values as the host-read path. Not bitwise: the residual
+                // kernel accumulates through work-group atomics, so repeated runs
+                // differ in the last few ulps regardless of this change.
+                const float ref = host.best[dst];
+                EXPECT_NEAR(staged.best[dst], ref, 1e-3f * std::max(1e-30f, std::abs(ref)))
+                    << "best residual differs from host path at " << dst;
+                EXPECT_NEAR(staged.current[dst], host.current[dst],
+                            1e-3f * std::max(1e-30f, std::abs(host.current[dst])))
+                    << "current residual differs from host path at " << dst;
+                EXPECT_NEAR(staged.ritz[dst], host.ritz[dst],
+                            1e-3f * std::max(1e-30f, std::abs(host.ritz[dst])))
+                    << "ritz value differs from host path at " << dst;
+            }
+
+            // Padding inside a batch block, and the tail of an iteration block,
+            // must be untouched.
+            const size_t pad = static_cast<size_t>(s) * iter_stride
+                             + static_cast<size_t>(b) * batch_stride + neig;
+            EXPECT_EQ(staged.best[pad], kInstrSentinel) << "scatter wrote into batch padding at " << pad;
+            EXPECT_EQ(staged.rate[pad], kInstrSentinel) << "scatter wrote into batch padding at " << pad;
+        }
+        const size_t tail = static_cast<size_t>(s) * iter_stride + batch * batch_stride;
+        EXPECT_EQ(staged.best[tail], kInstrSentinel) << "scatter wrote into iteration padding at " << tail;
+    }
+
+    // The stored block is the best seen so far and its quality is the worst of
+    // its columns, so max_i best[s] is non-increasing in s, and it equals the
+    // running minimum of max_i current[s]. That second identity is what pins the
+    // two channels to different values: feeding the current residual into the
+    // best-residual history passes every other check here.
+    int divergences = 0;
+    for (int b = 0; b < batch; ++b) {
+        float previous = std::numeric_limits<float>::infinity();
+        float running_min = std::numeric_limits<float>::infinity();
+        for (int s = 0; s < iters; ++s) {
+            float worst_best = 0.0f;
+            float worst_current = 0.0f;
+            for (int i = 0; i < neig; ++i) {
+                const size_t dst = static_cast<size_t>(s) * iter_stride
+                                 + static_cast<size_t>(b) * batch_stride + i;
+                worst_best = std::max(worst_best, staged.best[dst]);
+                worst_current = std::max(worst_current, staged.current[dst]);
+            }
+            running_min = std::min(running_min, worst_current);
+
+            EXPECT_LE(worst_best, previous * (1.0f + 1e-5f))
+                << "best-residual block quality increased at sample " << s << ", batch " << b;
+            EXPECT_NEAR(worst_best, running_min, 1e-5f * std::max(1.0f, running_min))
+                << "best-residual history is not the running best of the current residuals"
+                << " at sample " << s << ", batch " << b;
+            if (worst_current > worst_best * (1.0f + 1e-4f)) ++divergences;
+            previous = worst_best;
+        }
+    }
+    // Guards the check above: if the problem converged monotonically the two
+    // histories would be identical and none of this would be discriminating.
+    EXPECT_GT(divergences, 0)
+        << "best and current residual histories never diverged -- this problem no longer "
+           "distinguishes the two channels, so the test has lost its teeth";
+}
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
