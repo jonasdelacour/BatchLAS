@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1, 2 and 3 implemented.**
+Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7).**
 Tiers 3–5 are still design-only. See [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
@@ -832,6 +832,77 @@ reference `syev`, not only on residuals — a self-consistent (λ, v) pair prove
 nothing about whether it is one of the *wanted* pairs, which is the specific way a
 filtered solver fails. The whole suite also passes when forced onto each algorithm
 in turn, which is what exercises `Filtered` on the CSR and complex inputs.
+
+### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7)
+
+**§7.6 guard vectors — the one thing here with real measured numbers.**
+`extra_directions == 0` now means "choose one" (`max(2, neigs/4)`), matching the
+convention `filter_degree` uses; an explicit width still wins. Iterations to
+converge, `find_largest`, tol 1e-5, batch 4, measured via
+`SyevxInstrumentation::iterations_done` with the periodic convergence check
+disabled so the counts are exact:
+
+| n / neigs | no guard | guard | |
+|---|---|---|---|
+| 64 / 4   | 32 | 20 | −38 % |
+| 64 / 8   | 36 | 18 | −50 % |
+| 128 / 4  | 49 | 26 | −47 % |
+| 128 / 8  | 39 | 25 | −36 % |
+| 128 / 16 | 32 | 18 | −44 % |
+| 256 / 4  | 78 | 39 | −50 % |
+| 256 / 8  | 50 | 33 | −34 % |
+| 256 / 16 | 48 | 26 | −46 % |
+
+A third to a half of the iterations, for a cost linear in the extra width. This
+is the first *measured* result in this document; everything in §2.4 remains an
+estimate.
+
+**§7.1 host synchronization.** The pipeline is now drained only when a host
+reader actually needs the data that iteration: the convergence check (every
+`check_every`, default 4, `BATCHLAS_SYEVX_CHECK_EVERY`) or instrumentation.
+Previously every iteration paid a full round-trip. Overshooting the stopping
+point by up to `check_every - 1` iterations is far cheaper than the drains it
+replaces; correctness is unaffected (verified at `check_every` ∈ {1, 4, 16}).
+
+**§7.3 residual kernel.** Was `2·neigs` sequential group reductions — 128
+work-group barriers at `neigs = 64`. Now one pass that forms R and accumulates
+the per-column norms together, with a running partial flushed on column change
+(the block is column-major, so a work-item stays inside one column for long runs,
+turning one atomic per element into roughly one per thread per column).
+
+**§7.4 convergence criterion.** Was `‖r‖ / (‖x‖·|λ|)`, which collapses as λ → 0:
+a perfectly good eigenpair with a near-zero eigenvalue can never converge. Now
+`‖r‖ / (‖Ax‖ + |λ|·‖x‖)`, which stays bounded away from zero for any nonzero A.
+
+**§7.7 preconditioner staging copy.** `R_contiguous` is gone — `iluk_apply`
+indexes as `b·stride_ + col·ld_`, so it reads R's strided slice directly. Removes
+a full n×k×batch copy per iteration, its allocation, and the two
+`wait_and_throw` drains that bracketed it. The distinct `R_preconditioned`
+destination stays: the forward solve writes into `out` as its temporary while
+still reading `rhs`, so aliasing them would corrupt the solve.
+
+**Three pre-existing bugs surfaced.** All confirmed present before this tier:
+
+1. `syevx_buffer_size`'s `C_p` stand-in was built with only `(data, rows, cols,
+   ld)`, so `batch_size` defaulted to 1 and the orthogonalization workspace was
+   sized for a single item against a batched call. Present verbatim on `main`.
+   Latent because it only bites at shapes where that term is the maximum; the
+   guard-vector change made one such shape (n = 64, block_vectors = 20) the
+   default and turned it into a hard allocation failure.
+2. The single-matrix `ortho(X)` was never included in the workspace maximum at
+   all — it ran on whatever the two external-metric variants happened to need.
+3. The preconditioner argument validation lived inside `syevx_lobpcg`, which was
+   equivalent only while every path led there. Once Tier 0 routed dense input to
+   `Direct`/`DirectSubset`, an illegal combination on a dense matrix reached a
+   solver that ignores it instead of being rejected. Moved to the dispatcher,
+   where it belongs — these describe the problem, not the algorithm.
+
+**Still open in §7:** 7.2 (instrumentation host reads), 7.5 (locking/deflation),
+7.8 (column-reversal kernels), 7.9 (`fill_random` over-fills), 7.10 (Jacobi and
+Chebyshev preconditioners), 7.11 (projected-`syev` sweep). 7.8's suggested fixes
+all need either a reverse-indexed view or descending-order output from the
+projected `syev`; neither exists yet, so it is more than the "small" the ordering
+in §8 implies.
 
 ### Not yet measured
 

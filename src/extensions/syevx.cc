@@ -24,6 +24,7 @@
 #include <complex>
 #include <cstdlib>
 #include <string>
+#include <stdexcept>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
@@ -54,6 +55,36 @@ SyevxAlgorithm parse_syevx_algorithm(const char* v) {
     if (s == "lobpcg") return SyevxAlgorithm::LOBPCG;
     // Unknown value: stay conservative.
     return SyevxAlgorithm::Auto;
+}
+
+// Preconditioner arguments describe the *problem*, not the algorithm, so they have
+// to be validated before dispatch. They used to be checked inside syevx_lobpcg,
+// which was equivalent only while every path led there; once dense input started
+// routing to Direct/DirectSubset, an illegal combination on a dense matrix
+// silently reached a solver that ignores it.
+template <typename T, MatrixFormat MFormat>
+void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
+    if (params.preconditioner != nullptr && params.build_preconditioner) {
+        throw std::invalid_argument(
+            "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
+            "mutually exclusive; supply a factor or ask syevx to build one, not both");
+    }
+    const bool use_preconditioner = params.preconditioner != nullptr || params.build_preconditioner;
+    // An ILU(k) factorization approximates A^{-1}, so it only accelerates the
+    // smallest eigenpairs; for the largest it damps exactly what is being sought.
+    if (use_preconditioner && params.find_largest) {
+        throw std::invalid_argument(
+            "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
+            "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
+            "or clear SyevxParams::preconditioner / build_preconditioner");
+    }
+    if constexpr (MFormat != MatrixFormat::CSR) {
+        if (params.build_preconditioner) {
+            throw std::invalid_argument(
+                "syevx: SyevxParams::build_preconditioner requires a CSR matrix; ILU(k) is "
+                "only defined for sparse input");
+        }
+    }
 }
 
 SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback) {
@@ -113,6 +144,7 @@ Event syevx(Queue& ctx,
             JobType jobz,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params) {
+    validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
                                               syevx_direct_subset_supported<T, MFormat>());
     if (chosen == SyevxAlgorithm::Direct) {
@@ -135,6 +167,7 @@ size_t syevx_buffer_size(Queue& ctx,
                          JobType jobz,
                          const MatrixView<T, MatrixFormat::Dense>& V,
                          const SyevxParams<T>& params) {
+    validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
                                               syevx_direct_subset_supported<T, MFormat>());
     if (chosen == SyevxAlgorithm::Direct) {

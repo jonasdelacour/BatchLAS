@@ -25,6 +25,47 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsStasKernel;
 
+namespace {
+
+// Search-space width. `extra_directions == 0` means "choose one", matching the
+// convention SyevxParams::filter_degree uses.
+//
+// Running LOBPCG with exactly `neigs` vectors and no guard block is a known way
+// to converge slowly: the last wanted pair has nothing above it to separate
+// against. A guard of ~25% of neigs is standard practice and usually cuts the
+// iteration count for a cost only linear in the extra width. A caller that
+// genuinely wants no guard can still say so by asking for a width explicitly.
+//
+// The search space is n x 3*block_vectors; letting that exceed n would make the
+// block rank-deficient by construction and break the Cholesky-based
+// orthogonalization, so the guard is dropped rather than allowed to push past it.
+inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64_t n) {
+    const int64_t k = static_cast<int64_t>(neigs);
+    if (extra_directions > 0) return k + static_cast<int64_t>(extra_directions);
+    // Escape hatch for A/B-ing the guard itself; 0 reproduces the old behaviour.
+    int64_t extra = std::max<int64_t>(2, k / 4);
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_EXTRA_DIRECTIONS")) {
+        const int parsed = std::atoi(v);
+        if (parsed >= 0) extra = parsed;
+    }
+    if (extra <= 0) return k;
+    const int64_t guarded = k + extra;
+    if (n > 0 && 3 * guarded > n) return std::max<int64_t>(k, std::min<int64_t>(guarded, n / 3));
+    return guarded;
+}
+
+// How often the host reads back the convergence flags. Every iteration -- the
+// old behaviour -- costs a full pipeline drain each time; see SYEVX_PLAN.md §7.1.
+inline int64_t lobpcg_check_every() {
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_CHECK_EVERY")) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) return parsed;
+    }
+    return 4;
+}
+
+} // namespace
+
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_lobpcg(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
@@ -79,7 +120,8 @@ namespace batchlas {
 
         // Implementation of the syevx function
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
-        int64_t block_vectors = neigs + params.extra_directions;
+        int64_t block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
+        const int64_t convergence_check_every = lobpcg_check_every();
         auto pool = BumpAllocator(workspace);
         auto n = A.rows_;
         auto batch_size = A.batch_size();
@@ -150,18 +192,10 @@ namespace batchlas {
             }
         }
 
-        MatrixView<T, MatrixFormat::Dense> R_contiguous;
-        if (use_preconditioner) {
-            auto R_contiguous_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
-            R_contiguous = MatrixView(
-                R_contiguous_data.data(),
-                n,
-                block_vectors,
-                n,
-                n * block_vectors,
-                batch_size,
-                pool.allocate<T*>(ctx, batch_size).data());
-        }
+        // No staging buffer for the preconditioner input: iluk_apply indexes its
+        // operands as b*stride_ + col*ld_ (src/extensions/iluk.cc), so it reads R's
+        // n x 3k slice directly. Repacking R into a packed-batch copy first was a
+        // full n x k x batch copy per iteration, plus the allocation, for nothing.
 
         auto R_preconditioned_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
         auto R_preconditioned = MatrixView(
@@ -218,8 +252,15 @@ namespace batchlas {
                                     std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
         auto syev_workspace = pool.allocate<std::byte>(ctx, ws_projected);
-        auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(  ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
-                          ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
+        // Three distinct ortho calls share this buffer: the single-matrix ortho(X)
+        // below, and the two external-metric variants inside the loop. The
+        // single-matrix one was missing from this max, so its workspace was
+        // whatever the other two happened to need -- fine until a shape came along
+        // where it needed more (n = 64, block_vectors = 20 was one).
+        auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(
+                          ortho_buffer_size<B>(ctx, X, Transpose::NoTrans, params.algorithm),
+                          std::max(ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
+                          ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
         
         //Double buffering pointer swap approach as opposed to copying data unnecessarily                                                                        
         auto swap_subspace = [&](){
@@ -336,6 +377,10 @@ namespace batchlas {
                 auto best_quality_data = best_quality.data();
                 auto Xbest_data = want_eigenvectors ? X_best.data_ptr() : nullptr;
                 auto update_best = sycl::local_accessor<int32_t, 1>(1, h);
+                // Per-column partials for ||r||, ||x|| and ||Ax||, accumulated in
+                // one pass instead of 2*neigs sequential group reductions (each of
+                // which is a full work-group barrier -- 128 of them at neigs = 64).
+                auto lsums = sycl::local_accessor<float_type, 1>(3 * neigs, h);
                 h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
@@ -353,36 +398,67 @@ namespace batchlas {
                     if (tid == 0) {
                         update_best[0] = 0;
                     }
-                    sycl::group_barrier(cta);
-                    for (int i = tid; i < n*block_vectors; i+=local_size){
-                        auto eigvect_id = i / n;
-                        auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - eigvect_id) : eigvect_id];
-                        blockR[i] = blockAX[i] - blockX[i] * eigval;
+                    for (size_t s = tid; s < 3 * neigs; s += local_size) {
+                        lsums[s] = float_type(0);
                     }
                     sycl::group_barrier(cta);
-                    
-                    for (size_t i = 0; i < neigs; i++){
-                        float_type r_partial = 0;
-                        float_type x_partial = 0;
-                        for (int j = int(tid); j < n; j += int(local_size)){
-                            r_partial += internal::norm_squared(blockR[int(i)*n + j]);
-                            x_partial += internal::norm_squared(blockX[int(i)*n + j]);
-                        }
 
-                        const float_type r_sum = sycl::reduce_over_group(cta, r_partial, sycl::plus<float_type>());
-                        const float_type x_sum = sycl::reduce_over_group(cta, x_partial, sycl::plus<float_type>());
-                        if (tid == 0){
-                            auto residual = sycl::sqrt(r_sum);
-                            const auto x_norm = sycl::sqrt(x_sum);
-                            const auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
-                            const auto denom = x_norm * sycl::fabs(eigval);
-                            if (denom > float_type(0)){
-                                residual /= denom;
+                    // Form R and accumulate the three per-column norms in the same
+                    // sweep. The block is column-major with n contiguous entries per
+                    // column, so a work-item stays inside one column for long runs;
+                    // keeping a running partial and flushing only on a column change
+                    // turns what would be one atomic per element into roughly one per
+                    // thread per column.
+                    {
+                        int cur_col = -1;
+                        float_type acc_r = 0, acc_x = 0, acc_ax = 0;
+                        auto flush = [&]() {
+                            if (cur_col < 0 || cur_col >= int(neigs)) return;
+                            sycl::atomic_ref<float_type, sycl::memory_order::relaxed,
+                                             sycl::memory_scope::work_group,
+                                             sycl::access::address_space::local_space>
+                                ar(lsums[cur_col]), ax(lsums[neigs + cur_col]),
+                                aax(lsums[2 * neigs + cur_col]);
+                            ar.fetch_add(acc_r);
+                            ax.fetch_add(acc_x);
+                            aax.fetch_add(acc_ax);
+                        };
+                        for (int i = tid; i < n*block_vectors; i+=local_size){
+                            const int eigvect_id = i / n;
+                            auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - eigvect_id) : eigvect_id];
+                            const T rval = blockAX[i] - blockX[i] * eigval;
+                            blockR[i] = rval;
+                            if (eigvect_id >= int(neigs)) continue;
+                            if (eigvect_id != cur_col) {
+                                flush();
+                                cur_col = eigvect_id;
+                                acc_r = acc_x = acc_ax = float_type(0);
                             }
-                            blockresiduals[i] = residual;
+                            acc_r  += internal::norm_squared(rval);
+                            acc_x  += internal::norm_squared(blockX[i]);
+                            acc_ax += internal::norm_squared(blockAX[i]);
                         }
+                        flush();
                     }
-                    
+                    sycl::group_barrier(cta);
+
+                    // Backward-stable convergence measure: ||r|| / (||Ax|| + |lambda|*||x||).
+                    //
+                    // The previous denominator was ||x||*|lambda| alone, which
+                    // collapses as lambda -> 0: a perfectly good eigenpair with a
+                    // near-zero eigenvalue has its residual divided by something
+                    // approaching zero and can never register as converged. Adding
+                    // ||Ax|| keeps the denominator bounded away from zero for any
+                    // nonzero A (Duersch et al.).
+                    for (size_t i = tid; i < neigs; i += local_size){
+                        const float_type r_norm  = sycl::sqrt(lsums[i]);
+                        const float_type x_norm  = sycl::sqrt(lsums[neigs + i]);
+                        const float_type ax_norm = sycl::sqrt(lsums[2 * neigs + i]);
+                        const auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                        const float_type denom = ax_norm + sycl::fabs(eigval) * x_norm;
+                        blockresiduals[i] = (denom > float_type(0)) ? (r_norm / denom) : r_norm;
+                    }
+
                     sycl::group_barrier(cta);
                     if (tid == 0){
                         float_type current_quality = blockresiduals[0];
@@ -424,7 +500,22 @@ namespace batchlas {
                     }
                 });
             });
-            residual_evt.wait_and_throw();
+            // Only drain the pipeline when a host-side reader actually needs the
+            // results this iteration: the convergence check (every check_every
+            // iterations) or instrumentation (which still reads on the host --
+            // SYEVX_PLAN.md §7.2). Previously this waited unconditionally, so a
+            // 30-iteration solve paid 30 full round-trips; for small n and large
+            // batch that dominated the run. Overshooting the stopping point by a
+            // few iterations is far cheaper than the drains it replaces.
+            const bool instrumentation_active =
+                params.instrumentation && params.instrumentation->max_iterations > 0 &&
+                params.instrumentation->store_every > 0;
+            const bool last_iteration = (it + 1 >= static_cast<int64_t>(params.iterations));
+            const bool check_convergence =
+                (it % convergence_check_every == 0) || last_iteration;
+            if (instrumentation_active || check_convergence) {
+                residual_evt.wait_and_throw();
+            }
             trace("syevx: residual kernel done");
 
             if (params.instrumentation && params.instrumentation->max_iterations > 0 && params.instrumentation->store_every > 0 &&
@@ -473,11 +564,14 @@ namespace batchlas {
 
             // Early exit once all batches have converged for the requested eigenpairs.
             // This is intentionally conservative: it checks the best residual so far.
-            bool all_converged = true;
-            for (int64_t b = 0; b < batch_size; ++b) {
-                if (converged_flags[static_cast<std::size_t>(b)] == 0) {
-                    all_converged = false;
-                    break;
+            bool all_converged = false;
+            if (check_convergence) {
+                all_converged = true;
+                for (int64_t b = 0; b < batch_size; ++b) {
+                    if (converged_flags[static_cast<std::size_t>(b)] == 0) {
+                        all_converged = false;
+                        break;
+                    }
                 }
             }
             if (all_converged) {
@@ -486,11 +580,13 @@ namespace batchlas {
 
             if (use_preconditioner) {
                 trace("syevx: ILU(k) apply on residuals");
-                MatrixView<T, MatrixFormat::Dense>::copy(ctx, R_contiguous, R);
-                ctx.wait_and_throw();
-                iluk_apply<B, T>(ctx, precond, R_contiguous, R_preconditioned);
+                // R_preconditioned stays a distinct destination: the forward solve
+                // writes into `out` as its temporary y while still reading `rhs`, so
+                // aliasing them would corrupt the solve. The two wait_and_throw calls
+                // that used to bracket this were full pipeline drains per iteration
+                // on top of §7.1; the queue ordering already sequences these.
+                iluk_apply<B, T>(ctx, precond, R, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
-                ctx.wait_and_throw();
                 trace("syevx: ILU(k) apply done");
             }
 
@@ -642,7 +738,7 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params){
-        auto block_vectors = neigs + params.extra_directions;
+        auto block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
             auto batch_size = A.batch_size();
             auto n = A.rows();
             size_t work_size = 0;
@@ -691,16 +787,22 @@ namespace batchlas {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx, ws_projected);
             }
 
-            work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(    ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
-                                                                                    ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm)));
+            // Must mirror the runtime max exactly, including the single-matrix
+            // ortho(X) term -- see the comment at the runtime allocation.
+            //
+            // The C_p stand-in also has to carry the real batch size and stride.
+            // Built with only (data, rows, cols, ld) it defaulted to batch_size = 1,
+            // so this term came back sized for one item while the runtime call is
+            // batched -- an under-allocation that grew with the batch.
+            work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(
+                                                                                    ortho_buffer_size<B>(ctx, Xview, Transpose::NoTrans, params.algorithm),
+                                                                                    std::max(ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
+                                                                                    ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
                         
-            if (params.preconditioner != nullptr || params.build_preconditioner) {
-                work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);            //R_contiguous_data
-                work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);                               //R_contiguous ptrs
-            }
+            // R_contiguous is gone: iluk_apply reads R's strided slice directly.
             if constexpr (MFormat == MatrixFormat::CSR) {
                 // This runs ILU(k)'s symbolic phase to get an upper bound on the fill.
                 // syevx itself does not repeat it -- it sub-allocates from the pool tail
