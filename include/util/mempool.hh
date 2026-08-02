@@ -56,6 +56,21 @@ struct BumpAllocator {
 
     template<typename T>
     constexpr inline Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
+
+    // The still-unclaimed tail of the pool. Lets a callee sub-allocate without the
+    // caller having to know its size up front; pair with consume() to hand the
+    // bytes it actually took back to this allocator.
+    inline Span<std::byte> remaining() const {
+        return Span<std::byte>(static_cast<std::byte*>(data), byte_size);
+    }
+
+    inline void consume(size_t bytes) {
+        if (bytes > byte_size) {
+            throw std::runtime_error("BumpAllocator::consume called with more bytes than remain.");
+        }
+        data = static_cast<std::byte*>(data) + bytes;
+        byte_size -= bytes;
+    }
     
     private:
 

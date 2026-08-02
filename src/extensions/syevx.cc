@@ -52,16 +52,29 @@ namespace batchlas {
             std::cout << msg << std::endl;
             ctx.wait_and_throw();
         };
+        if (params.preconditioner != nullptr && params.build_preconditioner) {
+            throw std::invalid_argument(
+                "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
+                "mutually exclusive; supply a factor or ask syevx to build one, not both");
+        }
+        const bool use_preconditioner = params.preconditioner != nullptr || params.build_preconditioner;
         // An ILU(k) factorization approximates A^{-1}. Applying it to the LOBPCG
         // residual accelerates convergence toward the smallest eigenpairs, but for
         // the largest eigenpairs it suppresses the wanted directions and boosts the
         // unwanted ones -- measurably worse than running unpreconditioned. Reject the
         // combination instead of silently degrading.
-        if (params.preconditioner != nullptr && params.find_largest) {
+        if (use_preconditioner && params.find_largest) {
             throw std::invalid_argument(
                 "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
                 "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
-                "or clear SyevxParams::preconditioner");
+                "or clear SyevxParams::preconditioner / build_preconditioner");
+        }
+        if constexpr (MFormat != MatrixFormat::CSR) {
+            if (params.build_preconditioner) {
+                throw std::invalid_argument(
+                    "syevx: SyevxParams::build_preconditioner requires a CSR matrix; ILU(k) is "
+                    "only defined for sparse input");
+            }
         }
 
         // Implementation of the syevx function
@@ -120,8 +133,25 @@ namespace batchlas {
                 pool.allocate<T*>(ctx, batch_size).data());
         }
 
-        MatrixView<T, MatrixFormat::Dense> R_contiguous;
+        // Built either from the caller's factor or, when asked, from one formed here
+        // out of `workspace` -- no allocation of its own, so syevx stays pool-only.
+        ILUKView<T> precond;
         if (params.preconditioner != nullptr) {
+            precond = params.preconditioner->view();
+        } else if (params.build_preconditioner) {
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                // Hand ILU(k) the unclaimed tail of the pool and take back only what
+                // it used. Asking iluk_buffer_size first would work, but it costs a
+                // second symbolic factorization on the critical path for a number
+                // the factorization is about to compute anyway.
+                size_t iluk_bytes = 0;
+                precond = iluk_factorize<B, T>(ctx, A, pool.remaining(), params.iluk_params, &iluk_bytes);
+                pool.consume(iluk_bytes);
+            }
+        }
+
+        MatrixView<T, MatrixFormat::Dense> R_contiguous;
+        if (use_preconditioner) {
             auto R_contiguous_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
             R_contiguous = MatrixView(
                 R_contiguous_data.data(),
@@ -444,11 +474,11 @@ namespace batchlas {
                 break;
             }
 
-            if (params.preconditioner != nullptr) {
+            if (use_preconditioner) {
                 trace("syevx: ILU(k) apply on residuals");
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R_contiguous, R);
                 ctx.wait_and_throw();
-                iluk_apply<B>(ctx, *params.preconditioner, R_contiguous, R_preconditioned);
+                iluk_apply<B, T>(ctx, precond, R_contiguous, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 ctx.wait_and_throw();
                 trace("syevx: ILU(k) apply done");
@@ -642,9 +672,18 @@ namespace batchlas {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
                         
-            if (params.preconditioner != nullptr) {
+            if (params.preconditioner != nullptr || params.build_preconditioner) {
                 work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);            //R_contiguous_data
                 work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size);                               //R_contiguous ptrs
+            }
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                // This runs ILU(k)'s symbolic phase to get an upper bound on the fill.
+                // syevx itself does not repeat it -- it sub-allocates from the pool tail
+                // and reports back what it took -- so the cost lands here, on the sizing
+                // call a caller makes once and amortizes over every solve.
+                if (params.build_preconditioner) {
+                    work_size += BumpAllocator::allocation_size<std::byte>(ctx, iluk_buffer_size<B, T>(ctx, A, params.iluk_params));
+                }
             }
             work_size += BumpAllocator::allocation_size<T*>(ctx, batch_size) * 7;
             if (jobz == JobType::EigenVectors) {

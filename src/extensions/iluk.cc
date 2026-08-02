@@ -1,6 +1,7 @@
 #include "../linalg-impl.hh"
 
 #include <blas/functions/iluk.hh>
+#include <util/mempool.hh>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -90,17 +91,15 @@ inline T stabilize_pivot_or_mark(const T& pivot,
 }
 
 template <typename T>
-bool u_diagonals_are_usable(const Matrix<T, MatrixFormat::CSR>& lu,
-                            const UnifiedVector<int>& diag_positions,
+bool u_diagonals_are_usable(const T* vals,
+                            const int* diag_positions,
                             int n,
                             int batch_size,
                             const T& diagonal_shift) {
-    const auto vals = lu.view().data();
     for (int b = 0; b < batch_size; ++b) {
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
-            (void)stabilize_pivot_or_mark(vals[diag_positions[static_cast<std::size_t>(b * n + i)]],
-                                          diagonal_shift, &status);
+            (void)stabilize_pivot_or_mark(vals[diag_positions[b * n + i]], diagonal_shift, &status);
             if (status != 0) return false;
         }
     }
@@ -234,13 +233,16 @@ struct ILUKApplyKernel;
 // unit-lower forward solve (row i depends on columns j < i, scanned in increasing
 // row order) versus the upper backward solve (row i depends on columns j > i,
 // scanned in decreasing row order). Rows sharing a level are mutually independent.
-void build_level_schedule(const std::vector<int>& row_offsets,
-                          const std::vector<int>& col_indices,
-                          int n,
-                          bool lower,
-                          UnifiedVector<int>& rows_out,
-                          UnifiedVector<int>& level_ptr_out,
-                          int& num_levels) {
+struct LevelSchedule {
+    std::vector<int> rows;
+    std::vector<int> level_ptr;
+    int levels = 0;
+};
+
+LevelSchedule build_level_schedule(const std::vector<int>& row_offsets,
+                                   const std::vector<int>& col_indices,
+                                   int n,
+                                   bool lower) {
     std::vector<int> level(static_cast<std::size_t>(n), 0);
     int max_level = 0;
 
@@ -258,47 +260,44 @@ void build_level_schedule(const std::vector<int>& row_offsets,
         max_level = std::max(max_level, lvl);
     }
 
-    num_levels = max_level + 1;
-    std::vector<int> counts(static_cast<std::size_t>(num_levels) + 1, 0);
+    LevelSchedule out;
+    out.levels = max_level + 1;
+    std::vector<int> counts(static_cast<std::size_t>(out.levels) + 1, 0);
     for (int i = 0; i < n; ++i) counts[static_cast<std::size_t>(level[static_cast<std::size_t>(i)]) + 1] += 1;
-    for (int l = 0; l < num_levels; ++l) counts[static_cast<std::size_t>(l) + 1] += counts[static_cast<std::size_t>(l)];
+    for (int l = 0; l < out.levels; ++l) counts[static_cast<std::size_t>(l) + 1] += counts[static_cast<std::size_t>(l)];
 
-    level_ptr_out = UnifiedVector<int>(static_cast<std::size_t>(num_levels) + 1);
-    for (int l = 0; l <= num_levels; ++l) level_ptr_out[static_cast<std::size_t>(l)] = counts[static_cast<std::size_t>(l)];
-
-    rows_out = UnifiedVector<int>(static_cast<std::size_t>(n));
+    out.level_ptr = counts;
+    out.rows.assign(static_cast<std::size_t>(n), 0);
     std::vector<int> cursor(counts.begin(), counts.end() - 1);
     for (int i = 0; i < n; ++i) {
-        rows_out[static_cast<std::size_t>(cursor[static_cast<std::size_t>(level[static_cast<std::size_t>(i)])]++)] = i;
+        out.rows[static_cast<std::size_t>(cursor[static_cast<std::size_t>(level[static_cast<std::size_t>(i)])]++)] = i;
     }
+    return out;
 }
 
-}  // namespace
-
+// Everything ILU(k) computes on the host, in a storage-agnostic form. The
+// sparsity pattern (row_offsets/col_indices/diag_offsets) and both level
+// schedules are shared across the batch; only `values` varies per batch element.
 template <typename T>
-void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
-    const int n = M.n;
-    if (n <= 0) {
-        throw std::invalid_argument("ILU(k): cannot build a level schedule for an empty factor");
-    }
-    auto lu = M.lu.view();
-    const auto ro = lu.row_offsets();
-    const auto ci = lu.col_indices();
+struct HostFactor {
+    int n = 0;
+    int batch_size = 0;
+    int nnz = 0;
+    std::vector<int> row_offsets;   // n + 1
+    std::vector<int> col_indices;   // nnz
+    std::vector<T> values;          // batch_size * nnz, batch b at offset b * nnz
+    std::vector<int> diag_offsets;  // n, index into a single batch element's values
+    LevelSchedule l;
+    LevelSchedule u;
+};
 
-    std::vector<int> row_offsets(static_cast<std::size_t>(n) + 1);
-    for (int i = 0; i <= n; ++i) row_offsets[static_cast<std::size_t>(i)] = ro[i];
-    std::vector<int> col_indices(static_cast<std::size_t>(row_offsets[static_cast<std::size_t>(n)]));
-    for (std::size_t p = 0; p < col_indices.size(); ++p) col_indices[p] = ci[p];
-
-    build_level_schedule(row_offsets, col_indices, n, /*lower=*/true, M.l_rows, M.l_level_ptr, M.l_levels);
-    build_level_schedule(row_offsets, col_indices, n, /*lower=*/false, M.u_rows, M.u_level_ptr, M.u_levels);
-    M.u_diagonals_usable = u_diagonals_are_usable(M.lu, M.diag_positions, M.n, M.batch_size, M.diagonal_shift);
-}
-
-template <Backend B, typename T>
-ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::CSR>& A,
-                                     const ILUKParams<T>& params) {
+// `check_batch_sparsity` walks every batch element's pattern, which on unified
+// memory the device has just written means a page migration per batch element.
+// iluk_buffer_size skips it: it only sizes against batch element 0's pattern, and
+// the factorization that follows validates before it uses anything.
+template <typename T>
+void validate_iluk_params_or_throw(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params,
+                                   bool check_batch_sparsity = true) {
     if (A.rows() != A.cols()) {
         throw std::invalid_argument("ILU(k): matrix must be square");
     }
@@ -314,18 +313,22 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     if (params.diag_pivot_threshold < RealT<T>(0)) {
         throw std::invalid_argument("ILU(k): diag_pivot_threshold must be >= 0");
     }
-
-    const int n = A.rows();
-    const int batch_size = A.batch_size();
-
-    if (!params.validate_batch_sparsity && batch_size > 1) {
+    if (!params.validate_batch_sparsity && A.batch_size() > 1) {
         throw std::invalid_argument(
             "ILU(k): disabling batch sparsity validation is not supported; current implementation requires identical CSR sparsity across the batch");
     }
-    if (batch_size > 1 && !has_identical_batch_sparsity(A)) {
+    if (check_batch_sparsity && A.batch_size() > 1 && !has_identical_batch_sparsity(A)) {
         throw std::invalid_argument(
             "ILU(k): heterogeneous batch sparsity is not supported; batches must share an identical CSR pattern");
     }
+}
+
+template <typename T>
+HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params) {
+    validate_iluk_params_or_throw(A, params);
+
+    const int n = A.rows();
+    const int batch_size = A.batch_size();
 
     const auto ro = A.row_offsets();
     const auto ci = A.col_indices();
@@ -334,10 +337,9 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     std::vector<int> original_row_nnz(n, 0);
     for (int i = 0; i < n; ++i) {
         original_row_nnz[static_cast<std::size_t>(i)] = ro[i + 1] - ro[i];
-        const int rs = 0;
         const int re = static_cast<int>(symbolic_rows[static_cast<std::size_t>(i)].size());
         int pos = -1;
-        for (int p = rs; p < re; ++p) {
+        for (int p = 0; p < re; ++p) {
             if (symbolic_rows[static_cast<std::size_t>(i)][static_cast<std::size_t>(p)] == i) {
                 pos = p;
                 break;
@@ -445,7 +447,11 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     std::vector<std::vector<uint8_t>> union_keep(static_cast<std::size_t>(n));
     std::vector<std::vector<int>> compact_rows(static_cast<std::size_t>(n));
     std::vector<std::vector<int>> compact_index(static_cast<std::size_t>(n));
-    std::vector<int> row_offsets(n + 1, 0);
+
+    HostFactor<T> out;
+    out.n = n;
+    out.batch_size = batch_size;
+    out.row_offsets.assign(static_cast<std::size_t>(n) + 1, 0);
 
     for (int i = 0; i < n; ++i) {
         const auto& row_cols = symbolic_rows[static_cast<std::size_t>(i)];
@@ -467,24 +473,90 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
             compact_pos[static_cast<std::size_t>(p)] = static_cast<int>(compact_row.size());
             compact_row.push_back(row_cols[static_cast<std::size_t>(p)]);
         }
-        row_offsets[static_cast<std::size_t>(i + 1)] = row_offsets[static_cast<std::size_t>(i)] + static_cast<int>(compact_row.size());
+        out.row_offsets[static_cast<std::size_t>(i + 1)] = out.row_offsets[static_cast<std::size_t>(i)] + static_cast<int>(compact_row.size());
     }
 
-    std::vector<int> col_indices;
-    col_indices.reserve(static_cast<std::size_t>(row_offsets.back()));
+    out.col_indices.reserve(static_cast<std::size_t>(out.row_offsets.back()));
     for (int i = 0; i < n; ++i) {
         const auto& compact_row = compact_rows[static_cast<std::size_t>(i)];
-        col_indices.insert(col_indices.end(), compact_row.begin(), compact_row.end());
+        out.col_indices.insert(out.col_indices.end(), compact_row.begin(), compact_row.end());
+    }
+    out.nnz = static_cast<int>(out.col_indices.size());
+
+    out.diag_offsets.assign(static_cast<std::size_t>(n), 0);
+    out.values.assign(static_cast<std::size_t>(out.nnz) * static_cast<std::size_t>(batch_size), T(0));
+    for (int i = 0; i < n; ++i) {
+        out.diag_offsets[static_cast<std::size_t>(i)] =
+            out.row_offsets[static_cast<std::size_t>(i)] + compact_index[static_cast<std::size_t>(i)][static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])];
+    }
+    for (int b = 0; b < batch_size; ++b) {
+        const std::size_t vbase = static_cast<std::size_t>(b) * static_cast<std::size_t>(out.nnz);
+        for (int i = 0; i < n; ++i) {
+            const auto& row_vals = batch_values[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
+            const auto& row_keep = batch_keep[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
+            const auto& compact_pos = compact_index[static_cast<std::size_t>(i)];
+            for (int p = 0; p < static_cast<int>(row_vals.size()); ++p) {
+                const int new_pos = compact_pos[static_cast<std::size_t>(p)];
+                if (new_pos < 0) continue;
+                if (row_keep[static_cast<std::size_t>(p)] == 0 && p != diag_local[static_cast<std::size_t>(i)]) continue;
+                out.values[vbase + static_cast<std::size_t>(out.row_offsets[static_cast<std::size_t>(i)] + new_pos)] =
+                    row_vals[static_cast<std::size_t>(p)];
+            }
+        }
     }
 
-    const int nnz = static_cast<int>(col_indices.size());
+    out.l = build_level_schedule(out.row_offsets, out.col_indices, n, /*lower=*/true);
+    out.u = build_level_schedule(out.row_offsets, out.col_indices, n, /*lower=*/false);
+    return out;
+}
+
+}  // namespace
+
+template <typename T>
+void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
+    const int n = M.n;
+    if (n <= 0) {
+        throw std::invalid_argument("ILU(k): cannot build a level schedule for an empty factor");
+    }
+    auto lu = M.lu.view();
+    const auto ro = lu.row_offsets();
+    const auto ci = lu.col_indices();
+
+    std::vector<int> row_offsets(static_cast<std::size_t>(n) + 1);
+    for (int i = 0; i <= n; ++i) row_offsets[static_cast<std::size_t>(i)] = ro[i];
+    std::vector<int> col_indices(static_cast<std::size_t>(row_offsets[static_cast<std::size_t>(n)]));
+    for (std::size_t p = 0; p < col_indices.size(); ++p) col_indices[p] = ci[p];
+
+    const auto l = build_level_schedule(row_offsets, col_indices, n, /*lower=*/true);
+    const auto u = build_level_schedule(row_offsets, col_indices, n, /*lower=*/false);
+
+    auto to_unified = [](const std::vector<int>& src) {
+        UnifiedVector<int> dst(src.size());
+        for (std::size_t i = 0; i < src.size(); ++i) dst[i] = src[i];
+        return dst;
+    };
+    M.l_rows = to_unified(l.rows);
+    M.l_level_ptr = to_unified(l.level_ptr);
+    M.l_levels = l.levels;
+    M.u_rows = to_unified(u.rows);
+    M.u_level_ptr = to_unified(u.level_ptr);
+    M.u_levels = u.levels;
+    M.u_diagonals_usable = u_diagonals_are_usable(M.lu.view().data().data(), M.diag_positions.data(),
+                                                  M.n, M.batch_size, M.diagonal_shift);
+}
+
+template <Backend B, typename T>
+ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::CSR>& A,
+                                     const ILUKParams<T>& params) {
+    (void)ctx;
+    const auto host = compute_iluk(A, params);
+    const int n = host.n;
+    const int batch_size = host.batch_size;
+
     ILUKPreconditioner<T> result;
-    build_level_schedule(row_offsets, col_indices, n, /*lower=*/true,
-                         result.l_rows, result.l_level_ptr, result.l_levels);
-    build_level_schedule(row_offsets, col_indices, n, /*lower=*/false,
-                         result.u_rows, result.u_level_ptr, result.u_levels);
-    result.lu = Matrix<T, MatrixFormat::CSR>(n, n, nnz, batch_size);
-    result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n * batch_size));
+    result.lu = Matrix<T, MatrixFormat::CSR>(n, n, host.nnz, batch_size);
+    result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch_size));
     result.n = n;
     result.batch_size = batch_size;
     result.levels_of_fill = params.levels_of_fill;
@@ -494,6 +566,18 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     result.diag_pivot_threshold = params.diag_pivot_threshold;
     result.modified_ilu = params.modified_ilu;
 
+    auto to_unified = [](const std::vector<int>& src) {
+        UnifiedVector<int> dst(src.size());
+        for (std::size_t i = 0; i < src.size(); ++i) dst[i] = src[i];
+        return dst;
+    };
+    result.l_rows = to_unified(host.l.rows);
+    result.l_level_ptr = to_unified(host.l.level_ptr);
+    result.l_levels = host.l.levels;
+    result.u_rows = to_unified(host.u.rows);
+    result.u_level_ptr = to_unified(host.u.level_ptr);
+    result.u_levels = host.u.levels;
+
     auto lu_view = result.lu.view();
     auto lu_ro = lu_view.row_offsets();
     auto lu_ci = lu_view.col_indices();
@@ -501,35 +585,117 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     for (int b = 0; b < batch_size; ++b) {
         const int ro_base = b * lu_view.offset_stride();
         const int val_base = b * lu_view.matrix_stride();
-        for (int i = 0; i < n + 1; ++i) lu_ro[ro_base + i] = row_offsets[static_cast<std::size_t>(i)];
-        for (int p = 0; p < nnz; ++p) {
-            lu_ci[val_base + p] = col_indices[static_cast<std::size_t>(p)];
-            lu_vals[val_base + p] = T(0);
+        for (int i = 0; i < n + 1; ++i) lu_ro[ro_base + i] = host.row_offsets[static_cast<std::size_t>(i)];
+        for (int p = 0; p < host.nnz; ++p) {
+            lu_ci[val_base + p] = host.col_indices[static_cast<std::size_t>(p)];
+            lu_vals[val_base + p] = host.values[static_cast<std::size_t>(b) * static_cast<std::size_t>(host.nnz) + static_cast<std::size_t>(p)];
         }
-
         for (int i = 0; i < n; ++i) {
-            const auto& row_vals = batch_values[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
-            const auto& row_keep = batch_keep[static_cast<std::size_t>(b)][static_cast<std::size_t>(i)];
-            const auto& compact_pos = compact_index[static_cast<std::size_t>(i)];
-            for (int p = 0; p < static_cast<int>(row_vals.size()); ++p) {
-                const int new_pos = compact_pos[static_cast<std::size_t>(p)];
-                if (new_pos < 0) continue;
-                if (row_keep[static_cast<std::size_t>(p)] == 0 && p != diag_local[static_cast<std::size_t>(i)]) continue;
-                lu_vals[val_base + row_offsets[static_cast<std::size_t>(i)] + new_pos] = row_vals[static_cast<std::size_t>(p)];
-            }
-            result.diag_positions[static_cast<std::size_t>(b * n + i)] = val_base + row_offsets[static_cast<std::size_t>(i)] + compact_pos[static_cast<std::size_t>(diag_local[static_cast<std::size_t>(i)])];
+            result.diag_positions[static_cast<std::size_t>(b * n + i)] = val_base + host.diag_offsets[static_cast<std::size_t>(i)];
         }
     }
 
-    result.u_diagonals_usable = u_diagonals_are_usable(result.lu, result.diag_positions, n, batch_size,
-                                                       result.diagonal_shift);
+    result.u_diagonals_usable = u_diagonals_are_usable(lu_vals.data(), result.diag_positions.data(), n,
+                                                       batch_size, result.diagonal_shift);
 
     return result;
 }
 
 template <Backend B, typename T>
+size_t iluk_buffer_size(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::CSR>& A,
+                        const ILUKParams<T>& params) {
+    validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
+
+    const int n = A.rows();
+    const int batch_size = A.batch_size();
+
+    // Size against the symbolic pattern. The numeric phase only ever prunes
+    // entries (drop tolerance, fill quota), so this is an upper bound on the
+    // final nnz and the workspace factorization is guaranteed to fit.
+    const auto symbolic_rows = symbolic_iluk_pattern_single(A.row_offsets(), A.col_indices(), n, 0, 0,
+                                                            params.levels_of_fill);
+    size_t nnz_upper = 0;
+    for (const auto& row : symbolic_rows) nnz_upper += row.size();
+
+    size_t bytes = 0;
+    bytes += BumpAllocator::allocation_size<T>(ctx, nnz_upper * static_cast<size_t>(batch_size));    // values
+    bytes += BumpAllocator::allocation_size<int>(ctx, nnz_upper * static_cast<size_t>(batch_size));  // col indices
+    bytes += BumpAllocator::allocation_size<int>(ctx, static_cast<size_t>(n + 1) * static_cast<size_t>(batch_size));  // row offsets
+    bytes += BumpAllocator::allocation_size<int>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch_size));      // diag positions
+    // Level counts are bounded by n, so the pointer arrays need at most n + 1 slots.
+    bytes += BumpAllocator::allocation_size<int>(ctx, static_cast<size_t>(n)) * 2;      // l_rows, u_rows
+    bytes += BumpAllocator::allocation_size<int>(ctx, static_cast<size_t>(n + 1)) * 2;  // l/u level_ptr
+    return bytes;
+}
+
+template <Backend B, typename T>
+ILUKView<T> iluk_factorize(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::CSR>& A,
+                           Span<std::byte> workspace,
+                           const ILUKParams<T>& params,
+                           size_t* bytes_used) {
+    const auto host = compute_iluk(A, params);
+    const int n = host.n;
+    const int batch_size = host.batch_size;
+    const int nnz = host.nnz;
+
+    auto pool = BumpAllocator(workspace);
+    auto values = pool.allocate<T>(ctx, static_cast<size_t>(nnz) * static_cast<size_t>(batch_size));
+    auto col_indices = pool.allocate<int>(ctx, static_cast<size_t>(nnz) * static_cast<size_t>(batch_size));
+    auto row_offsets = pool.allocate<int>(ctx, static_cast<size_t>(n + 1) * static_cast<size_t>(batch_size));
+    auto diag_positions = pool.allocate<int>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch_size));
+    auto l_rows = pool.allocate<int>(ctx, static_cast<size_t>(n));
+    auto u_rows = pool.allocate<int>(ctx, static_cast<size_t>(n));
+    auto l_level_ptr = pool.allocate<int>(ctx, host.l.level_ptr.size());
+    auto u_level_ptr = pool.allocate<int>(ctx, host.u.level_ptr.size());
+
+    // The pattern is identical across the batch, but the apply kernel indexes
+    // values and column indices with the same matrix stride, so both are
+    // replicated per batch element rather than shared.
+    for (int b = 0; b < batch_size; ++b) {
+        const size_t val_base = static_cast<size_t>(b) * static_cast<size_t>(nnz);
+        const size_t ro_base = static_cast<size_t>(b) * static_cast<size_t>(n + 1);
+        for (int i = 0; i < n + 1; ++i) row_offsets[ro_base + static_cast<size_t>(i)] = host.row_offsets[static_cast<std::size_t>(i)];
+        for (int p = 0; p < nnz; ++p) {
+            col_indices[val_base + static_cast<size_t>(p)] = host.col_indices[static_cast<std::size_t>(p)];
+            values[val_base + static_cast<size_t>(p)] = host.values[val_base + static_cast<size_t>(p)];
+        }
+        for (int i = 0; i < n; ++i) {
+            diag_positions[static_cast<size_t>(b * n + i)] = static_cast<int>(val_base) + host.diag_offsets[static_cast<std::size_t>(i)];
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        l_rows[static_cast<size_t>(i)] = host.l.rows[static_cast<std::size_t>(i)];
+        u_rows[static_cast<size_t>(i)] = host.u.rows[static_cast<std::size_t>(i)];
+    }
+    for (std::size_t i = 0; i < host.l.level_ptr.size(); ++i) l_level_ptr[i] = host.l.level_ptr[i];
+    for (std::size_t i = 0; i < host.u.level_ptr.size(); ++i) u_level_ptr[i] = host.u.level_ptr[i];
+
+    ILUKView<T> view;
+    view.lu = MatrixView<T, MatrixFormat::CSR>(values.data(), row_offsets.data(), col_indices.data(), nnz, n, n,
+                                               nnz, n + 1, batch_size);
+    view.diag_positions = diag_positions;
+    view.l_rows = l_rows;
+    view.l_level_ptr = l_level_ptr;
+    view.l_levels = host.l.levels;
+    view.u_rows = u_rows;
+    view.u_level_ptr = u_level_ptr;
+    view.u_levels = host.u.levels;
+    view.n = n;
+    view.batch_size = batch_size;
+    view.diagonal_shift = params.diagonal_shift;
+    view.u_diagonals_usable = u_diagonals_are_usable(values.data(), diag_positions.data(), n, batch_size,
+                                                     params.diagonal_shift);
+    if (bytes_used != nullptr) {
+        *bytes_used = static_cast<size_t>(workspace.size() - pool.remaining().size());
+    }
+    return view;
+}
+
+template <Backend B, typename T>
 Event iluk_apply(Queue& ctx,
-                 const ILUKPreconditioner<T>& M,
+                 const ILUKView<T>& M,
                  const MatrixView<T, MatrixFormat::Dense>& rhs,
                  const MatrixView<T, MatrixFormat::Dense>& out,
                  Span<std::byte>) {
@@ -644,7 +810,7 @@ Event iluk_apply(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t iluk_apply_buffer_size(Queue&, const ILUKPreconditioner<T>&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&) {
+size_t iluk_apply_buffer_size(Queue&, const ILUKView<T>&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&) {
     return 0;
 }
 
@@ -659,8 +825,10 @@ ILUK_INSTANTIATE_COMMON(std::complex<double>)
 
 #define ILUK_INSTANTIATE(BACK, FP) \
     template ILUKPreconditioner<FP> iluk_factorize<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&); \
-    template Event iluk_apply<BACK, FP>(Queue&, const ILUKPreconditioner<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&, Span<std::byte>); \
-    template size_t iluk_apply_buffer_size<BACK, FP>(Queue&, const ILUKPreconditioner<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&);
+    template ILUKView<FP> iluk_factorize<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, Span<std::byte>, const ILUKParams<FP>&, size_t*); \
+    template size_t iluk_buffer_size<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&); \
+    template Event iluk_apply<BACK, FP>(Queue&, const ILUKView<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&, Span<std::byte>); \
+    template size_t iluk_apply_buffer_size<BACK, FP>(Queue&, const ILUKView<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&);
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 ILUK_INSTANTIATE(Backend::CUDA, float)

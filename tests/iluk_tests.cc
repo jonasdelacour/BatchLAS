@@ -4,6 +4,7 @@
 #include <blas/linalg.hh>
 
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -843,6 +844,115 @@ TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
     ctx->wait_and_throw();
 }
 
+// The in-solver path must be equivalent to handing syevx a factor the caller
+// built: same factorization, same iterates, just allocated from syevx's pool.
+TEST_F(ILUKTests, SyevxBuildsPreconditionerFromItsOwnWorkspace) {
+    constexpr int m = 24;  // 24x24 grid -> n = 576
+    constexpr int batch = 2;
+    constexpr size_t neigs = 4;
+    const int n = m * m;
+
+    auto csr = make_laplacian_2d(m, batch);
+    auto view = csr.view();
+
+    ILUKParams<float> iluk_params;
+    iluk_params.levels_of_fill = 1;
+
+    auto run = [&](bool build_in_solver, UnifiedVector<float>& W) {
+        SyevxParams<float> params;
+        params.iterations = 40;
+        params.extra_directions = 4;
+        params.find_largest = false;
+        params.algorithm = OrthoAlgorithm::Chol2;
+        params.iluk_params = iluk_params;
+
+        std::optional<ILUKPreconditioner<float>> external;
+        if (build_in_solver) {
+            params.build_preconditioner = true;
+        } else {
+            external = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+            params.preconditioner = &*external;
+        }
+
+        UnifiedVector<std::byte> workspace(
+            syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+                                                       MatrixView<float, MatrixFormat::Dense>(), params));
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params);
+        ctx->wait_and_throw();
+    };
+
+    UnifiedVector<float> W_external(neigs * batch, 0.0f);
+    UnifiedVector<float> W_internal(neigs * batch, 0.0f);
+    run(false, W_external);
+    run(true, W_internal);
+
+    // Identical factor and identical iteration sequence, so this is bit-level
+    // reproducible up to the nondeterminism syevx already has.
+    for (size_t i = 0; i < W_external.size(); ++i) {
+        EXPECT_NEAR(W_internal[i], W_external[i], 1e-4f * std::max(1.0f, std::abs(W_external[i])))
+            << "eigenvalue " << i << " differs between the in-solver and caller-built factor";
+    }
+
+    // Sanity check against the analytic 2D Laplacian spectrum: the smallest
+    // eigenvalue of the 5-point stencil on an m x m grid is 8 sin^2(pi/(2(m+1))).
+    const float pi = 3.14159265358979323846f;
+    const float lambda_min = 8.0f * std::pow(std::sin(pi / (2.0f * (m + 1))), 2.0f);
+    EXPECT_NEAR(W_internal[0], lambda_min, 0.05f * lambda_min);
+    (void)n;
+}
+
+TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
+    constexpr int n = 64;
+    constexpr int batch = 1;
+    constexpr size_t neigs = 2;
+
+    auto csr = csr_generators::random_sparse_hermitian_csr<float>(n, 0.05f, batch, 4242u, 2.0f, true);
+    auto view = csr.view();
+    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, ILUKParams<float>());
+
+    UnifiedVector<float> W(neigs * batch, 0.0f);
+    SyevxParams<float> params;
+    params.iterations = 5;
+    params.find_largest = false;
+    params.build_preconditioner = true;
+
+    UnifiedVector<std::byte> workspace(
+        syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+                                                   MatrixView<float, MatrixFormat::Dense>(), params));
+
+    // Supplying both a factor and asking for one is ambiguous rather than harmless:
+    // the caller clearly disagrees with itself about which factor should be used.
+    params.preconditioner = &M;
+    EXPECT_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params),
+        std::invalid_argument);
+    params.preconditioner = nullptr;
+
+    params.find_largest = true;
+    EXPECT_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params),
+        std::invalid_argument);
+    params.find_largest = false;
+
+    // ILU(k) is only defined for sparse input, so a dense A must be refused rather
+    // than silently ignored.
+    auto dense = Matrix<float, MatrixFormat::Dense>(n, n, batch);
+    auto dense_view = dense.view();
+    UnifiedVector<std::byte> dense_ws(1024);
+    EXPECT_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, dense_view, W, neigs, dense_ws, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params),
+        std::invalid_argument);
+
+    EXPECT_NO_THROW(
+        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+                                       MatrixView<float, MatrixFormat::Dense>(), params));
+    ctx->wait_and_throw();
+}
+
 // Not a correctness test: an end-to-end cost model for whether building the
 // preconditioner pays for itself. Run with --gtest_also_run_disabled_tests.
 TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
@@ -868,7 +978,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
     std::cout << "\n[ILUK amortization] level=" << level << ", neigs=" << neigs
               << ", max_iters=" << max_iters << "\n";
     std::cout << "  n  batch    nnz  factor_s   apply_s  base_s  base_it  prec_s  prec_it  "
-                 "solve_speedup  net_speedup\n";
+                 "solve_speedup  net_speedup  inner_s  inner_it  inner_speedup\n";
     // The host is often shared with other jobs, so single timings are unreliable;
     // report the median of several repetitions.
     constexpr int reps = 5;
@@ -882,7 +992,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
         auto view = csr.view();
         const int n = s.m * s.m;
 
-        auto run_syevx = [&](const ILUKPreconditioner<float>* precond, int& iters_out) {
+        auto run_syevx = [&](const ILUKPreconditioner<float>* precond, bool build_in_solver, int& iters_out) {
             UnifiedVector<float> W(neigs * s.batch, 0.0f);
             UnifiedVector<int32_t> iters(s.batch, 0);
             SyevxInstrumentation<float> instr;
@@ -896,6 +1006,8 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
             params.absolute_tolerance = tol;
             params.relative_tolerance = tol;
             params.preconditioner = precond;
+            params.build_preconditioner = build_in_solver;
+            params.iluk_params.levels_of_fill = level;
             params.instrumentation = &instr;
 
             UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
@@ -920,7 +1032,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
 
         int base_iters = 0;
         std::vector<double> base_samples;
-        for (int r = 0; r < reps; ++r) base_samples.push_back(run_syevx(nullptr, base_iters));
+        for (int r = 0; r < reps; ++r) base_samples.push_back(run_syevx(nullptr, false, base_iters));
         const double base_s = median(base_samples);
 
         ILUKParams<float> iluk_params;
@@ -953,17 +1065,27 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
 
         int prec_iters = 0;
         std::vector<double> prec_samples;
-        for (int r = 0; r < reps; ++r) prec_samples.push_back(run_syevx(&M, prec_iters));
+        for (int r = 0; r < reps; ++r) prec_samples.push_back(run_syevx(&M, false, prec_iters));
         const double prec_s = median(prec_samples);
+
+        // The in-solver path forms the factor from syevx's own workspace, so this
+        // one number is the honest end-to-end cost: no separate factorization to
+        // add on afterwards, and the allocation is already inside the pool.
+        int inner_iters = 0;
+        std::vector<double> inner_samples;
+        for (int r = 0; r < reps; ++r) inner_samples.push_back(run_syevx(nullptr, true, inner_iters));
+        const double inner_s = median(inner_samples);
 
         const double solve_speedup = base_s / prec_s;
         const double net_speedup = base_s / (prec_s + factor_s);
+        const double inner_speedup = base_s / inner_s;
 
         std::cout << "  " << n << "  " << s.batch << "  " << csr.nnz()
                   << "  " << factor_s << "  " << apply_s
                   << "  " << base_s << "  " << base_iters
                   << "  " << prec_s << "  " << prec_iters
-                  << "  " << solve_speedup << "  " << net_speedup << "\n";
+                  << "  " << solve_speedup << "  " << net_speedup
+                  << "  " << inner_s << "  " << inner_iters << "  " << inner_speedup << "\n";
     }
 }
 

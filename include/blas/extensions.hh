@@ -5,6 +5,7 @@
 #include <batchlas/tuning_params.hh>
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
+#include <blas/functions/iluk.hh>
 #include <numeric>
 #include <limits>
 #include <cstddef>
@@ -14,9 +15,6 @@
 
 namespace batchlas {
     // Forward declarations for interface compatibility
-
-    template <typename T>
-    struct ILUKPreconditioner;
 
     template <typename T>
     struct SyevxInstrumentation;
@@ -47,6 +45,12 @@ namespace batchlas {
         // components being sought and amplifies the rest, so syevx rejects that
         // combination rather than silently converging more slowly.
         const ILUKPreconditioner<T>* preconditioner = nullptr;
+        // Build the ILU(k) factor inside syevx instead of supplying one. The factor
+        // is carved out of the same workspace the caller passes to syevx, so an
+        // end-to-end timing covers formation as well as application. Requires a CSR
+        // A and find_largest = false, and is mutually exclusive with the pointer above.
+        bool build_preconditioner = false;
+        ILUKParams<T> iluk_params{};
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
     };
 

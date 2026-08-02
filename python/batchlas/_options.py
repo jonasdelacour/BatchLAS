@@ -27,6 +27,13 @@ class SyevxOptions:
     store_current_residual: bool = False
     store_convergence_rate: bool = True
     store_ritz_values: bool = False
+    # Build an ILU(k) preconditioner inside syevx, out of the workspace syevx
+    # already allocates. Requires a sparse `a` and find_largest=False. Mutually
+    # exclusive with passing a preconditioner built by iluk_factorize.
+    build_preconditioner: bool = False
+    iluk_levels_of_fill: int = 0
+    iluk_drop_tolerance: object = None
+    iluk_fill_factor: object = None
 
 
 @dataclass(slots=True)
