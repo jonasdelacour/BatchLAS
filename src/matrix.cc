@@ -1109,11 +1109,14 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
 
     for (int b = 0; b < batch_size_; ++b) {
         row_offsets_ptr[static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_)] = 0;
-        std::exclusive_scan(
+        // row_offsets[0] = 0 and row_offsets[i+1] = sum(counts[0..i]), i.e. an
+        // inclusive scan of the per-row counts written one slot in. Using an
+        // exclusive scan here shifts every offset down by one row, which leaves
+        // row 0 empty and makes rows 0 and 1 share a start index.
+        std::inclusive_scan(
             row_counts.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(n),
             row_counts.data() + static_cast<std::size_t>(b + 1) * static_cast<std::size_t>(n),
-            row_offsets_ptr + static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_) + 1,
-            0);
+            row_offsets_ptr + static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride_) + 1);
     }
     ctx.wait_and_throw();
 

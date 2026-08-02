@@ -263,7 +263,8 @@ void run_case(Queue& queue,
     SyevxParams<float> params;
     params.iterations = max_iters;
     params.extra_directions = extra_dirs;
-    params.find_largest = true;
+    // ILU(k) approximates A^{-1}; it only preconditions the smallest eigenpairs.
+    params.find_largest = false;
     params.absolute_tolerance = 1e-6f;
     params.relative_tolerance = 1e-6f;
     params.preconditioner = precond_ptr;
