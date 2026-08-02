@@ -440,7 +440,8 @@ std::vector<MatrixMetrics<Real>> run_sparse_syevx_once(Queue& q,
     params.algorithm = OrthoAlgorithm::ShiftChol3;
     params.iterations = static_cast<std::size_t>(max_iters);
     params.extra_directions = static_cast<std::size_t>(extra_dirs);
-    params.find_largest = true;
+    // ILU(k) approximates A^{-1}; it only preconditions the smallest eigenpairs.
+    params.find_largest = false;
     params.absolute_tolerance = tolerance;
     params.relative_tolerance = tolerance;
     params.preconditioner = preconditioner;
