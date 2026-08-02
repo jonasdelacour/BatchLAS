@@ -147,6 +147,51 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
     return plan;
 }
 
+// Soft locking (SYEVX_PLAN.md §7.5, variant (a): column masking).
+//
+// OFF by default, deliberately. The mechanism is implemented and correct, but it
+// does not pay for itself on any configuration that could be measured here:
+//
+//  * It saves no flops. The block shapes are fixed, so a masked column is still
+//    multiplied by A and still occupies its row/column of StAS. Only the
+//    batch-wide staircase (§7.5 variant (b)) would recover the flops.
+//  * Its claimed benefit is conditioning of [X,P,R] under the Cholesky-based
+//    ortho algorithms -- and Backend::NETLIB forces OrthoAlgorithm::Householder
+//    (src/extensions/ortho.cc:42-44, 337-339), which is exactly the algorithm
+//    that handles a near-null column gracefully. The regime where masking should
+//    help is therefore unreachable on a CPU-only build.
+//  * Measured cost on an 8-case sweep (n = 128..512, k = 8..32, batch 2..8):
+//    0 extra iterations on 6 cases and +1 on 2, versus locking disabled.
+//
+// So: no measured benefit, small measured cost, benefit unverifiable on this
+// hardware. Enable with BATCHLAS_SYEVX_SOFT_LOCK=1 to A/B it on a GPU backend
+// with Chol2; if it wins there, flip this default.
+inline bool lobpcg_soft_locking() {
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
+        return !(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F');
+    }
+    return false;
+}
+
+// Safety factor on the locking threshold: a column is masked only once its
+// residual is `lobpcg_lock_factor()` times the requested tolerance.
+//
+// Locking exactly at `tol` is a bad idea here. A masked column is not frozen --
+// its Ritz vector is still recombined every iteration -- so a column sitting
+// right at the boundary loses its correction direction, drifts back above `tol`,
+// unlocks, and oscillates. Measured on the ILU(k) convergence sweep
+// (tests/iluk_tests.cc, tol = 1e-6, final residuals ~1e-6), locking at `tol`
+// made the final residual worse on 3 of 8 cases. A factor of 0.1 masks only
+// columns that are converged with a decade to spare, and on the iteration-count
+// sweep costs 0-1 iterations where a factor of 1.0 costs 0-3.
+inline double lobpcg_lock_factor() {
+    if (const char* v = std::getenv("BATCHLAS_SYEVX_LOCK_FACTOR")) {
+        const double parsed = std::atof(v);
+        if (parsed > 0.0) return parsed;
+    }
+    return 0.1;
+}
+
 } // namespace
 
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -205,6 +250,8 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
         // This function computes the eigenvalues and eigenvectors of a symmetric matrix
         int64_t block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
         const int64_t convergence_check_every = lobpcg_check_every();
+        const bool soft_locking = lobpcg_soft_locking();
+        const double soft_lock_factor = lobpcg_lock_factor();
         auto pool = BumpAllocator(workspace);
         auto n = A.rows_;
         auto batch_size = A.batch_size();
@@ -220,6 +267,10 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_quality = pool.allocate<typename base_type<T>::type>(ctx, batch_size);
         auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
+        // Per-column convergence state for soft locking; 1 == column i of batch
+        // bid met the tolerance on the *current* iterate. Written by the residual
+        // kernel, consumed on-device only -- no host readback.
+        auto col_converged = pool.allocate<int32_t>(ctx, neigs * batch_size);
 
         auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto X = S({0,n}, {0,block_vectors});                       //First block of S
@@ -535,11 +586,13 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
                 if (!stage_ritz.empty()) stage_ritz_ptr = stage_ritz.data() + off;
             }
 
+            const float_type lock_tol = static_cast<float_type>(tol * static_cast<float_type>(soft_lock_factor));
             auto residual_evt = ctx -> submit([&](sycl::handler& h){
                 auto Rdata = R.data_ptr();
                 auto Xdata = X.data_ptr();
                 auto AXdata = AX.data_ptr();
                 auto flags = converged_flags.data();
+                auto col_conv = col_converged.data();
                 auto best_quality_data = best_quality.data();
                 auto Xbest_data = want_eigenvectors ? X_best.data_ptr() : nullptr;
                 auto update_best = sycl::local_accessor<int32_t, 1>(1, h);
@@ -638,7 +691,12 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
                         const float_type ax_norm = sycl::sqrt(lsums[2 * neigs + i]);
                         const auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
                         const float_type denom = ax_norm + sycl::fabs(eigval) * x_norm;
-                        blockresiduals[i] = (denom > float_type(0)) ? (r_norm / denom) : r_norm;
+                        const float_type rel = (denom > float_type(0)) ? (r_norm / denom) : r_norm;
+                        blockresiduals[i] = rel;
+                        // Per-column locking state for this iterate. Deliberately
+                        // the *current* residual, not the running best: it labels
+                        // the residual block that was just written into R.
+                        col_conv[bid * neigs + i] = (rel <= lock_tol) ? 1 : 0;
                     }
 
                     sycl::group_barrier(cta);
@@ -798,9 +856,152 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
                 trace("syevx: ILU(k) apply done");
             }
 
+            // ---- Soft locking, variant (a): column masking (SYEVX_PLAN.md §7.5)
+            //
+            // Take the converged residual columns out of the trial subspace, so a
+            // converged eigenpair stops contributing an all-but-noise direction to
+            // [X,P,R] and to the projected problem.
+            //
+            // This has to happen in two places, and the reason is the single
+            // non-obvious thing about the whole feature: `ortho` MIXES COLUMNS.
+            // Householder QR and the Chol/Chol2 triangular solve both replace R by
+            // R * (upper triangular)^-1, so column j of the orthonormalised block
+            // spans r_0..r_j, not r_j. Consequences:
+            //
+            //  * Masking only *after* ortho is wrong. Deleting column j then
+            //    deletes span(r_0..r_j) content that the *unconverged* columns were
+            //    orthogonalised against, and they lose their correction directions.
+            //    Measured on n=128, k=8, tol=1e-4: convergence froze completely at
+            //    the first locking iteration (residuals stuck at their it-13 values
+            //    for the rest of the run) and went NaN by iteration 26, where the
+            //    unlocked run converged at iteration 14.
+            //
+            //  * Masking only *before* ortho is also wrong, and dangerous. Zero
+            //    columns make R^T R singular, and the Cholesky-based algorithms --
+            //    Chol2 is the default -- silently produce NaN from potrf rather
+            //    than raising. A batch member that has converged every column would
+            //    hand ortho an all-zero block on every remaining iteration.
+            //
+            // So: before ortho, *replace* each converged column with a fresh
+            // pseudo-random vector scaled to the largest surviving residual column.
+            // The block keeps full rank (no Cholesky breakdown, and no all-zero
+            // block even when every column has converged), and the mixing that ortho
+            // does now mixes in a generic direction instead of a dead one. After
+            // ortho, zero those same columns: the injected directions have served
+            // their purpose as rank filler and must not reach AR/StAS. What the
+            // unconverged columns lose is their component along a handful of random
+            // directions in an n-dimensional space -- O(#locked / n), negligible --
+            // instead of the span of the locked residuals.
+            //
+            // Skipped on the restart iteration: there P is a copy of R taken just
+            // below, so masking would put permanent zero columns into P as well,
+            // and nothing has converged at it == 0 in any realistic case.
+            const bool mask_this_iteration = soft_locking && !restart;
+            if (mask_this_iteration) {
+                trace("syevx: soft-lock fill converged residual columns");
+                ctx->submit([&](sycl::handler& h) {
+                    auto Rdata = R.data_ptr();
+                    const int64_t R_ld = R.ld();
+                    const int64_t R_stride = R.stride();
+                    auto col_conv = col_converged.data();
+                    const size_t nlock = neigs;
+                    const int64_t nblk = block_vectors;
+                    const uint32_t seed = static_cast<uint32_t>(it) * 2654435761u + 1u;
+                    auto colnorm = sycl::local_accessor<float_type, 1>(size_t(block_vectors), h);
+                    auto scale_acc = sycl::local_accessor<float_type, 1>(1, h);
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                        [=](sycl::nd_item<1> item) {
+                            const auto tid = item.get_local_linear_id();
+                            const auto bid = item.get_group_linear_id();
+                            const auto local_size = item.get_local_range(0);
+                            sycl::group<1> cta = item.get_group();
+                            auto* block = Rdata + int64_t(bid) * R_stride;
+
+                            for (int64_t j = int64_t(tid); j < nblk; j += int64_t(local_size))
+                                colnorm[j] = float_type(0);
+                            if (tid == 0) scale_acc[0] = float_type(0);
+                            sycl::group_barrier(cta);
+
+                            // Norm of every column that is *not* being replaced, so
+                            // the filler matches the scale of the live block. A
+                            // unit-norm filler next to 1e-6 residual columns would
+                            // hand Chol2 a Gram matrix with condition ~1e12.
+                            for (int64_t j = 0; j < nblk; ++j) {
+                                const bool locked = (j < int64_t(nlock)) && (col_conv[bid * nlock + size_t(j)] != 0);
+                                if (locked) continue;
+                                const auto* col = block + j * R_ld;
+                                float_type acc = 0;
+                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
+                                    acc += internal::norm_squared(col[i]);
+                                const float_type s = sycl::reduce_over_group(cta, acc, sycl::plus<float_type>());
+                                if (tid == 0) colnorm[j] = sycl::sqrt(s);
+                            }
+                            sycl::group_barrier(cta);
+                            if (tid == 0) {
+                                float_type mx = 0;
+                                for (int64_t j = 0; j < nblk; ++j) mx = sycl::fmax(mx, colnorm[j]);
+                                // Every column locked (possible when the caller asks
+                                // for no guard block): fall back to a unit scale so
+                                // the filler still produces a full-rank block.
+                                scale_acc[0] = (mx > float_type(0)) ? mx : float_type(1);
+                            }
+                            sycl::group_barrier(cta);
+
+                            // Deterministic per (iteration, batch, column, row) hash
+                            // rather than a stateful RNG: reproducible runs, and no
+                            // extra allocation.
+                            const float_type amp =
+                                scale_acc[0] * sycl::sqrt(float_type(3) / float_type(n));
+                            for (size_t j = 0; j < nlock; ++j) {
+                                if (col_conv[bid * nlock + j] == 0) continue;
+                                auto* col = block + int64_t(j) * R_ld;
+                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size)) {
+                                    uint32_t hsh = seed ^ (uint32_t(bid) * 0x9E3779B9u) ^
+                                                   (uint32_t(j) * 0x85EBCA6Bu) ^ (uint32_t(i) * 0xC2B2AE35u);
+                                    hsh ^= hsh >> 16; hsh *= 0x7FEB352Du;
+                                    hsh ^= hsh >> 15; hsh *= 0x846CA68Bu;
+                                    hsh ^= hsh >> 16;
+                                    const float_type u =
+                                        float_type(hsh & 0xFFFFFFu) / float_type(0x800000u) - float_type(1);
+                                    col[i] = T(amp * u);
+                                }
+                            }
+                        });
+                });
+                trace_wait("syevx: soft-lock fill done");
+            }
+
             trace("syevx: ortho R vs (X or XP)");
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             trace_wait("syevx: ortho R done");
+
+            // Second half of the masking: drop the rank-filler directions before
+            // they can reach AR and StAS. See the comment above the fill kernel.
+            if (mask_this_iteration) {
+                trace("syevx: soft-lock zero converged residual columns");
+                ctx->submit([&](sycl::handler& h) {
+                    auto Rdata = R.data_ptr();
+                    const int64_t R_ld = R.ld();
+                    const int64_t R_stride = R.stride();
+                    auto col_conv = col_converged.data();
+                    const size_t nlock = neigs;
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                        [=](sycl::nd_item<1> item) {
+                            const auto tid = item.get_local_linear_id();
+                            const auto bid = item.get_group_linear_id();
+                            const auto local_size = item.get_local_range(0);
+                            auto* block = Rdata + int64_t(bid) * R_stride;
+                            for (size_t j = 0; j < nlock; ++j) {
+                                if (col_conv[bid * nlock + j] == 0) continue;
+                                auto* col = block + int64_t(j) * R_ld;
+                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
+                                    col[i] = T(0);
+                            }
+                        });
+                });
+                trace_wait("syevx: soft-lock zero done");
+            }
+
 
             if (restart){
                 trace("syevx: restart shift P<-R (device copy)");
@@ -837,6 +1038,58 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
             trace("syevx: gemm S^T*(A*S) (StAS)");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, T(1.0), T(0.0), trans, Transpose::NoTrans);
             trace_wait("syevx: StAS gemm done");
+
+            // A masked residual column makes the corresponding row and column of
+            // StAS exactly zero, so the projected problem gains a spurious
+            // eigenvalue 0 with eigenvector e_j. For find_largest = false and a
+            // positive-definite A those zeros sort *below* the wanted spectrum and
+            // would be selected as Ritz pairs, giving zero columns in X_new -- a
+            // hard breakdown. Push each locked index to the unwanted end instead
+            // by planting a sentinel on its diagonal.
+            //
+            // ||StAS||_F bounds |lambda| for every eigenvalue of StAS and of any
+            // principal submatrix of it, so normF + 1 is strictly outside the real
+            // spectrum. The masked rows/cols are zero and contribute nothing to
+            // the norm, so the sentinel is scale-aware and cannot be swamped.
+            if (mask_this_iteration) {
+                trace("syevx: soft-lock StAS deflation submit");
+                ctx->submit([&](sycl::handler& h) {
+                    auto StAS_ptr = StAS.data_ptr();
+                    const int64_t StAS_ld = StAS.ld();
+                    const int64_t StAS_stride = StAS.stride();
+                    auto col_conv = col_converged.data();
+                    const size_t nlock = neigs;
+                    const int64_t r_offset = block_vectors * 2;
+                    const int64_t nv = Nvecs;
+                    const bool largest = params.find_largest;
+                    auto partials = sycl::local_accessor<float_type, 1>(128, h);
+                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                        [=](sycl::nd_item<1> item) {
+                            const auto tid = item.get_local_linear_id();
+                            const auto bid = item.get_group_linear_id();
+                            const auto local_size = item.get_local_range(0);
+                            sycl::group<1> cta = item.get_group();
+                            auto* mat = StAS_ptr + int64_t(bid) * StAS_stride;
+                            float_type acc = 0;
+                            for (int64_t linear = int64_t(tid); linear < nv * nv; linear += int64_t(local_size)) {
+                                const int64_t row = linear % nv;
+                                const int64_t col = linear / nv;
+                                acc += internal::norm_squared(mat[row + col * StAS_ld]);
+                            }
+                            partials[tid] = acc;
+                            sycl::group_barrier(cta);
+                            const float_type total =
+                                sycl::joint_reduce(cta, partials.begin(), partials.end(), sycl::plus<float_type>());
+                            const float_type sentinel = sycl::sqrt(total) + float_type(1);
+                            for (size_t j = tid; j < nlock; j += local_size) {
+                                if (col_conv[bid * nlock + j] == 0) continue;
+                                const int64_t d = r_offset + int64_t(j);
+                                mat[d + d * StAS_ld] = T(largest ? -sentinel : sentinel);
+                            }
+                        });
+                });
+                trace_wait("syevx: soft-lock StAS deflation done");
+            }
             //Solve the eigenvalue problem
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
@@ -1078,6 +1331,7 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
                 work_size += BumpAllocator::allocation_size<T>(ctx, n * neigs * batch_size);
             }
             work_size += BumpAllocator::allocation_size<int32_t>(ctx, batch_size); // converged_flags
+            work_size += BumpAllocator::allocation_size<int32_t>(ctx, neigs * batch_size); // col_converged (soft locking)
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * 3 * batch_size) * 4;                    //Sdata, ASdata, S_newdata, Stempdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
