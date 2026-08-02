@@ -166,6 +166,12 @@ inline Provider normalize_vendor_like(Provider p) {
 //
 // n <= 32 is deliberately excluded: that is CTA territory and the CTA predicate
 // is checked first in the order loop. This grid did not measure it.
+//
+// The grid is float. It is applied to every scalar type because the mechanism is
+// the work-group-per-matrix decomposition of the panel kernel, which is identical
+// for all of them -- but the carve-out box in particular is a narrow margin
+// (1.16-1.37x) and could sit elsewhere in double or complex. Re-measure before
+// relying on it there.
 inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch) {
     if (!caps.is_gpu) return false;
     if (n <= 32) return false;
