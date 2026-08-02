@@ -129,12 +129,11 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
     }
 }
 
-// sytrd_sy2sb is numerically wrong unless n % kd <= 1 (see sy2sb_kd_is_safe in
-// syev_two_stage.cc). These sizes are all awkward for the nominal band width --
-// none of 100/130/150/200/250 satisfies the rule at kd=32 -- so they only pass
-// if kd selection actually backs off to a safe width, or falls back to
-// syev_blocked. Before that logic existed every one of them returned garbage
-// with a residual around 0.1-0.8 rather than failing loudly.
+// None of 100/130/150/200/250 is a multiple of the nominal kd=32, so each one
+// leaves a short final panel in sy2sb. That used to skip part of the two-sided
+// update and return garbage with a residual of 0.1-0.8 -- silently, which is
+// what made it survive so long. Keep these sizes covered: they are the cheapest
+// guard against the trailing-panel handling regressing.
 TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -350,26 +349,30 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
 
 // Isolates stage 1: sy2sb must be a similarity, so the band it produces has to
 // have the same spectrum as the input. sytrd_sy2sb_tests covers only float and
-// double, and eigenvector mode is the first caller to use kd>1, so this is the
-// first complex coverage sy2sb has had.
+// double, and eigenvector mode is the first caller to use kd>1, so this is also
+// the first complex coverage sy2sb has had.
 //
-// DISABLED: it currently FAILS, and the bug is real and pre-existing. float and
-// double are clean; complex<float> is off by ~8e-2 and complex<double> by ~1e-5
-// at n=129 with kd=16, while n=128 passes. The pattern is exactly "n not a
-// multiple of kd" -- the full pipeline shows the same signature (n=96/128/160
-// accurate to ~1e-6, n=127/129/130/200 wrong), which is why syev_two_stage
-// falls back to syev_blocked for complex eigenvectors. Re-enable, with the
-// fallback removed, once stage 1's complex tail-panel handling is fixed.
-TYPED_TEST(SyevTwoStageTest, DISABLED_Sy2sbBandPreservesSpectrum) {
+// The (n, kd) pairs are chosen around the trailing-panel bug this test found:
+// sy2sb skipped Q^H on columns [i+pk, i+kd) of the final panel whenever
+// pk = n % kd was < kd, corrupting the band for every n % kd >= 2. The first
+// four pairs all have n % kd >= 2 and failed at O(0.1); {129,16} has n % kd == 1
+// and failed for complex only, because a 1x1 complex larfg still returns a
+// nonzero tau (it rotates the diagonal real) where the real one returns 0; the
+// last two divide evenly and always passed.
+TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
     const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
-    const int kd = 16;
+    const std::vector<std::pair<int, int>> cases = {
+        {64, 48}, {96, 64}, {128, 48}, {100, 32}, {129, 16}, {128, 16}, {96, 24}};
 
-    for (int n : {128, 129}) {
+    for (const auto& nk : cases) {
+        const int n = nk.first;
+        const int kd = nk.second;
+        {
         const int batch = 2;
 
         Matrix<T, MatrixFormat::Dense> A =
@@ -434,8 +437,9 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_Sy2sbBandPreservesSpectrum) {
             for (Real v : x) scale = std::max(scale, std::abs(v));
             for (int i = 0; i < n; ++i)
                 EXPECT_NEAR(x[i], y[i], tol * scale)
-                    << "sy2sb band eigenvalue " << i << " n=" << n << " b=" << b;
+                    << "sy2sb band eigenvalue " << i << " n=" << n << " kd=" << kd << " b=" << b;
         }
+      }
     }
 }
 
