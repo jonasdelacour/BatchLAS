@@ -4,18 +4,20 @@
 // on how much of the spectrum is wanted; see SYEVX_PLAN.md §2 for the cost model
 // that produces the thresholds below.
 //
-//   dense, n <= SMALL_N            -> Direct   (a subset solver cannot beat syev_cta)
-//   dense, neigs/n >  DENSE_DIRECT -> Direct   (iterative methods cannot amortize)
-//   dense, neigs/n >  ITERATIVE    -> DirectSubset
-//   dense, neigs/n <= ITERATIVE    -> DirectSubset (Filtered, Tier 3, would go here)
+//   dense, n <= SMALL_N            -> Direct
+//   dense, eigenvalues only        -> Direct   (subset lost 3-5x at every shape)
+//   dense, vectors, n <  SUBSET_N  -> Direct
+//   dense, vectors, n >= SUBSET_N  -> DirectSubset
 //   sparse                         -> LOBPCG
 //
 // DirectSubset requires a real scalar type and dense input; where it is not
 // available the choice degrades to Direct (or LOBPCG below the iterative
 // threshold, where a full decomposition is clearly wrong).
 //
-// The thresholds are derived from flop counts, not measurement. Producing measured
-// ones is the deliverable of `benchmarks/syevx_benchmark.cc`.
+// The thresholds below are MEASURED on an RTX 4090 via `BM_SYEVX_Crossover` in
+// `benchmarks/syevx_benchmark.cc` plus an eigenvector-mode sweep; they are no
+// longer the flop-count estimates this file originally shipped with, and the two
+// disagree sharply. See the note above kSyevxSubsetMinN.
 
 #include "../linalg-impl.hh"
 #include <util/sycl-span.hh>
@@ -33,15 +35,29 @@ namespace batchlas {
 
 namespace {
 
-// Matrices at or below this dimension always use the full solver: the work a
-// subset solver removes is already hidden behind tridiagonalization there.
+// MEASURED thresholds (RTX 4090, CUDA backend, float). These replace the
+// flop-count estimates that stood here until the sweep in
+// benchmarks/syevx_benchmark.cc was finally run on GPU; see SYEVX_PLAN.md §13.
+//
+// The headline: the flop model said DirectSubset should beat Direct by ~3x for
+// k/n below 25%. It does not. cuSOLVER's full eigensolve is enough better
+// optimized than our two-stage + subset chain that a 3x flop advantage does not
+// survive contact with it. Measured, DirectSubset is
+//
+//   * SLOWER than Direct at every shape measured in eigenvalues-only mode
+//     (3-5x slower -- the reduction is pure cost there, with no back-transform
+//     to narrow), and
+//   * slower for n <= 512 even with eigenvectors,
+//   * faster only at n >= 1024 with eigenvectors, and by 1.16-1.46x, not 3x.
+//
+// So Auto now sends dense input to Direct unless it is in the one regime the
+// subset solver actually wins.
 constexpr int64_t kSyevxSmallN = 64;
 
-// Above this fraction of the spectrum, a full decomposition wins outright.
-constexpr double kSyevxDenseDirectFraction = 0.25;
-
-// Below this fraction, iterative/filtered methods can amortize their matvecs.
-constexpr double kSyevxIterativeFraction = 0.02;
+// With eigenvectors, DirectSubset only starts paying at this dimension. At n=512
+// it still lost by 1.1-1.3x; at n=1024 it won by 1.16x (batch 1) to 1.46x
+// (batch 64). Raise or lower this from measurement, not from the cost model.
+constexpr int64_t kSyevxSubsetMinN = 1024;
 
 SyevxAlgorithm parse_syevx_algorithm(const char* v) {
     if (!v || !*v) return SyevxAlgorithm::Auto;
@@ -149,7 +165,8 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                       int64_t n,
                                       size_t neigs,
                                       SyevxAlgorithm requested,
-                                      bool subset_supported) {
+                                      bool subset_supported,
+                                      JobType jobz) {
     const SyevxAlgorithm want = algorithm_from_env(requested);
     const bool dense = (format == MatrixFormat::Dense);
 
@@ -167,22 +184,22 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
         }
     }
 
-    if (n <= kSyevxSmallN) return SyevxAlgorithm::Direct;
-    if (n <= 0) return SyevxAlgorithm::Direct;
+    if (n <= kSyevxSmallN || n <= 0) return SyevxAlgorithm::Direct;
+    (void)neigs;
 
-    const double fraction = static_cast<double>(neigs) / static_cast<double>(n);
-    if (fraction > kSyevxDenseDirectFraction) return SyevxAlgorithm::Direct;
-    if (fraction > kSyevxIterativeFraction) {
-        return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::Direct;
-    }
-    // Below the iterative threshold, Filtered (Tier 3) is the algorithm the cost
-    // model favours -- but Auto still picks the subset solver where it is
-    // available, because that one is direct: no convergence risk, no degree to
-    // tune, and its cost is exactly what the model says. Filtered has a
-    // convergence failure mode the direct path does not, and the crossover has
-    // not been measured on real hardware (SYEVX_PLAN.md §2.4). Promote it to the
-    // Auto default for this band once it has been.
-    return subset_supported ? SyevxAlgorithm::DirectSubset : SyevxAlgorithm::LOBPCG;
+    // Eigenvalues-only: Direct won at every measured shape, by 3-5x. The subset
+    // path pays the full reduction and has no back-transform to save on, so there
+    // is nothing for it to win with.
+    if (jobz != JobType::EigenVectors) return SyevxAlgorithm::Direct;
+
+    if (subset_supported && n >= kSyevxSubsetMinN) return SyevxAlgorithm::DirectSubset;
+
+    // Filtered wins a genuine but narrow niche -- n >= 1024 at k/n around 1%, and
+    // only at small batch (at batch 64 Direct won there too). It is left opt-in
+    // rather than routed to by Auto: the margin is under 2x, it is the only path
+    // with a convergence failure mode, and the niche is too batch-dependent to
+    // encode from three data points.
+    return SyevxAlgorithm::Direct;
 }
 
 SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
@@ -218,7 +235,7 @@ Event syevx(Queue& ctx,
             const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
-                                              syevx_direct_subset_supported<T, MFormat>());
+                                              syevx_direct_subset_supported<T, MFormat>(), jobz);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
     }
@@ -241,7 +258,7 @@ size_t syevx_buffer_size(Queue& ctx,
                          const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
-                                              syevx_direct_subset_supported<T, MFormat>());
+                                              syevx_direct_subset_supported<T, MFormat>(), jobz);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
     }

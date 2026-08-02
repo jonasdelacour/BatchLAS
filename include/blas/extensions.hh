@@ -346,13 +346,18 @@ namespace batchlas {
      * @param n Matrix dimension
      * @param neigs Number of requested eigenpairs
      * @param requested Algorithm requested via SyevxParams::method
-     * @return SyevxAlgorithm Either Direct or LOBPCG
+     * @param subset_supported Whether DirectSubset is available for this T/format
+     * @param jobz Whether eigenvectors are wanted -- load-bearing, because the
+     *        subset solver's only measured advantage is the narrowed
+     *        back-transform, which does not exist in eigenvalues-only mode.
+     * @return SyevxAlgorithm A concrete, implemented algorithm
      */
     SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                           int64_t n,
                                           size_t neigs,
                                           SyevxAlgorithm requested,
-                                          bool subset_supported);
+                                          bool subset_supported,
+                                          JobType jobz = JobType::EigenVectors);
 
     /**
      * @brief Resolves SyevxParams::preconditioner_type to a concrete family.

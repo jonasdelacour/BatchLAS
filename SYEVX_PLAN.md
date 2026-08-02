@@ -1,7 +1,7 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0-3 implemented; Tier 4 §7.1-7.10 done (7.5 opt-in, 7.10 Jacobi only), §7.11 needs GPU.**
-Only §7.11 (a projected-`syev` sweep, needs GPU hardware) and Tier 5 remain; see [§13 Implementation status](#13-implementation-status).
+Status: **Tiers 0-4 implemented. Crossover thresholds MEASURED on RTX 4090 — the cost model overpredicted; see §13.**
+§7.11 and the §7.5 Chol2 A/B remain, and are now possible: this machine has two RTX 4090s. See [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
 user asked about separately — *batches of small matrices* and *batches of medium
@@ -1144,7 +1144,67 @@ forces Householder. `BATCHLAS_SYEVX_SOFT_LOCK=1` enables it for a GPU A/B.
 **Still open in §7:** 7.5's variant (b) (batch-wide staircase), 7.9's warm-start
 half, 7.10's Chebyshev half, 7.11 (projected-`syev` sweep).
 
-### Not yet measured
+### MEASURED — and the cost model's central prediction did not survive
+
+Run on an **RTX 4090** (CUDA backend, float) with `BM_SYEVX_Crossover`, plus a
+separate eigenvector-mode sweep. This section supersedes the estimates in §2.4.
+
+**The earlier claim in this document that the benchmarks could not run was wrong.**
+It was inferred from a CPU-only build (`BATCHLAS_ENABLE_CUDA=OFF`) and the
+`native_cpu` backend's `UR_RESULT_ERROR_INVALID_NULL_POINTER`, and generalised into
+a hardware limitation. This machine has two idle RTX 4090s; a CUDA build configures,
+compiles and passes all 44 syevx tests. The `native_cpu` abort is real but specific
+to that backend.
+
+**Eigenvalues only** (µs/matrix, batch 8):
+
+| n | k/n | Direct | DirectSubset | Filtered |
+|---|---|---|---|---|
+| 256 | 1.95% | **721** | 3609 | 1762 |
+| 512 | 1.95% | **2612** | 8211 | 9257 |
+| 1024 | 0.98% | 13943 | 50419 | **13179** |
+| 1024 | 9.96% | **13980** | 50526 | 108668 |
+
+**With eigenvectors** (µs/matrix):
+
+| n | batch | k/n | Direct | DirectSubset | Filtered |
+|---|---|---|---|---|---|
+| 512 | 8 | 4.88% | **2973** | 4317 | 25322 |
+| 1024 | 1 | 0.98% | 114325 | 85390 | **62039** |
+| 1024 | 1 | 4.98% | 113976 | **87966** | 274046 |
+| 1024 | 64 | 4.98% | 3547 | **2567** | 23512 |
+| 1024 | 64 | 25.0% | 3568 | **3035** | 114622 |
+
+What this overturns:
+
+1. **The ~3× ceiling was never approached. The best DirectSubset result measured is
+   1.46×**, at n = 1024, batch 64, with eigenvectors. §2.2's arithmetic is not wrong
+   about flops; it is wrong as a performance prediction, because it compares flop
+   counts and not implementations. cuSOLVER's full eigensolve is enough better
+   optimised than our two-stage + `stebz`/`stein` chain that a 3× flop advantage
+   does not survive contact with it.
+2. **DirectSubset is a pessimisation in eigenvalues-only mode at every measured
+   shape** — 3–5× slower. There the reduction is pure cost with no back-transform
+   to narrow, so there is nothing for it to win with. The cost model treated the
+   two modes as the same problem; they are not.
+3. **`Auto` was routing into that loss.** Until this measurement it sent all dense
+   real input with n > 64 and k/n ≤ 25% to DirectSubset — including eigenvalues-only
+   calls, the case where it loses worst. Routing is now measured: Direct unless
+   eigenvectors are wanted *and* n ≥ 1024.
+4. **Filtered's niche is real but narrow** — n ≥ 1024 at k/n ≈ 1%, and only at small
+   batch; at batch 64 Direct won even there. Under 2× at best, and it is the only
+   path with a convergence failure mode, so it stays opt-in rather than routed to.
+
+The one prediction that held: iterative methods are hopeless on dense input at
+moderate k/n. LOBPCG is 10–100× behind Direct across the sweep, and at k/n = 0.5 it
+cannot run at all — `[X,P,R]` needs 3·block_vectors columns in n dimensions, and
+`ortho` refuses once they do not fit. The sweep now skips those combinations rather
+than aborting.
+
+Still unmeasured: §7.11 (the projected-`syev` provider sweep) and the §7.5
+soft-locking A/B under Chol2, both of which are now possible on this hardware.
+
+### Superseded: the earlier "not yet measured" note
 
 The crossover thresholds in §2.4 and §8 remain **flop-count estimates**. The sweep
 that would replace them (`BM_SYEVX_Crossover` in `benchmarks/syevx_benchmark.cc`)
