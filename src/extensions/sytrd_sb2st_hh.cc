@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 namespace batchlas {
 namespace internal {
@@ -456,8 +457,143 @@ class Sb2stHhBackKernel;
 template <Backend B, typename T, int C>
 class Sb2stHhBackTiledKernel;
 
+template <Backend B, typename T, int C, int S>
+class Sb2stHhBackWaveKernel;
+
 constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
 
+inline int env_int_or(const char* key, int defval) {
+    const char* v = std::getenv(key);
+    if (!v || !*v) return defval;
+    return std::atoi(v);
+}
+
+}
+
+// Wave back-transform: resident Z tile + concurrent application of every
+// reflector in a commuting run.
+//
+// The resident-tile kernel below fixed the traffic on Z but left the *serial
+// chain* untouched: one work-group walked all m reflectors one at a time with
+// 32 threads. At n=1024/kd=64 that is 8687 dependent steps, and the tile's
+// local-memory footprint capped occupancy at ~1 block/SM worth of threads.
+//
+// But the reflectors of a single chase sweep act on disjoint row ranges (each
+// starts one past the previous one's end), so they commute and can all be
+// applied at once. build_sb2st_hh_wave_offsets recovers those runs: at
+// n=1024/kd=64 the 8687 reflectors form 1022 waves averaging 8.5 reflectors, so
+// the chain is 8.5x shorter than the reflector count suggests.
+//
+// One work-group of S sub-groups owns a C-column tile of Z. Per wave each
+// sub-group takes reflectors k = lo + sgid, lo + sgid + S, ...; they touch
+// disjoint rows of the tile, so no synchronisation is needed *within* a wave --
+// not even between successive reflectors handled by the same sub-group. A
+// single work-group barrier separates waves.
+//
+// This also fixes the occupancy problem for free: the tile costs n*C
+// regardless of S, so going from 32 to S*32 threads multiplies threads-per-byte
+// of local memory by S.
+template <Backend B, typename T, int C, int S>
+Event unmqr_hb2st_wave(Queue& ctx,
+                       const MatrixView<T, MatrixFormat::Dense>& v_in,
+                       const VectorView<T>& tau_in,
+                       const MatrixView<T, MatrixFormat::Dense>& z_io,
+                       int32_t n,
+                       const int32_t* starts_p,
+                       const int32_t* lens_p,
+                       const int32_t* waves_p,
+                       int32_t num_waves) {
+    constexpr int32_t kSg = 32;
+    constexpr int32_t G = kSg / C;
+    constexpr int32_t kWg = kSg * S;
+    static_assert(C >= 1 && C <= 32 && (kSg % C) == 0);
+    static_assert(S >= 1);
+
+    const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const int32_t ncols = static_cast<int32_t>(z_io.cols());
+    const int32_t col_chunks = (ncols + C - 1) / C;
+    const int32_t num_wg = batch * col_chunks;
+
+    auto Vv = v_in.kernel_view();
+    auto Zv = z_io.kernel_view();
+
+    ctx->submit([&](sycl::handler& h) {
+        sycl::local_accessor<T, 1> Zs(
+            sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
+        auto TAUv = tau_in;
+
+        h.parallel_for<Sb2stHhBackWaveKernel<B, T, C, S>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kWg),
+                              sycl::range<1>(kWg)),
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+                const auto wg = it.get_group();
+                const auto sg = it.get_sub_group();
+                const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
+                const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
+                const int32_t sgid = lid / kSg;
+                const int32_t lane = lid - sgid * kSg;
+
+                const int32_t b = wg_id / col_chunks;
+                const int32_t chunk = wg_id - b * col_chunks;
+                if (b >= batch) return;
+
+                const int32_t c0 = chunk * C;
+                auto Z = Zv.batch_item(b);
+                auto V = Vv.batch_item(b);
+
+                T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
+
+                for (int32_t idx = lid; idx < n * C; idx += kWg) {
+                    const int32_t r = idx / C;
+                    const int32_t c = idx - r * C;
+                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
+                }
+                sycl::group_barrier(wg);
+
+                const int32_t col = lane % C;
+                const int32_t grp = lane / C;
+
+                // Q = H_1 ... H_m, so Z := Q Z runs the waves in reverse
+                // generation order. Order *within* a wave is free.
+                for (int32_t wv = num_waves - 1; wv >= 0; --wv) {
+                    const int32_t lo = waves_p[wv];
+                    const int32_t hi = waves_p[wv + 1];
+
+                    // Every lane of a sub-group shares k, so tau and L are
+                    // sub-group uniform and the shuffles below stay uniform.
+                    for (int32_t k = lo + sgid; k < hi; k += S) {
+                        const T tau = TAUv(k, b);
+                        if (tau == T(0)) continue;
+                        const int32_t s = starts_p[k];
+                        const int32_t L = lens_p[k];
+
+                        T acc = T(0);
+                        for (int32_t r = grp; r < L; r += G) {
+                            acc += conj_if(V(r, k)) * Zl[(s + r) * C + col];
+                        }
+                        if constexpr (G > 1) {
+                            for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
+                                acc += shuffle_xor(sg, acc, m);
+                            }
+                        }
+                        for (int32_t r = grp; r < L; r += G) {
+                            Zl[(s + r) * C + col] -= tau * V(r, k) * acc;
+                        }
+                        // No barrier: the next k in this wave is disjoint from
+                        // this one, and other sub-groups are on disjoint rows.
+                    }
+                    sycl::group_barrier(wg);
+                }
+
+                for (int32_t idx = lid; idx < n * C; idx += kWg) {
+                    const int32_t r = idx / C;
+                    const int32_t c = idx - r * C;
+                    if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
+                }
+            });
+    });
+
+    return ctx.get_event();
 }
 
 // Resident-tile back-transform.
@@ -584,7 +720,8 @@ Event unmqr_hb2st(Queue& ctx,
                   int32_t n,
                   int32_t kd,
                   Span<const int32_t> starts,
-                  Span<const int32_t> lens) {
+                  Span<const int32_t> lens,
+                  Span<const int32_t> waves) {
     if (!ctx.in_order()) {
         throw std::runtime_error("unmqr_hb2st: requires an in-order Queue");
     }
@@ -592,6 +729,66 @@ Event unmqr_hb2st(Queue& ctx,
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());
     const int32_t ncols = static_cast<int32_t>(z_io.cols());
     if (nrefl <= 0 || batch <= 0 || ncols <= 0 || n <= 0) return ctx.get_event();
+
+    // Preferred path: resident tile + wave-parallel reflectors. Set
+    // BATCHLAS_SB2ST_BACK_WAVE=0 to fall through to the single-sub-group tiled
+    // kernel below (kept for comparison and as a fallback if the tile does not
+    // fit in local memory).
+    const bool want_wave = env_int_or("BATCHLAS_SB2ST_BACK_WAVE", 1) != 0;
+    if (want_wave) {
+        const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
+        const size_t per_col = static_cast<size_t>(n) * sizeof(T);
+        const int32_t num_waves = static_cast<int32_t>(waves.size()) - 1;
+
+        // With S sub-groups the tile is shared by 32*S threads, so a wider tile
+        // no longer costs occupancy the way it did at S=1; C is chosen to keep
+        // the footprint near a budget rather than as small as possible. Measured
+        // best at 8 columns for every n tried (see the subs table below).
+        int tile = env_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
+        if (tile <= 0) {
+            constexpr size_t kTargetLocalBytes = 32768;
+            tile = 1;
+            while (tile < 8 && per_col * static_cast<size_t>(tile * 2) <= kTargetLocalBytes) {
+                tile <<= 1;
+            }
+        }
+        while (tile > 1 && per_col * static_cast<size_t>(tile) > lmem) tile >>= 1;
+
+        // Sub-groups per work-group. More than a wave holds just leaves
+        // sub-groups idle at every barrier, and fewer serialises the wave, so
+        // this tracks the mean wave width (~n/2kd, but read off the schedule
+        // rather than assumed).
+        //
+        // Back-transform alone, RTX 4090, float, ms (rows subs, cols the four
+        // benchmark shapes; tile=8):
+        //           256/1024 512/512 1024/128 1024/256   mean wave
+        //   subs=8      17.1    51.0    123.8    245.0    8.5 / 8.5 / 16.5
+        //   subs=16     20.6    58.5    103.5    207.1
+        // -- 8 wins where waves hold ~8, 16 wins where they hold ~16.
+        int subs = env_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
+        if (subs <= 0) {
+            const int32_t avg = (num_waves > 0) ? (nrefl + num_waves - 1) / num_waves : 1;
+            subs = (avg >= 12) ? 16 : (avg >= 6 ? 8 : 4);
+        }
+
+        if (num_waves > 0 && per_col * static_cast<size_t>(tile) <= lmem) {
+            // Caller-owned, like starts/lens: a buffer allocated here would be
+            // freed at return while the kernel is still running.
+            const int32_t* wp = waves.data();
+
+            // C x S combinations are instantiated explicitly; anything else
+            // falls through to the tiled kernel.
+            #define BL_WAVE_CASE(CC, SS)                                              \
+                if (tile == (CC) && subs == (SS))                                     \
+                    return unmqr_hb2st_wave<B, T, (CC), (SS)>(                        \
+                        ctx, v_in, tau_in, z_io, n, starts.data(), lens.data(), wp,   \
+                        num_waves);
+            BL_WAVE_CASE(1, 8) BL_WAVE_CASE(2, 8) BL_WAVE_CASE(4, 8) BL_WAVE_CASE(8, 8)
+            BL_WAVE_CASE(1, 4) BL_WAVE_CASE(2, 4) BL_WAVE_CASE(4, 4) BL_WAVE_CASE(8, 4)
+            BL_WAVE_CASE(1, 16) BL_WAVE_CASE(2, 16) BL_WAVE_CASE(4, 16) BL_WAVE_CASE(8, 16)
+            #undef BL_WAVE_CASE
+        }
+    }
 
     // Prefer the resident-tile kernel: pick the widest column tile whose local
     // footprint fits, so Z is loaded and stored once instead of once per
@@ -719,6 +916,7 @@ streaming:
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,                     \
         int32_t,                                                                         \
         int32_t,                                                                         \
+        Span<const int32_t>,                                                             \
         Span<const int32_t>,                                                             \
         Span<const int32_t>);
 

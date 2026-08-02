@@ -68,6 +68,9 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
         starts[k] = sched[k].start;
         lens[k] = sched[k].len;
     }
+    const auto wave_host = internal::build_sb2st_hh_wave_offsets(sched, n);
+    UnifiedVector<int32_t> waves(wave_host.size());
+    for (size_t k = 0; k < wave_host.size(); ++k) waves[k] = wave_host[k];
 
     Matrix<T> vmat = Matrix<T>::Random(kd, nrefl, false, batch);
     Vector<T> tau(nrefl, T(0.5), batch);
@@ -77,12 +80,15 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     // harness would try to instantiate Span<const int32_t> device helpers.
     const int32_t* sp = starts.data();
     const int32_t* lp = lens.data();
+    const int32_t* wp = waves.data();
     const size_t nr = sched.size();
+    const size_t nw = wave_host.size();
     state.SetKernel(q, std::move(vmat), std::move(tau), bench::pristine(Z), n, kd,
-                    [sp, lp, nr](Queue& qq, auto&&... xs) {
+                    [sp, lp, wp, nr, nw](Queue& qq, auto&&... xs) {
                         internal::unmqr_hb2st<B, T>(qq, std::forward<decltype(xs)>(xs)...,
                                                     Span<const int32_t>(sp, nr),
-                                                    Span<const int32_t>(lp, nr));
+                                                    Span<const int32_t>(lp, nr),
+                                                    Span<const int32_t>(wp, nw));
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }

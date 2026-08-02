@@ -303,10 +303,15 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
                 lens[k] = sched[k].len;
             }
 
+            const auto wave_host = internal::build_sb2st_hh_wave_offsets(sched, n);
+            UnifiedVector<int32_t> waves(wave_host.size());
+            for (size_t k = 0; k < wave_host.size(); ++k) waves[k] = wave_host[k];
+
             internal::unmqr_hb2st<B, T>(
                 ctx, vmat, tau, Z, n, kd,
                 Span<const int32_t>(starts.data(), sched.size()),
-                Span<const int32_t>(lens.data(), sched.size()));
+                Span<const int32_t>(lens.data(), sched.size()),
+                Span<const int32_t>(waves.data(), wave_host.size()));
             ctx.wait();
 
             for (int b = 0; b < batch; ++b) {
@@ -334,6 +339,39 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
                     }
                 EXPECT_LT(std::sqrt(err), tol)
                     << "Q2 mismatch n=" << n << " kd=" << kd << " b=" << b;
+            }
+        }
+    }
+}
+
+// The wave back-transform applies every reflector in a wave concurrently, which
+// is only sound because reflectors in a wave touch disjoint rows. That property
+// is the whole safety argument for the kernel, so check it directly rather than
+// relying on the residual tests to notice a race.
+TEST(Sb2stHhWaves, ReflectorsInAWaveAreDisjoint) {
+    for (int n : {16, 33, 64, 100, 129, 256, 512}) {
+        for (int kd : {2, 3, 8, 16, 32, 64}) {
+            if (kd >= n) continue;
+            const auto sched = internal::build_sb2st_hh_schedule(n, kd);
+            const auto off = internal::build_sb2st_hh_wave_offsets(sched, n);
+            if (sched.empty()) continue;
+
+            ASSERT_GE(off.size(), 2u) << "n=" << n << " kd=" << kd;
+            EXPECT_EQ(off.front(), 0);
+            EXPECT_EQ(off.back(), static_cast<int32_t>(sched.size()));
+
+            for (size_t w = 0; w + 1 < off.size(); ++w) {
+                EXPECT_LT(off[w], off[w + 1]) << "empty wave " << w;
+                // Pairwise disjoint inside the wave.
+                for (int32_t a = off[w]; a < off[w + 1]; ++a) {
+                    for (int32_t b = a + 1; b < off[w + 1]; ++b) {
+                        const int32_t a0 = sched[a].start, a1 = a0 + sched[a].len;
+                        const int32_t b0 = sched[b].start, b1 = b0 + sched[b].len;
+                        EXPECT_TRUE(a1 <= b0 || b1 <= a0)
+                            << "overlap n=" << n << " kd=" << kd << " wave=" << w
+                            << " [" << a0 << "," << a1 << ") vs [" << b0 << "," << b1 << ")";
+                    }
+                }
             }
         }
     }

@@ -63,27 +63,21 @@ inline int32_t choose_two_stage_kd(int32_t n) {
     // total ms; kd across, n/batch down):
     //
     //                kd=16      32      48      64      96   blocked
-    //   128/2048      28.3    23.5    22.6    21.2    18.1     15.0
-    //   256/1024      80.6    68.1    69.9    68.4    71.6     41.9
-    //   512/512      329.7   255.6   269.7   265.0   309.3    193.0
-    //   1024/128     991.9   644.3   574.0   557.6   603.6    481.5
-    //   2048/32     3206.6  2007.3  1831.2  1712.6  1814.2   1262.6
+    //   128/2048      27.8    23.4    22.8    21.9    19.6     15.0
+    //   256/1024      78.9    65.3    66.9    66.7    72.2     42.4
+    //   512/512      249.5   203.9   223.1   240.0   298.6    193.3
+    //   1024/128     500.1   425.8   443.9   470.0   546.6    481.4
+    //   2048/32     1275.3  1183.4  1259.0  1353.8  1614.0   1265.7
     //
-    // The optimum rises with n (Gates/Tomov/Dongarra 2018 report the same trend
-    // once eigenvectors are wanted), so this is a table rather than a constant.
-    // The old flat 16/32 rule was off by 1.16x at n=1024 and 1.17x at n=2048.
-    // n=128 prefers 96, but two-stage loses to blocked by 1.2x there, so the
-    // simpler threshold is kept rather than special-casing an unused size.
+    // kd=32 is optimal at every n >= 256. This supersedes an earlier 32/64 split
+    // measured before the wave back-transform landed: back then Q2 dominated and
+    // its cost fell with kd, which pulled the optimum up to 64 at large n. Now
+    // that Q2 is ~3x cheaper the balance is set by stage 1 and the chase, whose
+    // O(n^2 kd) work favours a narrow band, so the optimum came back down.
     //
-    // Note the last column: blocked still wins everywhere, by 1.16x at n=1024
-    // (its best case for two-stage) and more elsewhere.
-    //
-    // kd used to be constrained to n % kd <= 1 to dodge a sytrd_sy2sb bug that
-    // skipped part of the two-sided update on a short final panel. That bug is
-    // fixed (see the A_left/A_right widening in sytrd_sy2sb.cc), so any kd is
-    // valid again; SyevTwoStageTest.AwkwardSizesStayAccurate covers the sizes
-    // that used to break.
-    const int32_t def = (n <= 512) ? 32 : 64;
+    // Two-stage now *wins* at n >= 1024 (1.13x at n=1024, 1.06x at n=2048) and
+    // still loses below that, where blocked's lower fixed overhead dominates.
+    const int32_t def = 32;
 
     const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
@@ -371,6 +365,16 @@ Event syev_two_stage(Queue& ctx,
         sb2st_lens[k] = sb2st_sched[k].len;
     }
 
+    // Commuting runs of reflectors, so the back-transform can apply a whole run
+    // at once. Lives until the back-transform's event completes.
+    const auto sb2st_wave_host = want_eigvecs
+                                     ? internal::build_sb2st_hh_wave_offsets(sb2st_sched, n)
+                                     : std::vector<int32_t>{};
+    UnifiedVector<int32_t> sb2st_waves(sb2st_wave_host.size());
+    for (std::size_t k = 0; k < sb2st_wave_host.size(); ++k) {
+        sb2st_waves[k] = sb2st_wave_host[k];
+    }
+
     Span<T> v_sb2st_span;
     Span<T> tau_sb2st_hh_span;
     Span<T> ab_tri_span;
@@ -524,7 +528,8 @@ Event syev_two_stage(Queue& ctx,
                                     n,
                                     kd,
                                     Span<const int32_t>(sb2st_starts.data(), sb2st_starts.size()),
-                                    Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()));
+                                    Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()),
+                                    Span<const int32_t>(sb2st_waves.data(), sb2st_waves.size()));
     }
 
     // Z(kd:, :) := Q1 Z(kd:, :).

@@ -109,9 +109,43 @@ Event sytrd_sb2st_hh(Queue& ctx,
 template <Backend B, typename T>
 size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch);
 
+// Splits the reflector list into maximal runs of consecutive reflectors with
+// pairwise-disjoint row ranges. Disjoint reflectors commute, so a whole run can
+// be applied concurrently in the back-transform; run w is [off[w], off[w+1]).
+//
+// The runs come out equal to the chase sweeps, but this derives them from the
+// schedule rather than assuming it, so an unsound grouping cannot slip through.
+inline std::vector<int32_t> build_sb2st_hh_wave_offsets(
+    const std::vector<Sb2stHhRefl>& sched, int32_t n) {
+    std::vector<int32_t> off;
+    const int32_t nrefl = static_cast<int32_t>(sched.size());
+    if (nrefl <= 0 || n <= 0) return off;
+
+    // stamp[r] == run means row r is already claimed by the run being built.
+    std::vector<int32_t> stamp(static_cast<size_t>(n), -1);
+    int32_t run = 0;
+    off.push_back(0);
+    for (int32_t k = 0; k < nrefl; ++k) {
+        const int32_t s = sched[k].start;
+        const int32_t e = s + sched[k].len;
+        bool overlaps = false;
+        for (int32_t r = s; r < e && r < n; ++r) {
+            if (stamp[r] == run) { overlaps = true; break; }
+        }
+        if (overlaps) { off.push_back(k); ++run; }
+        for (int32_t r = s; r < e && r < n; ++r) stamp[r] = run;
+    }
+    off.push_back(nrefl);
+    return off;
+}
+
 // Z := Q2 Z, with Q2 = H_1 H_2 ... H_m from sytrd_sb2st_hh. Applies the
 // reflectors in reverse generation order. `starts`/`lens` come from
-// build_sb2st_hh_schedule (host side, batch-independent).
+// build_sb2st_hh_schedule and `waves` from build_sb2st_hh_wave_offsets (all
+// host side, batch-independent).
+//
+// All four spans must stay alive until the returned Event completes -- they are
+// read by the kernel, not copied.
 template <Backend B, typename T>
 Event unmqr_hb2st(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& v_in,
@@ -120,7 +154,8 @@ Event unmqr_hb2st(Queue& ctx,
                   int32_t n,
                   int32_t kd,
                   Span<const int32_t> starts,
-                  Span<const int32_t> lens);
+                  Span<const int32_t> lens,
+                  Span<const int32_t> waves);
 
 } // namespace internal
 } // namespace batchlas
