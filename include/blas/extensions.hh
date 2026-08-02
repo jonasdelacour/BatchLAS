@@ -46,6 +46,12 @@ namespace batchlas {
         // components being sought and amplifies the rest, so syevx rejects that
         // combination rather than silently converging more slowly.
         const ILUKPreconditioner<T>* preconditioner = nullptr;
+        // Which preconditioner family the LOBPCG path should use. `Auto` keeps the
+        // pre-existing behaviour exactly: ILU(k) when a factor is supplied or
+        // requested below, otherwise none (unless BATCHLAS_SYEVX_PRECONDITIONER
+        // names a default). See SyevxPreconditioner and
+        // `syevx_select_preconditioner`.
+        SyevxPreconditioner preconditioner_type = SyevxPreconditioner::Auto;
         // Build the ILU(k) factor inside syevx instead of supplying one. The factor
         // is carved out of the same workspace the caller passes to syevx, so an
         // end-to-end timing covers formation as well as application. Requires a CSR
@@ -347,6 +353,25 @@ namespace batchlas {
                                           size_t neigs,
                                           SyevxAlgorithm requested,
                                           bool subset_supported);
+
+    /**
+     * @brief Resolves SyevxParams::preconditioner_type to a concrete family.
+     *
+     * Never returns `Auto`. Deterministic in its inputs so that `syevx`,
+     * `syevx_buffer_size` and `syevx_lobpcg` always agree -- the Jacobi path adds a
+     * pool allocation, and the sizing call has to make the same decision the solve
+     * will. Legality (e.g. ILU(k) requested with no factor supplied) is checked by
+     * `syevx`, not here.
+     *
+     * @param requested SyevxParams::preconditioner_type
+     * @param iluk_configured Whether an ILU(k) factor was supplied or requested
+     * @param find_largest SyevxParams::find_largest; an environment-supplied default
+     *        that is illegal for the requested end degrades to `None` instead of
+     *        throwing (an explicit request still throws -- see `syevx`).
+     */
+    SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
+                                                    bool iluk_configured,
+                                                    bool find_largest);
 
     /**
      * @brief Partial eigensolve by full decomposition followed by selection.
