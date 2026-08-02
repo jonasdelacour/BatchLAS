@@ -262,27 +262,27 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
     
-    #define LANCZOS_INSANTIATE_FOR_BACKEND(back)\
+    #define LANCZOS_INSTANTIATE_FOR_BACKEND(back)\
         LANCZOS_INSTANTIATE(back, float, MatrixFormat::CSR)\
         LANCZOS_INSTANTIATE(back, float, MatrixFormat::Dense)\
         LANCZOS_INSTANTIATE(back, double, MatrixFormat::CSR)\
         LANCZOS_INSTANTIATE(back, double, MatrixFormat::Dense)
 
     #if BATCHLAS_HAS_CUDA_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::CUDA)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
     #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::ROCM)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
     #endif
     #if BATCHLAS_HAS_HOST_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::NETLIB)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
     #endif
 
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
 
     #undef LANCZOS_INSTANTIATE
-    #undef LANCZOS_INSTANTIATE_FOR_FP
+    #undef LANCZOS_INSTANTIATE_FOR_BACKEND
 
 
 }

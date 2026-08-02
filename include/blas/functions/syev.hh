@@ -204,8 +204,8 @@ inline Event syev_dispatch(Queue& ctx,
     }
 
     Queue* run_q = &ctx;
+    Queue in_order_q;
     if (!ctx.in_order()) {
-        Queue in_order_q(run_q->device(), true);
         in_order_q = Queue(ctx, true);
         Event dep = ctx.get_event();
         in_order_q.enqueue(dep);

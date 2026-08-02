@@ -22,6 +22,7 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
+#include <util/env.hh>
 
 namespace batchlas {
 
@@ -38,18 +39,6 @@ inline bool use_device_sytrd() {
         return v && std::string(v) == "device";
     }();
     return result;
-}
-
-inline bool env_truthy(const char* v) {
-    if (!v) return false;
-    const std::string s(v);
-    return (s == "1" || s == "true" || s == "TRUE" || s == "on" || s == "ON");
-}
-
-inline bool env_falsy(const char* v) {
-    if (!v) return false;
-    const std::string s(v);
-    return (s == "0" || s == "false" || s == "FALSE" || s == "off" || s == "OFF");
 }
 
 enum class SytrdTrailingUpdateMode {

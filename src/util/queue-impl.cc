@@ -55,7 +55,21 @@ Queue::Queue(const Queue& base, bool in_order) : device_(base.device_), in_order
 
 Queue::~Queue() = default;
 Queue::Queue(Queue&& other) = default;
-Queue& Queue::operator=(Queue&& other) = default;
+
+// Written out rather than `= default` on purpose. Move-assignment destroys the
+// destination's QueueImpl *without* running ~Queue, so any per-queue state keyed
+// on QueueImpl identity (e.g. a workspace arena) must be released here as well as
+// in the destructor -- otherwise the key is left dangling and a later heap reuse
+// of the same address silently inherits it. Semantics are identical to the
+// previous defaulted version; this exists to give that teardown a home.
+Queue& Queue::operator=(Queue&& other) {
+    if (this == &other) return *this;
+    // (release per-queue state attached to impl_ here before it is overwritten)
+    device_ = other.device_;
+    in_order_ = other.in_order_;
+    impl_ = std::move(other.impl_);
+    return *this;
+}
 
 void Queue::wait() const {impl_->wait();}
 void Queue::wait_and_throw() const {impl_->wait_and_throw();}

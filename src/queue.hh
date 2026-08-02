@@ -12,18 +12,14 @@
 #include <unordered_map>
 
 #include "util/kernel-trace.hh"
+#include <util/env.hh>
 
 inline bool batchlas_queue_profiling_enabled() {
     // Keep profiling opt-in to avoid overhead in non-benchmark runs.
     // Kernel trace implies profiling; benchmarks can enable profiling without tracing.
-    auto env_truthy = [](const char* v) {
-        if (!v) return false;
-        return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
-                std::string(v) == "on" || std::string(v) == "ON");
-    };
     return batchlas_kernel_trace::enabled() ||
-           env_truthy(std::getenv("BATCHLAS_QUEUE_PROFILING")) ||
-           env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
+           batchlas::env_truthy(std::getenv("BATCHLAS_QUEUE_PROFILING")) ||
+           batchlas::env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
 }
 
 struct QueueImpl : public sycl::queue{

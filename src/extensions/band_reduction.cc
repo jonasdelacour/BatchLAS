@@ -22,6 +22,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <util/env.hh>
 
 namespace batchlas {
 
@@ -51,12 +52,6 @@ inline void enforce_real_diagonal(T& x) {
         using Real = typename base_type<T>::type;
         x = T(static_cast<Real>(x.real()), Real(0));
     }
-}
-
-inline bool env_truthy(const char* v) {
-    if (!v) return false;
-    const std::string s(v);
-    return (s == "1" || s == "true" || s == "TRUE" || s == "on" || s == "ON");
 }
 
 inline std::string bandr1_dump_root() {
@@ -512,57 +507,21 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
     bool dump_enabled = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_STEP"));
     const bool dump_abw_only = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_ABW_ONLY"));
-    const int dump_step = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_STEP_INDEX")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
+    const int dump_step = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_INDEX", -1);
     if (dump_step >= 0 && dump_step != step_index) {
         dump_enabled = false;
     }
 
-    const int dump_sweep = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
+    const int dump_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX", -1);
     if (dump_sweep >= 0 && dump_sweep != sweep_index) {
         dump_enabled = false;
     }
 
-    const int dump_step_in_sweep = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
+    const int dump_step_in_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP", -1);
     if (dump_step_in_sweep >= 0 && dump_step_in_sweep != step_in_sweep) {
         dump_enabled = false;
     }
-    const int dump_batch = [&]() -> int {
-        if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_BATCH")) {
-            try {
-                return std::stoi(std::string(v));
-            } catch (...) {
-                return -1;
-            }
-        }
-        return -1;
-    }();
+    const int dump_batch = env_int_or("BATCHLAS_DUMP_BANDR1_BATCH", -1);
 
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
