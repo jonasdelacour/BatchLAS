@@ -129,7 +129,51 @@ inline Provider normalize_vendor_like(Provider p) {
     return p;
 }
 
-template <typename T>
+// Should Auto prefer the vendor eigensolver over the BatchLAS blocked one?
+//
+// The default order below lists BatchLAS_Blocked ahead of Vendor, which made
+// `Auto` pick the blocked path for every GPU matrix with n > 32 -- it is the
+// first entry whose support predicate is unconditionally true on a GPU. That was
+// an ordering, not a performance decision, and it is wrong nearly everywhere.
+//
+// The blocked reduction's panel factorization (LatrdLowerPanelKernel) is
+// parallel over the *batch*: one work-group per matrix. At small batch it
+// therefore runs on a handful of SMs. Profiled at n=1024, batch=1, it is 88% of
+// the whole solve, and moves its ~134 MB per panel at roughly 1/48th of the
+// device's bandwidth. cuSOLVER has no such cliff.
+//
+// MEASURED, RTX 4090, CUDA backend, float, via BM_SYEVX_Crossover and
+// BM_SYEVX_CrossoverVectors. Ratio is blocked/vendor, so > 1 means vendor wins:
+//
+//   n \ batch    1      4     16     32     64    128    256    512
+//     64       2.11   4.24   4.44     -    3.91     -    2.30     -
+//     128      2.01   4.50   4.08     -    3.39     -    1.71     -
+//     256      4.32   2.67   2.62     -    2.19   1.84   1.27   1.22
+//     320        -      -      -    1.34   1.06   0.79   0.69     -
+//     384        -      -      -    1.43   1.13   0.89   0.59     -
+//     448        -      -      -    1.49   1.18   0.93   0.63     -
+//     512      6.48   2.15   1.91   1.62   1.27   0.86   0.73   0.74
+//     640        -      -      -    1.66   1.19   0.85   0.86     -
+//     768        -      -      -    1.77   1.15   1.06   1.06     -
+//     896        -      -      -    1.78   1.18   1.19   1.24     -
+//     1024    15.40   3.70   2.78     -    1.35   1.44   1.46   1.46
+//
+// Vendor wins everywhere except one connected box: 320 <= n <= 640 with batch
+// >= 128, where the blocked path is ahead by up to 1.37x. Outside it the vendor
+// margin reaches 15.4x. The carve-out is stated as the measurement found it
+// rather than smoothed into a formula, because it is not monotone in n -- at
+// n = 256 and again from n = 768 the vendor wins at every batch measured.
+//
+// n <= 32 is deliberately excluded: that is CTA territory and the CTA predicate
+// is checked first in the order loop. This grid did not measure it.
+inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch) {
+    if (!caps.is_gpu) return false;
+    if (n <= 32) return false;
+    if (n >= 320 && n <= 640 && batch >= 128) return false;
+    return true;
+}
+
+template <Backend B, typename T>
 inline Provider choose_syev_provider(const DispatchPolicy& policy,
                                      const DeviceCaps& caps,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -145,6 +189,15 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
         if (chosen == Provider::Vendor) return Provider::Vendor;
         // Unsupported request: fall through to Auto selection.
         chosen = Provider::Auto;
+    }
+
+    // Auto, and the shape is one the vendor wins: skip the order below, which
+    // would otherwise hand every GPU matrix to the blocked path. Restricted to
+    // CUDA because that is the only backend the grid above was measured on --
+    // the same call on rocSOLVER keeps the historical ordering until someone
+    // measures it there.
+    if constexpr (B == Backend::CUDA) {
+        if (syev_prefer_vendor(caps, A.rows(), A.batch_size())) return Provider::Vendor;
     }
 
     for (Provider p : policy.order) {
@@ -171,7 +224,7 @@ inline Event syev_dispatch(Queue& ctx,
                            Span<std::byte> workspace) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider(policy, caps, descrA, uplo);
+    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;
@@ -253,7 +306,7 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
                                         Uplo uplo) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider(policy, caps, descrA, uplo);
+    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;
