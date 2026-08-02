@@ -19,11 +19,10 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxResidualsKernel;
 
+    // Only used by the params.iterations == 0 cold path; the per-iteration column
+    // reversals it used to serve are folded into the X_best snapshot (SYEVX_PLAN.md 7.8).
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsKernel;
-
-    template <Backend B, typename T, MatrixFormat MFormat>
-    struct SyevxReverseEigenvectorsStasKernel;
 
 namespace {
 
@@ -306,40 +305,14 @@ inline int64_t lobpcg_check_every() {
         }
         trace_wait("syevx: syev XtAX done");
 
-        // If we are looking for the largest eigenpairs, reorder the eigenvectors so that
-        // the first columns correspond to the largest eigenvalues.
-        // Matrix storage is column-major (BLAS), so reversing the eigenvector order means
-        // swapping columns, not rows.
-        if (params.find_largest) {
-            const auto XtAX_ptr = XtAX.data_ptr();
-            const int64_t XtAX_stride = XtAX.stride();
-            const int64_t XtAX_ld = XtAX.ld();
-            const int64_t k = block_vectors;
-            constexpr size_t wg = 256;
-            ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(
-                    sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
-                    [=](sycl::nd_item<1> item) {
-                        const auto tid = item.get_local_linear_id();
-                        const auto bid = item.get_group_linear_id();
-                        auto* mat = XtAX_ptr + bid * XtAX_stride;
-
-                        const int64_t half_cols = k / 2;
-                        const int64_t swap_count = k * half_cols;
-                        for (int64_t linear = int64_t(tid); linear < swap_count; linear += int64_t(item.get_local_range(0))) {
-                            const int64_t row = linear % k;
-                            const int64_t col = linear / k;
-                            const int64_t col2 = (k - 1) - col;
-                            const int64_t idx1 = row + col * XtAX_ld;
-                            const int64_t idx2 = row + col2 * XtAX_ld;
-                            const auto tmp = mat[idx1];
-                            mat[idx1] = mat[idx2];
-                            mat[idx2] = tmp;
-                        }
-                    });
-            });
-            trace_wait("syevx: reverse XtAX eigenvectors done");
-        }
+        // NOTE (SYEVX_PLAN.md 7.8): the search block `X` is deliberately kept in the
+        // ascending order `syev` produces, even when `find_largest`. Nothing inside the
+        // iteration cares about the order of X's columns -- they are a basis -- so the
+        // two batch-wide column-reversal kernels that used to run here and on the
+        // selected StAS block every iteration were pure launch overhead. The
+        // largest-first presentation is applied exactly once, where the wanted block is
+        // snapshotted into `X_best` (a copy the residual kernel already performs), via
+        // `reported_col()` below.
         //Update X and corresponding implicit update of AX
         trace("syevx: gemm X*Z (update X)");
         gemm<B>(ctx, X, XtAX, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
@@ -381,8 +354,23 @@ inline int64_t lobpcg_check_every() {
                 // one pass instead of 2*neigs sequential group reductions (each of
                 // which is a full work-group barrier -- 128 of them at neigs = 64).
                 auto lsums = sycl::local_accessor<float_type, 1>(3 * neigs, h);
+                const bool find_largest = params.find_largest;
                 h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
+
+                    // X's columns are in the ascending order syev returned them in, so
+                    // column j of X pairs with lambda[eig_offset + j]. For find_largest
+                    // the selected block is the *top* block_vectors of num_eigvals, hence
+                    // the offset; the wanted neigs pairs are then the *last* neigs columns.
+                    const int64_t eig_offset = find_largest ? (int64_t(num_eigvals) - block_vectors) : 0;
+                    // Reported slot i (largest-first when find_largest) <- column of X.
+                    const auto reported_col = [=](int64_t i) {
+                        return find_largest ? (block_vectors - 1 - i) : i;
+                    };
+                    // Inverse of reported_col: column of X -> reported slot (may be >= neigs).
+                    const auto col_to_slot = [=](int64_t c) {
+                        return find_largest ? (block_vectors - 1 - c) : c;
+                    };
 
                     auto tid = item.get_local_linear_id();
                     sycl::group<1> cta = item.get_group();
@@ -425,13 +413,14 @@ inline int64_t lobpcg_check_every() {
                         };
                         for (int i = tid; i < n*block_vectors; i+=local_size){
                             const int eigvect_id = i / n;
-                            auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - eigvect_id) : eigvect_id];
+                            auto eigval = blockLambdas[eig_offset + eigvect_id];
                             const T rval = blockAX[i] - blockX[i] * eigval;
                             blockR[i] = rval;
-                            if (eigvect_id >= int(neigs)) continue;
-                            if (eigvect_id != cur_col) {
+                            const int slot = int(col_to_slot(eigvect_id));
+                            if (slot >= int(neigs)) continue;
+                            if (slot != cur_col) {
                                 flush();
-                                cur_col = eigvect_id;
+                                cur_col = slot;
                                 acc_r = acc_x = acc_ax = float_type(0);
                             }
                             acc_r  += internal::norm_squared(rval);
@@ -482,8 +471,14 @@ inline int64_t lobpcg_check_every() {
                     sycl::group_barrier(cta);
                     if (want_eigenvectors && update_best[0] != 0) {
                         auto* blockXbest = Xbest_data + bid * (n * neigs);
+                        // This copy is where the largest-first presentation happens: slot
+                        // i of the snapshot takes column reported_col(i) of X. Folding the
+                        // permutation into a copy that already touches every one of these
+                        // elements is what makes the two reversal kernels unnecessary.
                         for (int i = int(tid); i < int(n * neigs); i += int(local_size)) {
-                            blockXbest[i] = blockX[i];
+                            const int64_t slot = i / int(n);
+                            const int64_t row = i - slot * int(n);
+                            blockXbest[i] = blockX[reported_col(slot) * int64_t(n) + row];
                         }
                     }
 
@@ -641,42 +636,13 @@ inline int64_t lobpcg_check_every() {
 
             trace("syevx: post syev StAS (host)");
 
-            // syev returns eigenvalues in ascending order.
-            // For find_largest=true, we take the last `block_vectors` eigenvectors, but we also
-            // need column 0 to correspond to the *largest* eigenvalue to stay consistent with
-            // the residual computation and W ordering (largest-first).
+            // syev returns eigenvalues in ascending order. For find_largest=true we take
+            // the last `block_vectors` Ritz vectors; they stay in ascending order (see the
+            // note after the initial XtAX solve). The residual kernel knows that column j
+            // of the resulting X pairs with lambda[Nvecs - block_vectors + j], and it is
+            // the X_best snapshot -- not a separate kernel -- that flips the wanted block
+            // to largest-first on the way out.
             const int64_t eig_col_start = params.find_largest ? (Nvecs - block_vectors) : 0;
-            if (params.find_largest) {
-                auto* StAS_ptr = StAS.data_ptr();
-                const int64_t StAS_stride = StAS.stride();
-                const int64_t StAS_ld = StAS.ld();
-                trace("syevx: reverse selected StAS eigvec block submit");
-                ctx->submit([&](sycl::handler& h) {
-                    h.parallel_for<SyevxReverseEigenvectorsStasKernel<B, T, MFormat>>(
-                        sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}),
-                        [=](sycl::nd_item<1> item) {
-                            const int64_t tid = int64_t(item.get_local_linear_id());
-                            const int64_t bid = int64_t(item.get_group_linear_id());
-                            const int64_t local_size = int64_t(item.get_local_range(0));
-                            auto* mat = StAS_ptr + bid * StAS_stride;
-
-                            const int64_t half_cols = block_vectors / 2;
-                            const int64_t swap_count = Nvecs * half_cols;
-                            for (int64_t linear = tid; linear < swap_count; linear += local_size) {
-                                const int64_t row = linear % Nvecs;
-                                const int64_t c = linear / Nvecs;
-                                const int64_t col1 = eig_col_start + c;
-                                const int64_t col2 = eig_col_start + (block_vectors - 1 - c);
-                                const int64_t idx1 = row + col1 * StAS_ld;
-                                const int64_t idx2 = row + col2 * StAS_ld;
-                                const auto tmp = mat[idx1];
-                                mat[idx1] = mat[idx2];
-                                mat[idx2] = tmp;
-                            }
-                        });
-                });
-                trace_wait("syevx: reverse selected StAS eigvec block done");
-            }
             auto Z = StAS({0, Nvecs}, {eig_col_start, eig_col_start + block_vectors});
             // X(i+1) = S * C_x. For the next search block, keep only the non-X
             // coefficient rows of the selected Ritz vectors, which avoids the
@@ -721,10 +687,44 @@ inline int64_t lobpcg_check_every() {
 
         // The residual kernel snapshots the best Ritz block seen during the iteration.
         if (want_eigenvectors){
-            const auto vectors_to_return = completed_iterations > 0
-                ? X_best
-                : X({0, n}, {0, static_cast<int64_t>(neigs)});
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), vectors_to_return);
+            if (completed_iterations > 0) {
+                // X_best is already largest-first (the residual kernel's snapshot applies
+                // the permutation).
+                MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X_best);
+            } else if (!params.find_largest) {
+                MatrixView<T, MatrixFormat::Dense>::copy(
+                    ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, static_cast<int64_t>(neigs)}));
+            } else {
+                // params.iterations == 0: the loop never ran, so no snapshot exists and X
+                // is still in ascending order. The wanted block is its *last* neigs
+                // columns, reversed. One cold-path launch, outside any loop.
+                auto Vslice = V({0,n}, {0,int64_t(neigs)});
+                auto* Vptr = Vslice.data_ptr();
+                const int64_t V_ld = Vslice.ld();
+                const int64_t V_stride = Vslice.stride();
+                auto* Xptr = X.data_ptr();
+                const int64_t X_stride = X.stride();
+                const int64_t X_ld = X.ld();
+                const int64_t k = block_vectors;
+                const int64_t nn = n;
+                const int64_t ncols = static_cast<int64_t>(neigs);
+                ctx->submit([&](sycl::handler& h) {
+                    h.parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(
+                        sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}),
+                        [=](sycl::nd_item<1> item) {
+                            const int64_t tid = int64_t(item.get_local_linear_id());
+                            const int64_t bid = int64_t(item.get_group_linear_id());
+                            const int64_t local_size = int64_t(item.get_local_range(0));
+                            auto* src = Xptr + bid * X_stride;
+                            auto* dst = Vptr + bid * V_stride;
+                            for (int64_t i = tid; i < nn * ncols; i += local_size) {
+                                const int64_t col = i / nn;
+                                const int64_t row = i - col * nn;
+                                dst[row + col * V_ld] = src[row + (k - 1 - col) * X_ld];
+                            }
+                        });
+                });
+            }
         }
 
         return ctx.get_event();

@@ -1,6 +1,6 @@
 # SYEVX: Research Findings and a Performance Plan for Partial Symmetric Eigensolves
 
-Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7).**
+Status: **Tiers 0, 1, 2 and 3 implemented; Tier 4 partially (§7.1, 7.3, 7.4, 7.6, 7.7, 7.8).**
 Tiers 4 (partly) and 5 remain; see [§13 Implementation status](#13-implementation-status).
 
 Scope: what "high-performance SYEVX" should mean in BatchLAS, for two regimes the
@@ -478,7 +478,7 @@ The two `ctx.wait_and_throw()` calls (438, 441) are additional full pipeline
 drains per iteration on top of §7.1, and appear unnecessary given the queue
 ordering.
 
-### 7.8 Column-reversal kernels for `find_largest`
+### 7.8 Column-reversal kernels for `find_largest` — **done**
 
 Lines 226–247 and 506–529 launch dedicated kernels whose entire job is to reverse
 the column order of a `k×k` (resp. `Nvecs×k`) block. Each is a batch-wide launch
@@ -487,6 +487,32 @@ doing trivial work — pure launch overhead, twice per iteration.
 Fixes, in increasing order of effort: (a) index `Z`'s columns in reverse when
 forming the view, so no data movement happens at all; (b) have the projected `syev`
 emit descending order; (c) fold the permutation into the subsequent GEMM.
+
+**Outcome.** None of (a)–(c) is available as written; the reversals were removed by
+a fourth route instead.
+
+- (a) is not expressible. `MatrixView`/`KernelMatrixView` slicing only offsets the
+  base pointer (`apply_dense_slice_pointer_arithmetic`) and carries `ld_` through
+  unchanged, and the constructor clamps `ld_(ld > 0 ? ld : rows)`, so a
+  negative-stride column view cannot be built. Even if it could, `Z` is consumed by
+  `gemm`, whose vendor backends require `ld >= max(1, rows)`.
+- (b) has no hook. The public `syev` (`include/blas/functions/syev.hh`) takes no
+  ordering argument; `SortOrder` exists only inside `SteqrParams`/`JacobiParams`,
+  one provider deep. Plumbing it through every provider *and* `backend::syev_vendor`
+  — which is LAPACK/cuSOLVER, permanently ascending — would only relocate the same
+  permutation, not delete it.
+- (c) has no hook either: `gemm` dispatches to batched vendor GEMM with no
+  permutation argument, so folding the reversal in means replacing the GEMM.
+
+What landed: the search block `X` is simply **left in `syev`'s ascending order**.
+Nothing inside the iteration depends on the column order of `X` — it is a basis —
+so the only consumers that care are the residual/`W` indexing (a pure index change:
+column `j` pairs with `lambda[eig_offset + j]`, `eig_offset = num_eigvals -
+block_vectors` when `find_largest`) and the presentation order of the result. The
+largest-first flip is applied where the wanted block is snapshotted into `X_best`,
+a copy the residual kernel already performs over exactly those elements. Both
+per-iteration launches are gone at zero added work; one cold-path launch remains
+for the degenerate `params.iterations == 0` case, where no snapshot ever happens.
 
 ### 7.9 `S.fill_random` fills 3× more than needed
 
@@ -827,13 +853,13 @@ solver does not, and the crossover is unmeasured. Promote it once there are
 numbers. It is reachable explicitly via `SyevxParams::method` or
 `BATCHLAS_SYEVX_ALGORITHM=filtered`.
 
-Tests: `syevx_tests` is 31. The filtered tests assert on the eigenvalues against a
+Tests: `syevx_tests` is 33. The filtered tests assert on the eigenvalues against a
 reference `syev`, not only on residuals — a self-consistent (λ, v) pair proves
 nothing about whether it is one of the *wanted* pairs, which is the specific way a
 filtered solver fails. The whole suite also passes when forced onto each algorithm
 in turn, which is what exercises `Filtered` on the CSR and complex inputs.
 
-### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7)
+### Tier 4 — partially done (§7.1, 7.3, 7.4, 7.6, 7.7, 7.8)
 
 **§7.6 guard vectors — the one thing here with real measured numbers.**
 `extra_directions == 0` now means "choose one" (`max(2, neigs/4)`), matching the
@@ -881,6 +907,22 @@ a full n×k×batch copy per iteration, its allocation, and the two
 destination stays: the forward solve writes into `out` as its temporary while
 still reading `rhs`, so aliasing them would corrupt the solve.
 
+**§7.8 column-reversal kernels — removed, but by none of the three routes the
+plan proposed.** See the outcome note in §7.8 for why (a), (b) and (c) are all
+unavailable in the current `MatrixView` / `syev` / `gemm` APIs. What actually
+removed them: `X` now stays in `syev`'s ascending order and the largest-first flip
+rides along on the `X_best` snapshot the residual kernel already writes. Two
+batch-wide launches per iteration gone, no new work added; the one remaining
+launch is the cold `params.iterations == 0` path.
+
+*Testing gap this exposed.* Every pre-existing LOBPCG test asked for
+`JobType::NoEigenVectors`, so nothing checked that returned column `j` belongs to
+returned eigenvalue `j` — the exact failure mode of an ordering change, and one
+that leaves the eigenvalues looking perfect. `SyevxLobpcgVectorsTest` (2 cases,
+both `find_largest` values) now checks per-pair residuals against the original `A`.
+Verified to have teeth: forcing the snapshot permutation to the identity fails the
+`Largest` case on residual and passes `Smallest`.
+
 **Three pre-existing bugs surfaced.** All confirmed present before this tier:
 
 1. `syevx_buffer_size`'s `C_p` stand-in was built with only `(data, rows, cols,
@@ -898,11 +940,8 @@ still reading `rhs`, so aliasing them would corrupt the solve.
    where it belongs — these describe the problem, not the algorithm.
 
 **Still open in §7:** 7.2 (instrumentation host reads), 7.5 (locking/deflation),
-7.8 (column-reversal kernels), 7.9 (`fill_random` over-fills), 7.10 (Jacobi and
-Chebyshev preconditioners), 7.11 (projected-`syev` sweep). 7.8's suggested fixes
-all need either a reverse-indexed view or descending-order output from the
-projected `syev`; neither exists yet, so it is more than the "small" the ordering
-in §8 implies.
+7.9 (`fill_random` over-fills), 7.10 (Jacobi and Chebyshev preconditioners),
+7.11 (projected-`syev` sweep).
 
 ### Not yet measured
 

@@ -732,6 +732,90 @@ INSTANTIATE_TEST_SUITE_P(
         return name;
     });
 
+// LOBPCG with eigenvector output. The other LOBPCG tests all ask for
+// JobType::NoEigenVectors, so nothing pinned the *pairing* of returned columns to
+// returned eigenvalues -- and that pairing is exactly what the find_largest ordering
+// logic can get subtly wrong (correct-looking values, mismatched vectors). Checks
+// residuals per pair, not just values.
+class SyevxLobpcgVectorsTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    const bool find_largest = GetParam();
+    constexpr int n = 64, batch = 3, neig = 4;
+    SCOPED_TRACE(::testing::Message() << "find_largest=" << find_largest);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.algorithm = OrthoAlgorithm::Chol2;
+    params.find_largest = find_largest;
+    params.extra_directions = 8;
+    params.iterations = 300;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
+
+    UnifiedVector<float> W(neig * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, JobType::EigenVectors, V.view(), params));
+    syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
+    ctx->wait();
+
+    Matrix<float, MatrixFormat::Dense> A_ref(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(*ctx, A_ref.view(), A.view());
+    ctx->wait();
+    UnifiedVector<float> W_ref(n * batch);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev<test_utils::gpu_backend>(
+        *ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < neig; ++i) {
+            const int ref_idx = find_largest ? (n - 1 - i) : i;
+            const float got = W[b * neig + i];
+            const float ref = W_ref[b * n + ref_idx];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-5f), 0.0f, 5e-3f)
+                << "eigenvalue mismatch, batch " << b << " index " << i
+                << ": lobpcg=" << got << " syev=" << ref;
+        }
+        // Ordering: largest-first for find_largest, ascending otherwise.
+        for (int i = 1; i < neig; ++i) {
+            if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
+            else              EXPECT_LE(W[b * neig + i - 1], W[b * neig + i]);
+        }
+        // The load-bearing check: column j must be an eigenvector for W[j], not for
+        // some other member of the returned block.
+        for (int j = 0; j < neig; ++j) {
+            const float lambda = W[b * neig + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 1e-2f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Order, SyevxLobpcgVectorsTest, ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) {
+        return std::string(info.param ? "Largest" : "Smallest");
+    });
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
