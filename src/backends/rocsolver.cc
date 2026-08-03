@@ -364,9 +364,9 @@ namespace batchlas {
     #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t geqrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
     #define ORMQR_INSTANTIATE(fp) \
-    template Event ormqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
+    template Event ormqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>, int32_t);
     #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t ormqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>);
+    template size_t ormqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, int32_t);
     #define ORMQR_VENDOR_INSTANTIATE(fp) \
     template Event backend::ormqr_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
     #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
