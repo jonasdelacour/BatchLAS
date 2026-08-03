@@ -142,21 +142,25 @@ inline Provider normalize_vendor_like(Provider p) {
 // the whole solve, and moves its ~134 MB per panel at roughly 1/48th of the
 // device's bandwidth. cuSOLVER has no such cliff.
 //
-// MEASURED, RTX 4090, CUDA backend, float, via BM_SYEVX_Crossover and
-// BM_SYEVX_CrossoverVectors. Ratio is blocked/vendor, so > 1 means vendor wins:
+// MEASUREMENT CORRECTION. An earlier version of this comment carried one table
+// labelled as covering both modes. It did not: `--name=BM_SYEVX_Crossover` is a
+// SUBSTRING filter, so it also ran BM_SYEVX_CrossoverVectors, and the collector
+// keyed rows by (n, batch) alone -- the eigenvector rows silently overwrote the
+// eigenvalues-only ones. The numbers below are re-measured with the benchmark
+// name matched exactly, and the two modes genuinely differ. If you extend this
+// grid, filter on the `name` column, not on the --name flag alone.
 //
-//   n \ batch    1      4     16     32     64    128    256    512
-//     64       2.11   4.24   4.44     -    3.91     -    2.30     -
-//     128      2.01   4.50   4.08     -    3.39     -    1.71     -
-//     256      4.32   2.67   2.62     -    2.19   1.84   1.27   1.22
-//     320        -      -      -    1.34   1.06   0.79   0.69     -
-//     384        -      -      -    1.43   1.13   0.89   0.59     -
-//     448        -      -      -    1.49   1.18   0.93   0.63     -
-//     512      6.48   2.15   1.91   1.62   1.27   0.86   0.73   0.74
-//     640        -      -      -    1.66   1.19   0.85   0.86     -
-//     768        -      -      -    1.77   1.15   1.06   1.06     -
-//     896        -      -      -    1.78   1.18   1.19   1.24     -
-//     1024    15.40   3.70   2.78     -    1.35   1.44   1.46   1.46
+// MEASURED, RTX 4090, CUDA backend, float. Ratio is blocked/vendor, so > 1 means
+// vendor wins. WITH EIGENVECTORS:
+//
+//   n \ batch    1      8     16     32     64    128    256    512   1024
+//     64       2.06   4.38   4.44     -    3.93     -    2.28     -      -
+//     256      4.31   2.68   2.61     -    2.19   1.84   1.27   1.22     -
+//     320        -      -      -    1.34   1.06   0.79   0.69     -      -
+//     512      6.45   2.07   1.91   1.62   1.28   0.86   0.74   0.74   0.72
+//     640        -      -      -    1.66   1.19   0.85   0.86     -      -
+//     896        -      -      -    1.78   1.18   1.19   1.24     -      -
+//     1024    15.33   3.33   2.78     -    1.35   1.44   1.46   1.46   1.51
 //
 // Vendor wins everywhere except one connected box: 320 <= n <= 640 with batch
 // >= 128, where the blocked path is ahead by up to 1.37x. Outside it the vendor
@@ -172,6 +176,29 @@ inline Provider normalize_vendor_like(Provider p) {
 // for all of them -- but the carve-out box in particular is a narrow margin
 // (1.16-1.37x) and could sit elsewhere in double or complex. Re-measure before
 // relying on it there.
+//
+// EIGENVALUES-ONLY is a different problem and gets a different answer, because
+// the two-stage path's stage-2 chase was fixed (it used to run the ~5x slower
+// Givens chase in this mode; see two_stage_common.hh). With that fixed, our
+// two-stage solver is now the fastest thing available for large n at large batch.
+// Measured us/matrix, eigenvalues only:
+//
+//    n   batch   blocked  two_stage    vendor    two_stage vs vendor
+//   256    256      37.8       48.3      27.3    0.57x
+//   256   1024      28.1       30.0      27.5    0.92x
+//   512    256     266.8      209.6     423.1    2.02x
+//   512   1024     289.0      161.4     461.1    2.86x
+//  1024    256    3408.5     1110.3    2505.2    2.26x
+//  1024   1024    3603.1     1156.6    2626.3    2.27x
+//
+// So: n >= 512 and batch >= 256, eigenvalues only -> TwoStage, by 2.0-2.9x. At
+// n = 256 the vendor still wins at every batch, which is why the gate is on n as
+// well as batch.
+//
+// Below that batch the vendor still wins everywhere, and by a lot at batch 1
+// (12.5x at n=1024). That is the same starvation defect again -- both our
+// reductions are parallel over the batch only -- and it is the thing to fix if
+// these thresholds are ever to move left.
 inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch) {
     if (!caps.is_gpu) return false;
     if (n <= 32) return false;
@@ -179,11 +206,19 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
     return true;
 }
 
+// Eigenvalues-only: is the two-stage solver the best choice for this shape?
+// Checked before syev_prefer_vendor, since it overrides it where it applies.
+inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int64_t batch) {
+    if (!caps.is_gpu) return false;
+    return n >= 512 && batch >= 256;
+}
+
 template <Backend B, typename T>
 inline Provider choose_syev_provider(const DispatchPolicy& policy,
                                      const DeviceCaps& caps,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                     Uplo uplo) {
+                                     Uplo uplo,
+                                     JobType jobtype) {
     Provider chosen = normalize_vendor_like(policy.forced);
     // If the user requested a specific provider, try it first. If it cannot support
     // the current matrix/problem (e.g. CTA for n>32), fall back to the regular order
@@ -203,6 +238,14 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
     // the same call on rocSOLVER keeps the historical ordering until someone
     // measures it there.
     if constexpr (B == Backend::CUDA) {
+        // Eigenvalues-only at large n and large batch: our two-stage solver wins
+        // outright since its stage-2 chase was fixed. Checked first because it
+        // overlaps the vendor-preferred region.
+        if (jobtype != JobType::EigenVectors &&
+            syev_prefer_two_stage_values(caps, A.rows(), A.batch_size()) &&
+            syev_supports_two_stage(caps, A, uplo)) {
+            return Provider::BatchLAS_TwoStage;
+        }
         if (syev_prefer_vendor(caps, A.rows(), A.batch_size())) return Provider::Vendor;
     }
 
@@ -230,7 +273,7 @@ inline Event syev_dispatch(Queue& ctx,
                            Span<std::byte> workspace) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo);
+    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo, jobtype);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;
@@ -312,7 +355,7 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
                                         Uplo uplo) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo);
+    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo, jobtype);
 
     if constexpr (B == Backend::NETLIB) {
         chosen = Provider::Vendor;

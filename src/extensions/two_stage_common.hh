@@ -1,12 +1,12 @@
 // Helpers shared by the two-stage reduction paths (syev_two_stage, syevx_direct_subset).
 //
-// NOTE on kd: syev_two_stage's eigenvector path no longer forces kd = 1 -- since
+// NOTE on kd: syev_two_stage no longer forces kd = 1 in either mode -- since
 // sytrd_sb2st_hh retains Q2, it reduces at a real band width and then applies the
-// stage-2 reflectors explicitly. syevx_direct_subset has NOT been ported to that
-// path: it still uses the Givens sytrd_sb2st, which discards Q2, so it pins kd = 1
-// locally to make the band stage a pure extract. Do not assume the value returned by
-// choose_two_stage_kd_for_job is safe for a path that never applies stage-2
-// reflectors.
+// stage-2 reflectors explicitly. As of the chase fix below, syev_two_stage uses
+// the Householder chase in BOTH modes; eigenvalues-only simply discards Q2.
+// syevx_direct_subset still selects its chase by mode. Do not assume the value
+// returned by choose_two_stage_kd_for_job is safe for a path that never applies
+// stage-2 reflectors.
 //
 // build_phase_from_kd1_band and apply_phase_rows operate on a kd = 1 band regardless
 // of the reduction width -- in syev_two_stage that band is sb2st_hh's tridiagonal
@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <string_view>
 #include <type_traits>
 
 namespace batchlas::two_stage_detail {
@@ -57,6 +58,19 @@ inline int32_t choose_two_stage_kd(int32_t n) {
 
     const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
+}
+
+// Which stage-2 bulge chase should the eigenvalues-only path use?
+//
+// The Householder chase (sytrd_sb2st_hh) is the default in BOTH modes because it
+// is ~5x faster than the Givens chase on this GPU -- see the note at the call
+// site in syev_two_stage.cc. `BATCHLAS_SYEV_TWO_STAGE_CHASE=givens` restores the
+// old eigenvalues-only behaviour, which is what makes the two an intra-run A/B
+// rather than a comparison across builds. It has no effect in eigenvector mode,
+// where the Givens chase cannot be used at all: it discards Q2.
+inline bool two_stage_use_givens_chase_for_values() {
+    const char* v = std::getenv("BATCHLAS_SYEV_TWO_STAGE_CHASE");
+    return v && (std::string_view(v) == "givens");
 }
 
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {

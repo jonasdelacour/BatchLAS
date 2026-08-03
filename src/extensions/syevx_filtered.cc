@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <cstdio>
 #include <type_traits>
 #include <blas/linalg.hh>
 #include <blas/functions.hh>
@@ -490,6 +491,18 @@ Event syevx_filtered(Queue& ctx,
         for (int64_t b = 0; b < batch; ++b) {
             const size_t cap = static_cast<size_t>(std::max(1, degree_cap[b]));
             eff_degree = std::min(eff_degree, cap);
+        }
+        if (std::getenv("BATCHLAS_DEBUG_FILTER_DEGREE")) {
+            for (int64_t b = 0; b < batch; ++b) {
+                Real rmax = Real(0);
+                for (int64_t j = 0; j < k; ++j)
+                    rmax = std::max(rmax, resid_span[static_cast<size_t>(b * k + j)]);
+                std::fprintf(stderr,
+                    "[filt] iter=%zu b=%lld dcap=%d rmax=%g tol=%g d_need=%g eff=%zu\n",
+                    iter, (long long)b, degree_cap[b], (double)rmax, (double)use_tol,
+                    (double)(rmax > use_tol ? std::log((double)rmax / (double)use_tol) : 0.0),
+                    eff_degree);
+            }
         }
 
         for (size_t j = 2; j <= eff_degree; ++j) {
