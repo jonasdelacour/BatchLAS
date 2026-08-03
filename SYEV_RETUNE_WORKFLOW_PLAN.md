@@ -143,12 +143,49 @@ launches, which for the batch-parallel kernels is `batch`, and for the CTA kerne
 
 **Phase 2 produces a measured saturation table** and every later phase reads it:
 
-> For each (kernel, n, type, jobz), sweep `batch` over 1, 2, 4, …, 2048 and record µs/matrix.
-> The saturation batch is the smallest batch at which µs/matrix is within **5 %** of the
-> minimum over the remaining sweep. If µs/matrix never flattens, report `unsaturated` and
-> the sweep is extended; do not pick a number.
+> For each (kernel, n, type, jobz), climb `batch` in powers of 4 until µs/matrix stops
+> improving by more than **5 %** per step. The saturation batch is the first batch at which
+> that holds — the *knee*, not the asymptote. **Stop climbing there.**
 
 All head-to-head comparisons run at `max(saturation_batch(A), saturation_batch(B))`.
+
+#### 1.2.1 HARD RESOURCE CAPS — saturation does NOT mean "use the whole machine"
+
+**This got violated and it caused real damage.** An earlier sweep read "saturation" as "keep
+increasing batch until the curve is perfectly flat" and climbed to batch 2^20. That consumed
+**24 GB of the 24.5 GB card**, triggered the OOM killer, and killed unrelated processes on
+what is a **shared machine** — including, repeatedly, the agent session driving the work.
+
+Saturation means: **the batch is large enough that steady-state compute dominates launch and
+dispatch overhead, and the timing is measurable above timer noise.** Nothing more. It is a
+point on the curve where the *measurement becomes meaningful*, not the point where the
+hardware is exhausted.
+
+What the extra memory bought, measured (n=8, float, `syev_cta`, device 1):
+
+| batch | peak device memory | µs/matrix |
+|---|---|---|
+| 4 096 | 521 MiB | 0.020506 |
+| 16 384 | 509 MiB | 0.0099457 |
+| 65 536 | **487 MiB** | **0.0075321** |
+| 262 144 | — | 0.0072411 |
+| 1 048 576 | **24 083 MiB** | 0.0071809 |
+
+Going from 65 536 to 1 048 576 improved µs/matrix by **4.7 %** and cost **50× the memory**.
+The knee is at ~65 536. Everything past it was waste that took down the machine.
+
+**Therefore, every measurement obeys all of these, and they are ceilings, not targets:**
+
+1. **Peak device memory ≤ 2 GB per invocation** (of 24 GB). Probe `nvidia-smi` during the run;
+   if a shape exceeds it, drop to the next lower batch and record the cap as the reason.
+2. **Wall time ≤ ~2 s per invocation.** Longer means the batch is bigger than needed, not that
+   the measurement is better.
+3. **Stop at the knee.** Once a 4× batch increase buys < 5 %, that batch IS the answer.
+4. **Never climb past a cap chasing flatness.** A cell that has not converged within the caps
+   is reported as "knee not reached within resource caps" — with its curve — and is NOT
+   pursued further.
+5. **This is a shared machine.** Other users' jobs run here. Leaving headroom is a
+   correctness requirement of the process, not a courtesy.
 
 ### 1.3 Benchmark-name matching
 
