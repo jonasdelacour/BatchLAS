@@ -15,6 +15,27 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using syev = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   Span<typename base_type<T>::type>,
+                   JobType, Uplo, Span<std::byte>);
+
+template <typename T>
+using syev_buffer_size = size_t(Queue&,
+                                const MatrixView<T, MatrixFormat::Dense>&,
+                                Span<typename base_type<T>::type>,
+                                JobType, Uplo);
+
+// backend::syev_vendor / syev_vendor_buffer_size share these signatures.
+template <typename T> using syev_vendor = syev<T>;
+template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
+}  // namespace sig
+
+
 template <Backend B, typename T>
 Event syev(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors

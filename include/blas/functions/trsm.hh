@@ -10,6 +10,17 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using trsm = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   Side, Uplo, Transpose, Diag, T);
+}  // namespace sig
+
+
 template <typename T>
 inline void trsm_validate_params(
                         const MatrixView<T, MatrixFormat::Dense>& A,

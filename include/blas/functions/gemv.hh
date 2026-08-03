@@ -6,6 +6,18 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using gemv = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const VectorView<T>&,
+                   const VectorView<T>&,
+                   T, T, Transpose);
+}  // namespace sig
+
+
 template <Backend B, typename T>
 Event gemv(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,

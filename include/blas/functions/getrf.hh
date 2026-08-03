@@ -7,6 +7,20 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using getrf = Event(Queue&,
+                    const MatrixView<T, MatrixFormat::Dense>&,
+                    Span<int64_t>, Span<std::byte>);
+
+template <typename T>
+using getrf_buffer_size = size_t(Queue&,
+                                 const MatrixView<T, MatrixFormat::Dense>&);
+}  // namespace sig
+
+
 template <Backend B, typename T>
 Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,

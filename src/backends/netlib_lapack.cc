@@ -16,6 +16,7 @@
 #include <blas/dispatch/op.hh>
 
 #include "gemm_variant.hh"
+#include "../util/template-instantiations.hh"
 
 namespace batchlas{
 
@@ -950,218 +951,40 @@ namespace batchlas{
     }
 
 
-    #define SPMM_INSTANTIATE(fp, F) \
-    template Event spmm<Backend::NETLIB, fp, F>( \
-        Queue&, \
-        const MatrixView<fp, F>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Transpose, Transpose, Span<std::byte>);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU.
+    #define B_ Backend::NETLIB
 
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t spmm_buffer_size<Backend::NETLIB, fp, F>( \
-        Queue&, \
-        const MatrixView<fp, F>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Transpose, Transpose);
-
-    #define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Transpose, Transpose, ComputePrecision);
-
-    #define GEMV_INSTANTIATE(fp) \
-    template Event gemv<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&, \
-        fp, fp, Transpose);
-
-    #define TRSM_INSTANTIATE(fp) \
-    template Event trsm<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Side, Uplo, Transpose, Diag, fp);
-
-    #define SYMM_INSTANTIATE(fp) \
-    template Event symm<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Side, Uplo);
-
-    #define SYRK_INSTANTIATE(fp) \
-    template Event syrk<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Uplo, Transpose);
-
-    #define SYR2K_INSTANTIATE(fp) \
-    template Event syr2k<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Uplo, Transpose);
-
-    #define TRMM_INSTANTIATE(fp) \
-    template Event trmm<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, Side, Uplo, Transpose, Diag);
-
-    #define GEQRF_INSTANTIATE(fp) \
-    template Event geqrf<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>, \
-        Span<std::byte>);
-
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t geqrf_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>);
-
-    #define ORGQR_INSTANTIATE(fp) \
-    template Event orgqr<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>, \
-        Span<std::byte>);
-
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t orgqr_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<fp>);
-
-    #define GETRS_INSTANTIATE(fp) \
-    template Event getrs<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Transpose, \
-        Span<int64_t>, \
-        Span<std::byte>);
-
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getrs_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Transpose);
-
-    #define GETRF_INSTANTIATE(fp) \
-    template Event getrf<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<int64_t>, \
-        Span<std::byte>);
-
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getrf_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&);
-
-    #define GETRI_INSTANTIATE(fp) \
-    template Event getri<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<int64_t>, \
-        Span<std::byte>);
-
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getri_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&);
-
-    #define ORMQR_INSTANTIATE(fp) \
-    template Event ormqr<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Side, Transpose, \
-        Span<fp>, \
-        Span<std::byte>);
-
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t ormqr_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Side, Transpose, \
-        Span<fp>);
-
-    #define ORMQR_VENDOR_INSTANTIATE(fp) \
-    template Event backend::ormqr_vendor<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Side, Transpose, \
-        Span<fp>, \
-        Span<std::byte>);
-
-    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::ormqr_vendor_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Side, Transpose, \
-        Span<fp>);
-
-    #define POTRF_INSTANTIATE(fp) \
-    template Event potrf<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Uplo, Span<std::byte>);
-
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t potrf_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Uplo);
-
-    #define SYEV_INSTANTIATE(fp) \
-    template Event syev<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, Uplo, \
-        Span<std::byte>);
-
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t syev_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, Uplo);
-
-    #define SYEV_VENDOR_INSTANTIATE(fp) \
-    template Event backend::syev_vendor<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, Uplo, \
-        Span<std::byte>);
-
-    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::syev_vendor_buffer_size<Backend::NETLIB, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, Uplo);
+    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F)
+    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
+    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
+    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
+    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
+    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
+    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
+    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
+    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
+    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
+    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
+    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)
+    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
+    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)
+    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_buffer_size<fp>, getrs_buffer_size, B_, fp)
+    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf<fp>, getrf, B_, fp)
+    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_buffer_size<fp>, getrf_buffer_size, B_, fp)
+    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri<fp>, getri, B_, fp)
+    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_buffer_size<fp>, getri_buffer_size, B_, fp)
+    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
+    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
+    #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
+    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
+    #define POTRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::potrf<fp>, potrf, B_, fp)
+    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::potrf_buffer_size<fp>, potrf_buffer_size, B_, fp)
+    #define SYEV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syev<fp>, syev, B_, fp)
+    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp)    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
+    #define SYEV_VENDOR_INSTANTIATE(fp)         BATCHLAS_INSTANTIATE(sig::syev_vendor<fp>, backend::syev_vendor, B_, fp)
+    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::syev_vendor_buffer_size<fp>, backend::syev_vendor_buffer_size, B_, fp)
 
     #define BLAS_LEVEL3_INSTANTIATE(fp) \
         SPMM_INSTANTIATE(fp, MatrixFormat::CSR) \
@@ -1236,4 +1059,5 @@ namespace batchlas{
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
+    #undef B_
 }

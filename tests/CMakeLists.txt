@@ -66,6 +66,10 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     util_span_tests
     util_vector_tests
     matrix_tests
+    # Workspace sizing is derived from the same allocator arithmetic that the
+    # run path uses, so a sizing regression is a silent heap overflow. Keep it
+    # in the fast gate rather than only in the full suite.
+    mempool_tests
 )
 
 # Tests that require CPU SYCL kernel compilation (not just NETLIB)

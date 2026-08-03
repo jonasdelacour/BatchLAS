@@ -57,7 +57,8 @@
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/presets/cuda",
       "cacheVariables": {
-        "BATCHLAS_ENABLE_CUDA": "ON"
+        "BATCHLAS_ENABLE_CUDA": "ON",
+        "BATCHLAS_BUILD_TESTS": "ON"
       }
     }
   ],
@@ -93,6 +94,35 @@
       "name": "cuda",
       "configurePreset": "cuda",
       "jobs": 20
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "fast-dev",
+      "configurePreset": "fast-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-tests",
+      "configurePreset": "dev-tests",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1
+      }
+    },
+    {
+      "name": "cuda",
+      "configurePreset": "cuda",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1
+      }
     }
   ]
 }

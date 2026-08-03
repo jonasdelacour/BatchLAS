@@ -18,6 +18,27 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using ormqr = Event(Queue&,
+                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<T, MatrixFormat::Dense>&,
+                    Side, Transpose, Span<T>, Span<std::byte>);
+
+template <typename T>
+using ormqr_buffer_size = size_t(Queue&,
+                                 const MatrixView<T, MatrixFormat::Dense>&,
+                                 const MatrixView<T, MatrixFormat::Dense>&,
+                                 Side, Transpose, Span<T>);
+
+// backend::ormqr_vendor / ormqr_vendor_buffer_size share these signatures.
+template <typename T> using ormqr_vendor = ormqr<T>;
+template <typename T> using ormqr_vendor_buffer_size = ormqr_buffer_size<T>;
+}  // namespace sig
+
+
 // Public API
 template <Backend B, typename T>
 Event ormqr(Queue& ctx,
