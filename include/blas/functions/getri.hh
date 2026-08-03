@@ -4,7 +4,7 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
-#include <blas/dispatch.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
 
@@ -54,7 +54,7 @@ inline size_t getri_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
 BATCHLAS_DISPATCH_ON_QUEUE(getri)
 BATCHLAS_DISPATCH_ON_QUEUE(getri_buffer_size)

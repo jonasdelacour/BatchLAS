@@ -8,7 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <blas/dispatch.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
 
@@ -170,7 +170,7 @@ size_t iluk_apply_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
 BATCHLAS_DISPATCH_ON_QUEUE(iluk_factorize)
 BATCHLAS_DISPATCH_ON_QUEUE(iluk_buffer_size)

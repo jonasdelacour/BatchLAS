@@ -4,11 +4,12 @@
 // on how much of the spectrum is wanted; see SYEVX_PLAN.md §2 for the cost model
 // that produces the thresholds below.
 //
-//   dense, n <= SMALL_N            -> Direct
-//   dense, eigenvalues only        -> Direct   (subset lost 3-5x at every shape)
-//   dense, vectors, n <  SUBSET_N  -> Direct
-//   dense, vectors, n >= SUBSET_N  -> DirectSubset
-//   sparse                         -> LOBPCG
+//   dense, n <= SMALL_N                       -> Direct
+//   dense, eigenvalues only                   -> Direct
+//   dense, vectors, n <  SUBSET_N             -> Direct
+//   dense, vectors, n >= SUBSET_N, small batch-> Direct
+//   dense, vectors, n >= SUBSET_N, big batch  -> DirectSubset
+//   sparse                                    -> LOBPCG
 //
 // DirectSubset requires a real scalar type and dense input; where it is not
 // available the choice degrades to Direct (or LOBPCG below the iterative
@@ -39,25 +40,35 @@ namespace {
 // flop-count estimates that stood here until the sweep in
 // benchmarks/syevx_benchmark.cc was finally run on GPU; see SYEVX_PLAN.md §13.
 //
-// The headline: the flop model said DirectSubset should beat Direct by ~3x for
-// k/n below 25%. It does not. cuSOLVER's full eigensolve is enough better
-// optimized than our two-stage + subset chain that a 3x flop advantage does not
-// survive contact with it. Measured, DirectSubset is
+// A correction to what this comment used to say. It attributed DirectSubset's
+// loss to cuSOLVER being "better optimized than our two-stage + subset chain".
+// That comparison never happened: `Direct` calls `syev`, and `syev`'s Auto order
+// listed BatchLAS_Blocked ahead of Vendor, so on a GPU with n > 32 the baseline
+// was always our own *blocked* solver, never cuSOLVER. The blocked reduction is
+// parallel over the batch and starves at small batch -- at n=1024, batch=1 its
+// panel kernel is 88% of the solve -- so the old baseline was slow for exactly
+// the same reason DirectSubset is slow there, and the two comparing "evenly" at
+// batch 1 was two starved kernels, not a fair fight.
 //
-//   * SLOWER than Direct at every shape measured in eigenvalues-only mode
-//     (3-5x slower -- the reduction is pure cost there, with no back-transform
-//     to narrow), and
-//   * slower for n <= 512 even with eigenvectors,
-//   * faster only at n >= 1024 with eigenvectors, and by 1.16-1.46x, not 3x.
+// With that fixed (see syev_prefer_vendor in include/blas/functions/syev.hh),
+// Direct got up to 15.4x faster and the thresholds below had to be re-measured
+// against it. What survives:
 //
-// So Auto now sends dense input to Direct unless it is in the one regime the
-// subset solver actually wins.
+//   * eigenvalues-only: Direct still wins everywhere -- the subset path pays the
+//     full reduction with no back-transform to narrow, so it has nothing to win
+//     with. Unchanged conclusion, sounder baseline.
+//   * with eigenvectors: DirectSubset wins only at large n AND large batch, by
+//     up to 2.4x; at small batch it now loses by up to 16x. The old gate was n
+//     alone, which sent batch-1 calls into that loss.
 constexpr int64_t kSyevxSmallN = 64;
 
-// With eigenvectors, DirectSubset only starts paying at this dimension. At n=512
-// it still lost by 1.1-1.3x; at n=1024 it won by 1.16x (batch 1) to 1.46x
-// (batch 64). Raise or lower this from measurement, not from the cost model.
+// With eigenvectors, DirectSubset only starts paying at this dimension...
 constexpr int64_t kSyevxSubsetMinN = 1024;
+
+// ...and enough total work to fill the device. See the table at the use site:
+// n=1024 needs batch >= 128 and n=2048 needs batch >= 64, and both are this
+// product. Below it DirectSubset loses, by up to 16x at batch 1.
+constexpr int64_t kSyevxSubsetMinWork = 128 * 1024;
 
 SyevxAlgorithm parse_syevx_algorithm(const char* v) {
     if (!v || !*v) return SyevxAlgorithm::Auto;
@@ -166,7 +177,8 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                       size_t neigs,
                                       SyevxAlgorithm requested,
                                       bool subset_supported,
-                                      JobType jobz) {
+                                      JobType jobz,
+                                      int64_t batch_size) {
     const SyevxAlgorithm want = algorithm_from_env(requested);
     const bool dense = (format == MatrixFormat::Dense);
 
@@ -192,7 +204,31 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     // is nothing for it to win with.
     if (jobz != JobType::EigenVectors) return SyevxAlgorithm::Direct;
 
-    if (subset_supported && n >= kSyevxSubsetMinN) return SyevxAlgorithm::DirectSubset;
+    // DirectSubset's reduction is parallel over the batch, exactly like the
+    // blocked syev it used to be compared against, so it starves at small batch
+    // for the same reason. The previous gate was n alone, which sent batch-1
+    // calls -- its worst case -- straight into it.
+    //
+    // MEASURED (RTX 4090, float, eigenvectors, BM_SYEVX_CrossoverVectors),
+    // Direct/DirectSubset, so > 1 means DirectSubset wins:
+    //
+    //   n=1024, k=8:    b=1 0.09   b=4 0.34   b=16 0.36   b=64 1.00   b=256 2.40
+    //   n=2048, k=8:    b=1 0.06   b=4 0.28   b=16 0.43   b=64 1.12   b=256 1.98
+    //   n=1024, b=128:  k=8 1.47   k=25 1.57  k=51 1.38   k=102 1.51
+    //   n=1024, b=256:  k=8 2.12   k=25 1.93  k=51 1.96   k=102 1.83
+    //                   k=256 1.43  k=512 1.00
+    //
+    // Two anchors bound the win region: n=1024 needs batch >= 128, n=2048 needs
+    // batch >= 64. Both are `n * batch >= 128 * 1024`, which is the form used
+    // here. Above n=2048 that extrapolates rather than interpolates, but it
+    // extrapolates in the direction the two anchors already move.
+    //
+    // k is deliberately absent: the ratio is flat in k from 0.8% to 25% of the
+    // spectrum and only decays to a tie at 50%, so it does not discriminate.
+    if (subset_supported && n >= kSyevxSubsetMinN &&
+        n * batch_size >= kSyevxSubsetMinWork) {
+        return SyevxAlgorithm::DirectSubset;
+    }
 
     // Filtered wins a genuine but narrow niche -- n >= 1024 at k/n around 1%, and
     // only at small batch (at batch 64 Direct won there too). It is left opt-in
@@ -235,7 +271,8 @@ Event syevx(Queue& ctx,
             const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
-                                              syevx_direct_subset_supported<T, MFormat>(), jobz);
+                                              syevx_direct_subset_supported<T, MFormat>(), jobz,
+                                              A.batch_size());
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
     }
@@ -258,7 +295,8 @@ size_t syevx_buffer_size(Queue& ctx,
                          const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
-                                              syevx_direct_subset_supported<T, MFormat>(), jobz);
+                                              syevx_direct_subset_supported<T, MFormat>(), jobz,
+                                              A.batch_size());
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
     }

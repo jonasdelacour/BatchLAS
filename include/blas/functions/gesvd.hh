@@ -20,7 +20,7 @@
 #include <blas/dispatch/context.hh>
 #include <blas/dispatch/env.hh>
 #include <blas/dispatch/provider.hh>
-#include <blas/dispatch.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
 
@@ -544,7 +544,7 @@ inline size_t gesvd_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_buffer_size)

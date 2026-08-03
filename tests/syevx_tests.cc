@@ -1439,6 +1439,56 @@ TEST(SyevxJacobiValidation, RejectsInconsistentPreconditionerRequests) {
     }
 }
 
+// Routing is a pure function of (format, n, neigs, method, support, jobz, batch),
+// so it can be pinned directly rather than inferred from timings.
+//
+// The property under test is the one that was missing until it was measured:
+// DirectSubset's advantage depends on the BATCH, not on n alone. Its reduction is
+// parallel over the batch, so at batch 1 it starves and loses to Direct by up to
+// 16x -- and the previous gate, `n >= 1024`, routed batch-1 calls straight into
+// that. A regression here is silent in every other test, because both algorithms
+// return correct answers; only the speed differs.
+class SyevxSelectAlgorithmTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (std::getenv("BATCHLAS_SYEVX_ALGORITHM")) {
+            GTEST_SKIP() << "algorithm forced via env";
+        }
+    }
+    static SyevxAlgorithm pick(int64_t n, int64_t batch, JobType jobz) {
+        return syevx_select_algorithm(MatrixFormat::Dense, n, /*neigs=*/8,
+                                      SyevxAlgorithm::Auto, /*subset_supported=*/true,
+                                      jobz, batch);
+    }
+};
+
+TEST_F(SyevxSelectAlgorithmTest, SubsetNeedsBothLargeNAndLargeBatch) {
+    // Large n, small batch: DirectSubset's worst case. Must not be chosen.
+    EXPECT_EQ(pick(1024, 1, JobType::EigenVectors), SyevxAlgorithm::Direct);
+    EXPECT_EQ(pick(1024, 16, JobType::EigenVectors), SyevxAlgorithm::Direct);
+    EXPECT_EQ(pick(2048, 16, JobType::EigenVectors), SyevxAlgorithm::Direct);
+
+    // Large n and enough batch to fill the device: the regime it wins in.
+    EXPECT_EQ(pick(1024, 128, JobType::EigenVectors), SyevxAlgorithm::DirectSubset);
+    EXPECT_EQ(pick(2048, 64, JobType::EigenVectors), SyevxAlgorithm::DirectSubset);
+
+    // Small n never reaches it, however large the batch.
+    EXPECT_EQ(pick(512, 1024, JobType::EigenVectors), SyevxAlgorithm::Direct);
+}
+
+TEST_F(SyevxSelectAlgorithmTest, EigenvaluesOnlyNeverUsesSubset) {
+    // With no eigenvectors there is no back-transform to narrow, which is the
+    // only term DirectSubset saves on -- so it can only lose, at any shape.
+    EXPECT_EQ(pick(1024, 128, JobType::NoEigenVectors), SyevxAlgorithm::Direct);
+    EXPECT_EQ(pick(2048, 256, JobType::NoEigenVectors), SyevxAlgorithm::Direct);
+}
+
+TEST_F(SyevxSelectAlgorithmTest, SparseAlwaysUsesLobpcg) {
+    EXPECT_EQ(syevx_select_algorithm(MatrixFormat::CSR, 4096, 8, SyevxAlgorithm::Auto,
+                                     true, JobType::EigenVectors, 1024),
+              SyevxAlgorithm::LOBPCG);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
