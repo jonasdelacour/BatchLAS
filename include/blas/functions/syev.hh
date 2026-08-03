@@ -244,10 +244,29 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
 //   * an explicitly forced Provider::BatchLAS_CTA still wins, since the forced
 //     branch returns before this is consulted.
 inline int64_t syev_cta_max_n_for_vectors() {
-    // Default 16: below the one measured point (30, vendor wins) and above the
-    // sizes where a kernel launch dominates. Retune with the env var; this is the
-    // number to change when someone measures the sweep.
-    constexpr int64_t kDefault = 16;
+    // Default 32 == OFF: CTA keeps the whole n <= 32 range, as it always has.
+    //
+    // Lowering this IS a measured speedup for the projected Rayleigh-Ritz solve
+    // inside LOBPCG. Measured, LOBPCG EigenVectors, n=256, us/matrix:
+    //
+    //   BATCHLAS_SYEV_CTA_MAX_N     32(off)    16      8       0
+    //   batch 8                      15563   14211  13746   13551
+    //   batch 64                      1998.6  1890.4 1948.0  1945.9
+    //
+    // i.e. 1.10-1.15x at batch 8 and 1.03-1.06x at batch 64, monotone in the
+    // threshold. It is nevertheless OFF by default because moving the projected
+    // solve off CTA perturbs LOBPCG's numerics just enough to flip a marginal case
+    // in ILUKTests.SyevxInstrumentationAndPreconditioner, which asserts that ILU(k)
+    // beats the unpreconditioned baseline on EVERY case (lose_count == 0). At
+    // threshold 16 one of eight cases (d0.06_b0.5_s1234, iluk_k2) crosses to
+    // ratio 1.25 -- at a point where the baseline has already converged to 4.2e-06,
+    // so it is a near-tie rather than a real degradation, but it is a real test
+    // failure and this is someone else's correctness assertion, not mine to relax.
+    //
+    // Resolving it means deciding whether that assertion should tolerate a tie on an
+    // already-converged case, or whether the vendor projected solve genuinely hurts
+    // LOBPCG convergence. Until then, a 1.1x win does not justify shipping a red test.
+    constexpr int64_t kDefault = 32;
     const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
     if (!v || !*v) return kDefault;
     char* end = nullptr;
