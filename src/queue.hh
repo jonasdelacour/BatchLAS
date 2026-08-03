@@ -22,12 +22,118 @@ inline bool batchlas_queue_profiling_enabled() {
            batchlas::env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
 }
 
+// Per-queue scratch memory. See util/workspace.hh for the caller-facing rules.
+//
+// Blocks are never reallocated or moved, only appended to, because a lease that
+// is still live must keep its pointer: an inner borrow that does not fit in the
+// current block opens a new one rather than growing the old one. Released bytes
+// are rewound, not freed, so the steady state is one allocation per distinct
+// high-water mark rather than one per call.
+struct WorkspaceArena {
+    struct Block {
+        std::byte* ptr = nullptr;
+        size_t size = 0;
+    };
+
+    std::vector<Block> blocks_;
+    size_t cur_block_ = 0;   // block currently being carved from
+    size_t cur_offset_ = 0;  // bytes used within it
+
+    // Matches BumpAllocator's alignment rule so that a lease can be handed
+    // straight to one without the pool having to realign it first.
+    static size_t alignment_for(const sycl::device& dev) {
+        size_t bits = 16 * 8;
+        try {
+            bits = dev.get_info<sycl::info::device::mem_base_addr_align>();
+        } catch (...) {
+        }
+        return std::max<size_t>(16, bits / 8);
+    }
+
+    struct Loan {
+        std::byte* ptr;
+        size_t bytes;
+        size_t block;   // rewind target
+        size_t offset;
+    };
+
+    Loan acquire(sycl::queue& q, size_t bytes) {
+        const size_t align = alignment_for(q.get_device());
+        const size_t want = (bytes + align - 1) & ~(align - 1);
+
+        // Position at the first block from here on that can serve the request.
+        // Anything before cur_block_ is spoken for by an outstanding lease.
+        while (cur_block_ < blocks_.size()) {
+            const size_t off = (cur_offset_ + align - 1) & ~(align - 1);
+            if (off + want <= blocks_[cur_block_].size) {
+                const size_t start = off;
+                cur_offset_ = off + want;
+                return Loan{blocks_[cur_block_].ptr + start, bytes, cur_block_, start};
+            }
+            ++cur_block_;
+            cur_offset_ = 0;
+        }
+
+        // Nothing fits: open a new block. Grow geometrically so a caller that
+        // ratchets its request upward does not allocate once per step.
+        const size_t last = blocks_.empty() ? 0 : blocks_.back().size;
+        const size_t block_size = std::max({want, last * 2, static_cast<size_t>(64 * 1024)});
+        auto* p = sycl::aligned_alloc_shared<std::byte>(align, block_size, q.get_device(), q.get_context());
+        if (!p) throw std::bad_alloc();
+        blocks_.push_back(Block{p, block_size});
+        cur_block_ = blocks_.size() - 1;
+        cur_offset_ = want;
+        return Loan{p, bytes, cur_block_, size_t{0}};
+    }
+
+    void release(size_t block, size_t offset) {
+        cur_block_ = block;
+        cur_offset_ = offset;
+    }
+
+    size_t capacity() const {
+        size_t total = 0;
+        for (const auto& b : blocks_) total += b.size;
+        return total;
+    }
+
+    // Caller must have drained the queue first -- see ~QueueImpl.
+    void free_all(const sycl::context& ctx) {
+        for (auto& b : blocks_) {
+            try {
+                sycl::free(b.ptr, ctx);
+            } catch (...) {
+                // Destructors must not throw; the runtime may surface prior
+                // async device failures here.
+            }
+        }
+        blocks_.clear();
+        cur_block_ = 0;
+        cur_offset_ = 0;
+    }
+};
+
 struct QueueImpl : public sycl::queue{
     using sycl::queue::queue;
+
+    ~QueueImpl() {
+        // The arena's blocks may still be referenced by enqueued-but-unfinished
+        // kernels. Freeing shared USM out from under them is a use-after-free
+        // that usually only shows up under load, so drain first.
+        if (!arena_.blocks_.empty()) {
+            try {
+                wait();
+            } catch (...) {
+            }
+            arena_.free_all(get_context());
+        }
+    }
 
     // Tracks the last event submitted to this queue via the wrappers below.
     // Used to implement a cheap get_event() for in-order queues.
     mutable std::optional<sycl::event> last_event_;
+
+    WorkspaceArena arena_;
 
     static const sycl::context& shared_context(Device dev) {
         static std::mutex m;

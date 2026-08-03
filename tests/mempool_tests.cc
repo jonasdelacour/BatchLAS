@@ -824,6 +824,108 @@ TEST_F(BumpAllocatorTest, MeasuringRejectsQueriesThatMeanNothing) {
     EXPECT_THROW((void)real.required_bytes(), std::runtime_error);
 }
 
+// ---- per-queue workspace arena --------------------------------------------
+
+TEST_F(BumpAllocatorTest, WorkspaceLeaseIsUsableAndAligned) {
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto lease = queue->workspace(4096);
+    ASSERT_NE(lease.data(), nullptr);
+    EXPECT_EQ(lease.size(), 4096u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(lease.data()) % device_align, 0u);
+
+    // It is real, writable, shared memory -- not a sizing-mode stand-in.
+    std::memset(lease.data(), 0xAB, lease.size());
+    EXPECT_EQ(static_cast<unsigned char>(lease.data()[4095]), 0xABu);
+
+    // And it feeds a BumpAllocator without the pool having to realign it.
+    BumpAllocator pool(lease.span());
+    EXPECT_NO_THROW(pool.allocate<double>(device, 64));
+}
+
+// The point of the arena: repeating the same request must stop allocating.
+TEST_F(BumpAllocatorTest, WorkspaceReusesMemoryAcrossLeases) {
+    std::byte* first = nullptr;
+    {
+        auto lease = queue->workspace(8192);
+        first = lease.data();
+    }
+    const size_t cap_after_first = queue->workspace_capacity();
+    EXPECT_GT(cap_after_first, 0u);
+
+    for (int i = 0; i < 32; ++i) {
+        auto lease = queue->workspace(8192);
+        EXPECT_EQ(lease.data(), first);                       // same bytes every time
+        EXPECT_EQ(queue->workspace_capacity(), cap_after_first);  // no new allocation
+    }
+}
+
+// Nested leases must not overlap, and -- the part that is easy to get wrong --
+// an inner lease that forces a new block must not invalidate the outer one.
+TEST_F(BumpAllocatorTest, NestedLeasesAreDisjointAndOuterSurvivesGrowth) {
+    auto outer = queue->workspace(1024);
+    std::memset(outer.data(), 0x11, outer.size());
+
+    {
+        auto inner = queue->workspace(2048);
+        EXPECT_TRUE(inner.data() + inner.size() <= outer.data() ||
+                    outer.data() + outer.size() <= inner.data());
+        std::memset(inner.data(), 0x22, inner.size());
+
+        // Force a fresh block while both leases are live.
+        auto huge = queue->workspace(4 * 1024 * 1024);
+        std::memset(huge.data(), 0x33, huge.size());
+        EXPECT_TRUE(huge.data() + huge.size() <= outer.data() ||
+                    outer.data() + outer.size() <= huge.data());
+    }
+
+    // Outer's pointer is still valid and its contents untouched.
+    for (size_t i = 0; i < outer.size(); ++i) {
+        ASSERT_EQ(static_cast<unsigned char>(outer.data()[i]), 0x11u) << "clobbered at " << i;
+    }
+}
+
+// A lease released early frees its bytes for the next borrow, and moving a
+// lease transfers the obligation rather than releasing twice.
+TEST_F(BumpAllocatorTest, WorkspaceLeaseReleaseAndMove) {
+    std::byte* p = nullptr;
+    {
+        auto a = queue->workspace(2048);
+        p = a.data();
+        a.release();
+        EXPECT_EQ(a.data(), nullptr);
+        auto b = queue->workspace(2048);
+        EXPECT_EQ(b.data(), p);   // reclaimed
+    }
+
+    auto a = queue->workspace(2048);
+    auto* pa = a.data();
+    auto b = std::move(a);
+    EXPECT_EQ(b.data(), pa);
+    EXPECT_EQ(a.data(), nullptr);
+    b.release();
+    auto c = queue->workspace(2048);
+    EXPECT_EQ(c.data(), pa);      // the moved-from handle did not release it early
+}
+
+// Growth is geometric, not one allocation per step, so a caller whose request
+// ratchets upward does not leave a trail of blocks.
+TEST_F(BumpAllocatorTest, WorkspaceGrowthIsGeometric) {
+    Queue q;
+    size_t allocations = 0;
+    size_t prev_cap = 0;
+    for (size_t bytes = 1024; bytes <= 4u * 1024 * 1024; bytes += 4096) {
+        auto lease = q.workspace(bytes);
+        const size_t cap = q.workspace_capacity();
+        if (cap != prev_cap) {
+            ++allocations;
+            prev_cap = cap;
+        }
+    }
+    // ~1000 distinct sizes; doubling from 64 KiB reaches 4 MiB in far fewer.
+    EXPECT_LT(allocations, 20u);
+}
+
 // Stress test with many small allocations
 TEST_F(BumpAllocatorTest, ManySmallAllocations) {
     BumpAllocator pool(buffer.get(), buffer_size);

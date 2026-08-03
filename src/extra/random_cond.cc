@@ -164,8 +164,8 @@ namespace detail {
         auto tauv = static_cast<VectorView<T>>(tau);
 
         const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, block_size);
-        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-        sytrd_blocked<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, ws.to_span(), block_size).wait();
+        auto ws = ctx.workspace(ws_bytes);
+        sytrd_blocked<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, ws.span(), block_size).wait();
 
         Matrix<T, MatrixFormat::Dense> Tmat = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch_size);
         auto Tv = Tmat.view();
@@ -278,9 +278,9 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
 
     // Orthonormalize columns of U and V
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, U.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, U.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
-    ortho<B>(ctx, V.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, U.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
+    ortho<B>(ctx, V.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     // Build singular values with the requested condition number.
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
@@ -326,8 +326,8 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
 
     Matrix<T> Q = Matrix<T>::Random(n, n, false, batch_size, seed);
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, Q.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
         n, log10_kappa, metric, "random_hermitian_with_log10_cond_metric");
@@ -496,8 +496,8 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
 
     Matrix<T> Q = Matrix<T>::Random(n, n, false, batch_size, seed);
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, Q.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
         n, log10_kappa, metric, "random_hermitian_tridiagonal_with_log10_cond_metric");

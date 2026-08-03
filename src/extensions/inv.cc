@@ -60,8 +60,13 @@ namespace batchlas {
     Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
                                        const MatrixView<T, MatrixFormat::Dense>& A) {
         Matrix<T, MatrixFormat::Dense> Aout(A.rows(), A.cols(), A.batch_size());
-        UnifiedVector<std::byte> workspace(inv_buffer_size<B>(ctx, A));
-        inv<B>(ctx, A, Aout.view(), workspace);
+        // Arena-backed rather than a local UnifiedVector: this overload returns
+        // without waiting, so a local would sycl::free the workspace while the
+        // kernels using it were still only enqueued. Arena memory is owned by the
+        // queue and outlives the call; the next lease reuses it, which the
+        // in-order queue orders behind this work.
+        auto workspace = ctx.workspace(inv_buffer_size<B>(ctx, A));
+        inv<B>(ctx, A, Aout.view(), workspace.span());
         return Aout;
     }
 

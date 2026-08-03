@@ -1,4 +1,5 @@
 #include "../queue.hh"
+#include <util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
@@ -57,14 +58,15 @@ Queue::~Queue() = default;
 Queue::Queue(Queue&& other) = default;
 
 // Written out rather than `= default` on purpose. Move-assignment destroys the
-// destination's QueueImpl *without* running ~Queue, so any per-queue state keyed
-// on QueueImpl identity (e.g. a workspace arena) must be released here as well as
-// in the destructor -- otherwise the key is left dangling and a later heap reuse
-// of the same address silently inherits it. Semantics are identical to the
-// previous defaulted version; this exists to give that teardown a home.
+// destination's QueueImpl without running ~Queue, so per-queue state has to be
+// torn down on this path too. It is: the workspace arena is a member of
+// QueueImpl, so overwriting impl_ below runs ~QueueImpl, which drains the queue
+// and frees the arena's blocks. Keeping this written out documents that the
+// requirement exists and gives it somewhere to live if state is ever added
+// outside QueueImpl -- storing it in a side table keyed on impl_ would be a bug,
+// since a later heap reuse of the same address would inherit the entry.
 Queue& Queue::operator=(Queue&& other) {
     if (this == &other) return *this;
-    // (release per-queue state attached to impl_ here before it is overwritten)
     device_ = other.device_;
     in_order_ = other.in_order_;
     impl_ = std::move(other.impl_);
@@ -73,6 +75,28 @@ Queue& Queue::operator=(Queue&& other) {
 
 void Queue::wait() const {impl_->wait();}
 void Queue::wait_and_throw() const {impl_->wait_and_throw();}
+
+batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
+    auto loan = impl_->arena_.acquire(*impl_, bytes);
+    return batchlas::WorkspaceLease(this, loan.ptr, loan.bytes, loan.block, loan.offset);
+}
+
+size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
+
+namespace batchlas {
+
+Span<std::byte> WorkspaceLease::span() const { return Span<std::byte>(ptr_, size_); }
+WorkspaceLease::operator Span<std::byte>() const { return span(); }
+
+void WorkspaceLease::release() {
+    if (!queue_) return;
+    queue_->impl_->arena_.release(block_, offset_);
+    queue_ = nullptr;
+    ptr_ = nullptr;
+    size_ = 0;
+}
+
+}  // namespace batchlas
 
 
 QueueImpl* Queue::operator->() const {

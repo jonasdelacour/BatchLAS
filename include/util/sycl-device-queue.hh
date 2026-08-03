@@ -8,6 +8,8 @@
 #include <optional>
 #include <utility>
 
+#include <util/workspace.hh>
+
 
 enum class Policy
 {
@@ -170,7 +172,16 @@ struct Queue{
 
     void wait() const;
     void wait_and_throw() const;
-    
+
+    // Borrow `bytes` of device scratch backed by this queue's workspace arena.
+    // See util/workspace.hh for the lifetime rules; in short, the memory is
+    // owned by the queue, so it stays valid until the lease is released rather
+    // than until the calling function returns.
+    [[nodiscard]] batchlas::WorkspaceLease workspace(size_t bytes);
+
+    // Total bytes the arena currently holds. Diagnostics and tests only.
+    size_t workspace_capacity() const;
+
     std::unique_ptr<QueueImpl> impl_;
 
     Device device() const { return device_; }
