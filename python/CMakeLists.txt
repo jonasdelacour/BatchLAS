@@ -27,6 +27,7 @@ set(BATCHLAS_PY_EXTENSION_SOURCES
     batchlas/bindings/ops_factorization.cc
     batchlas/bindings/ops_spectral.cc
     batchlas/bindings/ops_misc.cc
+    batchlas/bindings/ops_linalg.cc
 )
 
 pybind11_add_module(_batchlas ${BATCHLAS_PY_EXTENSION_SOURCES})

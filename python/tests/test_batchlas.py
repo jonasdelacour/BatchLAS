@@ -460,3 +460,85 @@ def test_lanczos_without_eigenvectors_runs():
 
     assert np.asarray(values).shape == (2, 32)
     assert np.isfinite(np.asarray(values)).all()
+
+
+# --- elementwise arithmetic (batchlas::linalg) ------------------------------
+
+
+@pytest.mark.parametrize(
+    "op, reference",
+    [
+        (bl.add, lambda a, b: a + b),
+        (bl.subtract, lambda a, b: a - b),
+        (bl.multiply, lambda a, b: a * b),
+        (bl.divide, lambda a, b: a / b),
+    ],
+)
+def test_elementwise_matches_numpy(op, reference):
+    rng = np.random.default_rng(0)
+    # Non-square and batched: a shape bug that only shows up off the diagonal
+    # would pass unnoticed on square single-batch inputs.
+    a = rng.random((4, 3, 5)).astype(np.float64) + 1.0
+    b = rng.random((4, 3, 5)).astype(np.float64) + 1.0
+    np.testing.assert_allclose(op(a, b), reference(a, b), rtol=1e-12)
+
+
+def test_elementwise_two_dimensional_keeps_shape():
+    a = np.arange(12, dtype=np.float32).reshape(3, 4) + 1.0
+    b = np.full((3, 4), 2.0, dtype=np.float32)
+    result = bl.add(a, b)
+    assert result.shape == (3, 4)
+    np.testing.assert_allclose(result, a + b, rtol=1e-6)
+
+
+def test_multiply_is_hadamard_not_matmul():
+    # Square operands make both interpretations shape-valid, so only the values
+    # distinguish them.
+    a = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+    b = np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float64)
+    np.testing.assert_allclose(bl.multiply(a, b), a * b)
+    assert not np.allclose(bl.multiply(a, b), a @ b)
+
+
+def test_axpby_and_scale():
+    rng = np.random.default_rng(1)
+    a = rng.random((2, 4, 4)).astype(np.float64)
+    b = rng.random((2, 4, 4)).astype(np.float64)
+    np.testing.assert_allclose(bl.axpby(2.0, a, -3.0, b), 2.0 * a - 3.0 * b, rtol=1e-12)
+    np.testing.assert_allclose(bl.scale(a, 0.25), 0.25 * a, rtol=1e-12)
+
+
+def test_scale_leaves_the_caller_array_untouched():
+    a = np.ones((3, 3), dtype=np.float64)
+    original = a.copy()
+    bl.scale(a, 5.0)
+    np.testing.assert_array_equal(a, original)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.complex64, np.complex128])
+def test_elementwise_supports_all_dtypes(dtype):
+    rng = np.random.default_rng(2)
+    shape = (3, 3)
+    if np.issubdtype(dtype, np.complexfloating):
+        a = (rng.random(shape) + 1j * rng.random(shape)).astype(dtype)
+        b = (rng.random(shape) + 1j * rng.random(shape)).astype(dtype)
+    else:
+        a = rng.random(shape).astype(dtype)
+        b = rng.random(shape).astype(dtype)
+    tol = 1e-6 if np.dtype(dtype).itemsize <= 8 else 1e-12
+    np.testing.assert_allclose(bl.multiply(a, b), a * b, rtol=tol)
+
+
+def test_elementwise_rejects_mismatched_shapes():
+    a = np.ones((3, 4), dtype=np.float32)
+    b = np.ones((3, 5), dtype=np.float32)
+    with pytest.raises(ValueError):
+        bl.add(a, b)
+
+
+def test_elementwise_out_parameter_is_written():
+    a = np.ones((2, 2), dtype=np.float64)
+    b = np.full((2, 2), 3.0, dtype=np.float64)
+    out = np.zeros((2, 2), dtype=np.float64)
+    bl.add(a, b, out=out)
+    np.testing.assert_allclose(out, a + b)
