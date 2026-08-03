@@ -320,6 +320,232 @@ TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReferenc
 }
 #endif
 
+#if BATCHLAS_HAS_CUDA_BACKEND && BATCHLAS_HAS_HOST_BACKEND
+// The grid LATRD path (BATCHLAS_LATRD_IMPL=grid) only engages when
+// MAX_COMPUTE_UNITS / batch >= 2, i.e. in the small-batch regime that no other
+// test in this file covers. It also runs the same shapes through the legacy
+// path so a divergence is attributable.
+template <typename Scalar>
+void run_latrd_grid_case(int n, int batch, int nb, const char* impl, double eig_tol_scale) {
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = Backend::CUDA;
+
+    auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242 + n + batch);
+    Matrix<Scalar, MatrixFormat::Dense> A = A0;
+    Vector<Scalar> d(n, batch);
+    Vector<Scalar> e(n - 1, batch);
+    Vector<Scalar> tau(n - 1, batch);
+
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+
+    {
+        ScopedEnvVar latrd_impl("BATCHLAS_LATRD_IMPL", impl);
+        sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+    }
+    ctx->wait();
+
+    Matrix<Scalar, MatrixFormat::Dense> Tmat = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
+    constexpr bool kIsComplex = !std::is_same_v<Scalar, Real>;
+    if constexpr (kIsComplex) {
+        auto Tview = Tmat.view();
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) {
+                Tview.template at<MatrixFormat::Dense>(i, i, b) = Scalar(d(i, b).real(), Real(0));
+                if (i < n - 1) {
+                    const Scalar sub = e(i, b);
+                    Tview.template at<MatrixFormat::Dense>(i + 1, i, b) = sub;
+                    Tview.template at<MatrixFormat::Dense>(i, i + 1, b) = std::conj(sub);
+                }
+            }
+        }
+        ctx->wait();
+    } else {
+        Tmat.view().fill_tridiag(*ctx, e, d, e).wait();
+    }
+
+    const auto eig_ref = netlib_ref_eigs_dense_native<Scalar>(A0.view());
+    const auto eig_trd = netlib_ref_eigs_dense_native<Scalar>(Tmat.view());
+
+    const double eig_tol = eig_tol_scale * test_utils::tolerance<double>();
+    for (int b = 0; b < batch; ++b) {
+        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+        for (int i = 0; i < n; ++i) {
+            const double ref = static_cast<double>(eig_ref[base + static_cast<std::size_t>(i)]);
+            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
+            if constexpr (std::is_same_v<Real, float>) {
+                // Single precision tridiagonalization of an n=256 matrix loses
+                // this much on the legacy path too; the floor is not specific
+                // to the grid path.
+                err_tol = std::max(err_tol, 3e-4);
+            }
+            ASSERT_NEAR(static_cast<double>(eig_trd[base + static_cast<std::size_t>(i)]), ref, err_tol)
+                << "impl=" << impl << " n=" << n << " batch=" << batch
+                << " eigenvalue mismatch at i=" << i << ", batch item=" << b;
+        }
+    }
+}
+
+TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "LATRD grid path test requires a GPU device";
+    }
+
+    for (const int batch : {1, 2, 8}) {
+        for (const int n : {65, 96, 129, 256}) {
+            for (const int nb : {8, 16, 32}) {
+                for (const char* impl : {"grid", "legacy"}) {
+                    run_latrd_grid_case<float>(n, batch, nb, impl, 20000.0);
+                    run_latrd_grid_case<double>(n, batch, nb, impl, 200.0);
+                }
+            }
+        }
+    }
+}
+
+// n=1024, batch=1 is the regime the grid path targets: 32 work-groups of 32
+// work-items per matrix instead of a single work-group.
+TEST(SytrdBlockedLatrdGridCudaTest, LargeNBatchOneMatchesNetlibReference) {
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "LATRD grid path test requires a GPU device";
+    }
+    for (const char* impl : {"grid", "legacy"}) {
+        run_latrd_grid_case<double>(1024, 1, 32, impl, 4000.0);
+    }
+}
+
+TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchComplexMatchesNetlibReference) {
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "LATRD grid path test requires a GPU device";
+    }
+
+    for (const int batch : {1, 8}) {
+        for (const int n : {96, 257}) {
+            run_latrd_grid_case<std::complex<double>>(n, batch, 32, "grid", 200.0);
+        }
+    }
+}
+
+TEST(SytrdBlockedLatrdGridCudaTest, GridMatchesLegacyTridiagonal) {
+    using Scalar = double;
+    constexpr Backend B = Backend::CUDA;
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "LATRD grid path test requires a GPU device";
+    }
+
+    auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+    // n=1024/batch=1 is the target regime for the grid path (G == 32 groups of
+    // 32 work-items per matrix) and also the deadlock smoke test.
+    for (const int n : {96, 129, 1024}) {
+        for (const int batch : (n >= 1024 ? std::vector<int>{1, 8} : std::vector<int>{1, 4})) {
+            for (const int nb : (n >= 1024 ? std::vector<int>{32} : std::vector<int>{8, 16, 32})) {
+                for (const int seed : {456, 789}) {
+                    Matrix<Scalar, MatrixFormat::Dense> A0 =
+                        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, seed);
+                    UnifiedVector<Scalar> ds[2], es[2];
+                    for (int k = 0; k < 2; ++k) {
+                        Matrix<Scalar, MatrixFormat::Dense> A = A0;
+                        Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+                        const size_t wsb = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+                        // Deliberately NOT zero-initialized: sytrd's W workspace
+                        // comes from a shared BumpAllocator in syev_blocked, so
+                        // any read of an unwritten W entry must be caught here.
+                        UnifiedVector<std::byte> ws(wsb, std::byte{0x7f});
+                        {
+                            ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", k == 0 ? "legacy" : "grid");
+                            sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+                        }
+                        ctx->wait();
+                        ds[k] = UnifiedVector<Scalar>(static_cast<std::size_t>(n) * batch);
+                        es[k] = UnifiedVector<Scalar>(static_cast<std::size_t>(n - 1) * batch);
+                        for (int b = 0; b < batch; ++b) {
+                            for (int i = 0; i < n; ++i) ds[k][b * n + i] = d(i, b);
+                            for (int i = 0; i < n - 1; ++i) es[k][b * (n - 1) + i] = e(i, b);
+                        }
+                    }
+                    // The grid path reduces per work-group and then combines the
+                    // G partials, so rounding differs from the legacy single
+                    // group tree reduction; the difference accumulates over the
+                    // n sequential reflector steps. Scale with n accordingly.
+                    const double elem_tol = 1e-11 * n;
+                    for (std::size_t i = 0; i < ds[0].size(); ++i) {
+                        ASSERT_NEAR(ds[1][i], ds[0][i], elem_tol * std::max(1.0, std::abs(ds[0][i])))
+                            << "d mismatch n=" << n << " batch=" << batch << " nb=" << nb
+                            << " seed=" << seed << " i=" << i;
+                    }
+                    for (std::size_t i = 0; i < es[0].size(); ++i) {
+                        ASSERT_NEAR(std::abs(es[1][i]), std::abs(es[0][i]),
+                                    elem_tol * std::max(1.0, std::abs(es[0][i])))
+                            << "e mismatch n=" << n << " batch=" << batch << " nb=" << nb
+                            << " seed=" << seed << " i=" << i;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// End-to-end: syev_blocked must produce the same spectrum whichever LATRD
+// implementation runs underneath.
+TEST(SytrdBlockedLatrdGridCudaTest, SyevBlockedSpectrumMatchesLegacy) {
+    using Scalar = double;
+    constexpr Backend B = Backend::CUDA;
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) GTEST_SKIP();
+    auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+
+    for (const int batch : {1, 16}) {
+        for (const auto jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+            const int n = 96;
+            Matrix<Scalar, MatrixFormat::Dense> A0 =
+                Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 456);
+            UnifiedVector<Scalar> W[2];
+            for (int k = 0; k < 2; ++k) {
+                Matrix<Scalar, MatrixFormat::Dense> A = A0;
+                W[k] = UnifiedVector<Scalar>(static_cast<std::size_t>(n) * batch);
+                StedcParams<Scalar> params;
+                params.recursion_threshold = 32;
+                UnifiedVector<std::byte> ws(
+                    syev_blocked_buffer_size<B, Scalar>(*ctx, A.view(), jobz, Uplo::Lower, params));
+                ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", k == 0 ? "legacy" : "grid");
+                syev_blocked<B, Scalar>(*ctx, A.view(), W[k].to_span(), jobz, Uplo::Lower,
+                                        ws.to_span(), params).wait();
+                ctx->wait();
+            }
+            double maxdiff = 0;
+            for (std::size_t i = 0; i < W[0].size(); ++i)
+                maxdiff = std::max(maxdiff, std::abs(W[1][i] - W[0][i]));
+            EXPECT_LT(maxdiff, 1e-9) << "batch=" << batch
+                                     << " jobz=" << (jobz == JobType::EigenVectors ? "EV" : "NoEV");
+        }
+    }
+}
+
+TEST(SytrdBlockedLatrdGridCudaTest, ForcedGroupCountsAgree) {
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "LATRD grid path test requires a GPU device";
+    }
+
+    // Exercise group counts / work-group sizes the heuristic would not pick,
+    // including partitions where trailing work-groups end up empty.
+    for (const char* groups : {"2", "3", "7", "16", "64"}) {
+        for (const char* wgs : {"32", "128"}) {
+            ScopedEnvVar g("BATCHLAS_LATRD_GRID_GROUPS", groups);
+            ScopedEnvVar w("BATCHLAS_LATRD_GRID_WG", wgs);
+            run_latrd_grid_case<double>(129, 1, 32, "grid", 200.0);
+        }
+    }
+}
+#endif
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
