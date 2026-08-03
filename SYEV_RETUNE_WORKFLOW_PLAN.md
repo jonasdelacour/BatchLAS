@@ -62,6 +62,55 @@ wrong — a committed artifact shadowing a generated one means no retune can eve
 which makes every later phase of this plan pointless until fixed. (b) must be fixed first
 regardless of what (a) measures.
 
+### 0.1 UPDATE (2026-08-03, after Foundation + Forensics ran): (b) confirmed, (a) refuted
+
+Do not read §0 above without this. Three agents have now run and the picture changed.
+
+**The mechanism (b) is CONFIRMED, empirically rather than by reading CMake.** A throwaway TU
+compiled with the real `-I` flags — taken from
+`build/presets/cuda/src/CMakeFiles/batchlas_extensions_eigen_obj.dir/flags.make`, which lists
+the source include dir first — prints `ormqr_block_size_for_n(512) = 16` and
+`sytrd_block_size_for_n(512) = 24`. The committed header wins; the generated one (128 / 64) is
+dead. Fixed the enabling half: `7911847` makes every accessor runtime-overridable via
+`BATCHLAS_TUNE_*`, verified behaviour-preserving against the captured test baseline.
+
+**The values story (a) does NOT hold up, for two independent reasons.**
+
+1. *ORMQR never regressed.* It has been 16 in every bucket since the header was created
+   (`7363746`, 2026-03-02) and has never been modified since. There is no better value to
+   restore. What did move is SYTRD: 8/16/16/16/16 → 8/8/16/24/32 in `91341c1`, a 33-file
+   device-BLAS refactor with a one-line message and no measurement attached.
+2. *Forcing the "correct" value is slower.* Measured during override verification —
+   `BM_SYEV_BLOCKED<float,CUDA>`, n=512, `EigenVectors`, device 1, batch 128 (its **measured**
+   saturation point), 5 interleaved rounds:
+
+   | ORMQR block size | median µs/matrix | IQR |
+   |---|---|---|
+   | unset (committed 16) | **301.95** | 300.79 – 303.75 |
+   | forced 128 (CMake default) | 452.32 | 450.73 – 454.91 |
+
+   Forcing 128 is **1.50× slower**, IQRs disjoint. One shape, but it is the shape §0 leaned on.
+
+**There is also no recorded baseline to restore to.** An exhaustive search of git history —
+every CSV, plot, notebook and markdown table across 400+ revisions — found **no artifact
+anywhere** showing BatchLAS beating cuSOLVER at n = 32–512, or at any n. The only in-repo
+statement of that claim is line 3 of *this document*, quoting the user. The claim may well be
+true from an uncommitted run; it simply has no evidence in the repo, so nothing downstream may
+calibrate against it.
+
+**What this does to the plan.** Phase 3.3 stops being "A vs B" and becomes the measurement
+that was never taken: *what is the actual optimum block size per n, measured in the syev
+context at saturation?* Two defects in how the committed values were derived make that the
+right question — they came from a standalone `ormqr_blocked` microbenchmark at batch 8192, not
+from syev; at n ≤ 64 the search space only offered `block_size ∈ [4,8,12,16]`, so 16 is the
+**ceiling of the search** rather than a measured optimum; and `_derive_param_buckets` keeps the
+parameters of whichever *case* had the lower absolute time rather than the best block size per
+case. So the values are not a regression — they were never tuned for this solver at all.
+
+That reframing is a better outcome than the original hypothesis would have been: a restore
+would have recovered a state that never existed, whereas a real per-n sweep can only improve
+on values chosen by a capped search in the wrong context.
+
 ---
 
 ## 1. Hard constraints every agent must obey
