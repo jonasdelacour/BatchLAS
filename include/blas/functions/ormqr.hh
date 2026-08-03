@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <stdexcept>
 #include <type_traits>
 #include <complex>
@@ -26,7 +27,8 @@ Event ormqr(Queue& ctx,
             Side side,
             Transpose trans,
             Span<T> tau,
-            Span<std::byte> workspace);
+            Span<std::byte> workspace,
+            int32_t block_size_hint = 0);
 
 template <Backend B, typename T>
 size_t ormqr_buffer_size(Queue& ctx,
@@ -34,7 +36,8 @@ size_t ormqr_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          Side side,
                          Transpose trans,
-                         Span<T> tau);
+                         Span<T> tau,
+                         int32_t block_size_hint = 0);
 
 template <Backend B, typename T>
 inline Event ormqr(Queue& ctx,
@@ -43,14 +46,16 @@ inline Event ormqr(Queue& ctx,
                    Side side,
                    Transpose trans,
                    Span<T> tau,
-                   Span<std::byte> workspace) {
+                   Span<std::byte> workspace,
+                   int32_t block_size_hint = 0) {
     return ormqr<B, T>(ctx,
                        MatrixView<T, MatrixFormat::Dense>(A),
                        MatrixView<T, MatrixFormat::Dense>(Cmat),
                        side,
                        trans,
                        tau,
-                       workspace);
+                       workspace,
+                       block_size_hint);
 }
 
 template <Backend B, typename T>
@@ -59,13 +64,15 @@ inline size_t ormqr_buffer_size(Queue& ctx,
                                 const Matrix<T, MatrixFormat::Dense>& Cmat,
                                 Side side,
                                 Transpose trans,
-                                Span<T> tau) {
+                                Span<T> tau,
+                                int32_t block_size_hint = 0) {
     return ormqr_buffer_size<B, T>(ctx,
                                   MatrixView<T, MatrixFormat::Dense>(A),
                                   MatrixView<T, MatrixFormat::Dense>(Cmat),
                                   side,
                                   trans,
-                                  tau);
+                                  tau,
+                                  block_size_hint);
 }
 
 } // namespace batchlas
@@ -131,6 +138,23 @@ inline Provider choose_ormqr_provider(const DispatchPolicy& policy,
     return Provider::Vendor;
 }
 
+// Resolve the WY block width used by the blocked provider.
+//
+// `block_size_hint > 0` lets a caller that knows the *reflector count* k pick the
+// width; the tuning table is keyed on A.rows() (the panel height), which for a
+// tall skinny panel is the wrong dimension entirely. Clamped to k = min(rows,cols)
+// so the hint can never exceed the number of reflectors, and computed from A alone
+// so the buffer-size query and the call always agree.
+template <typename T>
+inline int32_t resolve_ormqr_block_size(const MatrixView<T, MatrixFormat::Dense>& A,
+                                        int32_t block_size_hint) {
+    const int32_t k = static_cast<int32_t>(std::min(A.rows(), A.cols()));
+    if (block_size_hint > 0) {
+        return std::max<int32_t>(1, std::min<int32_t>(block_size_hint, std::max<int32_t>(1, k)));
+    }
+    return batchlas::tuning::ormqr_block_size_for_n(static_cast<int32_t>(A.rows()));
+}
+
 } // namespace detail
 
 template <Backend B, typename T>
@@ -140,12 +164,13 @@ inline Event ormqr_dispatch(Queue& ctx,
                            Side side,
                            Transpose trans,
                            Span<T> tau,
-                           Span<std::byte> workspace) {
+                           Span<std::byte> workspace,
+                           int32_t block_size_hint = 0) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("ORMQR");
     Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
 
-    const int32_t block_size = batchlas::tuning::ormqr_block_size_for_n(static_cast<int32_t>(A.rows()));
+    const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
 
     size_t need_ws = 0;
     if (chosen == Provider::Vendor) {
@@ -186,12 +211,13 @@ inline size_t ormqr_buffer_size_dispatch(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& C,
                                         Side side,
                                         Transpose trans,
-                                        Span<T> tau) {
+                                        Span<T> tau,
+                                        int32_t block_size_hint = 0) {
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("ORMQR");
     const Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
 
-    const int32_t block_size = batchlas::tuning::ormqr_block_size_for_n(static_cast<int32_t>(A.rows()));
+    const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
 
     if (chosen == Provider::Vendor) {
         return backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau);
@@ -211,8 +237,9 @@ inline Event ormqr(Queue& ctx,
                    Side side,
                    Transpose trans,
                    Span<T> tau,
-                   Span<std::byte> workspace) {
-    return blas::dispatch::ormqr_dispatch<B, T>(ctx, A, C, side, trans, tau, workspace);
+                   Span<std::byte> workspace,
+                   int32_t block_size_hint) {
+    return blas::dispatch::ormqr_dispatch<B, T>(ctx, A, C, side, trans, tau, workspace, block_size_hint);
 }
 
 template <Backend B, typename T>
@@ -221,8 +248,9 @@ inline size_t ormqr_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& C,
                                 Side side,
                                 Transpose trans,
-                                Span<T> tau) {
-    return blas::dispatch::ormqr_buffer_size_dispatch<B, T>(ctx, A, C, side, trans, tau);
+                                Span<T> tau,
+                                int32_t block_size_hint) {
+    return blas::dispatch::ormqr_buffer_size_dispatch<B, T>(ctx, A, C, side, trans, tau, block_size_hint);
 }
 
 } // namespace batchlas

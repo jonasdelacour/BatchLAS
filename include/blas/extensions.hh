@@ -350,6 +350,10 @@ namespace batchlas {
      * @param jobz Whether eigenvectors are wanted -- load-bearing, because the
      *        subset solver's only measured advantage is the narrowed
      *        back-transform, which does not exist in eigenvalues-only mode.
+     * @param batch_size Number of matrices in the batch -- also load-bearing.
+     *        The subset solver's reduction is parallel over the batch, so at
+     *        small batch it starves; measured, it loses to Direct by up to 16x
+     *        at batch 1 and wins by up to 2.1x at batch 256, for the same n.
      * @return SyevxAlgorithm A concrete, implemented algorithm
      */
     SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
@@ -357,7 +361,8 @@ namespace batchlas {
                                           size_t neigs,
                                           SyevxAlgorithm requested,
                                           bool subset_supported,
-                                          JobType jobz = JobType::EigenVectors);
+                                          JobType jobz = JobType::EigenVectors,
+                                          int64_t batch_size = 1);
 
     /**
      * @brief Resolves SyevxParams::preconditioner_type to a concrete family.

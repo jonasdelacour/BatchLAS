@@ -14,12 +14,76 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 
 namespace batchlas {
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// WY block width for the panel back-transform.
+//
+// sy2sb factors a panel of width kd (default 32) and then calls ormqr on it.
+// ormqr's dispatch picks its WY block width from tuning::ormqr_block_size_for_n
+// keyed on A.rows() -- the panel *height* (hundreds to thousands) -- while the
+// dimension that actually matters is k = kd. Every ORMQR_BLOCK_SIZE_* constant is
+// 16, so a kd=32 panel is split into two WY blocks: 2x pack_v, 2x larft and 6
+// GEMMs per ormqr instead of 1, 1 and 3, with every GEMM at k=16 instead of 32.
+//
+// Using nb = kd was measured (prior probe, interleaved A/B, median of 15 rounds,
+// idle GPU) on the sy2sb panel loop:
+//
+//     n=1024 kd=32 batch=64  : 1.19-1.20x faster
+//     n=2048 kd=32 batch=32  : 1.36x   faster
+//     n=512  kd=32 batch=128 : 0.90x   (regression)
+//     n=1024 kd=32 batch=8   : 0.67x   (large regression)
+//
+// The win comes from GEMM k-depth, not from the lower launch count; LARFT work is
+// O(m*k*nb) and doubles with nb, which dominates once the GEMMs are too small to
+// benefit. So this is gated to the region where the win was measured: n >= 1024
+// and batch >= 32. Outside it we return 0, i.e. exactly today's behaviour.
+//
+// Override with BATCHLAS_SY2SB_ORMQR_NB:
+//   unset          -> shape gate below (default)
+//   0 / "off"      -> never hint; restores the pre-change tuning-table behaviour
+//   <positive int> -> force that block width unconditionally
+//
+// Read fresh on every call (like policy_from_env) so an A/B harness can flip it
+// inside one process. It must NOT be changed between a sytrd_sy2sb_buffer_size
+// query and the matching sytrd_sy2sb call -- that would desynchronise the
+// workspace size from the block width actually used.
+inline int32_t sy2sb_ormqr_nb_env(bool& has_override) {
+    const char* v = std::getenv("BATCHLAS_SY2SB_ORMQR_NB");
+    has_override = false;
+    if (!v || !*v) return -1;                       // unset -> use shape gate
+    if (std::strcmp(v, "off") == 0 || std::strcmp(v, "OFF") == 0) {
+        has_override = true;
+        return 0;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(v, &end, 10);
+    if (end == v || parsed < 0 || parsed > 1024) return -1;
+    has_override = true;
+    return static_cast<int32_t>(parsed);
+}
+
+// Returns the block-size hint to pass to ormqr / ormqr_buffer_size. 0 means "no
+// hint", i.e. let the dispatch use its tuning table (the old behaviour).
+inline int32_t sy2sb_ormqr_block_size_hint(int n, int batch, int kd) {
+    bool has_override = false;
+    const int32_t forced = sy2sb_ormqr_nb_env(has_override);
+    if (has_override) {
+        if (forced == 0) return 0;
+        return std::min<int32_t>(forced, std::max(1, kd));
+    }
+    if (kd <= 0) return 0;
+    // Shape gate: only where the win was measured.
+    if (n >= 1024 && batch >= 32) return kd;
+    return 0;
+}
 
 template <typename U>
 inline U conj_if_needed(const U& x, bool do_conj) {
@@ -323,10 +387,15 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         }
         Span<T> tau_span(tau_tmp, tau_elems);
 
+        // MUST use exactly the same hint as the ormqr calls in sytrd_sy2sb below:
+        // the blocked provider's V (nq*nb), T (nb*nb) and W1/W2 (nb*nC) are all
+        // linear in nb, so a mismatch silently overruns the BumpAllocator.
+        const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
+
         const size_t geqrf_ws = geqrf_buffer_size<B, T>(ctx, V0, tau_span);
         const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span);
-        const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span);
+        const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
+        const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span, ormqr_nb_hint);
         const size_t panel_ws = std::max(geqrf_ws, std::max(ormqr_l_ws, ormqr_r_ws));
 
         sycl::free(tau_tmp, ctx->get_context());
@@ -383,10 +452,15 @@ Event sytrd_sy2sb(Queue& ctx,
     auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
     const size_t geqrf_ws_bytes = geqrf_buffer_size<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    // Same hint used for the query and for every ormqr call in the loop below.
+    // Keep this identical to sytrd_sy2sb_buffer_size or the pool overruns.
+    const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
     const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left,
-                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
+                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
+                                                           ormqr_nb_hint);
     const size_t ormqr_r_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans,
-                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
+                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
+                                                           ormqr_nb_hint);
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
     
@@ -431,8 +505,11 @@ Event sytrd_sy2sb(Queue& ctx,
         // exactly on the trailing block, so it gets both sides and everything
         // else gets one.
         const Transpose trans_left_it = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws);
-        ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws);
+        // The hint is clamped to k = min(rows, cols) inside the dispatch, so on a
+        // short final panel (pk < kd) it degrades to min(nb, pk) and the workspace
+        // sized from the i = 0 panel still bounds it.
+        ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws, ormqr_nb_hint);
+        ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws, ormqr_nb_hint);
 
         // Store tau panel into output tau at offset i.
         (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);
