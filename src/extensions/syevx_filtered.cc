@@ -55,6 +55,8 @@
 namespace batchlas {
 
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsKernel;
+template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsPartialKernel;
+template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsReduceKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterInitKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterStepKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterSigmaKernel;
@@ -69,6 +71,20 @@ namespace {
 // wasted because the block is reorthogonalized anyway. Unmeasured on this
 // hardware -- see the benchmark note in SYEVX_PLAN.md §2.4.
 constexpr size_t kDefaultFilterDegree = 10;
+
+// Bounds for the automatically derived degree (see the note at the interval
+// kernel). The lower bound is the historical default, so switching auto on can
+// never make a step *less* selective than the old constant did. The upper bound
+// is the usual ChASE-style ceiling: past roughly this the extra matvecs stop
+// paying for themselves and the precision cap tends to bind anyway.
+constexpr int kAutoDegreeMin = 10;
+constexpr int kAutoDegreeMax = 40;
+
+// Work-group size of the parallel Gershgorin kernel. One work-item per row, so
+// neighbouring items read neighbouring addresses of a column-major matrix and
+// every load is coalesced. Row-groups per matrix scale as n / kBoundsWG, i.e.
+// the parallelism grows linearly while the work grows as n^2.
+constexpr size_t kBoundsWG = 64;
 
 // xorshift-based fill, so the starting block does not depend on host RNG state
 // and is reproducible across runs and backends.
@@ -107,10 +123,23 @@ Event syevx_filtered(Queue& ctx,
     if (params.extra_directions == 0) m = k + std::max<int64_t>(2, k / 4);
     m = std::min(m, n);
 
-    size_t degree = params.filter_degree > 0 ? params.filter_degree : kDefaultFilterDegree;
+    // Filter degree. Precedence: BATCHLAS_SYEVX_FILTER_DEGREE > params.filter_degree
+    // > derived-from-the-problem > kDefaultFilterDegree. Either of the first two
+    // pins the degree and turns the derivation off; BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0
+    // also turns it off, restoring the old constant-10 behaviour exactly.
+    bool degree_explicit = params.filter_degree > 0;
+    size_t degree = degree_explicit ? params.filter_degree : kDefaultFilterDegree;
     if (const char* dv = std::getenv("BATCHLAS_SYEVX_FILTER_DEGREE")) {
         const int parsed = std::atoi(dv);
-        if (parsed > 0) degree = static_cast<size_t>(parsed);
+        if (parsed > 0) { degree = static_cast<size_t>(parsed); degree_explicit = true; }
+    }
+    bool auto_degree = !degree_explicit;
+    if (const char* av = std::getenv("BATCHLAS_SYEVX_FILTER_DEGREE_AUTO")) {
+        if (std::atoi(av) == 0) auto_degree = false;
+    }
+    bool legacy_bounds = false;
+    if (const char* bv = std::getenv("BATCHLAS_SYEVX_BOUNDS_LEGACY")) {
+        legacy_bounds = (std::atoi(bv) != 0);
     }
     const bool find_largest = params.find_largest;
 
@@ -170,6 +199,8 @@ Event syevx_filtered(Queue& ctx,
     // Per-batch precision limit on the filter degree; reduced to one value so the
     // recurrence length stays uniform and the GEMM shapes stay batched.
     UnifiedVector<int32_t> degree_cap(static_cast<size_t>(batch));
+    // Per-batch degree the current residuals actually ask for (auto mode).
+    UnifiedVector<int32_t> degree_need(static_cast<size_t>(batch));
 
     const Transpose conj_t = is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
 
@@ -184,7 +215,63 @@ Event syevx_filtered(Queue& ctx,
 
     // ---- Gershgorin bounds. Cheap, needs no matvec, and only has to be
     // conservative: a loose interval costs filter sharpness, never correctness.
-    {
+    //
+    // Row i contributes the interval [a_ii - sum_{j!=i}|a_ij|, a_ii + sum_{j!=i}|a_ij|];
+    // lo/hi are the min/max over rows. The legacy kernel ran that as ONE work-item
+    // per matrix walking all n^2 elements with a column-major stride (every load its
+    // own sector) -- measured at 80.2% of the whole solve at n=1024, and completely
+    // independent of batch. The parallel version below gives each work-item one row
+    // and keeps the *inner* j loop serial and in ascending order, so each row's
+    // radius is accumulated in exactly the legacy order and the per-row endpoints are
+    // bit-identical; only the outer min/max is re-associated, and min/max is exact
+    // under any association. The results are therefore bit-identical, not merely
+    // equivalent. Neighbouring work-items handle neighbouring rows, so at a fixed j
+    // the work-group reads a contiguous run of a column: fully coalesced.
+    //
+    // BATCHLAS_SYEVX_BOUNDS_LEGACY=1 restores the serial kernel for A/B.
+    auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) {
+        Real diag = Real(0);
+        Real radius = Real(0);
+        if constexpr (MFormat == MatrixFormat::Dense) {
+            for (int64_t j = 0; j < nn; ++j) {
+                const T v = Akv(static_cast<int>(i), static_cast<int>(j), b);
+                if (i == j) {
+                    if constexpr (is_std_complex_v<T>) diag = v.real();
+                    else diag = v;
+                } else {
+                    if constexpr (is_std_complex_v<T>)
+                        radius += sycl::hypot(v.real(), v.imag());
+                    else radius += sycl::fabs(v);
+                }
+            }
+        } else {
+            const int ro = b * Akv.offset_stride_;
+            const int vb = b * Akv.matrix_stride_;
+            const int rs = Akv.row_offsets_[ro + i];
+            const int re = Akv.row_offsets_[ro + i + 1];
+            for (int p = rs; p < re; ++p) {
+                const int j = Akv.col_indices_[vb + p];
+                const T v = Akv.data_[vb + p];
+                if (j == static_cast<int>(i)) {
+                    if constexpr (is_std_complex_v<T>) diag = v.real();
+                    else diag = v;
+                } else {
+                    if constexpr (is_std_complex_v<T>)
+                        radius += sycl::hypot(v.real(), v.imag());
+                    else radius += sycl::fabs(v);
+                }
+            }
+        }
+        return sycl::vec<Real, 2>(diag - radius, diag + radius);
+    };
+
+    const size_t row_groups =
+        std::max<size_t>(1, (static_cast<size_t>(n) + kBoundsWG - 1) / kBoundsWG);
+    // Per-(matrix, row-group) partial [min, max]. Small (2 * ceil(n/64) * batch
+    // reals) and allocated outside the BumpAllocator, so the workspace query is
+    // unaffected -- see the note at syevx_filtered_buffer_size.
+    UnifiedVector<Real> bounds_partial(2 * row_groups * static_cast<size_t>(batch));
+    if (legacy_bounds) {
         auto lo = lo_span.data();
         auto hi = hi_span.data();
         auto Akv = A.kernel_view();
@@ -196,45 +283,72 @@ Event syevx_filtered(Queue& ctx,
                     Real l = std::numeric_limits<Real>::max();
                     Real u = -std::numeric_limits<Real>::max();
                     for (int64_t i = 0; i < nn; ++i) {
-                        Real diag = Real(0);
-                        Real radius = Real(0);
-                        if constexpr (MFormat == MatrixFormat::Dense) {
-                            for (int64_t j = 0; j < nn; ++j) {
-                                const T v = Akv(static_cast<int>(i), static_cast<int>(j), b);
-                                if (i == j) {
-                                    if constexpr (is_std_complex_v<T>) diag = v.real();
-                                    else diag = v;
-                                } else {
-                                    if constexpr (is_std_complex_v<T>)
-                                        radius += sycl::hypot(v.real(), v.imag());
-                                    else radius += sycl::fabs(v);
-                                }
-                            }
-                        } else {
-                            const int ro = b * Akv.offset_stride_;
-                            const int vb = b * Akv.matrix_stride_;
-                            const int rs = Akv.row_offsets_[ro + i];
-                            const int re = Akv.row_offsets_[ro + i + 1];
-                            for (int p = rs; p < re; ++p) {
-                                const int j = Akv.col_indices_[vb + p];
-                                const T v = Akv.data_[vb + p];
-                                if (j == static_cast<int>(i)) {
-                                    if constexpr (is_std_complex_v<T>) diag = v.real();
-                                    else diag = v;
-                                } else {
-                                    if constexpr (is_std_complex_v<T>)
-                                        radius += sycl::hypot(v.real(), v.imag());
-                                    else radius += sycl::fabs(v);
-                                }
-                            }
-                        }
-                        l = sycl::min(l, diag - radius);
-                        u = sycl::max(u, diag + radius);
+                        const sycl::vec<Real, 2> rb = row_bound(Akv, i, b, nn);
+                        l = sycl::min(l, rb[0]);
+                        u = sycl::max(u, rb[1]);
                     }
                     // Degenerate spectrum: widen so e > 0 below.
                     if (!(u > l)) { u = l + Real(1); }
                     lo[b] = l;
                     hi[b] = u;
+                });
+        });
+    } else {
+        auto Akv = A.kernel_view();
+        auto part = bounds_partial.data();
+        const int64_t nn = n;
+        const size_t rg = row_groups;
+        ctx->submit([&](sycl::handler& h) {
+            h.parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(
+                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
+                                  sycl::range{kBoundsWG}),
+                [=](sycl::nd_item<1> item) {
+                    const size_t gid = item.get_group_linear_id();
+                    const int b = static_cast<int>(gid / rg);
+                    const size_t g = gid % rg;
+                    const size_t lid = item.get_local_linear_id();
+                    const int64_t i = static_cast<int64_t>(g * kBoundsWG + lid);
+                    Real l = std::numeric_limits<Real>::max();
+                    Real u = -std::numeric_limits<Real>::max();
+                    if (i < nn) {
+                        const sycl::vec<Real, 2> rb = row_bound(Akv, i, b, nn);
+                        l = rb[0];
+                        u = rb[1];
+                    }
+                    l = sycl::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
+                    u = sycl::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
+                    if (lid == 0) {
+                        part[2 * gid + 0] = l;
+                        part[2 * gid + 1] = u;
+                    }
+                });
+        });
+        auto lo = lo_span.data();
+        auto hi = hi_span.data();
+        const size_t rwg = 128;
+        ctx->submit([&](sycl::handler& h) {
+            h.parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(
+                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
+                                  sycl::range{rwg}),
+                [=](sycl::nd_item<1> item) {
+                    const int b = static_cast<int>(item.get_group_linear_id());
+                    const size_t lid = item.get_local_linear_id();
+                    const size_t lsz = item.get_local_range(0);
+                    Real l = std::numeric_limits<Real>::max();
+                    Real u = -std::numeric_limits<Real>::max();
+                    for (size_t g = lid; g < rg; g += lsz) {
+                        const size_t idx = static_cast<size_t>(b) * rg + g;
+                        l = sycl::min(l, part[2 * idx + 0]);
+                        u = sycl::max(u, part[2 * idx + 1]);
+                    }
+                    l = sycl::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
+                    u = sycl::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
+                    if (lid == 0) {
+                        // Degenerate spectrum: widen so e > 0 below.
+                        if (!(u > l)) { u = l + Real(1); }
+                        lo[b] = l;
+                        hi[b] = u;
+                    }
                 });
         });
     }
@@ -348,8 +462,13 @@ Event syevx_filtered(Queue& ctx,
             auto cc = cc_span.data(); auto ee = ee_span.data();
             auto s1 = sig1_span.data(); auto sg = sig_span.data();
             auto dcap_out = degree_cap.data();
+            auto dneed_out = degree_need.data();
+            auto rn = resid_span.data();
             const int64_t mm = m, kk = k;
             const bool large = find_largest;
+            const Real tolv = use_tol;
+            const int auto_min = kAutoDegreeMin;
+            const int auto_max = kAutoDegreeMax;
             ctx->submit([&](sycl::handler& h) {
                 h.parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(
                     sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
@@ -430,6 +549,44 @@ Event syevx_filtered(Queue& ctx,
                             }
                         }
                         dcap_out[b] = dcap;
+
+                        // ---- Degree derived from the problem (ChASE-style).
+                        //
+                        // Inside the damped band |T_d| <= 1; the least-amplified
+                        // *wanted* direction sits at mapped coordinate y_edge > 1
+                        // and grows like cosh(d acosh(y_edge)) ~ exp(d rate)/2 with
+                        // rate = acosh(y_edge). So one outer iteration shrinks the
+                        // unwanted content of the block by roughly exp(-d rate),
+                        // and the degree that would finish the job in one more
+                        // iteration is
+                        //
+                        //     d_need = log(worst_residual / target) / rate
+                        //
+                        // measured in the same scaled units the convergence test
+                        // uses. This is exactly the geometry the code already
+                        // computes for the precision cap; the cap stays an upper
+                        // bound on top of it, because it guards the real measured
+                        // failure mode (rank-deficient block -> NaN from Cholesky).
+                        Real ratio = Real(1);
+                        for (int64_t j = 0; j < kk; ++j) {
+                            const int64_t col = large ? (mm - 1 - j) : j;
+                            const Real lam = th[b * mm + col];
+                            const Real scale = sycl::fmax(sycl::fabs(lam), Real(1));
+                            const Real rr = rn[b * kk + j] / (tolv * scale);
+                            ratio = sycl::fmax(ratio, rr);
+                        }
+                        int dneed = auto_max;
+                        if (y_edge > Real(1)) {
+                            const Real rate = sycl::acosh(y_edge);
+                            if (rate > Real(0)) {
+                                const Real d = sycl::log(ratio) / rate;
+                                dneed = (d < Real(auto_min))
+                                            ? auto_min
+                                            : (d > Real(auto_max) ? auto_max
+                                                                  : static_cast<int>(d) + 1);
+                            }
+                        }
+                        dneed_out[b] = dneed;
                     });
             });
         }
@@ -488,20 +645,30 @@ Event syevx_filtered(Queue& ctx,
         // the sync already paid for the convergence check above.
         ctx.wait();
         size_t eff_degree = degree;
+        if (auto_degree) {
+            // Uniform across the batch so the recurrence length -- and hence every
+            // GEMM shape -- stays batched: take the largest requirement, then let
+            // the strictest precision cap trim it.
+            size_t need = static_cast<size_t>(kAutoDegreeMin);
+            for (int64_t b = 0; b < batch; ++b) {
+                need = std::max(need, static_cast<size_t>(std::max(1, degree_need[b])));
+            }
+            eff_degree = need;
+        }
         for (int64_t b = 0; b < batch; ++b) {
             const size_t cap = static_cast<size_t>(std::max(1, degree_cap[b]));
             eff_degree = std::min(eff_degree, cap);
         }
+        if (eff_degree < 1) eff_degree = 1;
         if (std::getenv("BATCHLAS_DEBUG_FILTER_DEGREE")) {
             for (int64_t b = 0; b < batch; ++b) {
                 Real rmax = Real(0);
                 for (int64_t j = 0; j < k; ++j)
                     rmax = std::max(rmax, resid_span[static_cast<size_t>(b * k + j)]);
                 std::fprintf(stderr,
-                    "[filt] iter=%zu b=%lld dcap=%d rmax=%g tol=%g d_need=%g eff=%zu\n",
-                    iter, (long long)b, degree_cap[b], (double)rmax, (double)use_tol,
-                    (double)(rmax > use_tol ? std::log((double)rmax / (double)use_tol) : 0.0),
-                    eff_degree);
+                    "[filt] iter=%zu b=%lld dcap=%d dneed=%d auto=%d rmax=%g tol=%g eff=%zu\n",
+                    iter, (long long)b, degree_cap[b], degree_need[b], (int)auto_degree,
+                    (double)rmax, (double)use_tol, eff_degree);
             }
         }
 
@@ -579,6 +746,13 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
                                   JobType jobz,
                                   const MatrixView<T, MatrixFormat::Dense>& V,
                                   const SyevxParams<T>& params) {
+    // NOTE (workspace lockstep): the parallel Gershgorin reduction added to
+    // syevx_filtered() needs one extra scratch array (2 * ceil(n/kBoundsWG) * batch
+    // reals), but it is a UnifiedVector allocated outside the BumpAllocator -- the
+    // same pattern already used for `converged` and `degree_cap`. The sequence of
+    // pool.allocate() calls in syevx_filtered() is therefore byte-for-byte unchanged,
+    // and this query needs no corresponding change. The degree change touches no
+    // allocation at all (the recurrence reuses Y/Yprev regardless of length).
     using Real = typename base_type<T>::type;
     (void)W; (void)V; (void)jobz;
 
