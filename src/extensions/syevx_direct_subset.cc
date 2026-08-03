@@ -23,8 +23,28 @@
 // Givens sytrd_sb2st discards Q2 and a kd = 1 band makes stage 2 a pure extract.
 // That made stage 1 an unblocked BLAS-2 reduction -- the dominant cost here, done
 // the slow way. sytrd_sb2st_hh retains Q2, so the clamp is gone and both modes now
-// reduce at a real band width. Eigenvalue-only solves keep the cheaper Givens
-// chase, which never needs a back-transform at all.
+// reduce at a real band width.
+//
+// On the stage-2 chase: BOTH modes now use the Householder chase. This file used
+// to say eigenvalue-only solves "keep the cheaper Givens chase". The Givens chase
+// is not cheaper -- profiled at n = 1024 on an RTX 4090 it is 348.4 ms/call
+// against 62.4 ms for sytrd_sb2st_hh. The cause is occupancy, not arithmetic:
+// both chases are sequential per matrix and parallel only over the batch, but
+// sytrd_sb2st_hh got a 256-thread 2D lane mapping while the Givens path still
+// runs one 32-lane sub-group per matrix. This is the same fix already applied to
+// syev_two_stage.cc; see the long note at its call site and
+// two_stage_common.hh::two_stage_use_givens_chase_for_values.
+//
+// Eigenvalues-only therefore also allocates the stage-2 reflectors V and their
+// tau, and discards them. That is the same workspace the eigenvector path has
+// always allocated, and syevx_direct_subset_buffer_size below is updated in
+// lockstep. Only the *phase* chain stays eigenvector-only: it converts
+// eigenvectors of the tridiagonal built from |e| back to those of the signed one,
+// and the eigenvalues of the two are identical (a diagonal +-1 similarity), so
+// stebz does not need it.
+//
+// BATCHLAS_SYEV_TWO_STAGE_CHASE=givens restores the old eigenvalues-only path,
+// making this an intra-run A/B rather than a comparison across builds.
 
 #include "../linalg-impl.hh"
 #include <util/sycl-vector.hh>
@@ -99,16 +119,26 @@ Event syevx_direct_subset(Queue& ctx,
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
+        // Which stage-2 chase? Householder unless the A/B env var asks for the
+        // old Givens path, which is only legal without eigenvectors (it discards
+        // Q2). See the note at the top of this file.
+        const bool use_givens =
+            !want_eigenvectors && two_stage_use_givens_chase_for_values();
+
         // Stage-2 reflector schedule. Depends only on (n, kd) -- never on the
         // matrix values -- so it is identical for every batch item and can be
         // replayed on the host.
-        const auto sb2st_sched = want_eigenvectors
-                                     ? internal::build_sb2st_hh_schedule(n, kd)
-                                     : std::vector<internal::Sb2stHhRefl>{};
+        const auto sb2st_sched = use_givens
+                                     ? std::vector<internal::Sb2stHhRefl>{}
+                                     : internal::build_sb2st_hh_schedule(n, kd);
         const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
-        UnifiedVector<int32_t> sb2st_starts(static_cast<size_t>(nrefl));
-        UnifiedVector<int32_t> sb2st_lens(static_cast<size_t>(nrefl));
-        for (int32_t i = 0; i < nrefl; ++i) {
+        // starts/lens/waves are consumed only by the Q2 back-transform, which
+        // exists only in eigenvector mode. Eigenvalues-only runs the same chase
+        // but never reads the schedule on the device.
+        const int32_t nrefl_dev = want_eigenvectors ? nrefl : 0;
+        UnifiedVector<int32_t> sb2st_starts(static_cast<size_t>(nrefl_dev));
+        UnifiedVector<int32_t> sb2st_lens(static_cast<size_t>(nrefl_dev));
+        for (int32_t i = 0; i < nrefl_dev; ++i) {
             sb2st_starts[i] = sb2st_sched[i].start;
             sb2st_lens[i] = sb2st_sched[i].len;
         }
@@ -150,9 +180,10 @@ Event syevx_direct_subset(Queue& ctx,
             sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
         }
 
-        // Stage 2: band -> tridiagonal. Eigenvector mode uses the Householder
-        // chase, which retains Q2 so it can be applied to the selected vectors;
-        // eigenvalues-only keeps the cheaper Givens chase, which discards it.
+        // Stage 2: band -> tridiagonal. Both modes use the Householder chase --
+        // eigenvector mode needs Q2 to apply to the selected vectors, and
+        // eigenvalues-only uses it because it is ~5x faster than the Givens chase
+        // even though it then throws Q2 away. See the top of this file.
         auto d_span = pool.allocate<Real>(ctx, static_cast<size_t>(n) * batch);
         auto e_span = pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
         VectorView<Real> d_view(d_span, n, batch, 1, n);
@@ -163,7 +194,7 @@ Event syevx_direct_subset(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> v_sb2st_view;
         VectorView<T> tau_sb2st_hh_view;
 
-        if (want_eigenvectors) {
+        if (!use_givens) {
             const int32_t nr = std::max<int32_t>(1, nrefl);
             v_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(kd) * nr * batch);
             tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<size_t>(nr) * batch);
@@ -182,8 +213,13 @@ Event syevx_direct_subset(Queue& ctx,
 
             // The phase comes from stage 2's *output* tridiagonal, not from the
             // stage-1 band: it converts eigenvectors of the real tridiagonal
-            // built from |e| back to those of the signed one.
-            build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
+            // built from |e| back to those of the signed one. stebz works on |e|
+            // directly -- the two tridiagonals are a diagonal +-1 similarity and
+            // have identical eigenvalues -- so eigenvalues-only skips it, along
+            // with V/tau, which only the back-transform reads.
+            if (want_eigenvectors) {
+                build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
+            }
         } else {
             auto tau_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
             VectorView<T> tau_sb2st_view(tau_sb2st_span, std::max(0, n - 1), batch, 1,
@@ -313,7 +349,7 @@ Event syevx_direct_subset(Queue& ctx,
         // sb2st_starts/lens/waves are read by unmqr_hb2st's kernels, not copied,
         // and their UnifiedVector destructors sycl::free immediately. Returning
         // without waiting would free them out from under a kernel still in flight.
-        if (nrefl > 0) ctx.wait();
+        if (nrefl_dev > 0) ctx.wait();
 
         return ctx.get_event();
     }
@@ -344,7 +380,12 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
-        const int32_t nrefl = want_eigenvectors ? internal::sb2st_hh_num_reflectors(n, kd) : 0;
+        // Must mirror the runtime chase selection exactly: eigenvalues-only also
+        // runs the Householder chase now (unless BATCHLAS_SYEV_TWO_STAGE_CHASE=
+        // givens), so it allocates V/tau/ab_tri too.
+        const bool use_givens =
+            !want_eigenvectors && two_stage_use_givens_chase_for_values();
+        const int32_t nrefl = use_givens ? 0 : internal::sb2st_hh_num_reflectors(n, kd);
 
         size_t bytes = 0;
         bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * n * batch);
@@ -370,7 +411,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(n) * batch);
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
 
-        if (want_eigenvectors) {
+        if (!use_givens) {
             // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
             const int32_t nr = std::max<int32_t>(1, nrefl);
             bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd) * nr * batch);

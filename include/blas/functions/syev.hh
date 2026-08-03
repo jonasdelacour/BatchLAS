@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdlib>
 #include <stdexcept>
 
 #include <util/sycl-device-queue.hh>
@@ -206,6 +207,65 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
     return true;
 }
 
+// --- Small n: where does the vendor overtake the CTA solver? ---------------
+//
+// syev_supports_cta claims *every* n <= 32, and the Auto order checks it first,
+// so every small dense eigensolve on a GPU lands on CTA regardless of cost. That
+// is not free. The projected Rayleigh-Ritz solve inside LOBPCG and the filtered
+// solver (dimension up to 3 * block_vectors, so <= 32 for the usual block sizes)
+// is the case that exposed it:
+//
+//   n = 30, batch = 8, float, eigenvectors:  CTA 229.6 us/call
+//                                            cuSOLVER 103.7 us/call   (2.21x)
+//
+// and nsys attributed 29.4% of all LOBPCG GPU time to that solve, i.e. roughly
+// 16% end-to-end. syev_prefer_vendor above cannot fix this: it returns false for
+// n <= 32 by construction.
+//
+// HONESTY ABOUT WHAT IS MEASURED. Exactly one point in this range was measured:
+// n = 30, batch = 8, float, with eigenvectors. The crossover below it was NOT
+// measured. CTA is expected to win at very small n, where a vendor launch costs
+// more than the whole problem, so the threshold is a real one and not just "never
+// use CTA" -- but its value is a guess, deliberately exposed as a single knob:
+//
+//   BATCHLAS_SYEV_CTA_MAX_N=<n>   Auto uses CTA only for n <= this (default 16).
+//                                 Set 32 to restore the previous behaviour
+//                                 exactly (CTA claims the whole range); set 0 to
+//                                 send every small eigenvector solve to the
+//                                 vendor. Sweeping it over 0..32 is how the
+//                                 crossover should be found.
+//
+// Scope is kept deliberately narrow:
+//   * CUDA only -- the 2.21x is a cuSOLVER number and nothing else was measured;
+//   * eigenvector mode only -- eigenvalues-only at n <= 32 was not measured, so
+//     it keeps CTA and cannot regress;
+//   * only where CTA would actually have been chosen, so nothing that already
+//     routes elsewhere changes;
+//   * an explicitly forced Provider::BatchLAS_CTA still wins, since the forced
+//     branch returns before this is consulted.
+inline int64_t syev_cta_max_n_for_vectors() {
+    // Default 16: below the one measured point (30, vendor wins) and above the
+    // sizes where a kernel launch dominates. Retune with the env var; this is the
+    // number to change when someone measures the sweep.
+    constexpr int64_t kDefault = 16;
+    const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
+    if (!v || !*v) return kDefault;
+    char* end = nullptr;
+    const long parsed = std::strtol(v, &end, 10);
+    if (end == v || parsed < 0 || parsed > 32) return kDefault;
+    return static_cast<int64_t>(parsed);
+}
+
+template <typename T>
+inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
+                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                        JobType jobtype) {
+    if (!caps.is_gpu) return false;
+    if (jobtype != JobType::EigenVectors) return false;
+    if (!syev_supports_cta(caps, A)) return false;
+    return A.rows() > syev_cta_max_n_for_vectors();
+}
+
 // Eigenvalues-only: is the two-stage solver the best choice for this shape?
 // Checked before syev_prefer_vendor, since it overrides it where it applies.
 inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int64_t batch) {
@@ -247,6 +307,9 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
             return Provider::BatchLAS_TwoStage;
         }
         if (syev_prefer_vendor(caps, A.rows(), A.batch_size())) return Provider::Vendor;
+        // Small n with eigenvectors: CTA claims the whole n <= 32 range, but the
+        // vendor is faster over part of it. See syev_prefer_vendor_over_cta.
+        if (syev_prefer_vendor_over_cta<T>(caps, A, jobtype)) return Provider::Vendor;
     }
 
     for (Provider p : policy.order) {
