@@ -3,6 +3,7 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -46,5 +47,14 @@ inline Event symm(Queue& ctx,
                        side,
                        uplo);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(symm)
 
 }  // namespace batchlas

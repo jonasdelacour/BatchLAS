@@ -3,6 +3,7 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -41,5 +42,14 @@ inline Event trmm(Queue& ctx,
                                  Diag diag) {
         return trmm<Ba,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, side, uplo, transA, diag);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(trmm)
 
 }  // namespace batchlas

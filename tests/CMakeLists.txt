@@ -22,6 +22,7 @@ set(TEST_TARGETS
     util_device_queue_tests
     device_blas_tests
     mempool_tests
+    backend_dispatch_tests
     gemm_tests
     syevx_tests
     lanczos_tests
@@ -70,6 +71,10 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # run path uses, so a sizing regression is a silent heap overflow. Keep it
     # in the fast gate rather than only in the full suite.
     mempool_tests
+    # Runtime backend dispatch sits under every concise-API call; if it routes
+    # to the wrong backend or drops a defaulted argument, everything downstream
+    # is wrong in a way that is hard to trace back here.
+    backend_dispatch_tests
 )
 
 # Tests that require CPU SYCL kernel compilation (not just NETLIB)

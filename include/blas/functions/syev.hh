@@ -12,6 +12,7 @@
 #include <blas/dispatch/context.hh>
 #include <blas/dispatch/env.hh>
 #include <blas/dispatch/provider.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -324,3 +325,13 @@ inline size_t syev_buffer_size(Queue& ctx,
 }
 
 } // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(syev)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)
+
+}  // namespace batchlas

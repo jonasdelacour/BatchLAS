@@ -4,6 +4,7 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -55,5 +56,15 @@ inline size_t getrs_buffer_size(Queue& ctx,
                                                  Transpose transA) {
         return getrs_buffer_size<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), transA);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(getrs)
+BATCHLAS_DISPATCH_ON_QUEUE(getrs_buffer_size)
 
 }  // namespace batchlas

@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -163,5 +164,17 @@ size_t iluk_apply_buffer_size(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& out) {
     return iluk_apply_buffer_size<B, T>(ctx, M.view(), rhs, out);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(iluk_factorize)
+BATCHLAS_DISPATCH_ON_QUEUE(iluk_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(iluk_apply)
+BATCHLAS_DISPATCH_ON_QUEUE(iluk_apply_buffer_size)
 
 }  // namespace batchlas

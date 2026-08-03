@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <util/workspace.hh>
+#include <blas/enums.hh>
 
 
 enum class Policy
@@ -144,6 +145,7 @@ struct Queue{
     ~Queue();
 
     Queue(Device device, bool in_order = true);
+    Queue(Device device, batchlas::Backend backend, bool in_order = true);
     // Create a new queue sharing the same SYCL context/device as an existing queue.
     // Useful when using USM pointers/workspaces created for the base queue.
     Queue(const Queue& base, bool in_order);
@@ -186,9 +188,26 @@ struct Queue{
 
     Device device() const { return device_; }
     bool in_order() const { return in_order_; }
-    
+
+    // The backend this queue dispatches to. Never returns Backend::AUTO: an
+    // AUTO queue resolves once, on first query, to whatever suits its device.
+    // Callers that want the unresolved setting can ask requested_backend().
+    batchlas::Backend backend() const;
+    batchlas::Backend requested_backend() const { return backend_; }
+
+    // Pin this queue to a backend, or hand it back to AUTO. Throws if the
+    // backend was not compiled in, because the alternative is a call that
+    // type-checks and then fails at dispatch time with no useful context.
+    void set_backend(batchlas::Backend backend);
+
+    // Whether a backend was compiled into this build. Runtime-queryable
+    // counterpart to the BATCHLAS_HAS_*_BACKEND macros.
+    static bool backend_available(batchlas::Backend backend);
+
     private:
         Device device_;
         bool in_order_;
+        batchlas::Backend backend_ = batchlas::Backend::AUTO;
+        mutable batchlas::Backend resolved_backend_ = batchlas::Backend::AUTO;
 };
 

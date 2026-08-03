@@ -4,6 +4,7 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -47,5 +48,15 @@ inline Event potrf(Queue& ctx,
                 Span<std::byte> workspace) {
         return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(potrf)
+BATCHLAS_DISPATCH_ON_QUEUE(potrf_buffer_size)
 
 }  // namespace batchlas

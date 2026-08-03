@@ -3,6 +3,7 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -40,5 +41,14 @@ inline Event gemv(Queue& ctx,
                          static_cast<VectorView<T>>(Y),
                          alpha, beta, transA);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(gemv)
 
 }  // namespace batchlas

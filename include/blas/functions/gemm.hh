@@ -4,6 +4,7 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/dispatch.hh>
 
 namespace batchlas {
 
@@ -75,5 +76,15 @@ inline Event gemm_heterogeneous(Queue& ctx,
                                            transB,
                                            precision);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(gemm)
+BATCHLAS_DISPATCH_ON_QUEUE(gemm_heterogeneous)
 
 }  // namespace batchlas
