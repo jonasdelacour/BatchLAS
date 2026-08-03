@@ -144,8 +144,8 @@ DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
     Vector<T> y = resolve_accumulator_vector<T>(y_object, Vector<T>(y_size, a.batch_size()), beta, "gemv");
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::gemv<B, T>(queue, a.view(), x, y, alpha, beta, trans_a);
     });
@@ -175,8 +175,8 @@ DenseMatrix dense_symm_impl(const DenseMatrix& a_wrapper,
     const T beta = scalar_from_object<T>(beta_object);
     DenseMatrixT<T> c =
         resolve_accumulator<T>(c_object, DenseMatrixT<T>(b.rows(), b.cols(), b.batch_size()), beta, "symm");
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::symm<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
     });
@@ -199,8 +199,8 @@ DenseMatrix dense_syrk_impl(const DenseMatrix& a_wrapper,
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
     DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syrk");
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::syrk<B, T>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
     });
@@ -229,8 +229,8 @@ DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
     DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syr2k");
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::syr2k<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
     });
@@ -257,8 +257,8 @@ DenseMatrix dense_trmm_impl(const DenseMatrix& a_wrapper,
 
     DenseMatrixT<T> c(b.rows(), b.cols(), b.batch_size());
     const T alpha = scalar_from_object<T>(alpha_object);
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::trmm<B, T>(queue, a.view(), b.view(), c.view(), alpha, side, uplo, trans_a, diag);
     });
@@ -280,8 +280,8 @@ DenseMatrix dense_trsm_impl(const DenseMatrix& a_wrapper,
     const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
     const T alpha = scalar_from_object<T>(alpha_object);
-    Queue queue = make_queue(device_name);
-    visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::trsm<B, T>(queue, a.view(), out.view(), side, uplo, trans_a, diag, alpha);
     });
@@ -316,9 +316,9 @@ DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
     const T alpha = scalar_from_object<T>(alpha_object);
     const T beta = scalar_from_object<T>(beta_object);
     DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(m, n, b.batch_size()), beta, "spmm");
-    Queue queue = make_queue(device_name);
+    Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
-        backend, queue,
+        queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             return batchlas::spmm_buffer_size<B, T, MatrixFormat::CSR>(queue, a.view(), b.view(), c.view(), alpha,
@@ -359,8 +359,8 @@ void init_blas_ops(py::module_& module) {
             const scalar_type typed_beta = scalar_from_object<scalar_type>(beta);
             DenseMatrixT<scalar_type> c = resolve_accumulator<scalar_type>(
                 out_object, make_gemm_output(typed_a, typed_b, trans_a, trans_b), typed_beta, "gemm");
-            Queue queue = make_queue(device_name);
-            visit_backend(backend, [&](auto backend_tag) {
+            Queue& queue = acquire_queue(device_name, backend);
+            visit_backend(queue, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
                 if (typed_a.is_heterogeneous() || typed_b.is_heterogeneous()) {
                     batchlas::gemm_heterogeneous<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(),
@@ -399,8 +399,8 @@ void init_blas_ops(py::module_& module) {
             DenseMatrixT<scalar_type> c = resolve_accumulator<scalar_type>(
                 out_object, make_gemm_output(typed_a, typed_b, trans_a, trans_b), typed_beta,
                 "gemm_heterogeneous");
-            Queue queue = make_queue(device_name);
-            visit_backend(backend, [&](auto backend_tag) {
+            Queue& queue = acquire_queue(device_name, backend);
+            visit_backend(queue, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
                 batchlas::gemm_heterogeneous<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(),
                                                              typed_alpha, typed_beta, trans_a, trans_b, precision);
