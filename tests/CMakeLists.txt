@@ -24,6 +24,7 @@ set(TEST_TARGETS
     mempool_tests
     backend_dispatch_tests
     options_api_tests
+    linalg_layer_tests
     gemm_tests
     syevx_tests
     lanczos_tests
@@ -77,6 +78,7 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # is wrong in a way that is hard to trace back here.
     backend_dispatch_tests
     options_api_tests
+    linalg_layer_tests
 )
 
 # Tests that require CPU SYCL kernel compilation (not just NETLIB)
@@ -116,7 +118,7 @@ endif()
 set(BATCHLAS_TEST_LABELS_util
     sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
-    backend_dispatch_tests options_api_tests)
+    backend_dispatch_tests options_api_tests linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests syrk_tests syr2k_tests
     trmm_tests trsm_tests transpose_tests norm_tests cond_tests inverse_tests)
