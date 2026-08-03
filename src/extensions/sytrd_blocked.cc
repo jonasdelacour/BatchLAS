@@ -637,6 +637,18 @@ inline int resolved_nb_sytrd(int32_t block_size, int compiled_nb) {
     return std::max<int>(1, block_size);
 }
 
+// Single description of sytrd_blocked's workspace; see workspace_bytes() in
+// util/mempool.hh.
+template <typename T>
+MatrixView<T, MatrixFormat::Dense> sytrd_blocked_layout(Queue& ctx,
+                                                        BumpAllocator& pool,
+                                                        int n,
+                                                        int nb,
+                                                        int batch) {
+    auto Wbuf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    return MatrixView<T, MatrixFormat::Dense>(Wbuf.data(), n, nb, n, n * nb, batch);
+}
+
 template <Backend B, typename T, int NB>
 size_t sytrd_blocked_buffer_size_impl(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& a,
@@ -654,9 +666,9 @@ size_t sytrd_blocked_buffer_size_impl(Queue& ctx,
     const int batch = a.batch_size();
     const int nb = resolved_nb_sytrd(block_size, NB);
 
-    size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    return size;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
+    });
 }
 
 template <Backend B, typename T, int NB>
@@ -737,8 +749,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     VectorView<T> TAU = tau_out;
 
     BumpAllocator pool(ws);
-    auto Wbuf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> Wmat(Wbuf.data(), n, nb, n, n * nb, batch);
+    MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
 
     const int k = n - 1;
     const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");

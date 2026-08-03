@@ -107,14 +107,22 @@ static_assert(kTpr <= 32 && kRowsPar * kTpr == kWg);
 
 } // namespace
 
+// Single description of sytrd_sb2st_hh's workspace; see workspace_bytes() in
+// util/mempool.hh. The expanded working band is wider than the input band
+// because transient bulge fill reaches kd rows below it.
+template <typename T>
+Span<T> sytrd_sb2st_hh_layout(Queue& ctx, BumpAllocator& pool, int32_t n, int32_t kdw, int32_t batch) {
+    return pool.allocate<T>(
+        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+}
+
 template <Backend B, typename T>
 size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch) {
     if (n <= 0 || batch <= 0) return 0;
     const int32_t kdw = sb2st_hh_work_bandwidth(n, kd);
-    size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(
-        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
-    return size;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
+    });
 }
 
 // ab_in      : (kd+1) x n  lower band, read-only
@@ -152,9 +160,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
     BumpAllocator pool(ws);
 
-    // Expanded working band: transient bulge fill reaches kd rows below the band.
-    auto abw = pool.allocate<T>(
-        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto abw = sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
 
     const int32_t ldw = kdw + 1;
 

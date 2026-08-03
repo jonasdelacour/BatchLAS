@@ -8,33 +8,52 @@
 
 namespace batchlas {
 
+    template <typename T>
+    struct InvWorkspace {
+        MatrixView<T, MatrixFormat::Dense> Acopy;
+        Span<int64_t> pivots;
+        Span<std::byte> getri_ws;
+        Span<std::byte> getrf_ws;
+    };
+
+    // Single description of inv's workspace; see workspace_bytes() in
+    // util/mempool.hh. Note the nested size queries ask about the caller's A,
+    // not about Acopy: Acopy lives in the workspace and has no backing memory
+    // while this runs. The two are shape-identical, which is what makes that
+    // substitution sound.
+    template <Backend B, typename T>
+    InvWorkspace<T> inv_layout(Queue& ctx,
+                               BumpAllocator& pool,
+                               const MatrixView<T, MatrixFormat::Dense>& A) {
+        auto data = pool.allocate<T>(ctx, A.data().size());
+        auto ptrs = pool.allocate<T*>(ctx, A.batch_size());
+        return {
+            MatrixView<T, MatrixFormat::Dense>(data.data(),
+                                               A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
+                                               ptrs.data()),
+            pool.allocate<int64_t>(ctx, A.rows() * A.batch_size()),
+            pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, A)),
+            pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, A)),
+        };
+    }
+
     template <Backend B, typename T>
     Event inv(Queue& ctx,
               const MatrixView<T, MatrixFormat::Dense>& A,
               const MatrixView<T, MatrixFormat::Dense>& Ainv,
               Span<std::byte> workspace) {
         BumpAllocator pool(workspace);
-        auto Acopy = MatrixView<T, MatrixFormat::Dense>(
-            pool.allocate<T>(ctx, A.data().size()).data(),
-            A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-            pool.allocate<T*>(ctx, A.batch_size()).data());
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, Acopy, A);
-        auto pivots = pool.allocate<int64_t>(ctx, A.rows()*A.batch_size());
-        auto getri_ws = pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, Acopy));
-        auto getrf_ws = pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, Acopy));
-        getrf<B>(ctx, Acopy, pivots, getrf_ws);
-        getri<B>(ctx, Acopy, Ainv, pivots, getri_ws);
+        auto ws = inv_layout<B, T>(ctx, pool, A);
+        MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
+        getrf<B>(ctx, ws.Acopy, ws.pivots, ws.getrf_ws);
+        getri<B>(ctx, ws.Acopy, Ainv, ws.pivots, ws.getri_ws);
         return ctx.get_event();
     }
 
     template <Backend B, typename T>
     size_t inv_buffer_size(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A) {
-        return  BumpAllocator::allocation_size<T>(ctx, A.data().size()) +
-                BumpAllocator::allocation_size<T*>(ctx, A.batch_size()) +
-                BumpAllocator::allocation_size<int64_t>(ctx, A.rows()*A.batch_size()) +
-                BumpAllocator::allocation_size<std::byte>(ctx, getri_buffer_size<B>(ctx, A)) +
-                BumpAllocator::allocation_size<std::byte>(ctx, getrf_buffer_size<B>(ctx, A));
+        return workspace_bytes([&](BumpAllocator& pool) { return inv_layout<B, T>(ctx, pool, A); });
     }
 
     template <Backend B, typename T>

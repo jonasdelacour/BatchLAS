@@ -740,6 +740,27 @@ Event btrd_lower_inplace(Queue& q,
 
 } // namespace
 
+template <typename T>
+struct Sb2stWorkspace {
+    Span<T> ab_work;                        // AB work copy: (kd+1) x n per batch
+    Span<typename base_type<T>::type> c;    // Givens cosines: n+kd+2 per batch
+    Span<T> work;                           // Givens sines / scratch: n+kd+2 per batch
+};
+
+// Single description of sytrd_sb2st's unified band-only (SBTRD/HBTRD-style)
+// workspace; see workspace_bytes() in util/mempool.hh.
+template <typename T>
+Sb2stWorkspace<T> sytrd_sb2st_layout(Queue& ctx, BumpAllocator& pool, int n, int kd_i, int batch) {
+    using Real = typename base_type<T>::type;
+    const int ldab = kd_i + 1;
+    const size_t ab_elems = static_cast<size_t>(ldab) * static_cast<size_t>(n) * static_cast<size_t>(batch);
+    const size_t rot_elems = static_cast<size_t>(n + kd_i + 2) * static_cast<size_t>(batch);
+    auto ab_work = pool.allocate<T>(ctx, ab_elems);
+    auto c = pool.allocate<Real>(ctx, rot_elems);
+    auto work = pool.allocate<T>(ctx, rot_elems);
+    return {ab_work, c, work};
+}
+
 template <Backend B, typename T>
 size_t sytrd_sb2st_buffer_size(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -756,25 +777,12 @@ size_t sytrd_sb2st_buffer_size(Queue& ctx,
 
     (void)block_size;
 
-    size_t size = 0;
-
     const int kd_i = std::max<int>(0, kd);
     if (n <= 0) return 0;
 
-    // Unified band-only (SBTRD/HBTRD-style) workspace:
-    // - AB work copy: (kd+1) x n per batch
-    // - C array: length (n+kd+2) per batch (real)
-    // - WORK array: length (n+kd+2) per batch (T; real for real types, complex for complex types)
-    const int ldab = kd_i + 1;
-    const size_t ab_elems = static_cast<size_t>(ldab) * static_cast<size_t>(n) * static_cast<size_t>(batch);
-    size += BumpAllocator::allocation_size<T>(ctx, ab_elems);
-
-    const size_t rot_elems = static_cast<size_t>(n + kd_i + 2) * static_cast<size_t>(batch);
-    using Real = typename base_type<T>::type;
-    size += BumpAllocator::allocation_size<Real>(ctx, rot_elems); // C
-    size += BumpAllocator::allocation_size<T>(ctx, rot_elems);    // WORK
-
-    return size;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return sytrd_sb2st_layout<T>(ctx, pool, n, kd_i, batch);
+    });
 }
 
 template <Backend B, typename T>
@@ -816,10 +824,9 @@ Event sytrd_sb2st(Queue& ctx,
     BumpAllocator pool(ws);
 
     // Unified band-only SB2ST/HBTRD: copy AB into a mutable workspace and run bulge chasing.
+    auto sb2st_ws = sytrd_sb2st_layout<T>(ctx, pool, n, kd_i, batch);
     const int ldab = kd_i + 1;
-    const size_t ab_elems = static_cast<size_t>(ldab) * static_cast<size_t>(n) * static_cast<size_t>(batch);
-    auto ab_work = pool.allocate<T>(ctx, ab_elems);
-    T* ab_ptr = ab_work.data();
+    T* ab_ptr = sb2st_ws.ab_work.data();
 
     {
         const int stride_out = ldab * n;
@@ -841,9 +848,8 @@ Event sytrd_sb2st(Queue& ctx,
     }
 
     using Real = typename base_type<T>::type;
-    const size_t rot_elems = static_cast<size_t>(n + kd_i + 2) * static_cast<size_t>(batch);
-    auto c_buf = pool.allocate<Real>(ctx, rot_elems);
-    auto work_buf = pool.allocate<T>(ctx, rot_elems);
+    auto c_buf = sb2st_ws.c;
+    auto work_buf = sb2st_ws.work;
 
     KernelMatrixView<T, MatrixFormat::Dense> ABwork(ab_ptr, ldab, n, ldab, ldab * n, batch);
     VectorView<Real> Cv(c_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));

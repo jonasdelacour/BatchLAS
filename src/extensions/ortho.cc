@@ -24,6 +24,71 @@ namespace batchlas {
     template <Backend B, typename T>
     struct StridedCopyKernel {};
 
+    template <typename T>
+    struct OrthoWorkspace {
+        MatrixView<T, MatrixFormat::Dense> C;   // k x k Gram matrix A^H A
+        Span<std::byte> potrf_ws;
+        Span<typename base_type<T>::type> diags;
+        Span<typename base_type<T>::type> lambdas;
+        Span<std::byte> syev_ws;
+        Span<T> output_basis;
+        Span<T> Ymem;                           // CGS2 only
+        Span<T> tau;                            // Householder only
+        Span<std::byte> geqrf_ws;
+        Span<std::byte> orgqr_ws;
+    };
+
+    // Single description of ortho's workspace; see workspace_bytes() in
+    // util/mempool.hh.
+    //
+    // Every branch is allocated with a zero size when its algorithm was not
+    // selected, which is how the mutually exclusive tails (CGS2's Ymem versus
+    // Householder's tau/geqrf/orgqr) stay in one linear description.
+    //
+    // The nested size queries are asked about C, `lambdas` and `tau`, all of
+    // which live in this workspace. That is sound only because none of those
+    // queries dereferences the pointer it is given -- the previous sizing code
+    // passed literal nullptrs to exactly these calls.
+    template <Backend B, typename T>
+    OrthoWorkspace<T> ortho_layout(Queue& ctx,
+                                   BumpAllocator& pool,
+                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                   int64_t m,
+                                   int64_t k,
+                                   OrthoAlgorithm algo) {
+        using float_t = typename base_type<T>::type;
+        constexpr auto fmt = MatrixFormat::Dense;
+        const auto batch_size = A.batch_size();
+
+        const bool is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 ||
+                                 algo == OrthoAlgorithm::ShiftChol3;
+        const bool is_svqb = algo == OrthoAlgorithm::SVQB || algo == OrthoAlgorithm::SVQB2;
+        const bool is_cgs = algo == OrthoAlgorithm::CGS2;
+        const bool is_householder = algo == OrthoAlgorithm::Householder;
+
+        auto ATA = pool.allocate<T>(ctx, k * k * batch_size);
+        auto matAmem = pool.allocate<T*>(ctx, batch_size);
+        auto matATAmem = pool.allocate<T*>(ctx, batch_size);
+        static_cast<void>(matAmem);
+
+        auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data());
+        auto potrf_ws = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
+
+        auto diags = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
+        auto lambdas = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
+        auto syev_ws = pool.allocate<std::byte>(
+            ctx, is_svqb ? syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower) : 0);
+        auto output_basis = pool.allocate<T>(ctx, is_svqb ? batch_size * m * k : 0);
+
+        auto Ymem = pool.allocate<T>(ctx, is_cgs ? batch_size * m : 0);
+
+        auto tau = pool.allocate<T>(ctx, is_householder ? k * batch_size : 0);
+        auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, A, tau) : 0);
+        auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, A, tau) : 0);
+
+        return {C, potrf_ws, diags, lambdas, syev_ws, output_basis, Ymem, tau, geqrf_ws, orgqr_ws};
+    }
+
     template <Backend B, typename T>
     Event ortho(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -48,16 +113,12 @@ namespace batchlas {
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
         //Else if k > m && transA == Trans the rows of A are linearly dependent
-        auto ATA =          pool.allocate<T>(ctx, k*k*batch_size);
-        auto matAmem =      pool.allocate<T*>(ctx, batch_size);
-        auto matATAmem =    pool.allocate<T*>(ctx, batch_size);
-        auto ATA_stride = k*k;
-        auto is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3;
+        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo);
+        auto C = wsl.C;
+        auto potrf_workspace = wsl.potrf_ws;
+        auto ATA_stride = k * k;
 
-        auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, ATA_stride, batch_size, matATAmem.data());
-        auto potrf_workspace = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
-        
-        
+
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
         auto square = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
         
@@ -78,7 +139,7 @@ namespace batchlas {
             //2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
             //3. Normalize A[:,0 .. k-1]
             //Repeat until all vectors are orthogonal
-            auto Ymem = pool.allocate<T>(ctx, batch_size * m);
+            auto Ymem = wsl.Ymem;
             auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
             for (int i = 0; i < k; i++){
                 //View of the first i vectors (either columns or rows of A depending on transA)
@@ -154,15 +215,10 @@ namespace batchlas {
             chol_alg();
         };
         
-        auto is_alg_svqb = (algo == OrthoAlgorithm::SVQB) || (algo == OrthoAlgorithm::SVQB2);
-        auto diags = pool.allocate<float_t>(ctx, is_alg_svqb ? batch_size * k : 0 );
-        auto lambdas = pool.allocate<float_t>(ctx, is_alg_svqb ? batch_size * k : 0 );
-        size_t svqb_syev_ws = 0;
-        if (is_alg_svqb) {
-            svqb_syev_ws = syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower);
-        }
-        auto syev_workspace = pool.allocate<std::byte>(ctx, svqb_syev_ws);
-        auto output_basis = pool.allocate<T>(ctx, is_alg_svqb ? batch_size * m * k : 0);
+        auto diags = wsl.diags;
+        auto lambdas = wsl.lambdas;
+        auto syev_workspace = wsl.syev_ws;
+        auto output_basis = wsl.output_basis;
 
         auto svqb_alg = [&](auto in_mat, auto out_mat) {
             //Compute A^H * A
@@ -242,11 +298,8 @@ namespace batchlas {
                 shift_chol_alg();
                 break;
             case OrthoAlgorithm::Householder: {
-                auto tau = pool.allocate<T>(ctx, k * batch_size);
-                auto geqrf_workspace = pool.allocate<std::byte>(ctx, geqrf_buffer_size<B>(ctx, A, tau));
-                auto orgqr_workspace = pool.allocate<std::byte>(ctx, orgqr_buffer_size<B>(ctx, A, tau));
-                geqrf<B>(ctx, A, tau, geqrf_workspace);
-                orgqr<B>(ctx, A, tau, orgqr_workspace);
+                geqrf<B>(ctx, A, wsl.tau, wsl.geqrf_ws);
+                orgqr<B>(ctx, A, wsl.tau, wsl.orgqr_ws);
                 break;
             }
             case OrthoAlgorithm::CGS2:
@@ -287,42 +340,13 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Transpose transA,
                              OrthoAlgorithm algo) {
-        size_t size = 0;
         auto [m, k] = get_effective_dims(A, transA);
-        auto batch_size = A.batch_size();
         if constexpr (B == Backend::NETLIB) {
             algo = OrthoAlgorithm::Householder;
         }
-        
-        // Create temporary matrices for calculating buffer sizes
-        auto temp_C = MatrixView<T, MatrixFormat::Dense>(nullptr, k, k, k, k * k, batch_size);
-        auto temp_view = MatrixView<T, MatrixFormat::Dense>(nullptr, m, k, m, m * k, batch_size);
-        auto is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 || algo == OrthoAlgorithm::ShiftChol3;
-
-        auto mem_for_svqb = (algo == OrthoAlgorithm::SVQB || algo == OrthoAlgorithm::SVQB2) ?
-            (BumpAllocator::allocation_size<std::byte>(
-                 ctx,
-                 syev_buffer_size<B>(ctx, temp_C, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower)) +
-            BumpAllocator::allocation_size<T>(ctx, k * batch_size) +
-            BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, k * batch_size) +
-            BumpAllocator::allocation_size<T>(ctx, m * k * batch_size)) : 0;
-        
-        auto mem_for_cgs = algo == OrthoAlgorithm::CGS2 ? 
-            (BumpAllocator::allocation_size<T>(ctx, m * batch_size)) : 0;
-
-        auto mem_for_householder = algo == OrthoAlgorithm::Householder ? 
-            (BumpAllocator::allocation_size<T>(ctx, k * batch_size) + 
-             BumpAllocator::allocation_size<std::byte>(ctx, geqrf_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k))) +
-             BumpAllocator::allocation_size<std::byte>(ctx, orgqr_buffer_size<B>(ctx, temp_view, Span<T>(nullptr, k)))) : 0;
-        
-        return  BumpAllocator::allocation_size<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, temp_C, Uplo::Lower) : 0) +
-                BumpAllocator::allocation_size<T>(ctx, k*k*batch_size) +
-                BumpAllocator::allocation_size<T>(ctx, m*batch_size)+ 
-                BumpAllocator::allocation_size<T>(ctx, m*k*batch_size) +
-                mem_for_svqb +
-                mem_for_cgs +
-                mem_for_householder;
-
+        return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
+            return ortho_layout<B, T>(ctx, pool, A, m, k, algo);
+        });
     }
 
     template <Backend B, typename T>

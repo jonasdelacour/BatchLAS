@@ -273,6 +273,13 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
 
 } // namespace
 
+// Single description of bdsqr's workspace; see workspace_bytes() in
+// util/mempool.hh.
+template <typename T>
+Span<int32_t> bdsqr_layout(Queue& ctx, BumpAllocator& pool, int32_t batch) {
+    return pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
+}
+
 template <Backend B, typename T>
 Event bdsqr(Queue& ctx,
             const VectorView<T>& d,
@@ -331,7 +338,7 @@ Event bdsqr(Queue& ctx,
     } else {
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
         BumpAllocator pool(ws_mut);
-        auto fail_flags = pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
+        auto fail_flags = bdsqr_layout<T>(ctx, pool, batch);
         const bool ok = bdsqr_implicit_qr_attempt<T>(ctx,
                                                      d,
                                                      e,
@@ -356,7 +363,9 @@ size_t bdsqr_buffer_size(Queue& ctx,
                          Span<T> singular_values_out) {
     static_cast<void>(e);
     static_cast<void>(singular_values_out);
-    return BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(d.batch_size()));
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return bdsqr_layout<T>(ctx, pool, static_cast<int32_t>(d.batch_size()));
+    });
 }
 
 #define BDSQR_INSTANTIATE(back, fp) \

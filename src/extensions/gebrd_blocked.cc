@@ -28,6 +28,29 @@ inline int32_t gebrd_blocked_resolved_nb(int32_t block_size) {
 }
 
 template <typename T>
+struct GebrdBlockedWorkspace {
+    MatrixView<T, MatrixFormat::Dense> x;
+    MatrixView<T, MatrixFormat::Dense> y;
+};
+
+// Single description of gebrd_blocked's workspace; see workspace_bytes() in
+// util/mempool.hh.
+template <typename T>
+GebrdBlockedWorkspace<T> gebrd_blocked_layout(Queue& ctx,
+                                              BumpAllocator& pool,
+                                              int32_t m,
+                                              int32_t n,
+                                              int32_t nb,
+                                              int32_t batch) {
+    auto x_buf = pool.allocate<T>(ctx, static_cast<size_t>(m) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    auto y_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    return {
+        MatrixView<T, MatrixFormat::Dense>(x_buf.data(), m, nb, m, static_cast<int64_t>(m) * static_cast<int64_t>(nb), batch),
+        MatrixView<T, MatrixFormat::Dense>(y_buf.data(), n, nb, n, static_cast<int64_t>(n) * static_cast<int64_t>(nb), batch),
+    };
+}
+
+template <typename T>
 inline void validate_gebrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 const VectorView<typename base_type<T>::type>& d,
                                 const VectorView<typename base_type<T>::type>& e,
@@ -116,10 +139,9 @@ Event gebrd_blocked_real(Queue& ctx,
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
 
-    auto x_buf = pool.allocate<T>(ctx, static_cast<size_t>(m) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    auto y_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> x_mat(x_buf.data(), m, nb, m, static_cast<int64_t>(m) * static_cast<int64_t>(nb), batch);
-    MatrixView<T, MatrixFormat::Dense> y_mat(y_buf.data(), n, nb, n, static_cast<int64_t>(n) * static_cast<int64_t>(nb), batch);
+    auto ws_layout = gebrd_blocked_layout<T>(ctx, pool, m, n, nb, batch);
+    MatrixView<T, MatrixFormat::Dense> x_mat = ws_layout.x;
+    MatrixView<T, MatrixFormat::Dense> y_mat = ws_layout.y;
     const int32_t panel_wg = std::min<int32_t>(128, static_cast<int32_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()));
 
     for (int32_t j0 = 0; j0 < k_total; j0 += nb) {
@@ -376,15 +398,14 @@ size_t gebrd_blocked_buffer_size(Queue& ctx,
                                  int32_t block_size) {
     validate_gebrd_dims(a, d, e, tauq, taup, "gebrd_blocked_buffer_size");
 
-    const size_t m = static_cast<size_t>(a.rows());
-    const size_t n = static_cast<size_t>(a.cols());
-    const size_t batch = static_cast<size_t>(a.batch_size());
-    const size_t nb = static_cast<size_t>(gebrd_blocked_resolved_nb(block_size));
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t batch = static_cast<int32_t>(a.batch_size());
+    const int32_t nb = gebrd_blocked_resolved_nb(block_size);
 
-    size_t bytes = 0;
-    bytes += BumpAllocator::allocation_size<T>(ctx, m * nb * batch);
-    bytes += BumpAllocator::allocation_size<T>(ctx, n * nb * batch);
-    return bytes;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return gebrd_blocked_layout<T>(ctx, pool, m, n, nb, batch);
+    });
 }
 
 #define GEBRD_BLOCKED_INSTANTIATE(back, fp) \

@@ -687,6 +687,143 @@ TEST_F(BumpAllocatorTest, QueueVsDeviceConsistency) {
               BumpAllocator::allocation_size<double>(*queue, 50));
 }
 
+// ---- sizing mode -----------------------------------------------------------
+
+// Replays an allocation sequence against whichever pool it is handed. This is
+// the shape every converted *_buffer_size / implementation pair takes: one
+// layout function, called once in sizing mode and once for real.
+static void replay_layout(BumpAllocator& pool, const Device& device) {
+    const size_t n = 97;      // deliberately not a multiple of any alignment
+    const size_t batch = 5;
+    pool.allocate<float>(device, n * n * batch);
+    pool.allocate<int>(device, n * batch);
+    pool.allocate<std::byte>(device, 1);
+    pool.allocate<double>(device, n);
+    pool.allocate<float*>(device, batch);
+    pool.allocate<std::complex<double>>(device, n * batch);
+    pool.allocate<char>(device, 3);
+    pool.allocate<std::byte>(device, 4096);
+    // Deliberately ends on an extent that is not a multiple of the alignment:
+    // that is the case where "bytes consumed" and "bytes required" diverge.
+    pool.allocate<float>(device, 5);
+}
+
+// The contract: a real pool given required_bytes() satisfies the same sequence.
+//
+// Note the subtlety this is guarding. allocate() checks the alignment-rounded
+// size against the bytes left, but advances the cursor only by the raw extent,
+// so "bytes the sequence consumes" is strictly smaller than "bytes the sequence
+// needs to be handed". Sizing mode has to report the latter.
+TEST_F(BumpAllocatorTest, MeasuredSizeSufficesForRealAllocation) {
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    const size_t measured = sizer.required_bytes();
+    EXPECT_GT(measured, 0u);
+
+    // A real pool of exactly that size, based at a device-aligned address.
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
+    ASSERT_NE(mem, nullptr);
+
+    BumpAllocator real(reinterpret_cast<std::byte*>(mem), measured);
+    EXPECT_NO_THROW(replay_layout(real, device));
+
+    std::free(mem);
+}
+
+// Callers add a callee's reported size into their own running total and then
+// re-serve it with allocate<std::byte>(), which rounds the request up. A sizing
+// result that is not itself an alignment multiple therefore under-provisions
+// every such caller. Summed allocation_size totals always had this property;
+// sizing mode has to keep it.
+TEST_F(BumpAllocatorTest, MeasuredSizeIsAnAlignmentMultiple) {
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    EXPECT_EQ(sizer.required_bytes() % device_align, 0u);
+
+    // Including the degenerate case of a single ragged allocation.
+    auto one = BumpAllocator::measuring();
+    one.allocate<float>(device, 5);
+    EXPECT_EQ(one.required_bytes() % device_align, 0u);
+    EXPECT_EQ(one.required_bytes(), BumpAllocator::allocation_size<float>(device, 5));
+}
+
+// ...and it is tight: what is left over is under a single alignment quantum,
+// so the figure is a real size and not a padded guess.
+TEST_F(BumpAllocatorTest, MeasuredSizeIsTight) {
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    const size_t measured = sizer.required_bytes();
+
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
+    ASSERT_NE(mem, nullptr);
+
+    BumpAllocator real(reinterpret_cast<std::byte*>(mem), measured);
+    replay_layout(real, device);
+    EXPECT_LT(real.remaining().size(), device_align);
+
+    std::free(mem);
+}
+
+// Sizing mode is never larger than the hand-summed allocation_size total that
+// the *_buffer_size functions use today, so converting a call site can only
+// shrink its workspace, never grow it.
+TEST_F(BumpAllocatorTest, MeasuredSizeNeverExceedsSummedAllocationSize) {
+    const size_t n = 97, batch = 5;
+    size_t summed = 0;
+    summed += BumpAllocator::allocation_size<float>(device, n * n * batch);
+    summed += BumpAllocator::allocation_size<int>(device, n * batch);
+    summed += BumpAllocator::allocation_size<std::byte>(device, 1);
+    summed += BumpAllocator::allocation_size<double>(device, n);
+    summed += BumpAllocator::allocation_size<float*>(device, batch);
+    summed += BumpAllocator::allocation_size<std::complex<double>>(device, n * batch);
+    summed += BumpAllocator::allocation_size<char>(device, 3);
+    summed += BumpAllocator::allocation_size<std::byte>(device, 4096);
+    summed += BumpAllocator::allocation_size<float>(device, 5);
+
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    EXPECT_LE(sizer.required_bytes(), summed);
+}
+
+// Sizing mode hands out aligned, non-null, distinct, non-overlapping addresses
+// so that views can be built over it -- it just never backs them with memory.
+TEST_F(BumpAllocatorTest, MeasuringHandsOutUsableButUnbackedAddresses) {
+    auto sizer = BumpAllocator::measuring();
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto a = sizer.allocate<float>(device, 10);
+    auto b = sizer.allocate<double>(device, 10);
+    EXPECT_NE(a.data(), nullptr);
+    EXPECT_NE(b.data(), nullptr);
+    EXPECT_EQ(a.size(), 10u);
+    EXPECT_EQ(b.size(), 10u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(a.data()) % device_align, 0u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(b.data()) % device_align, 0u);
+    EXPECT_GE(reinterpret_cast<std::byte*>(b.data()),
+              reinterpret_cast<std::byte*>(a.data()) + 10 * sizeof(float));
+
+    // Zero-size behaves as it does for a real pool, and costs nothing.
+    const size_t before = sizer.required_bytes();
+    auto z = sizer.allocate<int>(device, 0);
+    EXPECT_EQ(z.data(), nullptr);
+    EXPECT_EQ(sizer.required_bytes(), before);
+}
+
+TEST_F(BumpAllocatorTest, MeasuringRejectsQueriesThatMeanNothing) {
+    auto sizer = BumpAllocator::measuring();
+    EXPECT_TRUE(sizer.is_measuring());
+    // No real tail exists, so a callee cannot size itself against it.
+    EXPECT_THROW((void)sizer.remaining(), std::runtime_error);
+
+    BumpAllocator real(buffer.get(), buffer_size);
+    EXPECT_FALSE(real.is_measuring());
+    EXPECT_THROW((void)real.required_bytes(), std::runtime_error);
+}
+
 // Stress test with many small allocations
 TEST_F(BumpAllocatorTest, ManySmallAllocations) {
     BumpAllocator pool(buffer.get(), buffer_size);
