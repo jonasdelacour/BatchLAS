@@ -232,9 +232,12 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     constexpr Backend B = TestFixture::BackendType;
     const int n = 1024;
     // This case builds a dense n x n x batch reference (537 MB at batch=128 in
-    // float) and runs a full SYEV over it. Keep the deep recursion that n=1024
-    // exercises; drop the batch multiplicity, which added no coverage.
-    const int batch = 8;
+    // float) and runs a full SYEV over it -- on the host for the NETLIB
+    // instantiations, where it dominates this whole binary. Keep the deep
+    // recursion that n=1024 exercises (6 merge levels at recursion_threshold
+    // =16); drop the batch multiplicity, which added no coverage. Batched
+    // behaviour at large n is still covered by BatchedMatrices above.
+    const int batch = 4;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::random(n, batch);
