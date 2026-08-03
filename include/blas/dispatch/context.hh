@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 #include <util/sycl-device-queue.hh>
@@ -11,6 +12,10 @@ namespace batchlas::blas::dispatch {
 struct DeviceCaps {
     bool is_gpu = false;
     int max_sub_group = 0;
+    // Work-group local (shared) memory in bytes.  Used to size the CTA
+    // eigensolver's per-problem tile; 0 means "unknown", which callers treat
+    // as "assume the conservative minimum".
+    std::size_t local_mem_size = 0;
     std::string name;
 };
 
@@ -39,6 +44,12 @@ inline DeviceCaps query_caps(Queue& q) {
 
     try {
         out.max_sub_group = static_cast<int>(q.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+    } catch (...) {
+        // leave default
+    }
+
+    try {
+        out.local_mem_size = static_cast<std::size_t>(q.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
     } catch (...) {
         // leave default
     }

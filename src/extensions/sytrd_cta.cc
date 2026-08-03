@@ -1,6 +1,7 @@
 #include <blas/matrix.hh>
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
+#include <blas/cta_limits.hh>
 #include <blas/extra.hh>
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
@@ -20,10 +21,14 @@ using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 
-    template <typename T, size_t P, bool Upper>
+    template <typename T, size_t P, bool Upper, bool UseWg>
     class Sytd2CTAKernel;
 
-    template <typename T, size_t P, bool Upper>
+    // UseWg == false: P lanes of a warp (SubGroupPartition), several problems per
+    //                 work-group.  Requires P <= 32.
+    // UseWg == true : one whole work-group of P work-items per problem, collectives
+    //                 backed by shared memory (WorkGroupPartition).  Lifts P > 32.
+    template <typename T, size_t P, bool Upper, bool UseWg = false>
     inline void sytd2_cta_impl(Queue& ctx,
                               MatrixView<T, MatrixFormat::Dense>& a,
                               VectorView<T>& d,
@@ -54,58 +59,66 @@ namespace batchlas {
             // CTA path assumes warp-sized sub-groups on NVIDIA.
             const int32_t sg_size = 32;
 
-            // Baseline work-group size is LCM(P, sg_size), so we can form fixed-size partitions of size P.
-            const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
-            int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1), static_cast<int32_t>(cta_wg_size_multiplier));
-            int32_t wg_size = base_wg_size * wg_size_multiplier;
+            int32_t wg_size = 0;
+            int32_t probs_per_wg = 1;
 
-            const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
-            if (wg_size > max_wg_size) {
-                const int32_t max_mul = std::max<int32_t>(int32_t(1), max_wg_size / base_wg_size);
-                wg_size_multiplier = std::min(wg_size_multiplier, max_mul);
+            if constexpr (UseWg) {
+                // One work-group per problem; the partition *is* the work-group.
+                wg_size = static_cast<int32_t>(P);
+                probs_per_wg = 1;
+            } else {
+                // Baseline work-group size is LCM(P, sg_size), so we can form fixed-size partitions of size P.
+                const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
+                int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1), static_cast<int32_t>(cta_wg_size_multiplier));
                 wg_size = base_wg_size * wg_size_multiplier;
+
+                const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
+                if (wg_size > max_wg_size) {
+                    const int32_t max_mul = std::max<int32_t>(int32_t(1), max_wg_size / base_wg_size);
+                    wg_size_multiplier = std::min(wg_size_multiplier, max_mul);
+                    wg_size = base_wg_size * wg_size_multiplier;
+                }
+
+                // Clamp by local memory usage: per-problem local storage is
+                //   A_local: P*P, V_local: P, W_local: P
+                // and probs_per_wg = wg_size / P.
+                {
+                    const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
+                    const std::size_t elems_per_prob = static_cast<std::size_t>(P) * static_cast<std::size_t>(P)
+                                                     + static_cast<std::size_t>(2) * static_cast<std::size_t>(P);
+                    const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
+                    const int32_t max_probs = (bytes_per_prob == 0)
+                                                  ? int32_t(1)
+                                                  : std::max<int32_t>(int32_t(1), static_cast<int32_t>(local_mem_bytes / bytes_per_prob));
+                    wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
+                    wg_size = base_wg_size * wg_size_multiplier;
+                }
+
+                probs_per_wg = wg_size / static_cast<int32_t>(P);
             }
 
-            // Clamp by local memory usage: per-problem local storage is
-            //   A_local: P*P, V_local: P, W_local: P
-            // and probs_per_wg = wg_size / P.
-            {
-                const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
-                const std::size_t elems_per_prob = static_cast<std::size_t>(P) * static_cast<std::size_t>(P)
-                                                 + static_cast<std::size_t>(2) * static_cast<std::size_t>(P);
-                const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
-                const int32_t max_probs = (bytes_per_prob == 0)
-                                              ? int32_t(1)
-                                              : std::max<int32_t>(int32_t(1), static_cast<int32_t>(local_mem_bytes / bytes_per_prob));
-                wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
-                wg_size = base_wg_size * wg_size_multiplier;
-            }
-
-            const int32_t probs_per_wg = wg_size / static_cast<int32_t>(P);
             const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
             const int32_t global_size = num_wg * wg_size;
 
             // Local storage per problem:
             // - Full P x P tile for A (column-major)
             // - Two length-P vectors (v and w)
+            // - (work-group partition only) a length-P collective scratch buffer
             auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+            auto S_local = sycl::local_accessor<T, 1>(sycl::range<1>(UseWg ? P : std::size_t(1)), cgh);
 
-            cgh.parallel_for<Sytd2CTAKernel<T, P, Upper>>(
+            cgh.parallel_for<Sytd2CTAKernel<T, P, Upper, UseWg>>(
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto wg = it.get_group();
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
-                    const auto sg = it.get_sub_group();
-                    const auto part = make_partition<P>(sg);
-
-                    // Make part_id unique across sub-groups in the work-group.
-                    const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                    const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
-                    const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
-
+                    // The per-problem body, generic over the partition flavour.
+                    // Note the only early exit is work-group-uniform when
+                    // UseWg, which the shared-memory barriers require.
+                    auto run = [&](const auto& part, int32_t part_id) {
                     const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     if (prob_id >= static_cast<int32_t>(batch_size)) return;
@@ -279,11 +292,26 @@ namespace batchlas {
                             A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
                         }
                     }
+                    }; // run
+
+                    if constexpr (UseWg) {
+                        run(WorkGroupPartition<P>(wg, static_cast<void*>(&S_local[0])), 0);
+                    } else {
+                        const auto sg = it.get_sub_group();
+                        const auto part = make_partition<P>(sg);
+
+                        // Make part_id unique across sub-groups in the work-group.
+                        const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
+                        const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
+                        run(part, sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id()));
+                    }
                 });
         });
     }
 
-    // Public wrapper: pick a compile-time P in {4,8,16,32} and choose triangle at runtime.
+    // Public wrapper: pick a compile-time P in {4,8,16,32,64,128} and choose the
+    // triangle at runtime.  P <= 32 uses a warp-chunk partition; P > 32 uses one
+    // whole work-group per problem with shared-memory collectives.
     // This is unblocked (SYTD2-style), so it is meant for very small n.
     template <Backend B, typename T>
     Event sytrd_cta(Queue& ctx,
@@ -306,8 +334,11 @@ namespace batchlas {
         }
 
         const int32_t n = static_cast<int32_t>(n64);
-        if (n < 1 || n > 32) {
-            throw std::invalid_argument("sytrd_cta currently supports 1 <= n <= 32.");
+        const int32_t max_n = cta_max_partition(
+            sizeof(T),
+            static_cast<std::size_t>(ctx->get_device().get_info<sycl::info::device::local_mem_size>()));
+        if (n < 1 || n > max_n) {
+            throw std::invalid_argument("sytrd_cta: n out of range for the CTA partition width.");
         }
 
         // Make mutable views (A is overwritten, D/E/TAU are outputs).
@@ -341,6 +372,17 @@ namespace batchlas {
             }
         };
 
+        // n > 32 cannot be expressed as a chunk of a warp; run one whole
+        // work-group per problem with shared-memory collectives instead.
+        auto launch_wg = [&](auto P_tag, bool upper) {
+            constexpr int32_t P = decltype(P_tag)::value;
+            if (upper) {
+                sytd2_cta_impl<T, P, true, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier);
+            } else {
+                sytd2_cta_impl<T, P, false, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier);
+            }
+        };
+
         const bool upper = (uplo == Uplo::Upper);
 
         if (n <= 4) {
@@ -349,8 +391,12 @@ namespace batchlas {
             launch(std::integral_constant<int32_t, 8>{}, upper);
         } else if (n <= 16) {
             launch(std::integral_constant<int32_t, 16>{}, upper);
-        } else {
+        } else if (n <= 32) {
             launch(std::integral_constant<int32_t, 32>{}, upper);
+        } else if (n <= 64) {
+            launch_wg(std::integral_constant<int32_t, 64>{}, upper);
+        } else {
+            launch_wg(std::integral_constant<int32_t, 128>{}, upper);
         }
 
         return ctx.get_event();

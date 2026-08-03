@@ -1,5 +1,7 @@
 #pragma once
 
+#include <blas/cta_limits.hh>
+
 #include <stdexcept>
 
 #include <util/sycl-device-queue.hh>
@@ -94,9 +96,12 @@ template <typename T>
 inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int64_t n = A.rows();
     if (A.rows() != A.cols()) return false;
-    if (n < 1 || n > 32) return false;
-    // CTA supports small sizes (n<=32). Note: some sizes may be slower than others,
-    // but this predicate is about functional support, not performance heuristics.
+    // The CTA chain runs one problem per partition and keeps an n x n tile in
+    // shared memory, so the supported n is whatever the device's local memory
+    // affords for this scalar type (>= 32 always).  BATCHLAS_CTA_LARGE_N=0
+    // restores the historical n <= 32 cap.
+    if (n < 1 || n > static_cast<int64_t>(cta_max_partition(sizeof(T), caps.local_mem_size))) return false;
+    // This predicate is about functional support, not performance heuristics.
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
     return true;
