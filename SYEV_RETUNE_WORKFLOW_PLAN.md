@@ -297,12 +297,59 @@ per-n optima rather than assumed.
    derived eigenvalues-only and is applied in both. Split the constant per mode if the
    crossovers differ.
 
+### Phase 6.5 — The ideation backlog: starvation and SYEVX **[GPU + CPU]**
+
+These are the items from `SYEV_PERF_IDEATION.md` that are not already absorbed into Phases
+3–7. They are independent of the regression hunt and can occupy a GPU lane whenever Phases
+5–6 leave one idle. Each is gated on a profile, so none of them starts as a speculative
+rewrite.
+
+**6.5a — Port the grid barrier to `stedc`** (ideation #2). `stedc.cc` launches every merge
+kernel as `nd_range(batch_size * 128, 128)` — lines 140, 176, 318, 350, 396, 423 — one
+work-group per matrix, in a phase worth ~1/3 of the total flops. This is the same defect
+`87f6887` fixed in `latrd` for 1.9–4.1× at n ≥ 1024.
+
+*Profile first.* Establish, with grid-latrd enabled and at batch 1, that `stedc` is actually
+the next dominant term. If it is not, report that and stop — do not port on the strength of a
+flop count. `BATCHLAS_KERNEL_TRACE_SCOPE` markers already exist in `syev_two_stage.cc`.
+
+If it is: reuse the proven machinery verbatim — sense-reversing device-scope barrier,
+work-group count capped at `MAX_COMPUTE_UNITS` for guaranteed co-residency, fixed group order
+so reductions stay run-to-run deterministic, `G == 1` dispatching to the legacy kernel
+bit-for-bit. Gate behind `BATCHLAS_STEDC_IMPL=grid` + a measured `BATCHLAS_STEDC_GRID_MIN_N`,
+mirroring the latrd rollout exactly. The barrier count here is O(nodes) per merge level rather
+than O(n) per panel column, so expect the crossover to sit **lower** than latrd's 768.
+
+**6.5b — Profile `Filtered`'s large-batch collapse** (ideation #7). `Filtered` wins at
+n=1024/k≈1%/batch 1 (62 ms vs 114 ms Direct) and loses 6.7× at batch 64 (23.5 ms vs 3.5 ms).
+Winning when the GPU is starved and losing when it saturates is a suspicious shape: the filter
+itself is two GEMMs per Chebyshev step and should saturate well, which points at the `ortho` /
+Rayleigh–Ritz tail instead. One profile before any further tuning. If the tail is the cost,
+the same fix helps `Filtered` and LOBPCG at once — both spend their non-GEMM time in `ortho`
+plus a small projected `syev`.
+
+**6.5c — The two sweeps `SYEVX_PLAN.md` §13 lists as "now possible" and still undone.**
+Both are sweeps, not code: §7.11 the projected-`syev` provider sweep, and the §7.5
+soft-locking A/B under `Chol2` ortho (`BATCHLAS_SYEVX_SOFT_LOCK=1`), which was never
+reachable on the CPU-only build that first evaluated it.
+
+**Explicitly out of scope for this run: ideation #8**, the grid-resident whole-solve
+persistent kernel. It is the natural endpoint of the starvation work, but it should not start
+until Phases 3–7 have bounded how much of the batch-1 gap survives the cheap fixes. Record
+what is left of that gap in the Phase 9 writeup so the decision has a number attached.
+
 ### Phase 7 — Re-derive every switch point **[GPU]**
 
 With Phases 3–6 landed, every routing threshold in `include/blas/functions/syev.hh` is
 measured against stale kernels and must be regenerated:
 
-- `syev_prefer_vendor` — the 320 ≤ n ≤ 640 & batch ≥ 128 carve-out
+- `syev_prefer_vendor` — the 320 ≤ n ≤ 640 & batch ≥ 128 carve-out. This is ideation #1 and
+  it has a second reason to be stale beyond the retune: the grid-`latrd` path (`87f6887`,
+  defaulted on at n ≥ 768 by `5401f63`) landed **after** the grid was measured at `27851a6`,
+  and is worth 1.4–4.1× in exactly the region where the table records the vendor's largest
+  margins. The 15.3× at n=1024/batch=1 in that table *is* the panel-starvation cliff the grid
+  path removes. Also re-measure `latrd_grid_min_n` (768) in **eigenvector** mode — it was
+  derived eigenvalues-only and is applied in both.
 - `syev_prefer_two_stage_values` — n ≥ 512 & batch ≥ 256
 - `syev_prefer_vendor_over_cta` / `syev_cta_max_n_for_vectors` — the disabled 1.10–1.15× win
 - `syevx_select_algorithm` — the Direct / DirectSubset / Filtered boundaries
