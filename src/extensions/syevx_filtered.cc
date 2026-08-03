@@ -133,9 +133,28 @@ Event syevx_filtered(Queue& ctx,
         const int parsed = std::atoi(dv);
         if (parsed > 0) { degree = static_cast<size_t>(parsed); degree_explicit = true; }
     }
-    bool auto_degree = !degree_explicit;
+    // The derivation is OFF by default, opt in with BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1.
+    //
+    // It is a large win at small batch and a large LOSS at batch >= 4, so it cannot
+    // ship on. MEASURED (RTX 4090, float, n=1024, neigs=8, derived / fixed-10, and
+    // the two modes agree to within 0.02x so this is not a jobz effect):
+    //
+    //   batch          1      2      4      8     16
+    //   NoEigenVectors 2.18x  2.25x  0.70x  0.50x  0.48x
+    //   EigenVectors   2.20x  2.30x  0.69x  0.49x  0.48x
+    //
+    // The mechanism is the batch reduction, not the derivation itself: the degree is
+    // derived per matrix and then reduced to a MIN across the batch, so the GEMM
+    // shapes stay uniform. As the batch grows, the chance that some matrix forces a
+    // low degree tends to 1, the whole batch runs at that worst-case degree, and the
+    // outer iteration count explodes -- which is exactly the plateau at ~0.48x.
+    //
+    // Fixing it means changing the batch reduction (a per-matrix degree costs the
+    // batched GEMM shape; a quantile instead of a min would keep it), not the
+    // per-matrix formula. Until then the constant is the safer default.
+    bool auto_degree = false;
     if (const char* av = std::getenv("BATCHLAS_SYEVX_FILTER_DEGREE_AUTO")) {
-        if (std::atoi(av) == 0) auto_degree = false;
+        if (std::atoi(av) != 0 && !degree_explicit) auto_degree = true;
     }
     bool legacy_bounds = false;
     if (const char* bv = std::getenv("BATCHLAS_SYEVX_BOUNDS_LEGACY")) {
