@@ -171,7 +171,10 @@ struct StedcConfig {
     static constexpr Backend BackendVal = B;
 };
 
-using StedcTestTypes = typename test_utils::backend_types<StedcConfig>::type;
+// Every STEDC test body operates purely on `base_type<T>::type` (the real
+// scalar), so the complex instantiations re-ran the real ones bit-for-bit.
+// Drop them: they doubled the file's runtime for zero extra coverage.
+using StedcTestTypes = typename test_utils::backend_types_filtered<StedcConfig, false>::type;
 
 template <typename Config>
 class StedcTest : public test_utils::BatchLASTest<Config> {
@@ -185,7 +188,10 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 512;
-    const int batch = 128;
+    // Large-batch behaviour is covered by the n=64/batch=128 fused-CTA tests
+    // below; here `n` is what drives the divide-and-conquer merge depth, and
+    // the batch dimension only multiplies the dense reference solve.
+    const int batch = 8;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
@@ -225,7 +231,10 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 1024;
-    const int batch = 128;
+    // This case builds a dense n x n x batch reference (537 MB at batch=128 in
+    // float) and runs a full SYEV over it. Keep the deep recursion that n=1024
+    // exercises; drop the batch multiplicity, which added no coverage.
+    const int batch = 8;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::random(n, batch);

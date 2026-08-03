@@ -107,7 +107,10 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 512;
-    const int batch = 32;
+    // n=512 with eigenvectors plus a dense 512x512xbatch ritz_values check is
+    // an O(n^3)*batch job that runs on the host for the NETLIB instantiations.
+    // The closed-form Toeplitz spectrum is verified just as well at batch=8.
+    const int batch = 8;
     using float_type = typename base_type<T>::type;
 
     auto a = Vector<float_type>::ones(n, batch);
@@ -151,7 +154,8 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 128;
-    const int batch = 128;
+    // netlib_ref_eigs_dense() below is a host O(n^3) solve per batch item.
+    const int batch = 16;
     using float_type = typename base_type<T>::type;
 
     Vector<float_type> diag = Vector<float_type>::random(n, batch);
@@ -385,7 +389,11 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
-    const int batch = 1280;
+    // Each size runs a host LAPACK reference over the whole batch, so cost is
+    // linear in `batch` x 29 sizes. Large-batch dispatch stays covered by
+    // SteqrBatchedMatricesWithSchemes (batch=1280); keep the full size sweep,
+    // which is what actually exercises the block/tail boundaries.
+    const int batch = 64;
     for (int n = 4; n <= 32; ++n) {
         Vector<float_type> diag = Vector<float_type>::random(n, batch);
         Vector<float_type> sub_diag = Vector<float_type>::random(n - 1, batch);

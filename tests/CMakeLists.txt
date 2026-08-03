@@ -88,6 +88,61 @@ elseif(NOT BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     message(FATAL_ERROR "Unsupported BATCHLAS_TEST_TARGET_SET='${BATCHLAS_TEST_TARGET_SET}'. Expected one of: all, smoke")
 endif()
 
+# ---------------------------------------------------------------------------
+# Test labels, for selective runs during iteration.
+#
+#   ctest -L eig            # only the eigensolver tests
+#   ctest -LE slow          # everything except the known-expensive binaries
+#   ctest -L tridiag -LE slow
+#
+# COMPONENT: which part of the library a test covers. Pick the label matching
+# the subsystem you changed; if you touched a shared low-level piece (Queue,
+# Matrix, memory pool) run the whole suite.
+#
+# SLOW: binaries that dominate wall-clock. Keep this list honest — if a test
+# grows past ~15 s, label it here rather than letting it bloat the default run.
+# ---------------------------------------------------------------------------
+set(BATCHLAS_TEST_LABELS_util
+    sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
+    mempool_tests matrix_tests matrix_view_tests minibench_cli_tests)
+set(BATCHLAS_TEST_LABELS_blas
+    device_blas_tests gemm_tests gemv_tests symm_tests syrk_tests syr2k_tests
+    trmm_tests trsm_tests transpose_tests norm_tests cond_tests inverse_tests)
+set(BATCHLAS_TEST_LABELS_ortho
+    ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
+set(BATCHLAS_TEST_LABELS_tridiag
+    steqr_tests stedc_tests stebz_tests stein_tests
+    sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
+    sytrd_cta_tests sytrd_blocked_tests)
+set(BATCHLAS_TEST_LABELS_eig
+    syev_tests syevx_tests syev_cta_tests syev_jacobi_cta_tests
+    syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
+    lanczos_tests ritz_values_tests gesvd_tests)
+set(BATCHLAS_TEST_LABELS_sparse
+    iluk_tests)
+
+# Binaries that dominate the suite. Measured serially on this machine.
+set(BATCHLAS_SLOW_TESTS
+    stedc_tests            # heaviest: dense reference solves at n=512/1024
+    steqr_tests            # ~135 s, almost all in the NETLIB instantiations
+    sytrd_sb2st_tests      # ~70 s, launch-latency bound bulge chase
+    sytrd_sb2st_hh_tests   # 48-combo (n, kd) cross product
+    syevx_tests
+    iluk_tests
+    gesvd_tests)
+
+# Map a target to its component label.
+function(batchlas_test_component out_var test_name)
+    foreach(component util blas ortho tridiag eig sparse)
+        list(FIND BATCHLAS_TEST_LABELS_${component} ${test_name} _idx)
+        if(NOT _idx EQUAL -1)
+            set(${out_var} ${component} PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+    set(${out_var} "unlabelled" PARENT_SCOPE)
+endfunction()
+
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
     if(test_name STREQUAL "sg_compat_tests")
@@ -129,6 +184,15 @@ function(batchlas_add_test_target test_name)
         )
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
+
+    batchlas_test_component(_component ${test_name})
+    set(_labels ${_component})
+    list(FIND BATCHLAS_SLOW_TESTS ${test_name} _slow_idx)
+    if(NOT _slow_idx EQUAL -1)
+        list(APPEND _labels slow)
+    endif()
+    set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
+
     if(BATCHLAS_OPENBLAS_CORETYPE)
         # The host BLAS was found to compute dgemm incorrectly with its
         # auto-detected kernel. OpenBLAS picks the kernel in its library
