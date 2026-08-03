@@ -32,6 +32,52 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     });
 }
 
+// Compile guard for docs/cpp-api.md.
+//
+// Every code block in that document appears here. Nothing calls this -- it only
+// has to compile. Documentation that shows a call the library no longer accepts
+// is worse than no documentation, and the API-modernisation sweep is exactly the
+// kind of change that would invalidate these silently.
+[[maybe_unused]] void docs_cpp_api_examples(Queue& ctx,
+                                            const Dense& A,
+                                            const Dense& B,
+                                            const Dense& C,
+                                            Span<float> W,
+                                            Span<int64_t> pivots,
+                                            Span<std::byte> my_span) {
+    // "1. The backend comes from the Queue"
+    Queue host(Device::default_device(), Backend::NETLIB);
+    if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
+    [[maybe_unused]] Backend resolved = ctx.backend();
+    with_backend(ctx, [&](auto Back) {
+        constexpr Backend Bk = Back.value;
+        gemm<Bk, float>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    });
+
+    // "2. Options are structs with defaults"
+    gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
+    syev(ctx, A, W, {.jobz = JobType::NoEigenVectors});
+    getrs(ctx, A, C, pivots, {.trans = Transpose::Trans});
+
+    // "3. Workspaces come from the queue's arena"
+    potrf(ctx, A, {.uplo = Uplo::Lower});
+    auto lease = ctx.workspace(1024);
+    [[maybe_unused]] Span<std::byte> bytes = lease.span();
+    [[maybe_unused]] auto capacity = ctx.workspace_capacity();
+    potrf(ctx, A, {.uplo = Uplo::Lower}, my_span);
+
+    // "4. The linalg convenience layer"
+    [[maybe_unused]] auto product = linalg::matmul(ctx, A, B);
+    [[maybe_unused]] auto chol = linalg::cholesky(ctx, A);
+    [[maybe_unused]] auto solution = linalg::solve(ctx, A, B);
+    [[maybe_unused]] auto values = linalg::eigvalsh(ctx, A);
+    [[maybe_unused]] auto pairs = linalg::eigh(ctx, A);
+    [[maybe_unused]] auto sum = linalg::add(ctx, A, B);
+    [[maybe_unused]] auto hadamard = linalg::multiply(ctx, A, B);
+    linalg::scale<float>(ctx, A, 2.0f);
+    linalg::axpby_into<float>(ctx, 2.0f, A, 3.0f, B, C);
+}
+
 }  // namespace
 
 TEST(LinalgLayer, ElementwiseMatchesScalarReference) {

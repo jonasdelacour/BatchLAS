@@ -15,6 +15,34 @@ BatchLAS is a SYCL-first batched linear algebra library with optional vendor bac
 - The repository includes active work on dense factorizations, spectral routines, orthogonalization, sparse eigensolvers, and performance benchmarking.
 - Recommended development entry points are the CMake presets in `CMakePresets.json`.
 
+## Using the C++ API
+
+The backend comes from the `Queue`, options are structs with defaults, and
+workspaces are leased from a per-queue arena, so a call is usually one line:
+
+```cpp
+#include <blas/linalg.hh>
+using namespace batchlas;
+
+Queue ctx(Device::default_device());   // backend resolved from the device
+gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});
+potrf(ctx, A.view(), {.uplo = Uplo::Upper});
+ctx.wait();
+```
+
+There is also a `batchlas::linalg` convenience layer with value-returning and
+elementwise operations:
+
+```cpp
+auto X = linalg::solve(ctx, A.view(), B.view());   // A X = B
+auto e = linalg::eigh(ctx, A.view());              // e.values, e.vectors
+auto P = linalg::multiply(ctx, A.view(), B.view());  // Hadamard, not matmul
+```
+
+See **[docs/cpp-api.md](docs/cpp-api.md)** for the full conventions, the
+workspace-lifetime caveat on out-of-order queues, and a migration guide from the
+older `gemm<Backend::CUDA, float>(...)` spelling — which still compiles.
+
 ## Implemented Surface Area
 
 The public C++ headers under `include/` currently expose these main groups of functionality.
@@ -43,7 +71,7 @@ The public C++ headers under `include/` currently expose these main groups of fu
 
 ### Python Package
 
-When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`.
+When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`, plus elementwise arithmetic (`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`) over batched dense arrays.
 
 Twelve self-checking example notebooks covering the whole Python surface live in `python/examples/`. They are committed with output from a reference run, so they render on GitHub without executing anything:
 
