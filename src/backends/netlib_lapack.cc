@@ -1094,7 +1094,8 @@ namespace batchlas{
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Side, Transpose, \
         Span<fp>, \
-        Span<std::byte>);
+        Span<std::byte>, \
+        int32_t);
 
     #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t ormqr_buffer_size<Backend::NETLIB, fp>( \
@@ -1102,7 +1103,8 @@ namespace batchlas{
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Side, Transpose, \
-        Span<fp>);
+        Span<fp>, \
+        int32_t);
 
     #define ORMQR_VENDOR_INSTANTIATE(fp) \
     template Event backend::ormqr_vendor<Backend::NETLIB, fp>( \

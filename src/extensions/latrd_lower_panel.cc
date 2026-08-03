@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -21,14 +23,67 @@ namespace batchlas {
 
 namespace {
 
-// Returns true when BATCHLAS_LATRD_IMPL=device, false otherwise (legacy default).
-// Evaluated once and cached for the lifetime of the process.
-inline bool use_device_latrd() {
-    static const bool result = []() {
-        const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
-        return v && std::string(v) == "device";
-    }();
-    return result;
+enum class LatrdImpl { Legacy, Device, Grid };
+
+// Selected once from BATCHLAS_LATRD_IMPL and cached for the process lifetime.
+//   (unset) / anything else -> Legacy   (default, bit-for-bit unchanged)
+//   "device"                -> Device   (device-BLAS variant, measured slower)
+//   "grid"                  -> Grid     (multi-work-group-per-matrix panel)
+// Deliberately re-read on every call (not cached) so that a single process can
+// A/B the implementations by flipping the environment variable between runs.
+inline LatrdImpl latrd_impl() {
+    const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
+    if (!v) return LatrdImpl::Legacy;
+    const std::string s(v);
+    if (s == "device") return LatrdImpl::Device;
+    if (s == "grid") return LatrdImpl::Grid;
+    return LatrdImpl::Legacy;
+}
+
+inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
+
+// Smallest n at which the multi-work-group panel path is worth its grid barrier.
+//
+// The grid path is ON BY DEFAULT above this size -- it is the fix for the
+// one-work-group-per-matrix starvation, and at large n it is worth a lot -- but
+// it is NOT free: the software grid barrier costs 5 device-scope syncs per panel
+// column, and below this size that cost exceeds what the extra work-groups buy.
+//
+// MEASURED, RTX 4090, float, eigenvalues-only, blocked provider, legacy/grid
+// (so > 1 means the grid path wins):
+//
+//    n      b=1    b=4    b=8    b=16   b=64
+//   128    0.71   0.74   0.75   0.76   0.77
+//   256    0.79   0.74   0.74   0.75   0.75
+//   384    0.95    -     0.95    -      -
+//   512    1.03   1.02   1.03   1.02   0.95
+//   768    1.43    -     1.41    -      -
+//   1024   1.94   1.91   1.90   1.82   1.24
+//   2048   4.10    -     3.63    -      -
+//
+// The win grows with n because the barrier count is O(n) per panel while the
+// work it parallelizes is O(n^2) per column. The loss below 512 is uniform in
+// batch, which is the signature of a fixed per-column overhead. Gated at 768:
+// every measured point at or above it wins by >= 1.4x, and 512 is only neutral.
+//
+// A knob rather than a formula because the crossover is a barrier-latency
+// property of the device, not of the algorithm -- re-measure on new hardware.
+inline int64_t latrd_grid_min_n() {
+    const char* v = std::getenv("BATCHLAS_LATRD_GRID_MIN_N");
+    if (v && *v) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) return parsed;
+    }
+    return 768;
+}
+
+// Grid path is the default above latrd_grid_min_n(); BATCHLAS_LATRD_IMPL still
+// forces either path explicitly at any size, which is what makes the two an
+// intra-run A/B (=legacy restores the old behaviour everywhere).
+inline bool use_grid_latrd(int64_t n) {
+    const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
+    if (v && *v) return latrd_impl() == LatrdImpl::Grid;
+    return n >= latrd_grid_min_n();
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +166,99 @@ inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
 // ---------------------------------------------------------------------------
 template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelLegacy;
 template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernel;
+template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelGrid;
+
+// ---------------------------------------------------------------------------
+// Grid-path helpers
+// ---------------------------------------------------------------------------
+
+template <typename T>
+inline T pack_real(typename base_type<T>::type x) {
+    if constexpr (internal::is_complex<T>::value) {
+        return T(x, typename base_type<T>::type(0));
+    } else {
+        return T(x);
+    }
+}
+
+template <typename T>
+inline typename base_type<T>::type unpack_real(const T& x) {
+    if constexpr (internal::is_complex<T>::value) {
+        return x.real();
+    } else {
+        return static_cast<typename base_type<T>::type>(x);
+    }
+}
+
+using GridBarrierWord = uint32_t;
+
+// Sense-reversing software grid barrier over the `groups` work-groups that share
+// `bar` (bar[0] = arrival counter, bar[1] = generation).
+//
+// SAFETY: this only terminates if every participating work-group is
+// simultaneously resident on the device. The launch configuration guarantees
+// that (see choose_grid_groups): total work-groups <= MAX_COMPUTE_UNITS, and
+// each work-group needs at most ~2*n*sizeof(T) bytes of local memory and
+// <= 256 work-items, so one block per SM is always schedulable. Blocks are
+// dispatched to distinct SMs while the block count does not exceed the SM
+// count, hence all of them are co-resident before any of them spins.
+inline void grid_barrier(const sycl::nd_item<1>& it, GridBarrierWord* bar, int groups) {
+    if (groups <= 1) {
+        it.barrier(sycl::access::fence_space::global_and_local);
+        return;
+    }
+    it.barrier(sycl::access::fence_space::global_and_local);
+    if (it.get_local_linear_id() == 0) {
+        sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
+        sycl::atomic_ref<GridBarrierWord, sycl::memory_order::acq_rel, sycl::memory_scope::device,
+                         sycl::access::address_space::global_space> cnt(bar[0]);
+        sycl::atomic_ref<GridBarrierWord, sycl::memory_order::acq_rel, sycl::memory_scope::device,
+                         sycl::access::address_space::global_space> gen(bar[1]);
+        const GridBarrierWord g0 = gen.load();
+        if (cnt.fetch_add(GridBarrierWord(1)) ==
+            static_cast<GridBarrierWord>(groups) - GridBarrierWord(1)) {
+            cnt.store(GridBarrierWord(0));
+            gen.store(g0 + GridBarrierWord(1));
+        } else {
+            while (gen.load() == g0) {
+                // spin
+            }
+        }
+        sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
+    }
+    it.barrier(sycl::access::fence_space::global_and_local);
+}
+
+// Process-lifetime device scratch for the grid path (barrier words + partial
+// reduction slots). Deliberately NOT taken from the caller's BumpAllocator so
+// that no *_buffer_size query anywhere in the codebase changes meaning.
+inline void* acquire_grid_scratch(Queue& q, size_t bytes) {
+    static std::mutex m;
+    static void* ptr = nullptr;
+    static size_t cap = 0;
+    static bool has_ctx = false;
+    static sycl::context cached_ctx{};
+
+    std::lock_guard<std::mutex> lk(m);
+    const sycl::context cur_ctx = q->get_context();
+    const bool ctx_changed = has_ctx && (cached_ctx != cur_ctx);
+    if (ptr && (bytes > cap || ctx_changed)) {
+        q->wait();
+        sycl::free(ptr, cached_ctx);
+        ptr = nullptr;
+        cap = 0;
+    }
+    if (!ptr) {
+        ptr = sycl::malloc_device(bytes, q->get_device(), cur_ctx);
+        if (!ptr) {
+            throw std::runtime_error("latrd_lower_panel(grid): device scratch allocation failed");
+        }
+        cap = bytes;
+        cached_ctx = cur_ctx;
+        has_ctx = true;
+    }
+    return ptr;
+}
 
 // ---------------------------------------------------------------------------
 // Legacy kernel: manual group-reduction inner loops
@@ -383,6 +531,337 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 }
 
 // ---------------------------------------------------------------------------
+// Grid kernel: G work-groups per matrix.
+//
+// The trailing row range [i+1, n) of the current panel column is split into G
+// contiguous blocks, one per work-group. Every one of the per-row loops in the
+// legacy kernel (column update, reflector scaling, symv, the rank-2k
+// corrections, and the W write-back) is perfectly load balanced over r, so this
+// split needs no communication at all. The four quantities that ARE reductions
+// over the whole trailing range -- sumsq for the reflector norm, gamma/delta
+// per previous panel column, and the final dot -- are reduced per work-group
+// and then combined through global scratch, in a fixed group order so the
+// result is run-to-run deterministic.
+//
+// Five grid barriers per panel column are required:
+//   1. after the column update + sumsq partials  (reflector needs the whole col)
+//   2. after scaling the reflector               (v must be fully updated)
+//   3. after gamma/delta partials
+//   4. after the dot partials
+//   5. at the end of the column                  (next column reads row i+1 of W)
+// ---------------------------------------------------------------------------
+template <typename T, int WG, bool FuseTrailingUpdate>
+Event latrd_lower_panel_batched_wg_grid(Queue& q,
+                                        const MatrixView<T, MatrixFormat::Dense>& a,
+                                        const VectorView<T>& e,
+                                        const VectorView<T>& tau,
+                                        const MatrixView<T, MatrixFormat::Dense>& w,
+                                        int groups) {
+    constexpr int wg = WG;
+    const int n_host = a.rows();
+    const int batch_host = a.batch_size();
+    const int ib_host = w.cols();
+    const int G_host = groups;
+
+    // Scratch layout, per matrix:
+    //   gamma partials : [G * ib]   index g*ib + p
+    //   delta partials : [G * ib]
+    //   sumsq partials : [G]
+    //   dot partials   : [G]
+    const size_t red_per_matrix =
+        static_cast<size_t>(G_host) * (2u * static_cast<size_t>(ib_host) + 2u);
+    const size_t bar_words = static_cast<size_t>(batch_host) * 2u;
+    size_t bar_bytes = bar_words * sizeof(GridBarrierWord);
+    bar_bytes = (bar_bytes + 255u) & ~static_cast<size_t>(255u);
+    const size_t red_bytes = static_cast<size_t>(batch_host) * red_per_matrix * sizeof(T);
+
+    std::byte* scratch = static_cast<std::byte*>(acquire_grid_scratch(q, bar_bytes + red_bytes));
+    GridBarrierWord* bar_base = reinterpret_cast<GridBarrierWord*>(scratch);
+    T* red_base_ptr = reinterpret_cast<T*>(scratch + bar_bytes);
+
+    auto zero_ev = q->memset(bar_base, 0, bar_words * sizeof(GridBarrierWord));
+
+    (void)q->submit([&](sycl::handler& h) {
+        h.depends_on(zero_ev);
+
+        KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
+        KernelMatrixView<T, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
+
+        VectorView<T> E_view = e;
+        VectorView<T> TAU_view = tau;
+
+        const int n = n_host;
+        const int batch = batch_host;
+        const int ib = ib_host;
+        const int G = G_host;
+        const size_t red_stride = red_per_matrix;
+        GridBarrierWord* bar_all = bar_base;
+        T* red_all = red_base_ptr;
+
+        auto v_local    = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto gam_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto del_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+
+        h.parallel_for<LatrdLowerPanelKernelGrid<T, WG, FuseTrailingUpdate>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(G) * wg),
+                              sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> it) {
+                using Real = typename base_type<T>::type;
+
+                const int glid = static_cast<int>(it.get_group_linear_id());
+                const int b = glid / G;
+                const int gg = glid - b * G;
+                const int lid = static_cast<int>(it.get_local_linear_id());
+                const sycl::group<1> g = it.get_group();
+
+                auto Ab = A_view.batch_item(b);
+                auto Wb = W_view.batch_item(b);
+
+                GridBarrierWord* bar = bar_all + 2 * b;
+                T* red = red_all + static_cast<size_t>(b) * red_stride;
+                T* red_gamma = red;
+                T* red_delta = red + static_cast<size_t>(G) * static_cast<size_t>(ib);
+                T* red_sumsq = red + 2u * static_cast<size_t>(G) * static_cast<size_t>(ib);
+                T* red_dot   = red_sumsq + G;
+
+                for (int i = 0; i < ib; ++i) {
+                    if (i >= n - 1) break;
+
+                    // Row partition for this column: contiguous block per group.
+                    const int base_r = i + 1;
+                    const int total_r = n - base_r;
+                    const int chunk = (total_r + G - 1) / G;
+                    const int rlo = sycl::min(n, base_r + gg * chunk);
+                    const int rhi = sycl::min(n, rlo + chunk);
+                    const int slo = sycl::max(rlo, i + 2);   // reflector tail start
+
+                    for (int p = lid; p < i; p += wg) {
+                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
+                        wip_local[p] = Wb(i, p);
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
+
+                    if (gg == 0 && lid == 0) {
+                        T aii = Ab(i, i);
+                        for (int p = 0; p < i; ++p) {
+                            const T vip = vip_local[p];
+                            const T wip = wip_local[p];
+                            aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
+                        }
+                        Ab(i, i) = aii;
+                    }
+
+                    // ---- column update over this group's rows -----------------
+                    for (int r = rlo + lid; r < rhi; r += wg) {
+                        T val = Ab(r, i);
+                        for (int p = 0; p < i; ++p) {
+                            const T wip = wip_local[p];
+                            const T vip = vip_local[p];
+                            T vrp = T(0);
+                            if (r == p + 1) {
+                                vrp = T(1);
+                            } else if (r > p + 1) {
+                                vrp = Ab(r, p);
+                            }
+                            const T wrp = Wb(r, p);
+                            val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
+                        }
+                        Ab(r, i) = val;
+                    }
+
+                    // ---- sumsq partial (only over rows this group just wrote) --
+                    Real sumsq = Real(0);
+                    for (int r = slo + lid; r < rhi; r += wg) {
+                        sumsq += abs2_if_complex(Ab(r, i));
+                    }
+                    sumsq = reduce_sum_group_real<T>(g, sumsq);
+                    if (lid == 0) red_sumsq[gg] = pack_real<T>(sumsq);
+
+                    grid_barrier(it, bar, G);   // barrier 1
+
+                    Real sumsq_total = Real(0);
+                    for (int gi = 0; gi < G; ++gi) {
+                        sumsq_total += unpack_real<T>(red_sumsq[gi]);
+                    }
+
+                    // Every work-item recomputes the reflector from identical
+                    // inputs, so no broadcast is needed and all groups agree.
+                    // NOTE: Ab(i+1,i) must be read here, BEFORE group 0 replaces
+                    // it with 1 (which happens after barrier 2).
+                    const T alpha = (i + 1 < n) ? Ab(i + 1, i) : T(0);
+
+                    T tau_i = T(0);
+                    T beta = alpha;
+                    T scale = T(0);
+                    {
+                        const Real xnorm = sycl::sqrt(sumsq_total);
+                        if constexpr (internal::is_complex<T>::value) {
+                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
+                                tau_i = T(0);
+                                beta = alpha;
+                                scale = T(0);
+                            } else {
+                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
+                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
+                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
+                                beta = -alpha_sign * T(beta_abs);
+                                tau_i = (beta - alpha) / beta;
+                                scale = T(1) / (alpha - beta);
+                            }
+                        } else {
+                            if (xnorm == Real(0)) {
+                                tau_i = T(0);
+                                beta = alpha;
+                                scale = T(0);
+                            } else {
+                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                tau_i = (beta - alpha) / beta;
+                                scale = T(1) / (alpha - beta);
+                            }
+                        }
+                    }
+
+                    if (tau_i != T(0)) {
+                        for (int r = slo + lid; r < rhi; r += wg) {
+                            Ab(r, i) *= scale;
+                        }
+                    }
+
+                    grid_barrier(it, bar, G);   // barrier 2
+
+                    if (gg == 0 && lid == 0) {
+                        E_view(i, b) = beta;
+                        TAU_view(i, b) = tau_i;
+                        Ab(i + 1, i) = T(1);
+                    }
+
+                    // Every group needs the whole reflector for the symv.
+                    for (int c = base_r + lid; c < n; c += wg) {
+                        v_local[c] = (c == base_r) ? T(1) : Ab(c, i);
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
+
+                    // ---- symmetric mat-vec over this group's rows -------------
+                    for (int r = rlo + lid; r < rhi; r += wg) {
+                        const int c_split = sycl::min(r, n - 1);
+                        T acc = T(0);
+                        #pragma unroll 4
+                        for (int c = base_r; c <= c_split; ++c) {
+                            acc += Ab(r, c) * v_local[c];
+                        }
+                        #pragma unroll 4
+                        for (int c = c_split + 1; c < n; ++c) {
+                            acc += conj_if_needed(Ab(c, r)) * v_local[c];
+                        }
+                        wcol_local[r] = acc;
+                    }
+
+                    // ---- gamma/delta partials ---------------------------------
+                    for (int p = 0; p < i; ++p) {
+                        T gamma_partial = T(0);
+                        T delta_partial = T(0);
+                        for (int c = rlo + lid; c < rhi; c += wg) {
+                            const T vc = v_local[c];
+                            gamma_partial += conj_if_needed(Wb(c, p)) * vc;
+                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
+                            delta_partial += conj_if_needed(vcp) * vc;
+                        }
+                        gamma_partial = reduce_sum_group(g, gamma_partial);
+                        delta_partial = reduce_sum_group(g, delta_partial);
+                        if (lid == 0) {
+                            red_gamma[static_cast<size_t>(gg) * ib + p] = gamma_partial;
+                            red_delta[static_cast<size_t>(gg) * ib + p] = delta_partial;
+                        }
+                    }
+
+                    grid_barrier(it, bar, G);   // barrier 3
+
+                    for (int p = lid; p < i; p += wg) {
+                        T gs = T(0);
+                        T ds = T(0);
+                        for (int gi = 0; gi < G; ++gi) {
+                            gs += red_gamma[static_cast<size_t>(gi) * ib + p];
+                            ds += red_delta[static_cast<size_t>(gi) * ib + p];
+                        }
+                        gam_local[p] = gs;
+                        del_local[p] = ds;
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
+
+                    for (int p = 0; p < i; ++p) {
+                        const T gamma = gam_local[p];
+                        const T delta = del_local[p];
+                        for (int r = rlo + lid; r < rhi; r += wg) {
+                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
+                            const T wrp = Wb(r, p);
+                            wcol_local[r] -= vrp * gamma + wrp * delta;
+                        }
+                    }
+
+                    for (int r = rlo + lid; r < rhi; r += wg) {
+                        wcol_local[r] *= tau_i;
+                    }
+
+                    T dot_partial = T(0);
+                    for (int r = rlo + lid; r < rhi; r += wg) {
+                        dot_partial += conj_if_needed(v_local[r]) * wcol_local[r];
+                    }
+                    dot_partial = reduce_sum_group(g, dot_partial);
+                    if (lid == 0) red_dot[gg] = dot_partial;
+
+                    grid_barrier(it, bar, G);   // barrier 4
+
+                    T dot = T(0);
+                    for (int gi = 0; gi < G; ++gi) dot += red_dot[gi];
+
+                    const T alpha2 = T(-0.5) * tau_i * dot;
+                    for (int r = rlo + lid; r < rhi; r += wg) {
+                        Wb(r, i) = wcol_local[r] + alpha2 * v_local[r];
+                    }
+
+                    grid_barrier(it, bar, G);   // barrier 5
+                }
+
+                if constexpr (FuseTrailingUpdate) {
+                    const int j2 = ib;
+                    const int n2 = n - j2;
+                    const int tid = gg * wg + lid;
+                    const int nthreads = G * wg;
+                    for (int lin = tid; lin < n2 * n2; lin += nthreads) {
+                        const int r = lin % n2;
+                        const int c = lin / n2;
+                        if (r < c) continue;
+
+                        const int rr = j2 + r;
+                        const int cc = j2 + c;
+                        T acc = T(0);
+                        for (int k = 0; k < ib; ++k) {
+                            const T vrk = (rr == k + 1) ? T(1) : ((rr > k + 1) ? Ab(rr, k) : T(0));
+                            const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
+                            const T wrk = Wb(rr, k);
+                            const T wck = Wb(cc, k);
+                            acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+                        }
+
+                        T a_rc = Ab(rr, cc) - acc;
+                        if constexpr (internal::is_complex<T>::value) {
+                            if (rr == cc) {
+                                a_rc = T(a_rc.real(), typename T::value_type(0));
+                            }
+                        }
+                        Ab(rr, cc) = a_rc;
+                    }
+                }
+            });
+    });
+
+    return q.get_event();
+}
+
+// ---------------------------------------------------------------------------
 // Device-BLAS kernel: uses device::hemv, dotc, axpy, scal, copy, her2k
 // ---------------------------------------------------------------------------
 template <typename T, int WG, bool FuseTrailingUpdate>
@@ -564,6 +1043,84 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
 // Dispatcher: selects legacy or device path based on use_device_latrd().
 // Legacy supports WG = 64/128/256; device additionally supports WG = 512.
 // ---------------------------------------------------------------------------
+inline int env_int_or(const char* name, int fallback) {
+    const char* v = std::getenv(name);
+    if (!v || *v == '\0') return fallback;
+    const int value = std::atoi(v);
+    return value > 0 ? value : fallback;
+}
+
+// Chooses (G, wg) for the grid path.
+//
+// Co-residency is the hard constraint: the software grid barrier deadlocks
+// unless all batch*G work-groups are resident at once. We therefore never
+// launch more than MAX_COMPUTE_UNITS work-groups in total, i.e. at most one
+// block per SM, which is schedulable for any work-group size <= 256 and any
+// local-memory footprint the legacy kernel already accepts.
+//
+// Beyond that, the useful parallelism of the panel is one work-item per
+// trailing row, so G*wg is kept close to n and never far above it.
+// Returns G == 1 to mean "use the legacy kernel verbatim".
+struct GridLaunch { int groups; int wg; };
+
+inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
+    GridLaunch out{1, 0};
+    if (n < 4 || batch < 1) return out;
+
+    // GPU only. The software grid barrier requires all participating
+    // work-groups to be co-resident; that is argued from "one block per SM" on
+    // a GPU. The CPU/host SYCL runtimes give no such guarantee (work-groups are
+    // multiplexed onto a thread pool), so the barrier is unsound there and the
+    // legacy single-work-group kernel must be used instead.
+    if (q.device().type != DeviceType::GPU) return out;
+
+    const int cus = static_cast<int>(q.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    const int resident_cap = std::max(1, cus);
+    int cap = resident_cap / batch;            // integer division, never rounds up
+    if (cap < 1) return out;
+
+    const int rows = n - 1;
+    int G = std::min(cap, std::max(1, (rows + 31) / 32));
+
+    const int forced_g = env_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
+    if (forced_g > 0) {
+        G = std::min(forced_g, cap);           // never exceed the residency cap
+    }
+    if (G <= 1) return out;
+
+    // One work-item per trailing row, rounded up to a whole sub-group.
+    int wg = ((rows + G - 1) / G + 31) / 32 * 32;
+    wg = std::min(256, std::max(32, wg));
+    const int forced_wg = env_int_or("BATCHLAS_LATRD_GRID_WG", 0);
+    if (forced_wg == 32 || forced_wg == 64 || forced_wg == 128 || forced_wg == 256) {
+        wg = forced_wg;
+    }
+
+    out.groups = G;
+    out.wg = wg;
+    return out;
+}
+
+template <typename T>
+Event latrd_lower_panel_batched_grid_dispatch(Queue& q,
+                                              const MatrixView<T, MatrixFormat::Dense>& a,
+                                              const VectorView<T>& e,
+                                              const VectorView<T>& tau,
+                                              const MatrixView<T, MatrixFormat::Dense>& w,
+                                              bool fuse_trailing_update,
+                                              const GridLaunch& gl) {
+    auto call = [&](auto wg_tag) {
+        constexpr int WG = decltype(wg_tag)::value;
+        if (fuse_trailing_update)
+            return latrd_lower_panel_batched_wg_grid<T, WG, true>(q, a, e, tau, w, gl.groups);
+        return latrd_lower_panel_batched_wg_grid<T, WG, false>(q, a, e, tau, w, gl.groups);
+    };
+    if (gl.wg <= 32)  return call(std::integral_constant<int, 32>{});
+    if (gl.wg <= 64)  return call(std::integral_constant<int, 64>{});
+    if (gl.wg <= 128) return call(std::integral_constant<int, 128>{});
+    return call(std::integral_constant<int, 256>{});
+}
+
 template <typename T>
 Event latrd_lower_panel_batched(Queue& q,
                                 const MatrixView<T, MatrixFormat::Dense>& a,
@@ -587,6 +1144,14 @@ Event latrd_lower_panel_batched(Queue& q,
             return latrd_lower_panel_batched_wg_device<T, WG, true>(q, a, e, tau, w);
         return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w);
     };
+
+    if (use_grid_latrd(n)) {
+        const GridLaunch gl = choose_grid_launch(q, n, a.batch_size());
+        if (gl.groups > 1) {
+            return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl);
+        }
+        // G == 1: fall through to the legacy kernel verbatim.
+    }
 
     if (use_device) {
         if (wg_hint == 64)  return call_device(std::integral_constant<int, 64>{});
