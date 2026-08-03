@@ -56,6 +56,23 @@ inline auto with_backend(Queue& ctx, F&& f) {
         "Check Queue::backend_available() before pinning a backend.");
 }
 
+namespace detail {
+// A backend that is definitely compiled in, used only to ask "would the
+// positional call be well-formed?". Any compiled backend answers that question
+// identically -- the entry points are declared once and instantiated per
+// backend, so they all share a signature.
+inline constexpr Backend kProbeBackend =
+#if BATCHLAS_HAS_CUDA_BACKEND
+    Backend::CUDA;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+    Backend::ROCM;
+#elif BATCHLAS_HAS_MKL_BACKEND
+    Backend::MKL;
+#else
+    Backend::NETLIB;
+#endif
+}  // namespace detail
+
 }  // namespace batchlas
 
 // Define the backend-deducing overload of an entry point already declared as
@@ -75,8 +92,20 @@ inline auto with_backend(Queue& ctx, F&& f) {
 // drop out, leaving only this one. Called as `NAME<Backend::CUDA>(ctx, args...)`
 // this one drops out, because Backend::CUDA is a value and Args are types. The
 // inner call always supplies Backend explicitly, so it can never re-enter here.
+//
+// The requires-clause is what keeps it honest. Without it this overload accepts
+// *any* argument list, so it beats a more specific overload -- an option-struct
+// spelling, say, or one relying on a default argument -- and only then fails,
+// deep inside its own body, on a call it should never have claimed. Constraining
+// it to argument lists the positional entry point would actually accept makes it
+// drop out of resolution instead, which is the whole difference between "this
+// overload does not apply" and "this overload applies and is broken".
 #define BATCHLAS_DISPATCH_ON_QUEUE(NAME)                                        \
     template <typename... Args>                                                 \
+        requires requires(Queue& probe_ctx, Args&&... probe_args) {             \
+            NAME<::batchlas::detail::kProbeBackend>(probe_ctx,                  \
+                                                    std::forward<Args>(probe_args)...); \
+        }                                                                       \
     inline auto NAME(Queue& ctx, Args&&... args) {                              \
         return ::batchlas::with_backend(ctx, [&](auto Back) {                   \
             return NAME<Back.value>(ctx, std::forward<Args>(args)...);          \
