@@ -4,9 +4,9 @@
 // sytrd_sb2st_hh retains Q2, it reduces at a real band width and then applies the
 // stage-2 reflectors explicitly. As of the chase fix below, syev_two_stage uses
 // the Householder chase in BOTH modes; eigenvalues-only simply discards Q2.
-// syevx_direct_subset still selects its chase by mode. Do not assume the value
-// returned by choose_two_stage_kd_for_job is safe for a path that never applies
-// stage-2 reflectors.
+// syevx_direct_subset now does the same. Do not assume the value returned by
+// choose_two_stage_kd_for_job is safe for a path that never applies stage-2
+// reflectors.
 //
 // build_phase_from_kd1_band and apply_phase_rows operate on a kd = 1 band regardless
 // of the reduction width -- in syev_two_stage that band is sb2st_hh's tridiagonal
@@ -68,6 +68,10 @@ inline int32_t choose_two_stage_kd(int32_t n) {
 // old eigenvalues-only behaviour, which is what makes the two an intra-run A/B
 // rather than a comparison across builds. It has no effect in eigenvector mode,
 // where the Givens chase cannot be used at all: it discards Q2.
+//
+// Consumed by both two-stage callers: syev_two_stage and syevx_direct_subset.
+// Both read it in their solve *and* in their *_buffer_size query, so the two stay
+// in lockstep; do not make it stateful or randomize it between the two calls.
 inline bool two_stage_use_givens_chase_for_values() {
     const char* v = std::getenv("BATCHLAS_SYEV_TWO_STAGE_CHASE");
     return v && (std::string_view(v) == "givens");

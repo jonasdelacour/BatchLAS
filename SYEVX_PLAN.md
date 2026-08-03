@@ -697,6 +697,22 @@ The `3k × 3k` projected solve runs every iteration for every batch member. At
 should be swept, and `syev_jacobi_cta` from the Jacobi plan is a candidate provider
 for the small-`k` end.
 
+**Partly addressed.** The sweep found that `syev`'s `Auto` order checks
+`syev_supports_cta` first and CTA claims *every* `n ≤ 32`, so the projected solve
+never reached the vendor no matter how small the margin. Measured at `n = 30`,
+`batch = 8`, float, with eigenvectors: CTA 229.6 µs/call against cuSOLVER
+103.7 µs/call (2.21×), with nsys attributing 29.4% of all LOBPCG GPU time to that
+solve. The fix is in the dispatcher, not in `syevx`, so both LOBPCG and the
+filtered solver get it: `syev_prefer_vendor_over_cta`
+(`include/blas/functions/syev.hh`) sends eigenvector-mode CUDA solves with
+`n > BATCHLAS_SYEV_CTA_MAX_N` to the vendor, default 16.
+
+What remains: **the crossover itself is not measured.** `n = 30` is the only point
+in `1 ≤ n ≤ 32` that was, and the default 16 is a guess placed below it. Sweeping
+`BATCHLAS_SYEV_CTA_MAX_N` over `0..32` (32 restores the old behaviour exactly) is
+the remaining work, as is the eigenvalues-only case at `n ≤ 32`, which is
+deliberately left on CTA because nothing measured it.
+
 ---
 
 ## 8. Implementation plan
