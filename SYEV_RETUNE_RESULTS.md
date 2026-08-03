@@ -145,6 +145,31 @@ plumbing is wired to the code path it claims to control.
 **SYTRD matches the committed value at every n measured**, and its sweep is *not* flat, so the
 knob is live and the committed choice is genuinely the optimum.
 
+### 3.1 Double confirms float independently
+
+| n | mode | knob | best | committed | verdict | sweep (µs/matrix) |
+|---|---|---|---|---|---|---|
+| 32 | vectors | ormqr | 16 | 16 | **= committed** | 8:4.877 **16:4.842** 32:5.924 64:5.926 128:5.924 |
+| 64 | vectors | ormqr | 16 | 16 | **= committed** | 8:13.574 **16:12.821** 32:14.809 64:26.680 128:26.567 |
+| 128 | vectors | ormqr | 16 | 16 | **= committed** | 8:50.395 **16:43.639** 32:46.494 64:72.031 128:117.373 |
+| 512 | vectors | ormqr | 32 | 16 | 1.053× *neutral* | 8:2117.0 16:1732.3 **32:1645.1** 64:1814.6 128:2312.2 |
+| 64 | vectors | sytrd | 8 | 8 | **= committed** | **8:12.833** 16:13.328 24:13.726 32:14.402 48:15.046 |
+| 128 | vectors | sytrd | 8 | 8 | **= committed** | **8:43.648** 16:45.102 24:46.910 32:48.398 48:52.887 |
+| 512 | values | sytrd | 16 | 24 | 1.066× *neutral* | 8:1355.2 **16:1202.6** 24:1281.3 32:1255.5 48:1331.7 |
+| 512 | vectors | sytrd | 16 | 24 | 1.048× *neutral* | 8:1805.4 **16:1652.4** 24:1732.0 32:1705.4 48:1782.3 |
+
+Same conclusion, reached independently: ORMQR = 16 is optimal wherever the knob bites, and 64
+or 128 is catastrophic at n = 128 (2.7× worse). The values-mode ORMQR sweep is flat again, as
+it must be.
+
+**One candidate worth a second look, still not claimed.** At n = 512 in double, SYTRD = 16
+beats the committed 24 by 1.066× (values) and 1.048× (vectors), and ORMQR = 32 beats 16 by
+1.053× (vectors, and 1.059× in float). Each is individually below the 1.10× threshold, but the
+SYTRD result is *consistent across both modes* and the ORMQR result is *consistent across both
+precisions* — which is more than noise usually manages. If anyone retunes the XLARGE bucket
+specifically, that is where to look. It is not evidence of a regression: the committed value is
+not beaten by the value the original hypothesis favoured, and the margin is small either way.
+
 ---
 
 ## 4. New defect: workspace footprint is the binding constraint on batch
@@ -175,9 +200,13 @@ usable batch ceiling for every small-n eigenvector solve.
 
 ## 5. Coverage, gaps, and what is NOT established
 
-- **864 successful measurements.** Phase A (small-n) is complete for both precisions.
-  Phase B is complete for float; **double Phase B was still running when this was written**
-  and its table is not included.
+- **973 successful measurements.** Phase A (small-n) complete for both precisions. Phase B
+  complete for both precisions except n = 256, below.
+- **n = 256 is missing from Phase B entirely** (both modes, both precisions). `syev_blocked`
+  exceeded the 3 GB per-invocation abort even at batch 476 — the §4 workspace defect again.
+  This is a real gap: the MEDIUM bucket (n ≤ 256) is the one bucket whose block sizes were not
+  re-measured in double. No conclusion in this document rests on it, because §3 and §3.1 agree
+  at every other n in both precisions.
 - **No cuSOLVER route exists for eigenvalues-only.** `benchmarks/syev_benchmark.cc` hardcodes
   `JobType::EigenVectors` (lines 53, 59) and takes `(n, batch, nb, fuse)` — no jobz argument.
   So `values`-mode cells rank our five kernels against each other but **cannot** be ranked
