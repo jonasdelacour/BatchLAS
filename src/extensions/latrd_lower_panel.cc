@@ -42,6 +42,50 @@ inline LatrdImpl latrd_impl() {
 
 inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 
+// Smallest n at which the multi-work-group panel path is worth its grid barrier.
+//
+// The grid path is ON BY DEFAULT above this size -- it is the fix for the
+// one-work-group-per-matrix starvation, and at large n it is worth a lot -- but
+// it is NOT free: the software grid barrier costs 5 device-scope syncs per panel
+// column, and below this size that cost exceeds what the extra work-groups buy.
+//
+// MEASURED, RTX 4090, float, eigenvalues-only, blocked provider, legacy/grid
+// (so > 1 means the grid path wins):
+//
+//    n      b=1    b=4    b=8    b=16   b=64
+//   128    0.71   0.74   0.75   0.76   0.77
+//   256    0.79   0.74   0.74   0.75   0.75
+//   384    0.95    -     0.95    -      -
+//   512    1.03   1.02   1.03   1.02   0.95
+//   768    1.43    -     1.41    -      -
+//   1024   1.94   1.91   1.90   1.82   1.24
+//   2048   4.10    -     3.63    -      -
+//
+// The win grows with n because the barrier count is O(n) per panel while the
+// work it parallelizes is O(n^2) per column. The loss below 512 is uniform in
+// batch, which is the signature of a fixed per-column overhead. Gated at 768:
+// every measured point at or above it wins by >= 1.4x, and 512 is only neutral.
+//
+// A knob rather than a formula because the crossover is a barrier-latency
+// property of the device, not of the algorithm -- re-measure on new hardware.
+inline int64_t latrd_grid_min_n() {
+    const char* v = std::getenv("BATCHLAS_LATRD_GRID_MIN_N");
+    if (v && *v) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) return parsed;
+    }
+    return 768;
+}
+
+// Grid path is the default above latrd_grid_min_n(); BATCHLAS_LATRD_IMPL still
+// forces either path explicitly at any size, which is what makes the two an
+// intra-run A/B (=legacy restores the old behaviour everywhere).
+inline bool use_grid_latrd(int64_t n) {
+    const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
+    if (v && *v) return latrd_impl() == LatrdImpl::Grid;
+    return n >= latrd_grid_min_n();
+}
+
 // ---------------------------------------------------------------------------
 // Helpers used by the legacy kernel
 // ---------------------------------------------------------------------------
@@ -1101,7 +1145,7 @@ Event latrd_lower_panel_batched(Queue& q,
         return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w);
     };
 
-    if (latrd_impl() == LatrdImpl::Grid) {
+    if (use_grid_latrd(n)) {
         const GridLaunch gl = choose_grid_launch(q, n, a.batch_size());
         if (gl.groups > 1) {
             return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl);
