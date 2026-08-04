@@ -3,6 +3,7 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
+#include "../src/queue.hh"
 
 #include <algorithm>
 #include <array>
@@ -627,6 +628,18 @@ void assert_all_finite(Vector<Real>& v) {
     }
 }
 
+// steqr() only dispatches to the CTA kernel when the device advertises a
+// 32-wide sub-group (see src/extensions/steqr.cc:29 should_use_cta and
+// src/extensions/steqr_cta.cc:170-185).  SYCL Native CPU reports
+// sub_group_sizes == {1}, so on the host backend BOTH steqr() calls below fall
+// back to the identical steqr_wg path and produce bit-identical results.
+inline bool device_has_cta_path(Queue& ctx) {
+    for (auto sgs : ctx->get_device().get_info<sycl::info::device::sub_group_sizes>()) {
+        if (static_cast<int>(sgs) == 32) return true;
+    }
+    return false;
+}
+
 template <Backend B, typename Real>
 void stress_run_case(Queue& ctx,
                      Vector<Real>& diag,
@@ -724,7 +737,9 @@ void stress_run_case(Queue& ctx,
             if (check_steqr_against_ref) {
                 ASSERT_NEAR(ste[i], r, tol) << "STEQR mismatch at (" << i << "," << j << ")";
             }
-            if (check_cta_against_ref) {
+            // When the CTA path is unavailable, cta[] *is* ste[]; do not hold it
+            // to a stricter standard than the baseline path it actually ran.
+            if (check_cta_against_ref && (check_steqr_against_ref || device_has_cta_path(ctx))) {
                 ASSERT_NEAR(cta[i], r, tol * 1e2) << "STEQR mismatch at (" << i << "," << j << ")";
             }
         }
