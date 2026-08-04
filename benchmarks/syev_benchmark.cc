@@ -41,6 +41,13 @@ inline JobType parse_jobz(int v) {
     return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
 }
 
+// arg5: 0 = Lower (default, and what every registered size uses), 1 = Upper. Upper exists so
+// the mirror path in syev_blocked / syev_two_stage can be measured against the vendor at all;
+// before it, no benchmark could express an Upper solve.
+inline Uplo parse_uplo(int v) {
+    return (v == 0) ? Uplo::Lower : Uplo::Upper;
+}
+
 } // namespace
 
 // Symmetric eigenvalue decomposition benchmark
@@ -51,6 +58,7 @@ static void BM_SYEV(minibench::State& state) {
     const int sytrd_block_size = static_cast<int>(state.range(2));
     const int fuse_panel_update = static_cast<int>(state.range(3));
     const JobType jobz = parse_jobz(static_cast<int>(state.range(4)));
+    const Uplo uplo = parse_uplo(static_cast<int>(state.range(5)));
 
     ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
     ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
@@ -60,14 +68,14 @@ static void BM_SYEV(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     size_t ws_size = syev_buffer_size<B>(*q, A.view(), W.to_span(),
-                                         jobz, Uplo::Lower);
+                                         jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
                     bench::pristine(A),
                     std::move(W),
                     jobz,
-                    Uplo::Lower,
+                    uplo,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
                         syev<B, T>(q, std::forward<decltype(xs)>(xs)...);

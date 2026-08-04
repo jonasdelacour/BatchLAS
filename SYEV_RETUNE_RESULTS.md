@@ -419,3 +419,60 @@ A measurement is only as good as the regime it samples: §7 was methodologically
 medians, IQRs and name-matching, and still reached the wrong conclusion because the batch
 ladder stopped short. **Routing must be decided at saturation** — the regime where the kernel,
 not the launch overhead, is what is being compared.
+
+---
+
+# Part 4 — Uplo::Upper (2026-08-04)
+
+## 12. Upper was conceded to the vendor for want of an O(n^2) copy
+
+`sytrd_blocked` threw on `Uplo::Upper`, and `syev_supports_blocked` / `syev_supports_two_stage`
+rejected it, so **every** Upper call routed to cuSOLVER regardless of shape. Upper also had
+**no test coverage anywhere** in the syev suite.
+
+A Hermitian matrix's two triangles carry the same operator (`A[j][i] == conj(A[i][j])`), so
+mirroring the upper triangle into the lower one lets the existing Lower pipeline produce
+identical results. That is `O(n^2)` in front of an `O(n^3)` solve
+(`src/extensions/uplo_mirror.cc`).
+
+### 12.1 Measured (float, RTX 4090 device 1, µs/matrix, median of 3, single process)
+
+| n | batch | mode | Auto (Upper) | vendor (Upper) | **speedup** | Auto (Lower) | Upper/Lower |
+|---|---|---|---|---|---|---|---|
+| 128 | 4069 | vectors | 6.72 | 8.22 | **1.22×** | 6.64 | 1.013× |
+| 256 | 2034 | vectors | 37.26 | 37.89 | 1.02× | 36.91 | 1.009× |
+| 320 | 1302 | vectors | 75.00 | 221.25 | **2.95×** | 74.39 | 1.008× |
+| 512 | 508 | vectors | 381.94 | 532.71 | **1.39×** | 380.09 | 1.005× |
+| 1024 | 254 | vectors | 2459.62 | 3314.37 | **1.35×** | 2452.86 | 1.003× |
+| 128 | 4069 | values | 4.51 | 5.61 | **1.24×** | 4.42 | 1.020× |
+| 256 | 2034 | values | 25.19 | 27.85 | **1.11×** | 24.87 | 1.013× |
+| 320 | 1302 | values | 51.82 | 197.22 | **3.81×** | 51.10 | 1.014× |
+| 512 | 508 | values | 171.90 | 482.48 | **2.81×** | 170.43 | 1.009× |
+| 1024 | 254 | values | 915.92 | 3102.78 | **3.39×** | 907.97 | 1.009× |
+
+**The mirror costs 0.3–2.0%** (`Upper/Lower`), and Upper now beats the vendor at every measured
+shape by 1.02×–3.81×. Upper inherits the Lower routing rather than conceding to the vendor.
+
+`Upper/Lower` has a known floor of 1.0 — Upper is Lower plus a mirror pass, so it can never be
+faster. That made it a usable correctness check on the measurement itself: an early run
+reported 0.647× at n=128, which is impossible, and turned out to be two benchmark processes
+sharing the device. Re-run single-process, every ratio sits at or just above 1.0.
+
+### 12.2 Testing
+
+Two cases in `tests/syev_blocked_tests.cc`, one per call site (blocked, two-stage), across
+float / double / complex-float / complex-double.
+
+The obvious test would be vacuous: `Matrix::Random(..., symmetric=true)` is symmetric, so
+Upper and Lower are interchangeable and the test passes with no mirror at all. So the fixture
+**poisons the strictly-lower triangle** after taking the reference from the upper one, and
+then *asserts* that a Lower-read solve of the same matrix gives a spectrum differing by > 1.0.
+If the poisoning ever silently stops taking effect, the test fails with "fixture is vacuous"
+rather than passing for the wrong reason.
+
+### 12.3 Not done
+
+Upper is **not** implemented natively in `sytrd_blocked` / `sytrd_sy2sb` / `sytrd_sb2st`; those
+remain Lower-only and the mirror converts the problem instead. A native implementation could
+recover at most the 0.3–2.0% the mirror costs, at the price of an Upper variant of every
+reduction kernel. Not worth it on these numbers.

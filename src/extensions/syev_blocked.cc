@@ -1,4 +1,5 @@
 #include <blas/extensions.hh>
+#include "uplo_mirror.hh"
 #include <blas/functions.hh>
 #include <blas/matrix.hh>
 #include <blas/linalg.hh>
@@ -33,10 +34,8 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
         throw std::invalid_argument("syev_blocked: invalid JobType.");
     }
-    if (uplo != Uplo::Lower) {
-        // Current sytrd_blocked implementation supports only Lower.
-        throw std::invalid_argument("syev_blocked: only Uplo::Lower is currently implemented.");
-    }
+    // Uplo::Upper is accepted: the solve mirrors the upper triangle into the lower one and
+    // proceeds down the Lower path. See uplo_mirror.hh.
 
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
@@ -91,6 +90,14 @@ Event syev_blocked(Queue& ctx,
 
     if (!ctx.in_order()) {
         throw std::runtime_error("syev_blocked: requires an in-order Queue");
+    }
+
+    // Uplo::Upper: mirror the upper triangle into the lower one and continue as Lower.
+    // sytrd_blocked below implements Lower only; this O(n^2) pass is what lets Auto route
+    // Upper input here at all instead of conceding it to the vendor. See uplo_mirror.hh.
+    if (uplo == Uplo::Upper) {
+        mirror_upper_to_lower<B, T>(ctx, a_in);
+        uplo = Uplo::Lower;
     }
 
     const int32_t n = static_cast<int32_t>(a_in.rows());
@@ -357,9 +364,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
         throw std::invalid_argument("syev_blocked_buffer_size: invalid JobType.");
     }
-    if (uplo != Uplo::Lower) {
-        throw std::invalid_argument("syev_blocked_buffer_size: only Uplo::Lower is currently implemented.");
-    }
+    // Uplo::Upper is accepted; the workspace is identical because the mirror is in-place.
 
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());

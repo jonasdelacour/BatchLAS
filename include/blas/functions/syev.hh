@@ -105,25 +105,30 @@ inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, Matrix
     return true;
 }
 
+// Uplo::Upper is supported: syev_blocked mirrors the upper triangle into the lower one
+// (an O(n^2) pass, see src/extensions/uplo_mirror.hh) and runs the ordinary Lower pipeline.
+// Before that, every Upper call fell through to the vendor no matter how much faster this
+// path was at that shape.
 template <typename T>
 inline bool syev_supports_blocked(const DeviceCaps& caps,
                                   const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
+    (void)uplo;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.batch_size() < 1) return false;
     if (!caps.is_gpu) return false;
-    if (uplo != Uplo::Lower) return false;
     return true;
 }
 
+// Uplo::Upper supported by the same mirror; see syev_supports_blocked above.
 template <typename T>
 inline bool syev_supports_two_stage(const DeviceCaps& caps,
                                     const MatrixView<T, MatrixFormat::Dense>& A,
                                     Uplo uplo) {
+    (void)uplo;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.batch_size() < 1) return false;
     if (!caps.is_gpu) return false;
-    if (uplo != Uplo::Lower) return false;
     return true;
 }
 
@@ -550,8 +555,8 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
             if (want == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) {
                 return want;
             }
-            // Unsupported for this shape (e.g. Uplo::Upper, which neither BatchLAS path
-            // takes) -- the vendor handles everything.
+            // Unsupported for this shape -- the vendor handles everything. (Uplo::Upper is
+            // no longer such a case; both BatchLAS paths mirror it into Lower.)
             return Provider::Vendor;
         }
         // Only reachable for n <= 32 now, where it returns false by construction -- both

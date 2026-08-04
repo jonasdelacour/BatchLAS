@@ -360,3 +360,146 @@ int main(int argc, char** argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }
+
+// --- Uplo::Upper -------------------------------------------------------------
+//
+// Upper had NO coverage anywhere in the syev tests before this. It also had no
+// implementation: sytrd_blocked threw on it, so every Upper call fell through to the vendor.
+// syev_blocked/syev_two_stage now mirror the upper triangle into the lower one and run the
+// ordinary Lower pipeline (src/extensions/uplo_mirror.hh), which is what lets Auto route
+// Upper input to our own providers.
+//
+// The test that has teeth: build a matrix whose two triangles DISAGREE, so that reading the
+// wrong one gives a different spectrum. Matrix::Random(..., /*symmetric=*/true) is symmetric,
+// which would make Upper and Lower trivially interchangeable and the test vacuous. Here the
+// strictly-lower entries are overwritten with garbage after the reference is taken from the
+// upper triangle, so a solver that reads the lower triangle without mirroring gets the wrong
+// answer.
+TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const int n = 96;
+	const int batch = 8;
+
+	Matrix<Scalar, MatrixFormat::Dense> A0 =
+		Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 4242);
+
+	// Poison the strictly-lower triangle so it no longer mirrors the upper one.
+	for (int b = 0; b < batch; ++b) {
+		Scalar* Ab = A0.view().data().data() + static_cast<std::size_t>(b) * A0.view().stride();
+		const int ld = static_cast<int>(A0.view().ld());
+		for (int c = 0; c < n; ++c) {
+			for (int r = c + 1; r < n; ++r) {
+				Ab[r + c * ld] = Scalar(Real(-7.5));   // garbage, deliberately not symmetric
+			}
+		}
+	}
+
+	Matrix<Scalar, MatrixFormat::Dense> A_ours = A0;
+	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+
+	auto W_ours = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+
+	// Reference: CPU LAPACKE, reading the UPPER triangle.
+	{
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Upper));
+		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(),
+							  JobType::NoEigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
+	}
+
+	// PROVE THE FIXTURE HAS TEETH. If the poisoning above did not take effect the matrix is
+	// still symmetric, Upper and Lower are interchangeable, and this test would pass even if
+	// the mirror never ran. Solve the SAME matrix reading the LOWER triangle and require a
+	// different spectrum -- that is what makes the Upper comparison below meaningful.
+	{
+		Matrix<Scalar, MatrixFormat::Dense> A_lo = A0;
+		auto W_lo = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+		auto ws_lo = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+			*this->ctx, A_lo.view(), W_lo.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+		syev<Backend::NETLIB>(*this->ctx, A_lo.view(), W_lo.to_span(),
+							  JobType::NoEigenVectors, Uplo::Lower, ws_lo.to_span()).wait();
+		Real max_gap = Real(0);
+		for (int j = 0; j < batch; ++j) {
+			for (int i = 0; i < n; ++i) {
+				max_gap = std::max(max_gap, std::abs(W_lo[i + j * n] - W_ref[i + j * n]));
+			}
+		}
+		ASSERT_GT(max_gap, Real(1))
+			<< "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
+	}
+
+	// Ours: blocked path with Uplo::Upper, which must mirror before reducing.
+	{
+		StedcParams<Real> params;
+		params.recursion_threshold = 32;
+		auto ws = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(
+			*this->ctx, A_ours.view(), JobType::NoEigenVectors, Uplo::Upper, params));
+		syev_blocked<B, Scalar>(*this->ctx, A_ours.view(), W_ours.to_span(),
+								JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
+	}
+
+	const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
+	for (int j = 0; j < batch; ++j) {
+		for (int i = 0; i < n; ++i) {
+			EXPECT_NEAR(W_ours[i + j * n], W_ref[i + j * n], tol)
+				<< "(i,b)= (" << i << "," << j << ")";
+		}
+	}
+}
+
+// Same, through the two-stage provider, which has its own mirror call site.
+TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	if constexpr (B == Backend::NETLIB) {
+		GTEST_SKIP() << "two-stage is a GPU path";
+	} else {
+		const int n = 128;
+		const int batch = 4;
+
+		Matrix<Scalar, MatrixFormat::Dense> A0 =
+			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 909);
+		for (int b = 0; b < batch; ++b) {
+			Scalar* Ab = A0.view().data().data() + static_cast<std::size_t>(b) * A0.view().stride();
+			const int ld = static_cast<int>(A0.view().ld());
+			for (int c = 0; c < n; ++c) {
+				for (int r = c + 1; r < n; ++r) {
+					Ab[r + c * ld] = Scalar(Real(3.25));
+				}
+			}
+		}
+
+		Matrix<Scalar, MatrixFormat::Dense> A_ours = A0;
+		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+		auto W_ours = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+
+		{
+			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Upper));
+			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(),
+								  JobType::NoEigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
+		}
+		{
+			StedcParams<Real> params;
+			auto ws = UnifiedVector<std::byte>(syev_two_stage_buffer_size<B, Scalar>(
+				*this->ctx, A_ours.view(), JobType::NoEigenVectors, Uplo::Upper, params));
+			syev_two_stage<B, Scalar>(*this->ctx, A_ours.view(), W_ours.to_span(),
+									  JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
+		}
+
+		const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
+		for (int j = 0; j < batch; ++j) {
+			for (int i = 0; i < n; ++i) {
+				EXPECT_NEAR(W_ours[i + j * n], W_ref[i + j * n], tol)
+					<< "(i,b)= (" << i << "," << j << ")";
+			}
+		}
+	}
+}
