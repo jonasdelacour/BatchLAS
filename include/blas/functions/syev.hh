@@ -105,25 +105,30 @@ inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, Matrix
     return true;
 }
 
+// Uplo::Upper is supported: syev_blocked mirrors the upper triangle into the lower one
+// (an O(n^2) pass, see src/extensions/uplo_mirror.hh) and runs the ordinary Lower pipeline.
+// Before that, every Upper call fell through to the vendor no matter how much faster this
+// path was at that shape.
 template <typename T>
 inline bool syev_supports_blocked(const DeviceCaps& caps,
                                   const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
+    (void)uplo;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.batch_size() < 1) return false;
     if (!caps.is_gpu) return false;
-    if (uplo != Uplo::Lower) return false;
     return true;
 }
 
+// Uplo::Upper supported by the same mirror; see syev_supports_blocked above.
 template <typename T>
 inline bool syev_supports_two_stage(const DeviceCaps& caps,
                                     const MatrixView<T, MatrixFormat::Dense>& A,
                                     Uplo uplo) {
+    (void)uplo;
     if (A.rows() != A.cols()) return false;
     if (A.rows() < 1 || A.batch_size() < 1) return false;
     if (!caps.is_gpu) return false;
-    if (uplo != Uplo::Lower) return false;
     return true;
 }
 
@@ -187,8 +192,14 @@ inline Provider normalize_vendor_like(Provider p) {
 //     896     10.05  2.27  1.93  1.52  1.06  1.19  1.24     -     -
 //     1024    10.14  2.29  1.97  1.50  1.15  1.44     -     -     -
 //
-// THE CARVE-OUT SURVIVES UNCHANGED, and the routing below needs no edit. What
-// did change:
+// SUPERSEDED 2026-08-04 by the saturated sweep in syev_saturated_provider_for_n below.
+// THIS GRID IS RETAINED ONLY AS A RECORD OF THE BATCH-DEPENDENT BEHAVIOUR; it no longer
+// drives eigenvector routing. Its batch ladder stopped at 1024, which for small n is NOWHERE
+// NEAR saturation -- at n = 64 the true crossover needs batch ~16384, and there blocked wins
+// by 1.23x where this grid shows the vendor ahead at 1.11x. Reading routing off it was wrong
+// at five of nine sizes. Do not reinstate a batch-keyed rule from these numbers.
+//
+// The original conclusion, now known to be an artifact of the unsaturated ladder:
 //   * n = 1024 improved a lot -- 15.33 -> 10.14 at batch 1, 3.33 -> 2.29 at
 //     batch 8 -- which is grid-latrd doing exactly its job. The vendor still
 //     wins there, so the decision does not flip; only the margin narrowed.
@@ -401,9 +412,94 @@ inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
 
 // Eigenvalues-only: is the two-stage solver the best choice for this shape?
 // Checked before syev_prefer_vendor, since it overrides it where it applies.
+// SUPERSEDED by syev_saturated_provider_for_n_values. Retained only because the batch >= 256
+// term is a documented cautionary tale: an n = 1024 solve at batch 254 fell through it to the
+// vendor and paid 2.75x. No longer consulted by choose_syev_provider.
 inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int64_t batch) {
     if (!caps.is_gpu) return false;
     return n >= 512 && batch >= 256;
+}
+
+// --- Eigenvector routing, decided AT SATURATION and keyed on n alone ----------
+//
+// WHY THIS REPLACES syev_prefer_vendor FOR EIGENVECTORS.
+//
+// Every earlier grid in this file capped its batch ladder at 1024, and for small n that is
+// nowhere near saturation -- at n = 64 the vendor's lower fixed cost still dominates there,
+// so the vendor looked like the winner. Measured at a batch large enough to amortise launch
+// overhead, it is not. Routing is a per-n decision made on the assumption that the batch is
+// large; a caller running tiny batches pays launch overhead whatever we pick, and tuning the
+// routing for that regime costs the saturated regime real throughput.
+//
+// MEASURED 2026-08-04, RTX 4090 device 1, build 12963a8, float, EIGENVECTORS, us/matrix,
+// median of 3, one process on the device. Batch per n is the largest at which ALL THREE
+// providers fit (blocked and two-stage carry much larger workspaces than the vendor path):
+//
+//     n   batch    blocked    vendor  two_stage    winner        margin
+//    64   16384       1.64      2.02       2.21    blocked        1.23x
+//   128    4069       6.65      7.85      10.35    blocked        1.18x
+//   256    2034      36.92     37.14      57.56    blocked        1.01x  (tie w/ vendor)
+//   320    1302      74.53    215.23     111.20    blocked        1.49x
+//   512     508     384.27    504.69     380.02    two_stage      1.01x  (tie w/ blocked)
+//   640     651     836.30   1008.06     727.48    two_stage      1.15x
+//   768     452    1612.98   1414.99    1184.11    two_stage      1.19x
+//  1024     254    4089.02   2706.84    2441.93    two_stage      1.11x
+//  2048      64   33842.60  15019.10   24782.30    vendor         1.65x
+//
+// The old routing sent 64, 128, 768 and 1024 to the vendor and 640 to blocked -- five of the
+// nine rows wrong, by 1.11x to 1.23x.
+//
+// n <= 32 is NOT handled here: it is CTA territory and syev_choose_small_kernel picks among
+// the three CTA kernels. Measured at batch 2048, cta/jacobi (n=16) and cta/fused (n=32) beat
+// every non-CTA provider by 2.8x-3.0x, so the CTA-first ordering is correct there.
+//
+// CAVEATS, all load-bearing:
+//   * n = 2048 was measured at batch 64, which is BELOW the 128 SMs and therefore NOT
+//     saturated -- it is memory-limited, since blocked/two-stage cannot fit a larger batch at
+//     that size. Its "vendor" verdict is the weakest row in the table and should be
+//     re-measured on a card with more memory before being relied on.
+//   * float only. The mechanism (work-per-matrix vs launch overhead) is type-independent, but
+//     the crossovers could sit elsewhere in double or complex.
+//   * EIGENVECTORS only. Eigenvalues-only has its own table and its own rule; see
+//     syev_saturated_provider_for_n_values below. (syev_benchmark grew a jobz argument so
+//     that mode could be measured against the vendor at all.)
+inline Provider syev_saturated_provider_for_n(int64_t n) {
+    if (n <= 320) return Provider::BatchLAS_Blocked;   // 64..320, up to 1.49x over the vendor
+    if (n <= 1024) return Provider::BatchLAS_TwoStage; // 512..1024, up to 1.19x
+    return Provider::Vendor;                           // 2048+, 1.65x (but see the caveat)
+}
+
+// --- The same, for EIGENVALUES-ONLY -----------------------------------------
+//
+// Measured 2026-08-04, same method and machine, jobz = NoEigenVectors. This mode could only
+// be measured once syev_benchmark grew a jobz argument -- it previously hardcoded
+// JobType::EigenVectors, so there was no vendor arm to compare against.
+//
+//     n   batch    blocked    vendor  two_stage    winner      margin
+//    64   16384       1.06      1.12       1.14    blocked      1.06x
+//   128    4069       4.41      5.34       5.35    blocked      1.21x
+//   256    2034      24.78     27.20      27.98    blocked      1.10x
+//   320    2604      48.16    200.94      50.35    blocked      1.05x
+//   512    1017     298.30    458.95     158.72    two_stage    1.88x
+//   640     651     687.67    929.05     330.71    two_stage    2.08x
+//   768     452    1362.46   1301.59     505.29    two_stage    2.58x
+//  1024     254    3537.41   2494.44     908.32    two_stage    2.75x
+//  2048      64   29547.70  13908.80   10804.10    two_stage    1.29x
+//
+// Same boundaries as the eigenvector table for 64..320, but two-stage keeps winning all the
+// way to 2048 rather than handing over to the vendor -- and by far larger margins (1.88x to
+// 2.75x, against at most 1.19x with eigenvectors). That is the back-transform: with no
+// eigenvectors to produce, two-stage keeps its cheap band reduction and never pays to apply
+// Q2, so its flop advantage survives into wall-clock.
+//
+// THIS REPLACES syev_prefer_two_stage_values, WHOSE BATCH TERM DID REAL DAMAGE. That
+// predicate required batch >= 256; the n = 1024 cell above ran at batch 254 and therefore
+// fell through to the vendor and paid 2.75x. Two callers differing by two matrices got
+// completely different providers for reasons unrelated to which kernel is better. Routing is
+// keyed on n alone.
+inline Provider syev_saturated_provider_for_n_values(int64_t n) {
+    if (n <= 320) return Provider::BatchLAS_Blocked;   // 64..320, 1.05x - 1.21x
+    return Provider::BatchLAS_TwoStage;                // 512..2048, 1.29x - 2.75x
 }
 
 template <Backend B, typename T>
@@ -434,11 +530,38 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
         // Eigenvalues-only at large n and large batch: our two-stage solver wins
         // outright since its stage-2 chase was fixed. Checked first because it
         // overlaps the vendor-preferred region.
-        if (jobtype != JobType::EigenVectors &&
-            syev_prefer_two_stage_values(caps, A.rows(), A.batch_size()) &&
-            syev_supports_two_stage(caps, A, uplo)) {
-            return Provider::BatchLAS_TwoStage;
+        // EIGENVALUES-ONLY, n > 32: routed per n from the saturated measurement, replacing
+        // syev_prefer_two_stage_values. Its batch >= 256 term sent an n=1024 solve at batch
+        // 254 to the vendor at 2.75x the cost of two-stage; routing is keyed on n alone.
+        if (jobtype != JobType::EigenVectors && A.rows() > 32) {
+            const Provider want = syev_saturated_provider_for_n_values(A.rows());
+            if (want == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) {
+                return want;
+            }
+            if (want == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) {
+                return want;
+            }
+            return Provider::Vendor;
         }
+        // EIGENVECTORS, n > 32: routed per n from the saturated measurement above, NOT from
+        // the batch-dependent syev_prefer_vendor grid, which was built from unsaturated
+        // cells and picks the wrong provider at five of nine measured sizes. n <= 32 falls
+        // through to the order loop so the CTA branch keeps it.
+        if (jobtype == JobType::EigenVectors && A.rows() > 32) {
+            const Provider want = syev_saturated_provider_for_n(A.rows());
+            if (want == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) {
+                return want;
+            }
+            if (want == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) {
+                return want;
+            }
+            // Unsupported for this shape -- the vendor handles everything. (Uplo::Upper is
+            // no longer such a case; both BatchLAS paths mirror it into Lower.)
+            return Provider::Vendor;
+        }
+        // Only reachable for n <= 32 now, where it returns false by construction -- both
+        // jobz branches above return for n > 32. Kept so an explicit provider order still
+        // behaves, but it no longer decides anything. See the SUPERSEDED note on the grid.
         if (syev_prefer_vendor(caps, A.rows(), A.batch_size())) return Provider::Vendor;
         // Small n with eigenvectors: CTA claims the whole n <= 32 range, but the
         // vendor is faster over part of it. See syev_prefer_vendor_over_cta.

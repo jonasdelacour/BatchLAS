@@ -18,6 +18,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     syevx_lobpcg.cc
     syevx_filtered.cc
     syev_cta.cc
+    uplo_mirror.cc
     syev_blocked.cc
     syev_two_stage.cc
     lanczos.cc
