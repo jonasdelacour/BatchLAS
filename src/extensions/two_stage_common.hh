@@ -54,6 +54,51 @@ inline int32_t choose_two_stage_kd(int32_t n) {
     //
     // Two-stage now *wins* at n >= 1024 (1.13x at n=1024, 1.06x at n=2048) and
     // still loses below that, where blocked's lower fixed overhead dominates.
+    //
+    // RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8, float,
+    // eigenvectors, total ms, median of 3, one process at a time). kd = 32 IS
+    // STILL THE OPTIMUM -- confirmed at n = 256, 512, 1024 and 2048:
+    //
+    //   n/batch      kd=16   kd=32   kd=48   kd=64   kd=96  kd=128   blocked
+    //   128/2048      27.6    22.0    22.0    21.0    18.5    16.9      14.6
+    //   256/1024      69.5    61.3    64.2    65.7    93.5    75.7      40.9
+    //   512/512      217.7   194.2   216.8   236.1   294.9       -     191.4
+    //   1024/128     445.3   369.9   394.9   433.2   541.3   715.3     475.5
+    //   2048/32     1171    1066    1160    1286    1609    1943       876
+    //
+    // A PREDICTION THIS DISPROVES. It was argued that the kd optimum should move
+    // UP to 96-128 now that f7f3c57 lets the panel back-transform use nb = kd,
+    // since the old split-WY behaviour chopped every band back to 16 and so
+    // structurally penalised wide kd. That is wrong everywhere except n = 128
+    // (where 128 beats 32 by 1.30x, and two-stage loses to blocked anyway). The
+    // reason is visible in the nb A/B at n = 1024, the only shape where
+    // f7f3c57's gate (n >= 1024 && batch >= 32) actually fires:
+    //
+    //   kd            16      32      48      64      96     128
+    //   nb hint on   445.3   369.9   394.9   433.2   541.3   715.3
+    //   nb hint off  453.6   391.1   420.0   448.1   531.0   662.4
+    //   hint gives   1.019x  1.057x  1.064x  1.034x  0.981x  0.926x
+    //
+    // The hint HELPS narrow bands and HURTS wide ones -- exactly as the comment
+    // at sytrd_sy2sb.cc:44 predicts, since LARFT work is O(m*k*nb) and doubles
+    // with nb. So removing the split-WY penalty did not free wide kd; it made
+    // wide kd relatively worse.
+    //
+    // AND THE "two-stage wins at n >= 1024" CLAIM ABOVE IS NOW SHAPE-DEPENDENT.
+    // Grid-latrd (87f6887, default at n >= 768) sped the BLOCKED baseline up
+    // underneath this comparison, and nothing re-checked it:
+    //
+    //   n=2048/32   blocked latrd=legacy 1235.1   grid 875.8   (grid is 1.41x)
+    //               two-stage kd=32      1066
+    //     -> with legacy latrd two-stage wins 1.16x (matching the claim above);
+    //        with today's default grid latrd, BLOCKED wins 1.22x.
+    //   n=1024/128  blocked legacy 475.5, grid 475.7 -- identical, because batch
+    //               128 already saturates the 128 SMs so there is no starvation
+    //               for the grid path to fix. There two-stage wins by 1.29x.
+    //
+    // So: two-stage wins where the batch saturates the device, and loses where it
+    // does not, because that is precisely where grid-latrd rescues blocked. Do
+    // not restate it as a plain "n >= 1024" rule.
     const int32_t def = 32;
 
     const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);

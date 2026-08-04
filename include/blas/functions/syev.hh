@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 #include <stdexcept>
+#include <type_traits>
+#include <string_view>
 
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
@@ -169,6 +171,44 @@ inline Provider normalize_vendor_like(Provider p) {
 // rather than smoothed into a formula, because it is not monotone in n -- at
 // n = 256 and again from n = 768 the vendor wins at every batch measured.
 //
+// RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8, float, eigenvectors,
+// median of 3, one process at a time). The grid above was taken at 27851a6, i.e.
+// BEFORE the grid-barrier latrd path (87f6887, defaulted on at n >= 768 by
+// 5401f63) existed, so it was due a re-check. blocked/vendor, > 1 = vendor wins:
+//
+//   n \ batch     1     8    16    32    64   128   256   512  1024
+//     64       2.08  4.43  4.48  4.32  3.93  3.22  2.29  1.55  1.11
+//     128      2.00  4.16  4.09  3.79  3.39  2.71  1.72  1.22  0.98
+//     256      3.96  2.67  2.59  2.44  2.19  1.87  1.26  1.21  1.08
+//     320      5.00  1.23  1.35  1.24  1.03  0.79  0.68  0.47  0.36
+//     512      6.42  2.07  1.93  1.62  1.27  0.86  0.73  0.74     -
+//     640      8.78  2.27  2.03  1.67  1.18  0.85  0.86  0.81     -
+//     768      9.99  2.56  2.21  1.73  1.10  1.05  1.07     -     -
+//     896     10.05  2.27  1.93  1.52  1.06  1.19  1.24     -     -
+//     1024    10.14  2.29  1.97  1.50  1.15  1.44     -     -     -
+//
+// THE CARVE-OUT SURVIVES UNCHANGED, and the routing below needs no edit. What
+// did change:
+//   * n = 1024 improved a lot -- 15.33 -> 10.14 at batch 1, 3.33 -> 2.29 at
+//     batch 8 -- which is grid-latrd doing exactly its job. The vendor still
+//     wins there, so the decision does not flip; only the margin narrowed.
+//   * The carve-out is WIDER than recorded, because the original grid stopped at
+//     batch 256. The blocked win keeps growing with batch: at n = 320 it reaches
+//     0.47 at batch 512 and 0.36 at batch 1024, i.e. blocked is 2.8x faster than
+//     cuSOLVER there. Same direction at n = 512 (0.74 at batch 512) and n = 640
+//     (0.81 at batch 512). The `batch >= 128` predicate already covers all of it.
+//   * n = 128 at batch 1024 came in at 0.98 -- nominally ours, but 1.02x is
+//     inside the noise band and is NOT carved out.
+//   * n = 768 and 896 are vendor-win at every batch, confirming the upper edge.
+//
+// A CONTENTION WARNING, because it nearly produced a wrong table. A first pass
+// had n=768 at 0.28 and 0.38 for batch 32 and 64 -- an apparent 3.6x blocked win
+// that would have moved the carve-out's upper edge. It was an artifact: two
+// measuring processes overlapped on the device, and the VENDOR arm (not blocked)
+// was inflated to 6885 us/matrix against 1110 when re-run alone. Re-measured with
+// the GPU to itself, the row is 1.73 / 1.10 / 1.05 -- vendor wins throughout.
+// Never measure this grid with anything else running on the device.
+//
 // n <= 32 is deliberately excluded: that is CTA territory and the CTA predicate
 // is checked first in the order loop. This grid did not measure it.
 //
@@ -275,6 +315,80 @@ inline int64_t syev_cta_max_n_for_vectors() {
     return static_cast<int64_t>(parsed);
 }
 
+// --- Which small-n kernel? -------------------------------------------------
+//
+// `Auto` used to send EVERY n <= 32 to syev_cta. Measured on an RTX 4090 (2026-08-03, build
+// 7911847, device 1, median of 5 repeats with IQR, each at that cell's measured knee batch),
+// syev_cta does not win a single cell in either precision -- and the two kernels that beat it
+// were both unreachable from `Auto`. us/matrix, best over cta_wg_size_multiplier:
+//
+//   type   n  mode     winner      vs syev_cta   vs cuSOLVER
+//   double 4  values   jacobi          3.87x         --
+//   double 4  vectors  jacobi          3.75x       15.17x
+//   double 8  vectors  jacobi          2.91x        3.70x
+//   double 16 vectors  jacobi          2.50x        3.29x
+//   double 32 vectors  jacobi           --          1.37x
+//   float  4  vectors  jacobi          4.55x       18.57x
+//   float  8  vectors  jacobi          2.55x        8.42x
+//   float  16 vectors  cta_fused       1.25x        4.10x
+//   float  32 vectors  cta_fused       1.12x        1.79x
+//
+// Full tables, provenance and the two cells that came out NEUTRAL (float n=16 and n=32,
+// eigenvalues-only) are in SYEV_RETUNE_RESULTS.md.
+//
+// SCOPE -- deliberately only what was measured:
+//   * REAL types only. Complex was not measured and keeps syev_cta.
+//   * n <= 32 only, i.e. exactly the range syev_cta already claimed.
+//   * Uplo::Lower is what the benchmarks exercise. Both kernels accept either; cta_fused
+//     internally runs the Upper path and transposes Lower, so Lower is the costlier case and
+//     is the one measured.
+//
+// FP64 CAVEAT, load-bearing. This GPU runs FP64 at 1/64 rate, which inflates Jacobi's margin
+// over the tridiagonalizing path. The float column is the better predictor for a 1:2 FP64
+// datacenter GPU. The `double` rule below should be re-measured there before being trusted;
+// BATCHLAS_SYEV_SMALL_KERNEL=cta restores the previous behaviour wholesale.
+//
+// Jacobi additionally has a large relative-accuracy advantage on graded SPD input
+// (4.5e-07 vs syev_cta's 2.7e+28, JACOBI_EIGENSOLVER_PLAN.md 13.1). That is a reason to
+// prefer it on ties; it is not the reason it is routed here -- it also wins on speed.
+enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
+
+inline SyevSmallKernel syev_small_kernel_env(bool& forced) {
+    forced = true;
+    const char* v = std::getenv("BATCHLAS_SYEV_SMALL_KERNEL");
+    if (v && *v) {
+        const std::string_view s(v);
+        if (s == "cta") return SyevSmallKernel::Cta;
+        if (s == "fused" || s == "cta_fused") return SyevSmallKernel::CtaFused;
+        if (s == "jacobi") return SyevSmallKernel::Jacobi;
+    }
+    forced = false;
+    return SyevSmallKernel::Cta;
+}
+
+template <typename T>
+inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat::Dense>& A) {
+    bool forced = false;
+    const SyevSmallKernel env = syev_small_kernel_env(forced);
+    if (forced) return env;
+
+    // Complex was never measured -- keep the historical kernel. `internal::is_complex` lives
+    // in src/math-helpers.hh and is not visible from this public header, so detect complex
+    // via the public base_type trait: for a real T, base_type<T>::type IS T.
+    constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
+    if constexpr (!kReal) {
+        return SyevSmallKernel::Cta;
+    } else {
+        constexpr bool is_double = std::is_same_v<typename base_type<T>::type, double>;
+        if constexpr (is_double) {
+            return SyevSmallKernel::Jacobi;      // wins at every measured n <= 32
+        } else {
+            return A.rows() <= 8 ? SyevSmallKernel::Jacobi   // 2.2x - 4.6x
+                                 : SyevSmallKernel::CtaFused; // 1.03x - 1.25x
+        }
+    }
+}
+
 template <typename T>
 inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
                                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -365,7 +479,19 @@ inline Event syev_dispatch(Queue& ctx,
     if (chosen == Provider::Vendor) {
         need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     } else if (chosen == Provider::BatchLAS_CTA) {
-        need_ws = syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
+        switch (detail::syev_choose_small_kernel<T>(descrA)) {
+            case detail::SyevSmallKernel::Jacobi:
+                need_ws = syev_jacobi_cta_buffer_size<B, T>(ctx, descrA, jobtype);
+                break;
+            case detail::SyevSmallKernel::CtaFused:
+                need_ws = syev_cta_fused_buffer_size<B, T>(ctx, descrA, jobtype,
+                                                           detail::syev_cta_steqr_params<T>(jobtype));
+                break;
+            default:
+                need_ws = syev_cta_buffer_size<B, T>(ctx, descrA, jobtype,
+                                                     detail::syev_cta_steqr_params<T>(jobtype));
+                break;
+        }
     } else if (chosen == Provider::BatchLAS_TwoStage) {
         need_ws = syev_two_stage_buffer_size<B, T>(ctx,
                                                    descrA,
@@ -400,14 +526,35 @@ inline Event syev_dispatch(Queue& ctx,
     if (chosen == Provider::Vendor) {
         e = backend::syev_vendor<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
     } else if (chosen == Provider::BatchLAS_CTA) {
-        e = syev_cta<B, T>(*run_q,
-                           descrA,
-                           eigenvalues,
-                           jobtype,
-                           uplo,
-                           workspace,
-                           detail::syev_cta_steqr_params<T>(jobtype),
-                           /*cta_wg_size_multiplier=*/1);
+        // Which of the three n<=32 kernels -- see syev_choose_small_kernel. The workspace
+        // query above MUST take the same branch; both call the same selector, and the
+        // selector reads its env override fresh, so it must not be flipped between the
+        // buffer-size query and the call.
+        switch (detail::syev_choose_small_kernel<T>(descrA)) {
+            case detail::SyevSmallKernel::Jacobi:
+                e = syev_jacobi_cta<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
+                break;
+            case detail::SyevSmallKernel::CtaFused:
+                e = syev_cta_fused<B, T>(*run_q,
+                                         descrA,
+                                         eigenvalues,
+                                         jobtype,
+                                         uplo,
+                                         workspace,
+                                         detail::syev_cta_steqr_params<T>(jobtype),
+                                         /*cta_wg_size_multiplier=*/1);
+                break;
+            default:
+                e = syev_cta<B, T>(*run_q,
+                                   descrA,
+                                   eigenvalues,
+                                   jobtype,
+                                   uplo,
+                                   workspace,
+                                   detail::syev_cta_steqr_params<T>(jobtype),
+                                   /*cta_wg_size_multiplier=*/1);
+                break;
+        }
     } else if (chosen == Provider::BatchLAS_TwoStage) {
         e = syev_two_stage<B, T>(*run_q,
                                  descrA,
@@ -447,7 +594,19 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
         return backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     }
     if (chosen == Provider::BatchLAS_CTA) {
-        return syev_cta_buffer_size<B, T>(ctx, descrA, jobtype, detail::syev_cta_steqr_params<T>(jobtype));
+        // Must mirror syev_dispatch exactly: a caller that sizes its workspace here and then
+        // runs a different small-n kernel would under-allocate. Both sites call the same
+        // selector with the same arguments.
+        switch (detail::syev_choose_small_kernel<T>(descrA)) {
+            case detail::SyevSmallKernel::Jacobi:
+                return syev_jacobi_cta_buffer_size<B, T>(ctx, descrA, jobtype);
+            case detail::SyevSmallKernel::CtaFused:
+                return syev_cta_fused_buffer_size<B, T>(ctx, descrA, jobtype,
+                                                        detail::syev_cta_steqr_params<T>(jobtype));
+            default:
+                return syev_cta_buffer_size<B, T>(ctx, descrA, jobtype,
+                                                  detail::syev_cta_steqr_params<T>(jobtype));
+        }
     }
     if (chosen == Provider::BatchLAS_TwoStage) {
         return syev_two_stage_buffer_size<B, T>(ctx,
