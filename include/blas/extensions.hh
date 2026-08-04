@@ -1681,9 +1681,17 @@ namespace batchlas {
         FusedCta,           // CTA-partitioned root solve using tunable threads per root
     };
 
+    // Which divide-and-conquer driver runs the merge tree.
+    enum class StedcAlgorithm {
+        Auto = -1,      // Currently: Levels
+        Levels,         // Level-synchronous: every node at a tree level merges in one launch
+        Recursive,      // Depth-first: one node per launch (kept for A/B comparison)
+    };
+
     template <typename T>
     struct StedcParams {
         int64_t recursion_threshold = 0; // <=0 uses BatchLAS tuning; otherwise this exact threshold is used
+        StedcAlgorithm algorithm = StedcAlgorithm::Auto;
         StedcSecularSolver secular_solver = StedcSecularSolver::Rocm;
         SteqrParams<T> leaf_steqr_params = SteqrParams<T>();
 
@@ -1700,11 +1708,6 @@ namespace batchlas {
     Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
 
-        // Flattened STEDC (non-recursive) for testing/comparison; kept separate from the default path.
-        template <Backend B, typename T>
-        Event stedc_flat(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
-
     template <Backend B, typename T>
     inline Event stedc(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
@@ -1712,16 +1715,7 @@ namespace batchlas {
     }
 
     template <Backend B, typename T>
-    inline Event stedc_flat(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return stedc_flat<B,T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), static_cast<VectorView<T>>(eigenvalues), ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-    
-    template <Backend B, typename T>
     size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
-
-    template <Backend B, typename T>
-    size_t stedc_flat_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
 
 
     /**

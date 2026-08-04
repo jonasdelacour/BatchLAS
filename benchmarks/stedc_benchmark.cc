@@ -9,8 +9,9 @@ template <typename Benchmark>
 static void StedcBenchSizes(Benchmark* b) {
     for (int n : {64, 128, 256}) {
         for (int batch : {128, 512, 2048}) {
-            for (int flattened : {0, 1}) {
-                b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::FusedCta), flattened, 0, 0});
+            for (int algorithm : {static_cast<int>(StedcAlgorithm::Levels),
+                                  static_cast<int>(StedcAlgorithm::Recursive)}) {
+                b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::FusedCta), 0, 0, algorithm});
             }
         }
     }
@@ -20,7 +21,8 @@ template <typename Benchmark>
 static void StedcBenchSizesNetlib(Benchmark* b) {
     for (int n : {32, 64, 128}) {
         for (int batch : {1, 8, 32}) {
-            b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Baseline), 0, 0, 0});
+            b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Baseline), 0, 0,
+                     static_cast<int>(StedcAlgorithm::Levels)});
         }
     }
 }
@@ -38,6 +40,7 @@ static void BM_STEDC(minibench::State& state) {
     // library never actually runs by default.
     const int threads_per_root = static_cast<int>(state.range(4));
     const int wg_multiplier = static_cast<int>(state.range(5));
+    const auto algorithm = static_cast<StedcAlgorithm>(state.range(6));
     JobType jobz = JobType::EigenVectors;
 
     auto diags = Vector<T>::random(n, batch);
@@ -48,6 +51,7 @@ static void BM_STEDC(minibench::State& state) {
     params.merge_variant = merge_variant;
     params.secular_threads_per_root = threads_per_root;
     params.secular_cta_wg_size_multiplier = wg_multiplier;
+    params.algorithm = algorithm;
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
     auto eigvals = Vector<T>::zeros(n, batch);

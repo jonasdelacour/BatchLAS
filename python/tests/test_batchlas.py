@@ -245,7 +245,7 @@ def test_syev_without_eigenvectors_returns_the_full_spectrum():
     np.testing.assert_allclose(np.sort(values, axis=-1), np.linalg.eigvalsh(a), rtol=1e-8, atol=1e-8)
 
 
-@pytest.mark.parametrize("name", ["stedc", "stedc_flat", "steqr", "steqr_cta"])
+@pytest.mark.parametrize("name", ["stedc", "steqr", "steqr_cta"])
 def test_tridiagonal_solvers_without_eigenvectors(name):
     rng = np.random.default_rng(3)
     d = rng.standard_normal((2, 16))

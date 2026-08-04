@@ -57,7 +57,7 @@ are GPU-only, as noted below.
 | 05 | `05_svd.ipynb` | `gesvd`, `gesvd_blocked`, `gesvd_cta`, `gebrd_*`, `bdsqr`, `ormbr` |
 | 06 | `06_symmetric_eigensolvers.ipynb` | The whole `syev` family incl. `syev_jacobi_cta`, `syev_variant_support`, options objects |
 | 07 | `07_tridiagonal_reduction.ipynb` | `sytrd_cta`, `sytrd_blocked`, `sytrd_sy2sb`, `sytrd_sb2st`, `hetrd_hb2st`, `sytrd_band_reduction` |
-| 08 | `08_tridiagonal_eigensolvers.ipynb` | `steqr`, `steqr_cta`, `stedc`, `stedc_flat`, `tridiagonal_solver` |
+| 08 | `08_tridiagonal_eigensolvers.ipynb` | `steqr`, `steqr_cta`, `stedc`, `tridiagonal_solver` |
 | 09 | `09_sparse_and_iterative.ipynb` | `spmm`, `syevx` (+ convergence history), `lanczos`, `ritz_values`, ILU(k) |
 | 10 | `10_jacobi_relative_accuracy.ipynb` | Why `syev_jacobi_cta` exists: relative accuracy on graded matrices |
 | 11 | `11_generators_and_utilities.ipynb` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
@@ -104,15 +104,12 @@ out in the notebooks where they come up.
   view rather than the real `A` (`src/extensions/ortho.cc`), so the bump
   allocator can hand out overlapping blocks. The other algorithms are unaffected;
   notebook 04 uses those.
-- **`stedc` / `stedc_flat` with `JobType::NoEigenVectors`.** Returns wrong
+- **`stedc` with `JobType::NoEigenVectors`.** Returns wrong
   eigenvalues, and slices an eigenvector output it was told not to produce. The
   Python bindings work around this by always requesting vectors internally and
   discarding them, which is also what `syev_blocked` does inside the library. The
   same defect is why `syev_two_stage(compute_vectors=False)` needed the same
   workaround.
-- **`stedc_flat` eigenvectors.** Eigenvalues are correct; the eigenvectors do not
-  satisfy `A V = V diag(w)`. Notebook 08 reports this residual without a
-  tolerance so it stays visible.
 - **`tridiagonal_solver` accuracy.** Its QR iteration does not converge reliably;
   accuracy varies with `n` and with the data. Prefer `steqr` or `stedc`.
 - **`uplo="upper"` with a half-filled matrix on CUDA.** `syev` and `syev_cta`

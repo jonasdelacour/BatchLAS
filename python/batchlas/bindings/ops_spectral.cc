@@ -195,8 +195,7 @@ py::object stedc_common(const DenseVector& d_wrapper,
                         bool compute_vectors,
                         const py::dict& options,
                         Backend backend,
-                        const std::optional<std::string>& device_name,
-                        bool flat) {
+                        const std::optional<std::string>& device_name) {
     ensure_same_dtype(d_wrapper, e_wrapper, "d and e dtypes must match");
     const auto& d = std::get<Vector<T>>(d_wrapper.storage);
     const auto& e = std::get<Vector<T>>(e_wrapper.storage);
@@ -211,21 +210,13 @@ py::object stedc_common(const DenseVector& d_wrapper,
     Queue queue = make_queue(device_name);
     const std::size_t workspace_size = visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        if (flat) {
-            return batchlas::stedc_flat_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
-        }
         return batchlas::stedc_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
     });
     UnifiedVector<std::byte> workspace(workspace_size);
     visit_backend(backend, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        if (flat) {
-            batchlas::stedc_flat<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
-                                       workspace.to_span(), jobz, params, vectors.view());
-        } else {
-            batchlas::stedc<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
-                                  workspace.to_span(), jobz, params, vectors.view());
-        }
+        batchlas::stedc<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
+                              workspace.to_span(), jobz, params, vectors.view());
     });
     queue.wait();
     if (compute_vectors) {
@@ -689,21 +680,7 @@ void init_spectral_ops(py::module_& module) {
             if constexpr (!std::is_floating_point_v<scalar_type>) {
                 throw_not_implemented("stedc only supports float32 and float64");
             } else {
-                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name, false);
-            }
-        });
-    });
-
-    module.def("_stedc_flat", [](const DenseVector& d, const DenseVector& e, bool compute_vectors, const py::dict& options,
-                                  const std::string& backend_name, const py::object& device_name_obj) {
-        const Backend backend = parse_backend(backend_name);
-        const auto device_name = optional_string_from_obj(device_name_obj);
-        return visit_vector(d, [&](auto tag, const auto&) -> py::object {
-            using scalar_type = typename decltype(tag)::type;
-            if constexpr (!std::is_floating_point_v<scalar_type>) {
-                throw_not_implemented("stedc_flat only supports float32 and float64");
-            } else {
-                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name, true);
+                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name);
             }
         });
     });
