@@ -259,7 +259,13 @@ Re-measured, blocked/vendor, `> 1` = vendor wins:
 | 896 | 10.05 | 2.27 | 1.93 | 1.52 | 1.06 | 1.19 | 1.24 | — | — |
 | 1024 | 10.14 | 2.29 | 1.97 | 1.50 | 1.15 | 1.44 | — | — | — |
 
-**The `320 <= n <= 640 && batch >= 128` carve-out is confirmed and needs no edit.** What moved:
+> **SUPERSEDED — see §11.** This section concluded the routing needed no edit. That was wrong,
+> and wrong for the reason the whole document warns about elsewhere: the batch ladder here
+> stopped at 1024, which is not saturation for small n. Measured at saturation (§11), the
+> routing is wrong at five of nine sizes. The table below is kept as a record of the
+> batch-dependent behaviour, not as a routing basis.
+
+**The carve-out looked confirmed at the batches measured here.** What moved:
 
 - **n = 1024 improved substantially** — 15.33 → 10.14 at batch 1, 3.33 → 2.29 at batch 8 —
   which is grid-`latrd` doing its job. The vendor still wins, so the decision does not flip.
@@ -342,3 +348,74 @@ invalidated by a later optimisation that nothing re-checked — the same failure
 `latrd` gate is confirmed, `kd = 32` is confirmed, and two-stage should still not be routed for
 eigenvectors. What changed is the *documentation*: three tables now carry re-measured numbers,
 a date, a build SHA, and the shape-dependence that the plain claims elided.
+
+---
+
+# Part 3 — saturated routing (2026-08-04), which supersedes §7
+
+## 11. Routing decided at saturation, keyed on n alone
+
+§7 concluded the eigenvector routing needed no change. **That was wrong.** Its batch ladder
+stopped at 1024, and for small n that is not saturation — at n = 64 the crossover needs batch
+~16384. Small batch flatters the vendor, whose fixed launch cost is lowest, so a ladder that
+never reaches saturation systematically over-credits it.
+
+Re-measured at, for each n, the largest batch where **all three providers fit** (blocked and
+two-stage carry far larger workspaces than the vendor path). Float, eigenvectors, µs/matrix,
+median of 3, RTX 4090 device 1, one process on the device, build `12963a8`:
+
+| n | batch | blocked | vendor | two_stage | winner | margin | old Auto | new Auto |
+|---|---|---|---|---|---|---|---|---|
+| 64 | 16384 | **1.64** | 2.02 | 2.21 | blocked | 1.23× | vendor ✗ | blocked |
+| 128 | 4069 | **6.65** | 7.85 | 10.35 | blocked | 1.18× | vendor ✗ | blocked |
+| 256 | 2034 | **36.92** | 37.14 | 57.56 | blocked | 1.01× | vendor | blocked |
+| 320 | 1302 | **74.53** | 215.23 | 111.20 | blocked | 1.49× | blocked ✓ | blocked |
+| 512 | 508 | 384.27 | 504.69 | **380.02** | two_stage | 1.01× | blocked | two_stage |
+| 640 | 651 | 836.30 | 1008.06 | **727.48** | two_stage | 1.15× | blocked ✗ | two_stage |
+| 768 | 452 | 1612.98 | 1414.99 | **1184.11** | two_stage | 1.19× | vendor ✗ | two_stage |
+| 1024 | 254 | 4089.02 | 2706.84 | **2441.93** | two_stage | 1.11× | vendor ✗ | two_stage |
+| 2048 | 64 | 33842.6 | **15019.1** | 24782.3 | vendor | 1.65× | vendor ✓ | vendor |
+
+**The old routing was wrong at five of nine sizes**, by 1.11×–1.23×.
+
+### 11.1 The rule
+
+```
+n <= 32          -> CTA family (syev_choose_small_kernel; unchanged)
+64 <= n <= 320   -> BatchLAS_Blocked
+512 <= n <= 1024 -> BatchLAS_TwoStage
+n >= 2048        -> Vendor
+```
+
+`syev_prefer_vendor` is no longer consulted for eigenvectors. It was removed from that path
+rather than re-tuned, because its whole structure is batch-keyed and every grid feeding it was
+built from unsaturated cells.
+
+### 11.2 Verified end to end
+
+Auto dispatches to the measured winner at every shape (idle GPU, ratio Auto/expected):
+
+| n | 64 | 128 | 320 | 640 | 1024 | 2048 |
+|---|---|---|---|---|---|---|
+| ratio | 1.000 | 0.999 | 1.001 | 1.000 | 1.000 | 1.002 |
+
+Tests reproduce the baseline exactly: 16 pass, 3 fail (`lanczos`, `steqr`, `stedc`, all
+pre-existing).
+
+### 11.3 What is NOT established
+
+- **n = 2048 was measured at batch 64**, below the 128 SMs — memory-limited, not saturated,
+  because blocked and two-stage cannot fit a larger batch at that size. It is the weakest row
+  in the table and the 2048 boundary rests on it.
+- **Float only.** The mechanism is type-independent but the crossovers may not be.
+- **Eigenvectors only.** `syev_benchmark` hardcodes `JobType::EigenVectors`, so eigenvalues-only
+  keeps `syev_prefer_two_stage_values` and the historical ordering, unmeasured.
+- **`Uplo::Upper`** falls back to the vendor — neither BatchLAS path supports it.
+
+### 11.4 The recurring lesson
+
+This is the third table in this repo invalidated the same way, and the second one *I* produced.
+A measurement is only as good as the regime it samples: §7 was methodologically careful about
+medians, IQRs and name-matching, and still reached the wrong conclusion because the batch
+ladder stopped short. **Routing must be decided at saturation** — the regime where the kernel,
+not the launch overhead, is what is being compared.
