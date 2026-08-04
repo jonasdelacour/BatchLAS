@@ -166,7 +166,10 @@ namespace batchlas {
         auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
                                                     ctx, 
                                                     VectorView<real_t>(alphas.data(), n, batch_size),
-                                                    VectorView<real_t>(betas.data(), n-1, batch_size),
+                                                    // betas is allocated with a per-batch stride of n (see the
+                                                    // subspan(bid*n, n) write below), so the stride must be given
+                                                    // explicitly: it would otherwise default to size*inc == n-1.
+                                                    VectorView<real_t>(betas.data(), n-1, batch_size, 1, n),
                                                     VectorView<real_t>(W.data(), n, batch_size),
                                                     jobz,
                                                     steqr_params));
@@ -176,7 +179,7 @@ namespace batchlas {
         
         steqr<B> (ctx,
             VectorView<real_t>(alphas.data(), n, batch_size),
-            VectorView<real_t>(betas.data(), n-1, batch_size),
+            VectorView<real_t>(betas.data(), n-1, batch_size, 1, n),
             VectorView<real_t>(W.data(), n, batch_size),
             steqr_ws,
             jobz,
@@ -231,7 +234,7 @@ namespace batchlas {
         basic_size += BumpAllocator::allocation_size<std::byte>(ctx,
                         steqr_buffer_size<T>(ctx, 
                             VectorView<typename base_type<T>::type>(nullptr, n, batch_size),
-                            VectorView<typename base_type<T>::type>(nullptr, n-1, batch_size),
+                            VectorView<typename base_type<T>::type>(nullptr, n-1, batch_size, 1, n),
                             VectorView<typename base_type<T>::type>(W.data(), n, batch_size),
                             jobz,
                             SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true}));
