@@ -1075,9 +1075,25 @@ namespace batchlas {
         // max_steps <= 0 means run exactly one step.
         int32_t max_steps = 1;
 
-        // Working band semibandwidth. kd_work <= 0 means use the implementation default.
+        // Working band semibandwidth. kd_work <= 0 means use the implementation
+        // default, which is 2*kd + nb_max: a chase step factors a panel of at
+        // most b+nb rows and the subsequent A <- A*Q fills down to a band
+        // distance of 2*b + nb - 1, and anything deeper than kd_work is
+        // discarded (silently breaking the similarity).
         int32_t kd_work = 0;
     };
+
+    // sytrd_band_reduction: reduce a symmetric/Hermitian band matrix (lower-band
+    // storage, semibandwidth kd) to tridiagonal form by bulge-chasing sweeps.
+    // `params.d_seq` selects how many diagonals each sweep removes.
+    //
+    // EIGENVALUES ONLY. The accumulated similarity transform is *not* returned:
+    // the Householder reflectors are discarded as the chase proceeds and
+    // `tau_out` is filled with zeros. `e_out` receives |e_i|, so the sign
+    // information needed to rebuild the exact tridiagonal factor is also gone.
+    // The result is similar to the input and so has the same spectrum, but
+    // eigenvectors cannot be back-transformed through it. Use the two-stage
+    // path (sytrd_sy2sb + sytrd_sb2st) when eigenvectors are required.
 
     template <Backend B, typename T>
     Event sytrd_band_reduction(Queue& ctx,

@@ -861,10 +861,17 @@ namespace batchlas {
                 throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
-            // Do not propagate the parent pointer-array into a slice: those pointers refer to the
-            // *unsliced* base addresses. Backends that use pointer-array batched kernels (e.g. cuBLAS)
-            // would then read/write the wrong addresses. Leaving it null lets backends regenerate the
-            // correct pointer array for this view if needed.
+            // NOTE: the parent pointer-array *is* propagated below, which contradicts what this
+            // comment used to claim. Those pointers refer to the *unsliced* base addresses, so
+            // they are only correct when the slice starts at element (0,0) -- i.e. `offset == 0`.
+            // For a slice with a nonzero offset, a backend that uses pointer-array batched kernels
+            // (e.g. cuBLAS) will read/write the parent's base addresses rather than the slice's.
+            //
+            // Current in-tree callers only take offset-0 slices of batched views, so this is not
+            // live today; it is left as-is because MatrixView holds a non-owning Span<T*> and
+            // cannot regenerate a corrected array in place. Fixing it properly requires giving the
+            // slice somewhere to allocate. Do not take a nonzero-offset slice of a batched view
+            // and hand it to a pointer-array backend until then.
             return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
         }
 

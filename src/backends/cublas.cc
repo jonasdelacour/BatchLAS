@@ -796,6 +796,21 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    // RAII for cusolverDnParams_t.
+    //
+    // These handles were created per call and never destroyed anywhere in this
+    // file. geqrf is invoked once per band-reduction chase step (~1.9e6 times
+    // for a default n=1024, kd=64 reduction), so this leaked steadily under any
+    // iterative solver built on top of it.
+    struct CusolverParamsGuard {
+        cusolverDnParams_t params{};
+        CusolverParamsGuard() { cusolverDnCreateParams(&params); }
+        ~CusolverParamsGuard() { cusolverDnDestroyParams(params); }
+        CusolverParamsGuard(const CusolverParamsGuard&) = delete;
+        CusolverParamsGuard& operator=(const CusolverParamsGuard&) = delete;
+        operator cusolverDnParams_t() const { return params; }
+    };
+
     template <Backend B, typename T>
     Event geqrf_vendor(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
@@ -809,8 +824,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         auto pool = BumpAllocator(work_space);
         if (batch_size <= 1) {
-            cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
+            CusolverParamsGuard params;
             size_t device_l_work, host_l_work;
             cusolverDnXgeqrf_bufferSize(handle, params, m, n,
                 BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
@@ -849,8 +863,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         if (batch_size <= 1) {
             size_t device_l_work, host_l_work;
-            cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
+            CusolverParamsGuard params;
             cusolverDnXgeqrf_bufferSize(handle, params, m, n,
                 BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
                 BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
@@ -1036,8 +1049,7 @@ namespace batchlas {
             auto pool = BumpAllocator(work_space);
             if (batch_size <= 1) {
                 auto info = pool.allocate<int>(ctx, 1);
-                cusolverDnParams_t params;
-                cusolverDnCreateParams(&params);
+                CusolverParamsGuard params;
                 cusolverDnXgetrs(handle, params, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
                     BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
                     pivots.data(),
