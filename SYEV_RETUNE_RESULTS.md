@@ -234,3 +234,111 @@ usable batch ceiling for every small-n eigenvector solve.
 5. Then the outstanding ideation items: re-measure the eigenvector routing grid (stale since
    grid-`latrd` landed), the two-stage `kd` sweep with the `nb` hint active, and the
    `stedc` grid-barrier port.
+
+---
+
+# Part 2 — eigenvector routing grid and two-stage `kd` (2026-08-04)
+
+Same provenance rules as Part 1. RTX 4090 **device 1 only**, build `12963a8`, float,
+eigenvectors, median of 3, **one measuring process at a time** (see the contention note).
+
+## 7. The eigenvector routing grid: re-measured, and the routing survives
+
+The grid in `syev.hh` was measured at `27851a6`, before the grid-barrier `latrd` path existed.
+Re-measured, blocked/vendor, `> 1` = vendor wins:
+
+| n \ batch | 1 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|---|---|---|---|
+| 64 | 2.08 | 4.43 | 4.48 | 4.32 | 3.93 | 3.22 | 2.29 | 1.55 | 1.11 |
+| 128 | 2.00 | 4.16 | 4.09 | 3.79 | 3.39 | 2.71 | 1.72 | 1.22 | 0.98 |
+| 256 | 3.96 | 2.67 | 2.59 | 2.44 | 2.19 | 1.87 | 1.26 | 1.21 | 1.08 |
+| **320** | 5.00 | 1.23 | 1.35 | 1.24 | 1.03 | **0.79** | **0.68** | **0.47** | **0.36** |
+| **512** | 6.42 | 2.07 | 1.93 | 1.62 | 1.27 | **0.86** | **0.73** | **0.74** | — |
+| **640** | 8.78 | 2.27 | 2.03 | 1.67 | 1.18 | **0.85** | **0.86** | **0.81** | — |
+| 768 | 9.99 | 2.56 | 2.21 | 1.73 | 1.10 | 1.05 | 1.07 | — | — |
+| 896 | 10.05 | 2.27 | 1.93 | 1.52 | 1.06 | 1.19 | 1.24 | — | — |
+| 1024 | 10.14 | 2.29 | 1.97 | 1.50 | 1.15 | 1.44 | — | — | — |
+
+**The `320 <= n <= 640 && batch >= 128` carve-out is confirmed and needs no edit.** What moved:
+
+- **n = 1024 improved substantially** — 15.33 → 10.14 at batch 1, 3.33 → 2.29 at batch 8 —
+  which is grid-`latrd` doing its job. The vendor still wins, so the decision does not flip.
+- **The carve-out is wider than recorded.** The original grid stopped at batch 256; the
+  blocked win keeps *growing* with batch, reaching **0.36 at n=320 / batch 1024** — blocked is
+  **2.8× faster than cuSOLVER** there. The existing `batch >= 128` predicate already covers it.
+- n = 768 and 896 are vendor-win at every batch, confirming the upper edge.
+- n = 128 at batch 1024 is 0.98 — nominally ours, inside the noise band, not carved out.
+
+### 7.1 A contention artifact that nearly moved the carve-out
+
+A first pass had n=768 at **0.28** and **0.38** for batch 32 and 64 — an apparent 3.6× blocked
+win that would have extended the carve-out's upper edge. It was false. Two measuring processes
+had overlapped on the device, and the inflated arm was the **vendor** one: 6885 µs/matrix
+against 1110 when re-run alone. Clean, the row is 1.73 / 1.10 / 1.05 — vendor throughout.
+Recorded because the artifact was large, plausible, and pointed the *wrong way*.
+
+## 8. `latrd_grid_min_n = 768` confirmed for eigenvector mode
+
+The gate was derived eigenvalues-only and applied in both modes. legacy/grid, `> 1` = grid wins:
+
+| n | batch 1 | batch 8 | batch 64 |
+|---|---|---|---|
+| 256 | 0.734 | 0.734 | 0.788 |
+| 384 | 0.885 | 0.894 | 0.881 |
+| 512 | 1.012 | 1.018 | 0.956 |
+| **768** | **1.379** | **1.375** | 1.090 |
+| **1024** | **1.843** | **1.781** | — |
+
+Same crossover. **The constant does not need splitting per mode.** The win shrinks as batch
+grows, which is the mechanism behaving: once the batch alone saturates the SMs there is no
+starvation left to absorb.
+
+## 9. Two-stage `kd`: the prediction is disproved, and a second stale claim found
+
+Total ms, eigenvectors, median of 3:
+
+| n / batch | kd=16 | **kd=32** | kd=48 | kd=64 | kd=96 | kd=128 | blocked |
+|---|---|---|---|---|---|---|---|
+| 128 / 2048 | 27.6 | 22.0 | 22.0 | 21.0 | 18.5 | **16.9** | **14.6** |
+| 256 / 1024 | 69.5 | **61.3** | 64.2 | 65.7 | 93.5 | 75.7 | **40.9** |
+| 512 / 512 | 217.7 | **194.2** | 216.8 | 236.1 | 294.9 | — | **191.4** |
+| 1024 / 128 | 445.3 | **369.9** | 394.9 | 433.2 | 541.3 | 715.3 | 475.5 |
+| 2048 / 32 | 1171 | **1066** | 1160 | 1286 | 1609 | 1943 | **876** |
+
+**`kd = 32` remains optimal at n >= 256.** The argument that removing the split-WY penalty
+(`f7f3c57`) should push the optimum up to 96–128 holds only at n = 128 — where two-stage loses
+to blocked anyway, so a better kd only narrows a loss.
+
+The nb-hint A/B at n = 1024, the only shape where `f7f3c57`'s gate fires, explains why:
+
+| kd | 16 | 32 | 48 | 64 | 96 | 128 |
+|---|---|---|---|---|---|---|
+| hint gives | 1.019× | 1.057× | 1.064× | 1.034× | 0.981× | **0.926×** |
+
+The hint **helps narrow bands and hurts wide ones**, exactly as `sytrd_sy2sb.cc:44` predicts
+(LARFT work is O(m·k·nb) and doubles with nb). Removing the split-WY penalty did not free wide
+kd — it made wide kd relatively worse.
+
+### 9.1 "Two-stage wins at n >= 1024" is now shape-dependent
+
+Grid-`latrd` sped the *blocked* baseline up underneath that comparison:
+
+| n=2048 / batch=32 | blocked | two-stage (kd=32) | winner |
+|---|---|---|---|
+| latrd **legacy** (as originally measured) | 1235.1 | 1066 | two-stage 1.16× |
+| latrd **grid** (today's default) | **875.8** | 1066 | **blocked 1.22×** |
+
+The legacy figure reproduces the committed table's 1265.7, so the comparison is like-for-like.
+At n=1024/batch=128 the `latrd` impl makes no difference (475.5 vs 475.7 — batch 128 already
+saturates 128 SMs) and two-stage wins by **1.29×**, better than the recorded 1.13×.
+
+**So: two-stage wins where the batch saturates the device and loses where it does not**, because
+that is exactly where grid-`latrd` rescues blocked. This is the second claim in this codebase
+invalidated by a later optimisation that nothing re-checked — the same failure mode as §7.
+
+## 10. Net effect on the routing
+
+**No routing change is warranted from Part 2.** The eigenvector carve-out is confirmed, the
+`latrd` gate is confirmed, `kd = 32` is confirmed, and two-stage should still not be routed for
+eigenvectors. What changed is the *documentation*: three tables now carry re-measured numbers,
+a date, a build SHA, and the shape-dependence that the plain claims elided.

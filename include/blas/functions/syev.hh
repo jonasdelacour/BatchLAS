@@ -171,6 +171,44 @@ inline Provider normalize_vendor_like(Provider p) {
 // rather than smoothed into a formula, because it is not monotone in n -- at
 // n = 256 and again from n = 768 the vendor wins at every batch measured.
 //
+// RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8, float, eigenvectors,
+// median of 3, one process at a time). The grid above was taken at 27851a6, i.e.
+// BEFORE the grid-barrier latrd path (87f6887, defaulted on at n >= 768 by
+// 5401f63) existed, so it was due a re-check. blocked/vendor, > 1 = vendor wins:
+//
+//   n \ batch     1     8    16    32    64   128   256   512  1024
+//     64       2.08  4.43  4.48  4.32  3.93  3.22  2.29  1.55  1.11
+//     128      2.00  4.16  4.09  3.79  3.39  2.71  1.72  1.22  0.98
+//     256      3.96  2.67  2.59  2.44  2.19  1.87  1.26  1.21  1.08
+//     320      5.00  1.23  1.35  1.24  1.03  0.79  0.68  0.47  0.36
+//     512      6.42  2.07  1.93  1.62  1.27  0.86  0.73  0.74     -
+//     640      8.78  2.27  2.03  1.67  1.18  0.85  0.86  0.81     -
+//     768      9.99  2.56  2.21  1.73  1.10  1.05  1.07     -     -
+//     896     10.05  2.27  1.93  1.52  1.06  1.19  1.24     -     -
+//     1024    10.14  2.29  1.97  1.50  1.15  1.44     -     -     -
+//
+// THE CARVE-OUT SURVIVES UNCHANGED, and the routing below needs no edit. What
+// did change:
+//   * n = 1024 improved a lot -- 15.33 -> 10.14 at batch 1, 3.33 -> 2.29 at
+//     batch 8 -- which is grid-latrd doing exactly its job. The vendor still
+//     wins there, so the decision does not flip; only the margin narrowed.
+//   * The carve-out is WIDER than recorded, because the original grid stopped at
+//     batch 256. The blocked win keeps growing with batch: at n = 320 it reaches
+//     0.47 at batch 512 and 0.36 at batch 1024, i.e. blocked is 2.8x faster than
+//     cuSOLVER there. Same direction at n = 512 (0.74 at batch 512) and n = 640
+//     (0.81 at batch 512). The `batch >= 128` predicate already covers all of it.
+//   * n = 128 at batch 1024 came in at 0.98 -- nominally ours, but 1.02x is
+//     inside the noise band and is NOT carved out.
+//   * n = 768 and 896 are vendor-win at every batch, confirming the upper edge.
+//
+// A CONTENTION WARNING, because it nearly produced a wrong table. A first pass
+// had n=768 at 0.28 and 0.38 for batch 32 and 64 -- an apparent 3.6x blocked win
+// that would have moved the carve-out's upper edge. It was an artifact: two
+// measuring processes overlapped on the device, and the VENDOR arm (not blocked)
+// was inflated to 6885 us/matrix against 1110 when re-run alone. Re-measured with
+// the GPU to itself, the row is 1.73 / 1.10 / 1.05 -- vendor wins throughout.
+// Never measure this grid with anything else running on the device.
+//
 // n <= 32 is deliberately excluded: that is CTA territory and the CTA predicate
 // is checked first in the order loop. This grid did not measure it.
 //
