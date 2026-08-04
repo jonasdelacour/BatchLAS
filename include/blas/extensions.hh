@@ -75,6 +75,42 @@ namespace batchlas {
         // measurements in src/extensions/syevx_lobpcg.cc.
         int init_power_iterations = -1;
         const SyevxInstrumentation<T>* instrumentation = nullptr;               // Optional convergence instrumentation sink
+
+        // ---- Range selection (LAPACK ?syevx's RANGE argument) --------------
+        // All defaulted so that an existing caller's behaviour is byte-for-byte
+        // unchanged: Extremal + find_largest is exactly the historical top-k.
+
+        // Which part of the spectrum to return. See SyevxSelect.
+        SyevxSelect select = SyevxSelect::Extremal;
+
+        // select == Index: inclusive 0-based bounds into the ASCENDING spectrum.
+        // iu < 0 means n-1. il > iu is an empty request and is rejected.
+        int64_t il = 0;
+        int64_t iu = -1;
+
+        // select == Value: the half-open interval (vl, vu], matching LAPACK. The
+        // count is data-dependent and differs per batch item, so it is reported
+        // through the `m` output of syevx rather than being known in advance.
+        //
+        // These are float_type, not T: the eigenvalues of a Hermitian matrix are
+        // real and W is already Span<base_type<T>::type>, so typing them T would
+        // force complex callers to write std::complex<float>(vl) for a real
+        // quantity. This deliberately differs from absolute_tolerance /
+        // relative_tolerance above, which are a pre-existing wart.
+        float_type vl = float_type(0);
+        float_type vu = float_type(0);
+
+        // Absolute tolerance on each eigenvalue for the bisection-based paths.
+        // Non-positive means eps * ||T||, i.e. full working precision. Forwarded
+        // to StebzParams::abstol; ignored by paths that get their eigenvalues from
+        // a full decomposition (syevx_direct).
+        float_type abstol = float_type(0);
+
+        // Output order within the selected block. Honoured for Index and Value
+        // only: for Extremal the order comes from find_largest (descending for the
+        // largest, ascending for the smallest), which is what preserves the
+        // historical contract, and this member is ignored.
+        SortOrder order = SortOrder::Ascending;
     };
 
     template <typename T>
@@ -335,12 +371,75 @@ namespace batchlas {
     }
 
     /**
+     * @brief Resolved, algorithm-independent description of what the caller asked
+     *        for, produced by `syevx_resolve_range`.
+     *
+     * Every solver and every `*_buffer_size` derives its behaviour from this struct
+     * and never from SyevxParams::select / il / iu / find_largest directly, so that
+     * the solve and the sizing call can never disagree about what was requested.
+     *
+     * `vl`/`vu` are deliberately absent: they are typed `float_type` and are
+     * forwarded verbatim from SyevxParams to StebzParams (or compared against the
+     * computed spectrum) without any normalization, so keeping them here would
+     * force this struct -- and the resolver -- to be a template for no benefit.
+     * Read `params.vl` / `params.vu` directly when `value_range` is true.
+     */
+    struct SyevxResolvedRange {
+        bool    value_range;  // true: (vl, vu]; false: the index block [il, iu]
+        int64_t il;           // valid iff !value_range; 0-based, inclusive
+        int64_t iu;           // valid iff !value_range; 0-based, inclusive
+        // Upper bound on the number of eigenpairs that can be produced per item,
+        // already clamped to n. For an index block this is exactly iu-il+1 and
+        // hence exactly m[b]; for a value range it is the caller's capacity and
+        // the true m[b] may be larger (the answer is then truncated, see `syevx`).
+        int64_t max_count;
+        bool    reverse;      // write the selected block in descending order
+    };
+
+    /**
+     * @brief Normalizes a range request into a SyevxResolvedRange.
+     *
+     * A plain (non-template) function, exactly like `syevx_select_algorithm`, so
+     * that it links from every translation unit that needs it. Nothing about range
+     * resolution depends on the scalar type.
+     *
+     * Legality is NOT checked here -- this function assumes the request already
+     * passed the host-side validator in syevx.cc. It clamps rather than throws so
+     * that it stays usable from a sizing path.
+     *
+     * @param n     Matrix dimension
+     * @param neigs Capacity of W and V per batch item (see `syevx`)
+     * @param select      SyevxParams::select
+     * @param find_largest SyevxParams::find_largest (Extremal only)
+     * @param il,iu       SyevxParams::il / iu (Index only; iu < 0 means n-1)
+     * @param order       SyevxParams::order (Index and Value only)
+     */
+    SyevxResolvedRange syevx_resolve_range(int64_t n,
+                                           size_t neigs,
+                                           SyevxSelect select,
+                                           bool find_largest,
+                                           int64_t il,
+                                           int64_t iu,
+                                           SortOrder order);
+
+    // Convenience adaptor. Distinguished from the 7-argument form by arity, so
+    // there is no overload ambiguity between them.
+    template <typename T>
+    inline SyevxResolvedRange syevx_resolve_range(int64_t n,
+                                                  size_t neigs,
+                                                  const SyevxParams<T>& params) {
+        return syevx_resolve_range(n, neigs, params.select, params.find_largest,
+                                   params.il, params.iu, params.order);
+    }
+
+    /**
      * @brief Resolves SyevxParams::method (and the BATCHLAS_SYEVX_ALGORITHM override)
      *        to a concrete, implemented algorithm.
      *
-     * Never returns `Auto`, `DirectSubset` or `Filtered`: unimplemented tiers fall
-     * back to their nearest implemented neighbour. Deterministic in its inputs so
-     * that `syevx` and `syevx_buffer_size` always agree on the choice.
+     * Never returns `Auto`: an unavailable tier falls back to its nearest
+     * implemented neighbour (`DirectSubset` degrades to `Direct` when the scalar
+     * type or format does not support it). Deterministic in its inputs so that
+     * `syevx` and `syevx_buffer_size` always agree on the choice.
      *
      * @param format Matrix format of A (sparse formats always use LOBPCG)
      * @param n Matrix dimension
@@ -387,19 +486,35 @@ namespace batchlas {
      * @brief Partial eigensolve by full decomposition followed by selection.
      *
      * Runs `syev` on a private copy of A (A is not modified) and extracts the
-     * `neigs` extreme eigenpairs. Ordering matches the LOBPCG path: descending
-     * when `params.find_largest`, ascending otherwise. Dense input only.
+     * requested part of the spectrum. Dense input only, but every scalar type
+     * (including complex) and every SyevxSelect range, which is what makes it the
+     * universal fallback.
+     *
+     * Ordering: descending when `params.find_largest` for the default `Extremal`
+     * selection (matching the LOBPCG path), otherwise `params.order`.
+     *
+     * @param W Eigenvalue output, `neigs` entries per batch item. `neigs` is a
+     *        CAPACITY: for a Value range only `min(m[b], neigs)` entries are
+     *        written and the rest are left untouched. The stride is always `neigs`.
+     * @param m Per-item count of eigenvalues in the requested range, or an empty
+     *        span to not report it. For Index/Extremal this is always the block
+     *        size; for Value it is data-dependent, and `m[b] > neigs` is the
+     *        caller's truncation signal. When truncating, the LOWEST `neigs`
+     *        eigenvalues of the interval are the ones kept.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_direct(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
                 Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
                 size_t neigs,
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
 
+    // No `m` parameter: sizing writes no counts, and this function is
+    // range-independent anyway (it sizes a full syev on n and batch alone).
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_direct_buffer_size(Queue& ctx,
                 const MatrixView<T, MFormat>& A,

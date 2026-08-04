@@ -1489,6 +1489,529 @@ TEST_F(SyevxSelectAlgorithmTest, SparseAlwaysUsesLobpcg) {
               SyevxAlgorithm::LOBPCG);
 }
 
+// ---------------------------------------------------------------------------
+// Range selection (SyevxSelect::Index / ::Value) on the Direct path.
+//
+// Direct is the universal fallback -- dense, every scalar type, every range -- so
+// it is where range support is pinned down first. Everything here calls
+// `syevx_direct` explicitly rather than going through `syevx`, so the tests keep
+// testing this path regardless of how routing is later retuned, and so the `m`
+// output can be inspected before Phase 5 wires it through the public entry point.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Sentinel written into W before every call, so that "this slot was not touched"
+// is an assertion rather than an assumption. Finite (not NaN) so that a stray
+// comparison fails loudly instead of silently evaluating false.
+constexpr float kUntouched = -123456.0f;
+
+struct DirectRangeRun {
+    std::vector<float> W;
+    std::vector<int32_t> m;
+};
+
+DirectRangeRun RunDirectRange(Queue& ctx,
+                              const Matrix<float, MatrixFormat::Dense>& A,
+                              int batch,
+                              int capacity,
+                              const SyevxParams<float>& params,
+                              JobType jobz,
+                              Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+    UnifiedVector<float> W(static_cast<size_t>(std::max(capacity, 1)) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(
+        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            ctx, A.view(), W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
+    syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        ctx, A.view(), W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
+        Vv, params);
+    ctx.wait();
+
+    return DirectRangeRun{std::vector<float>(W.begin(), W.end()),
+                          std::vector<int32_t>(m.begin(), m.end())};
+}
+
+// Eigenvalues of TriDiagToeplitz(n, diag, s, s), ascending.
+//
+// The closed form is diag + 2*sqrt(sub*super)*cos(j*pi/(n+1)), j = 1..n. It is a
+// valid oracle for syevx ONLY when the two off-diagonals are equal (real) or
+// conjugate (complex): every dense path reads Uplo::Lower only and mirrors it, so
+// an unequal pair means syevx is solving a different matrix than the formula
+// describes. Never parameterize these tests over sub != super.
+std::vector<float> ToeplitzSpectrumAscending(int n, float diag, float s) {
+    std::vector<float> lam(n);
+    for (int j = 1; j <= n; ++j) {
+        lam[n - j] = diag + 2.0f * std::abs(s) * std::cos(float(j) * float(M_PI) / float(n + 1));
+    }
+    return lam;  // cos is decreasing in j, so index n-j is ascending
+}
+
+// Per-item spectra that genuinely disagree: item b's diagonal sits around 10*b,
+// so one fixed value interval catches a different count in every batch item.
+Matrix<float, MatrixFormat::Dense> MakeShiftedPerItem(int n, int batch, unsigned seed = 4242u) {
+    Matrix<float, MatrixFormat::Dense> A(n, n, batch);
+    unsigned state = seed;
+    auto next = [&]() {
+        state = state * 1664525u + 1013904223u;
+        return (float(state >> 8) / float(1u << 24)) - 0.5f;
+    };
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = j; i < n; ++i) {
+                // Small off-diagonal noise: enough that the matrix is not diagonal,
+                // small enough that item b's spectrum stays inside [10b-1, 10b+2].
+                const float v = (i == j) ? 0.0f : 0.01f * next();
+                A.view()(i, j, b) = v;
+                A.view()(j, i, b) = v;
+            }
+            A.view()(j, j, b) = 10.0f * float(b) + float(j) / float(n);
+        }
+    }
+    return A;
+}
+
+} // namespace
+
+TEST(SyevxDirectRangeTest, InteriorIndexBlockMatchesReferenceSpectrum) {
+    constexpr int n = 64, batch = 3, il = 20, iu = 27, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+
+    Matrix<float, MatrixFormat::Dense> V(n, k, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, k, params, JobType::EigenVectors, &V);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], k) << "an index block's count is static, batch " << b;
+        for (int i = 0; i < k; ++i) {
+            const float got = run.W[b * k + i];
+            const float ref = W_ref[b * n + il + i];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-6f), 0.0f, 1e-4f)
+                << "batch " << b << " slot " << i;
+        }
+        for (int i = 1; i < k; ++i) {
+            EXPECT_LE(run.W[b * k + i - 1], run.W[b * k + i]) << "not ascending at " << i;
+        }
+    }
+    CheckResiduals(A, V, run.W, n, batch, k, 2e-3f);
+}
+
+TEST(SyevxDirectRangeTest, SingleInteriorEigenpair) {
+    constexpr int n = 48, batch = 2, idx = 17;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Index;
+    params.il = idx;
+    params.iu = idx;
+
+    Matrix<float, MatrixFormat::Dense> V(n, 1, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, 1, params, JobType::EigenVectors, &V);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], 1);
+        EXPECT_NEAR(std::abs(run.W[b] - W_ref[b * n + idx]) /
+                        std::max(std::abs(W_ref[b * n + idx]), 1e-6f), 0.0f, 1e-4f);
+    }
+    CheckResiduals(A, V, run.W, n, batch, 1, 2e-3f);
+}
+
+TEST(SyevxDirectRangeTest, FullIndexRangeMatchesFullSyev) {
+    constexpr int n = 40, batch = 2;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Index;
+    params.il = 0;
+    params.iu = -1;  // means n-1
+
+    const auto run = RunDirectRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], n);
+        for (int i = 0; i < n; ++i) {
+            const float ref = W_ref[b * n + i];
+            EXPECT_NEAR(std::abs(run.W[b * n + i] - ref) / std::max(std::abs(ref), 1e-6f),
+                        0.0f, 1e-4f) << "batch " << b << " slot " << i;
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, EndBlocksReproduceExtremalBitForBit) {
+    // An index block touching an end takes the same code path with the same inputs
+    // as the Extremal request it is equivalent to, so any difference at all is a
+    // normalization bug rather than a rounding difference.
+    //
+    // Assumption: syev is run-to-run deterministic here (same kernels, same input,
+    // same launch geometry). If this ever flakes, investigate the normalization
+    // before loosening the comparison.
+    constexpr int n = 64, batch = 2, k = 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    for (const bool find_largest : {true, false}) {
+        SyevxParams<float> extremal;
+        extremal.method = SyevxAlgorithm::Direct;
+        extremal.find_largest = find_largest;
+        const auto a = RunDirectRange(*ctx, A, batch, k, extremal, JobType::NoEigenVectors);
+
+        SyevxParams<float> indexed;
+        indexed.method = SyevxAlgorithm::Direct;
+        indexed.select = SyevxSelect::Index;
+        indexed.il = find_largest ? (n - k) : 0;
+        indexed.iu = find_largest ? (n - 1) : (k - 1);
+        indexed.order = find_largest ? SortOrder::Descending : SortOrder::Ascending;
+        const auto b_run = RunDirectRange(*ctx, A, batch, k, indexed, JobType::NoEigenVectors);
+
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(a.m[b], k);
+            EXPECT_EQ(b_run.m[b], k);
+            for (int i = 0; i < k; ++i) {
+                EXPECT_EQ(a.W[b * k + i], b_run.W[b * k + i])
+                    << "find_largest=" << find_largest << " batch " << b << " slot " << i;
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, DescendingInteriorBlockIsTheAscendingBlockReversed) {
+    constexpr int n = 64, batch = 2, il = 25, iu = 32, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+    const auto asc = RunDirectRange(*ctx, A, batch, k, params, JobType::NoEigenVectors);
+    params.order = SortOrder::Descending;
+    const auto desc = RunDirectRange(*ctx, A, batch, k, params, JobType::NoEigenVectors);
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < k; ++i) {
+            EXPECT_EQ(asc.W[b * k + i], desc.W[b * k + (k - 1 - i)]) << "batch " << b;
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
+    // TriDiagToeplitz with EQUAL off-diagonals: see ToeplitzSpectrumAscending.
+    constexpr int n = 64, batch = 2;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+
+    // Boundaries in the middle third, where the gaps are ~2*pi/(n+1); at the ends
+    // they collapse as O(1/n^2) and a boundary there is not unambiguous.
+    constexpr int p = 24, q = 33;
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+    ASSERT_GT(0.5f * (lam[p] - lam[p - 1]), 1e-2f * std::max(std::abs(lam[p]), 1.0f));
+    ASSERT_GT(0.5f * (lam[q + 1] - lam[q]), 1e-2f * std::max(std::abs(lam[q]), 1.0f));
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    constexpr int capacity = 16;
+    Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::EigenVectors, &V);
+
+    const int expected = q - p + 1;
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], expected) << "batch " << b;
+        for (int i = 0; i < expected; ++i) {
+            EXPECT_NEAR(run.W[b * capacity + i], lam[p + i], 3e-4f) << "batch " << b << " slot " << i;
+        }
+        for (int i = expected; i < capacity; ++i) {
+            EXPECT_EQ(run.W[b * capacity + i], kUntouched)
+                << "slot beyond m[b] was written, batch " << b << " slot " << i;
+        }
+    }
+    // CheckResiduals indexes W with stride `neig`; here W's stride is the capacity,
+    // which is deliberately larger. Repack rather than widen the shared helper.
+    std::vector<float> W_packed(static_cast<size_t>(expected) * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < expected; ++i) W_packed[b * expected + i] = run.W[b * capacity + i];
+    }
+    CheckResiduals(A, V, W_packed, n, batch, expected, 2e-3f);
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeEmptyAndFullIntervals) {
+    constexpr int n = 32, batch = 2;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+
+    // Nothing in the interval: m == 0 and not one slot written.
+    params.vl = lam[n - 1] + 1.0f;
+    params.vu = lam[n - 1] + 2.0f;
+    const auto empty = RunDirectRange(*ctx, A, batch, 8, params, JobType::NoEigenVectors);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(empty.m[b], 0);
+        for (int i = 0; i < 8; ++i) EXPECT_EQ(empty.W[b * 8 + i], kUntouched);
+    }
+
+    // Everything in the interval.
+    params.vl = lam[0] - 1.0f;
+    params.vu = lam[n - 1] + 1.0f;
+    const auto full = RunDirectRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(full.m[b], n);
+        for (int i = 0; i < n; ++i) EXPECT_NEAR(full.W[b * n + i], lam[i], 3e-4f);
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
+    constexpr int n = 64, batch = 2, capacity = 5;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    constexpr int p = 20, q = 39;  // 20 eigenvalues, capacity 5
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+        params.order = order;
+        const auto run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+        for (int b = 0; b < batch; ++b) {
+            // The TRUE count, which is the caller's overflow signal.
+            EXPECT_EQ(run.m[b], q - p + 1) << "batch " << b;
+            // Truncation keeps the LOWEST `capacity` of the interval regardless of
+            // the requested order; `order` only flips them within what was kept.
+            for (int i = 0; i < capacity; ++i) {
+                const int src = (order == SortOrder::Descending) ? (p + capacity - 1 - i) : (p + i);
+                EXPECT_NEAR(run.W[b * capacity + i], lam[src], 3e-4f) << "batch " << b;
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
+    // Item b's spectrum sits around 10*b, so the interval (-1, 9] catches all of
+    // item 0, none of item 1 and none of item 2 -- and (-1, 10.5] catches item 0
+    // in full plus a handful of item 1.
+    constexpr int n = 32, batch = 3;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = MakeShiftedPerItem(n, batch);
+    ctx->wait();
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = -1.0f;
+    params.vu = 10.5f;
+
+    Matrix<float, MatrixFormat::Dense> V(n, n, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
+
+    for (int b = 0; b < batch; ++b) {
+        int expected = 0;
+        for (int i = 0; i < n; ++i) {
+            if (W_ref[b * n + i] > params.vl && W_ref[b * n + i] <= params.vu) ++expected;
+        }
+        EXPECT_EQ(run.m[b], expected) << "batch " << b;
+        for (int i = 0; i < expected; ++i) {
+            const float ref = W_ref[b * n + i];  // the block starts at index 0 for these shifts
+            EXPECT_NEAR(std::abs(run.W[b * n + i] - ref) / std::max(std::abs(ref), 1e-5f),
+                        0.0f, 1e-3f) << "batch " << b << " slot " << i;
+        }
+        for (int i = expected; i < n; ++i) {
+            EXPECT_EQ(run.W[b * n + i], kUntouched) << "batch " << b << " slot " << i;
+        }
+    }
+    // The counts must genuinely differ, or this test proves nothing.
+    EXPECT_EQ(run.m[0], n);
+    EXPECT_LT(run.m[1], n);
+    EXPECT_EQ(run.m[2], 0);
+}
+
+TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
+    // `neigs` is a capacity now, so asking for more than n is legal: the first n
+    // slots get the whole spectrum and the tail is left alone. The stride stays at
+    // the caller's capacity, which is what keeps item b out of item b+1's slots.
+    constexpr int n = 24, batch = 3, capacity = n + 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.find_largest = false;
+
+    DirectRangeRun run;
+    ASSERT_NO_THROW(run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors));
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], n);
+        for (int i = 0; i < n; ++i) {
+            const float ref = W_ref[b * n + i];
+            EXPECT_NEAR(std::abs(run.W[b * capacity + i] - ref) / std::max(std::abs(ref), 1e-6f),
+                        0.0f, 1e-4f) << "batch " << b << " slot " << i;
+        }
+        for (int i = n; i < capacity; ++i) EXPECT_EQ(run.W[b * capacity + i], kUntouched);
+    }
+}
+
+// The host-side validator. Every rejection is asserted through BOTH entry points
+// that call it -- a validator wired into only one of them is an easy and real
+// mistake, and its failure mode is that sizing succeeds and the solve throws
+// halfway through a pipeline.
+TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
+    constexpr int n = 32, batch = 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+    UnifiedVector<float> W(n * batch);
+
+    // syevx_direct_buffer_size is range-independent (it sizes a full syev on n and
+    // batch alone), so one sizing call with the defaults covers every case below.
+    const SyevxParams<float> defaults;
+    UnifiedVector<std::byte> ws(std::max<size_t>(
+        syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), 8, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), defaults),
+        1));
+
+    auto size_call = [&](const SyevxParams<float>& p, size_t neigs) {
+        return syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neigs, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), p);
+    };
+    auto solve_call = [&](const SyevxParams<float>& p, size_t neigs) {
+        return syevx<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neigs, ws.to_span(), JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), p);
+    };
+
+    // Rule 1: il/iu out of range or inverted.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = -1; p.iu = 4;
+        EXPECT_THROW(size_call(p, 6), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 6), std::invalid_argument);
+        p.il = 4; p.iu = n;
+        EXPECT_THROW(size_call(p, n - 3), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, n - 3), std::invalid_argument);
+        p.il = 9; p.iu = 4;
+        EXPECT_THROW(size_call(p, 1), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 1), std::invalid_argument);
+    }
+    // Rule 2: neigs must equal iu - il + 1.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = 4; p.iu = 11;   // 8 wanted
+        EXPECT_THROW(size_call(p, 7), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 7), std::invalid_argument);
+        EXPECT_NO_THROW(size_call(p, 8));
+        EXPECT_NO_THROW(solve_call(p, 8));
+    }
+    // Rule 3: an empty or inverted value interval.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Value;
+        p.vl = 1.0f; p.vu = 1.0f;
+        EXPECT_THROW(size_call(p, 8), std::invalid_argument);
+        p.vl = 2.0f; p.vu = 1.0f;
+        EXPECT_THROW(size_call(p, 8), std::invalid_argument);
+    }
+    // Rule 4: a Value range needs an `m` output, which the public overload does not
+    // have yet. Sizing must still accept it, or sizing a value-range solve would be
+    // impossible.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Value;
+        p.vl = -1.0f; p.vu = 1.0f;
+        EXPECT_NO_THROW(size_call(p, 8));
+        EXPECT_THROW(solve_call(p, 8), std::invalid_argument);
+    }
+}
+
+TEST(SyevxRangeValidationTest, ResolverNormalizesEverySelector) {
+    // Pure host-side, no device: the one place Extremal, Index and Value are turned
+    // into the same vocabulary, so it is worth pinning directly.
+    constexpr int64_t n = 100;
+
+    auto rr = syevx_resolve_range(n, 8, SyevxSelect::Extremal, /*find_largest=*/true,
+                                  0, -1, SortOrder::Ascending);
+    EXPECT_FALSE(rr.value_range);
+    EXPECT_EQ(rr.il, 92);
+    EXPECT_EQ(rr.iu, 99);
+    EXPECT_EQ(rr.max_count, 8);
+    // Extremal takes its order from find_largest, never from `order` -- that is what
+    // preserves the historical contract.
+    EXPECT_TRUE(rr.reverse);
+
+    rr = syevx_resolve_range(n, 8, SyevxSelect::Extremal, /*find_largest=*/false,
+                             0, -1, SortOrder::Descending);
+    EXPECT_EQ(rr.il, 0);
+    EXPECT_EQ(rr.iu, 7);
+    EXPECT_FALSE(rr.reverse);
+
+    // A capacity above n is clamped, not rejected.
+    rr = syevx_resolve_range(n, 200, SyevxSelect::Extremal, /*find_largest=*/true,
+                             0, -1, SortOrder::Ascending);
+    EXPECT_EQ(rr.il, 0);
+    EXPECT_EQ(rr.iu, 99);
+    EXPECT_EQ(rr.max_count, 100);
+
+    rr = syevx_resolve_range(n, 8, SyevxSelect::Index, true, 20, 27, SortOrder::Ascending);
+    EXPECT_FALSE(rr.value_range);
+    EXPECT_EQ(rr.il, 20);
+    EXPECT_EQ(rr.iu, 27);
+    EXPECT_EQ(rr.max_count, 8);
+    EXPECT_FALSE(rr.reverse);
+
+    // iu < 0 means n-1.
+    rr = syevx_resolve_range(n, 100, SyevxSelect::Index, true, 0, -1, SortOrder::Descending);
+    EXPECT_EQ(rr.iu, 99);
+    EXPECT_EQ(rr.max_count, 100);
+    EXPECT_TRUE(rr.reverse);
+
+    rr = syevx_resolve_range(n, 12, SyevxSelect::Value, true, 0, -1, SortOrder::Ascending);
+    EXPECT_TRUE(rr.value_range);
+    EXPECT_EQ(rr.max_count, 12);   // the capacity; the true count is per item
+    EXPECT_FALSE(rr.reverse);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

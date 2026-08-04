@@ -24,6 +24,7 @@
 #include <util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
+#include <algorithm>
 #include <complex>
 #include <cstdlib>
 #include <string>
@@ -151,6 +152,62 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
     }
 }
 
+// Range arguments, like the preconditioner arguments above, describe the *problem*
+// and so must be rejected before dispatch -- otherwise an illegal request reaches a
+// solver that would answer a different question instead of failing.
+//
+// Deliberately NOT implemented, from the plan's rule list: "select == Extremal and
+// `order` contradicts `find_largest`". SortOrder has only Ascending and Descending
+// and SyevxParams::order defaults to Ascending, so there is no way to tell an
+// explicit Ascending from an unset one; the rule as written would reject the
+// library's own defaults (Extremal + find_largest = true + Ascending), i.e. nearly
+// every existing call. `order` is documented as ignored for Extremal instead.
+//
+// TODO(Phase 5, routing): also reject `select != Extremal` with a resolved method of
+// LOBPCG or Filtered, and sparse input with a non-extremal range. Neither can answer
+// an interior request, and today `syevx_select_algorithm` may still route one to
+// DirectSubset (which ignores `select` until Phase 4) or to LOBPCG. That check needs
+// the resolved algorithm, so it belongs with the routing change, not here.
+template <typename T, MatrixFormat MFormat>
+void validate_syevx_range_params(const SyevxParams<T>& params,
+                                 int64_t n,
+                                 size_t neigs,
+                                 // False for the solve entry points, which have no
+                                 // `m` argument to report a data-dependent count
+                                 // through. True for the sizing entry points, which
+                                 // write no counts at all and must therefore still
+                                 // accept a Value range or sizing one is impossible.
+                                 bool value_range_reportable) {
+    if (params.select == SyevxSelect::Index) {
+        const int64_t iu = (params.iu < 0) ? (n - 1) : params.iu;
+        if (params.il < 0 || iu >= n || params.il > iu) {
+            throw std::invalid_argument(
+                "syevx: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 means n-1); "
+                "an empty block is expressed with neigs == 0, not with il > iu");
+        }
+        if (static_cast<int64_t>(neigs) != iu - params.il + 1) {
+            throw std::invalid_argument(
+                "syevx: SyevxSelect::Index requires neigs == iu - il + 1; neigs is validated "
+                "against the range rather than derived from it so that a mismatched pair is a "
+                "loud error instead of a silently under- or over-filled output buffer");
+        }
+    }
+    if (params.select == SyevxSelect::Value) {
+        if (!(params.vl < params.vu)) {
+            throw std::invalid_argument(
+                "syevx: SyevxSelect::Value requires vl < vu for the half-open interval "
+                "(vl, vu]; an empty or inverted interval is almost always swapped arguments, "
+                "and the cost of being wrong is a full O(n^3) reduction that returns nothing");
+        }
+        if (!value_range_reportable) {
+            throw std::invalid_argument(
+                "syevx: SyevxSelect::Value needs the overload that takes an `m` output span -- "
+                "the number of eigenvalues in an interval is data-dependent and differs per "
+                "batch item, so it cannot be inferred from neigs (which is only a capacity)");
+        }
+    }
+}
+
 SyevxPreconditioner parse_syevx_preconditioner(const char* v) {
     if (!v || !*v) return SyevxPreconditioner::Auto;
     std::string s(v);
@@ -171,6 +228,54 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback) {
 }
 
 } // namespace
+
+SyevxResolvedRange syevx_resolve_range(int64_t n,
+                                       size_t neigs,
+                                       SyevxSelect select,
+                                       bool find_largest,
+                                       int64_t il,
+                                       int64_t iu,
+                                       SortOrder order) {
+    SyevxResolvedRange rr{};
+    const int64_t nn = std::max<int64_t>(n, 0);
+    // Clamp rather than reject: `neigs` is a capacity now, and a capacity above n
+    // is harmless -- it just means the tail of W and V goes unwritten. Note this
+    // clamps only the WORK COUNT; the caller's `neigs` remains the output stride
+    // everywhere, which is the distinction that keeps batch item b's results out of
+    // item b+1's slots.
+    const int64_t capacity = std::min<int64_t>(static_cast<int64_t>(neigs), nn);
+
+    switch (select) {
+        case SyevxSelect::Value:
+            rr.value_range = true;
+            rr.il = 0;
+            rr.iu = -1;                 // unused; a Value range has no static block
+            rr.max_count = capacity;
+            rr.reverse = (order == SortOrder::Descending);
+            break;
+
+        case SyevxSelect::Index:
+            rr.value_range = false;
+            rr.il = il;
+            rr.iu = (iu < 0) ? (nn - 1) : iu;
+            rr.max_count = rr.iu - rr.il + 1;
+            rr.reverse = (order == SortOrder::Descending);
+            break;
+
+        case SyevxSelect::Extremal:
+        default:
+            rr.value_range = false;
+            rr.il = find_largest ? (nn - capacity) : 0;
+            rr.iu = find_largest ? (nn - 1) : (capacity - 1);
+            rr.max_count = capacity;
+            // NOT from `order`: find_largest implying descending is the historical
+            // contract, and preserving it is the whole reason Extremal exists as a
+            // separate selector rather than being spelled as an index block.
+            rr.reverse = find_largest;
+            break;
+    }
+    return rr;
+}
 
 SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                       int64_t n,
@@ -270,11 +375,18 @@ Event syevx(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
+    // This overload has no `m` output, so a Value range is rejected here; the
+    // overload that takes one arrives with the Phase 5 plumbing.
+    validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
+                                            /*value_range_reportable=*/false);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
                                               syevx_direct_subset_supported<T, MFormat>(), jobz,
                                               A.batch_size());
     if (chosen == SyevxAlgorithm::Direct) {
-        return syevx_direct<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+        // No `m` span to fill: an Index range's count is iu-il+1, which the caller
+        // already knows, and a Value range cannot reach here.
+        return syevx_direct<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                           jobz, V, params);
     }
     if (chosen == SyevxAlgorithm::DirectSubset) {
         return syevx_direct_subset<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
@@ -294,6 +406,10 @@ size_t syevx_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& V,
                          const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
+    // Sizing writes no counts, so the "Value needs an `m` span" rule does not apply:
+    // if it did, sizing the workspace for a value-range solve would be impossible.
+    validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
+                                            /*value_range_reportable=*/true);
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
                                               syevx_direct_subset_supported<T, MFormat>(), jobz,
                                               A.batch_size());

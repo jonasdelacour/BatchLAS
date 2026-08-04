@@ -11,7 +11,9 @@
 #include "../queue.hh"
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
+#include <algorithm>
 #include <complex>
+#include <cstdint>
 #include <stdexcept>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
@@ -41,12 +43,34 @@ inline MatrixView<T, MatrixFormat::Dense> packed_copy_view(T* data,
                                               ptr_array);
 }
 
+// Number of eigenvalues <= x in an ASCENDING array, i.e. the index of the first
+// entry strictly greater than x (std::upper_bound, not lower_bound).
+//
+// The `<=` here is load-bearing and must not be relaxed to `<`: it is exactly the
+// predicate `stebz`'s Sturm count implements (src/extensions/stebz.cc:34-59), and
+// matching it is what makes `Direct` and `DirectSubset` agree on m for the same
+// half-open interval (vl, vu]. A boundary within rounding distance of an
+// eigenvalue can still make the two differ by one -- they compute the count by
+// genuinely different means -- but nothing else may.
+template <typename R>
+inline int64_t count_le(const R* asc, int64_t n, R x) {
+    int64_t lo = 0;
+    int64_t hi = n;
+    while (lo < hi) {
+        const int64_t mid = lo + (hi - lo) / 2;
+        if (asc[mid] <= x) lo = mid + 1;
+        else               hi = mid;
+    }
+    return lo;
+}
+
 } // namespace
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx_direct(Queue& ctx,
                    const MatrixView<T, MFormat>& A,
                    Span<typename base_type<T>::type> W,
+                   Span<int32_t> m,
                    size_t neigs,
                    Span<std::byte> workspace,
                    JobType jobz,
@@ -55,7 +79,7 @@ Event syevx_direct(Queue& ctx,
     using float_type = typename base_type<T>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {
-        (void)ctx; (void)A; (void)W; (void)neigs; (void)workspace;
+        (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
         (void)jobz; (void)V; (void)params;
         throw std::runtime_error("syevx_direct: only dense matrices are supported");
     } else {
@@ -66,8 +90,11 @@ Event syevx_direct(Queue& ctx,
         if (A.rows() != A.cols()) {
             throw std::runtime_error("syevx_direct: A must be square");
         }
-        if (static_cast<int64_t>(neigs) > n) {
-            throw std::runtime_error("syevx_direct: neigs must not exceed the matrix dimension");
+        // `neigs` is a capacity, so exceeding n is harmless -- the tail of W and V
+        // simply goes unwritten. It is clamped inside syevx_resolve_range and is
+        // deliberately no longer rejected.
+        if (!m.empty() && static_cast<int64_t>(m.size()) < batch_size) {
+            throw std::runtime_error("syevx_direct: m must cover every batch item");
         }
 
         auto pool = BumpAllocator(workspace);
@@ -84,10 +111,21 @@ Event syevx_direct(Queue& ctx,
             ctx, syev_buffer_size<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower));
         syev<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower, syev_ws);
 
-        // syev returns eigenvalues ascending. Select the requested extreme block,
-        // matching the LOBPCG path's ordering: descending for find_largest.
-        const bool find_largest = params.find_largest;
-        const int64_t k = static_cast<int64_t>(neigs);
+        // syev returns eigenvalues ascending, so every range reduces to picking a
+        // contiguous block out of `lambdas` -- for an index block statically, for a
+        // value interval by two searches over that ascending array.
+        const auto rr = syevx_resolve_range(n, neigs, params);
+
+        // Three distinct quantities that all used to be one `k`. Conflating them is
+        // how a batched solver silently writes item b's answers into item b+1's
+        // slots, so they are named separately and never mixed.
+        const int64_t capacity = static_cast<int64_t>(neigs);  // stride of W, columns of V
+        const bool value_range = rr.value_range;
+        const bool reverse = rr.reverse;
+        const int64_t range_il = rr.il;                        // index ranges only
+        const int64_t range_count = rr.max_count;              // index ranges only
+        const float_type vl = params.vl;
+        const float_type vu = params.vu;
 
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         const auto* lam_ptr = lambdas.data();
@@ -96,32 +134,72 @@ Event syevx_direct(Queue& ctx,
         T* dst_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t dst_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t dst_stride = want_eigenvectors ? V.stride() : 0;
+        int32_t* m_ptr = m.empty() ? nullptr : m.data();
 
         ctx->submit([&](sycl::handler& h) {
+            // first index of the block, and its true (untruncated) size.
+            auto block = sycl::local_accessor<int64_t, 1>(sycl::range<1>(2), h);
+
             h.parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
                     const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
+                    auto cta = item.get_group();
 
                     const auto* lam = lam_ptr + bid * n;
-                    auto* w = w_ptr + bid * k;
 
-                    for (int64_t i = tid; i < k; i += local_size) {
-                        const int64_t src = find_largest ? (n - 1 - i) : i;
+                    int64_t first;
+                    int64_t count;
+                    if (value_range) {
+                        // Two O(log n) searches, done once per group rather than
+                        // redundantly per work-item; same shape as stebz's
+                        // count-then-barrier.
+                        if (tid == 0) {
+                            const int64_t c_lo = count_le<float_type>(lam, n, vl);
+                            const int64_t c_hi = count_le<float_type>(lam, n, vu);
+                            block[0] = c_lo;
+                            // Cannot go negative for vl < vu on an ascending array,
+                            // but m[b] is consumed as a loop bound downstream and an
+                            // unsigned wrap there would be an enormous write.
+                            block[1] = (c_hi > c_lo) ? (c_hi - c_lo) : int64_t(0);
+                        }
+                        sycl::group_barrier(cta);
+                        first = block[0];
+                        count = block[1];
+                    } else {
+                        first = range_il;
+                        count = range_count;
+                    }
+
+                    // Truncation policy: keep the LOWEST `capacity` eigenvalues of
+                    // the block, so the answer does not depend on the requested
+                    // output order. `reverse` then only flips within what was kept.
+                    const int64_t write = (count < capacity) ? count : capacity;
+                    const int64_t hi_src = first + write - 1;
+
+                    auto* w = w_ptr + bid * capacity;
+                    for (int64_t i = tid; i < write; i += local_size) {
+                        const int64_t src = reverse ? (hi_src - i) : (first + i);
                         w[i] = lam[src];
                     }
 
                     if (dst_ptr != nullptr) {
                         const auto* vsrc = src_ptr + bid * n * n;
                         auto* vdst = dst_ptr + bid * dst_stride;
-                        for (int64_t linear = tid; linear < n * k; linear += local_size) {
+                        for (int64_t linear = tid; linear < n * write; linear += local_size) {
                             const int64_t row = linear % n;
                             const int64_t col = linear / n;
-                            const int64_t src_col = find_largest ? (n - 1 - col) : col;
+                            const int64_t src_col = reverse ? (hi_src - col) : (first + col);
                             vdst[row + col * dst_ld] = vsrc[row + src_col * n];
                         }
+                    }
+
+                    if (m_ptr != nullptr && tid == 0) {
+                        // The TRUE count, not `write`: m[b] > capacity is the
+                        // caller's truncation signal.
+                        m_ptr[bid] = static_cast<int32_t>(count);
                     }
                 });
         });
@@ -144,6 +222,11 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         (void)ctx; (void)A; (void)W; (void)neigs; (void)jobz; (void)V; (void)params;
         return 0;
     } else {
+        // Range-independent by construction, and worth stating because this is the
+        // first place a reader chasing a value-range memory question will look: the
+        // workspace is a private copy of A, the full eigenvalue array and syev's own
+        // scratch, all sized on n and batch alone. `neigs` -- and therefore the
+        // capacity semantics that come with a Value range -- never enters.
         (void)W; (void)V; (void)params; (void)neigs;
         const int64_t n = A.rows();
         const int64_t batch_size = A.batch_size();
@@ -166,6 +249,7 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
         Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+        Span<int32_t>,\
         size_t,\
         Span<std::byte>,\
         JobType,\
