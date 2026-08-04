@@ -48,12 +48,12 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
 
     const JobType jobz = parse_jobz(jobz_i);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    const size_t ws_size = syev_blocked_buffer_size<B, T>(*q,
+    const size_t ws_size = syev_blocked_buffer_size(*q,
                                                          A.view(),
                                                          jobz,
                                                          Uplo::Lower);
@@ -66,7 +66,7 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
                     Uplo::Lower,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        syev_blocked<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        syev_blocked(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * double(n) * double(n);

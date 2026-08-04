@@ -13,7 +13,7 @@ static void BM_TRANSPOSE(minibench::State& state) {
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto A = Matrix<T>::Random(m, n, false, batch);
     auto B_mat = Matrix<T>::Zeros(n, m, batch);

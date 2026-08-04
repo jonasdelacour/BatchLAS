@@ -46,18 +46,18 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
 
     ::setenv("BATCHLAS_SYEV_TWO_STAGE_KD", std::to_string(kd).c_str(), 1);
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    const size_t ws_size = syev_two_stage_buffer_size<B>(
+    const size_t ws_size = syev_two_stage_buffer_size(
         *q, A.view(), JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,
                     Uplo::Lower, std::move(workspace),
                     [](Queue& qq, auto&&... xs) {
-                        syev_two_stage<B, T>(qq, std::forward<decltype(xs)>(xs)...);
+                        syev_two_stage(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }
@@ -67,18 +67,18 @@ static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    const size_t ws_size = syev_blocked_buffer_size<B>(
+    const size_t ws_size = syev_blocked_buffer_size(
         *q, A.view(), JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,
                     Uplo::Lower, std::move(workspace),
                     [](Queue& qq, auto&&... xs) {
-                        syev_blocked<B, T>(qq, std::forward<decltype(xs)>(xs)...);
+                        syev_blocked(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }

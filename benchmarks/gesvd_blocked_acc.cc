@@ -184,7 +184,7 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
     const int n = std::max(2, state.arg_int(0));
     const int chunk_batch = miniacc_acc::chunk_batch_from_samples(state.samples());
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetTag("impl", "gesvd_blocked");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Scalar>());

@@ -39,7 +39,7 @@ static void BM_ORMQR_CTA(minibench::State& state) {
     // Each reflector costs ~2n^2 flops; total ~2n^3 (order-of-magnitude model).
     const double total_flops = 2.0 * double(n) * double(n) * double(n) * double(batch);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     // Build reflectors via QR once (outside timed region) using the same backend.
     // This avoids an unconditional dependency on the NETLIB/CPU backend.
@@ -47,10 +47,10 @@ static void BM_ORMQR_CTA(minibench::State& state) {
     // NOTE: minibench executes the SetKernel callback after this function returns.
     // So we must capture *owning* storage (not just a VectorView) into the callback.
     UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau_storage.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau_storage.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
 
-    geqrf<B>(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
+    geqrf(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
     q->wait();
 
     auto C = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1337);
@@ -81,7 +81,7 @@ static void BM_ORMQR_CTA(minibench::State& state) {
                         VectorView<T> tau_view_local(tau_storage,
                                                      static_cast<int>(n),
                                                      static_cast<int>(batch));
-                        ormqx_cta<B>(q,
+                        ormqx_cta(q,
                                     A,
                                     tau_view_local,
                                     C,

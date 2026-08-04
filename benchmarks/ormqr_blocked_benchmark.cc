@@ -68,15 +68,15 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     const Transpose trans = parse_transpose(state.range(3));
     const int block_size = std::max(1, state.range(4));
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2026);
     UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     // Build reflectors via QR once (outside timed region).
-    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau_storage.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau_storage.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf<B>(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
+    geqrf(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
     q->wait();
 
     // Apply to identity to avoid numerical blow-up across iterations.

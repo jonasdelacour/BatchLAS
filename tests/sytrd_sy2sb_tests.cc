@@ -78,12 +78,12 @@ void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
         }
 
         UnifiedVector<std::byte> ws_l(
-            ormqr_buffer_size<B>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data()));
-        ormqr<B>(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data(), ws_l.to_span()).wait();
+            ormqr_buffer_size(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data()));
+        ormqr(ctx, V, A_rows, Side::Left, Transpose::Trans, tau_panel.data(), ws_l.to_span()).wait();
 
         UnifiedVector<std::byte> ws_r(
-            ormqr_buffer_size<B>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data()));
-        ormqr<B>(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data(), ws_r.to_span()).wait();
+            ormqr_buffer_size(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data()));
+        ormqr(ctx, V, A_cols, Side::Right, Transpose::NoTrans, tau_panel.data(), ws_r.to_span()).wait();
     }
 }
 

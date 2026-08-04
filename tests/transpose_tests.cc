@@ -30,17 +30,16 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
     constexpr int batch_size = 2;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, false, batch_size);
-    size_t ws = ortho_buffer_size<test_utils::gpu_backend, T>(*this->ctx, A.view(), Transpose::NoTrans, OrthoAlgorithm::SVQB);
+    size_t ws = ortho_buffer_size(*this->ctx, A.view(), Transpose::NoTrans, OrthoAlgorithm::SVQB);
     UnifiedVector<std::byte> workspace(ws);
-    ortho<test_utils::gpu_backend, T>(*this->ctx, A.view(), Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::SVQB);
+    ortho(*this->ctx, A.view(), Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::SVQB);
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> At = transpose(*this->ctx, A.view());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Prod(k, k, batch_size);
-    gemm<test_utils::gpu_backend>(*this->ctx, At.view(), A.view(), Prod.view(), T(1.0), T(0.0),
-                       Transpose::NoTrans, Transpose::NoTrans);
+    gemm(*this->ctx, At.view(), A.view(), Prod.view(), {});
     this->ctx->wait();
 
     auto prod_data = Prod.data();

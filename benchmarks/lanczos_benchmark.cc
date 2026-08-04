@@ -12,7 +12,7 @@ static void BM_LANCZOS(minibench::State& state) {
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::TriDiagToeplitz(m, 1.0, 0.5, 0.5, batch);
     auto Acsr = A.template convert_to<MatrixFormat::CSR>();
     UnifiedVector<typename base_type<T>::type> W(n * batch);
@@ -21,7 +21,7 @@ static void BM_LANCZOS(minibench::State& state) {
     LanczosParams<T> params;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
 
-    size_t ws_size = lanczos_buffer_size<B>(*q, Acsr.view(), W.to_span(),
+    size_t ws_size = lanczos_buffer_size(*q, Acsr.view(), W.to_span(),
                                            JobType::NoEigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 

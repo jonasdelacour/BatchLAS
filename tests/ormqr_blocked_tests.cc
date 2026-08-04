@@ -82,8 +82,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-        geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -111,7 +111,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
 
     // Check orthonormality for the blocked output.
     Matrix<T, MatrixFormat::Dense> QtQ = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
-    gemm<B>(*this->ctx, Q_blk.view(), Q_blk.view(), QtQ.view(), T(1), T(0), this->trans_h(), Transpose::NoTrans);
+    gemm(*this->ctx, Q_blk.view(), Q_blk.view(), QtQ.view(), {.transA = this->trans_h()});
     this->ctx->wait();
 
     auto r = QtQ.data();
@@ -143,8 +143,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-        geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -190,8 +190,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-        geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -237,8 +237,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-        geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -285,8 +285,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-        geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 

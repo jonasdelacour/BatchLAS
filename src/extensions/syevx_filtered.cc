@@ -226,7 +226,7 @@ Event syevx_filtered(Queue& ctx,
     auto matvec = [&](const MatrixView<T, MatrixFormat::Dense>& in,
                       const MatrixView<T, MatrixFormat::Dense>& out) {
         if constexpr (MFormat == MatrixFormat::Dense) {
-            gemm<B>(ctx, A, in, out, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, A, in, out, GemmOptions<T>{});
         } else {
             spmm<B>(ctx, A, in, out, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
         }
@@ -403,11 +403,11 @@ Event syevx_filtered(Queue& ctx,
     auto rayleigh_ritz = [&](const MatrixView<T, MatrixFormat::Dense>& blk,
                              const MatrixView<T, MatrixFormat::Dense>& ablk) {
         matvec(blk, ablk);
-        gemm<B>(ctx, blk, ablk, H, T(1), T(0), conj_t, Transpose::NoTrans);
-        syev<B>(ctx, H, theta_span, JobType::EigenVectors, Uplo::Lower, syev_ws);
-        gemm<B>(ctx, blk, H, Tmp, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, blk, ablk, H, {.transA = conj_t});
+        syev<B>(ctx, H, theta_span, SyevOptions{}, syev_ws);
+        gemm<B>(ctx, blk, H, Tmp, GemmOptions<T>{});
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
-        gemm<B>(ctx, ablk, H, Tmp, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, ablk, H, Tmp, GemmOptions<T>{});
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
     };
 

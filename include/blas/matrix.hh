@@ -1255,6 +1255,14 @@ namespace batchlas {
         }
 
         Span<T> data() const { return data_.to_span(); }
+
+        // Mirrors Matrix::view(). VectorView has an implicit converting
+        // constructor from Vector, which is enough when the parameter type is
+        // already concrete -- but not when T has to be *deduced* from it, since
+        // deduction does not consider user conversions. Entry points whose
+        // parameter is VectorView<T> therefore need this at the call site.
+        VectorView<T> view() const { return VectorView<T>(*this); }
+
         // USM preparation helpers (safe to call on const vectors)
         Event set_access_device(const Queue& ctx = Queue()) const {
             return data_.to_span().set_access_device(ctx);

@@ -178,12 +178,16 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 	// Reference (CPU LAPACKE)
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx,
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 															A_ref.view(),
 															W_ref.to_span(),
 															JobType::NoEigenVectors,
 															Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		syev(*this->ctx,
+                        A_ref.view(),
+                        W_ref.to_span(),
+                        {.jobz = JobType::NoEigenVectors},
+                        ws_ref.to_span()).wait();
 	}
 
 	// Blocked pipeline
@@ -229,12 +233,12 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 
 	// Reference eigenvalues (CPU LAPACKE)
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx,
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 															A_ref.view(),
 															W_ref.to_span(),
 															JobType::EigenVectors,
 															Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
 	}
 
 	{
@@ -279,17 +283,16 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
 
 	{
-		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size<TestFixture::BackendType>(*this->ctx,
+		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 																								  A_two_stage.view(),
 																								  W_two_stage.to_span(),
 																								  JobType::NoEigenVectors,
 																								  Uplo::Lower));
-		syev<TestFixture::BackendType>(*this->ctx,
-									   A_two_stage.view(),
-									   W_two_stage.to_span(),
-									   JobType::NoEigenVectors,
-									   Uplo::Lower,
-									   ws_two_stage.to_span()).wait();
+		syev(*this->ctx,
+                                 A_two_stage.view(),
+                                 W_two_stage.to_span(),
+                                 {.jobz = JobType::NoEigenVectors},
+                                 ws_two_stage.to_span()).wait();
 	}
 
 	if (old_provider) {
@@ -326,17 +329,16 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
 
 	{
-		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size<TestFixture::BackendType>(*this->ctx,
+		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 															  A_two_stage.view(),
 															  W_two_stage.to_span(),
 															  JobType::EigenVectors,
 															  Uplo::Lower));
-		syev<TestFixture::BackendType>(*this->ctx,
-								   A_two_stage.view(),
-								   W_two_stage.to_span(),
-								   JobType::EigenVectors,
-								   Uplo::Lower,
-								   ws_two_stage.to_span()).wait();
+		syev(*this->ctx,
+                                 A_two_stage.view(),
+                                 W_two_stage.to_span(),
+                                 {},
+                                 ws_two_stage.to_span()).wait();
 	}
 
 	if (old_provider) {

@@ -56,7 +56,7 @@ namespace batchlas {
         
         // Compute AV = A * V using spmm for sparse or gemm for dense
         if constexpr (MFormat == MatrixFormat::Dense) {
-            last_event = gemm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            last_event = gemm<B>(ctx, A, V, AV, GemmOptions<T>{});
         } else {
             auto spmm_ws = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             last_event = spmm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);

@@ -45,11 +45,11 @@ static void BM_SYEV(minibench::State& state) {
     ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
     ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    size_t ws_size = syev_buffer_size<B>(*q, A.view(), W.to_span(),
+    size_t ws_size = syev_buffer_size(*q, A.view(), W.to_span(),
                                          JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
@@ -60,7 +60,7 @@ static void BM_SYEV(minibench::State& state) {
                     Uplo::Lower,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        syev<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        syev(q, std::forward<decltype(xs)>(xs)...);
                     });
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);

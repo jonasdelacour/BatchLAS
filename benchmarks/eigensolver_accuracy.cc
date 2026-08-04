@@ -181,14 +181,7 @@ UnifiedVector<typename base_type<Real>::type> residual_residuals(
     const int batch = A.batch_size();
     auto R = Matrix<Real>::Zeros(n, m, batch);
 
-    gemm<B, Real>(q,
-                  A.view(),
-                  Z.view(),
-                  R.view(),
-                  Real(1),
-                  Real(0),
-                  Transpose::NoTrans,
-                  Transpose::NoTrans);
+    gemm<B>(q, A.view(), Z.view(), R.view(), {.alpha = Real(1), .beta = Real(0)});
 
     auto r_view = R.kernel_view();
     auto z_view = Z.view().kernel_view();
@@ -381,7 +374,7 @@ int run_accuracy(const Options& opt) {
     out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr\n";
     out << std::setprecision(12);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     int sample_id = 0;
     for (int bin_idx = 0; bin_idx < bins; ++bin_idx) {
@@ -619,12 +612,7 @@ int run_accuracy(const Options& opt) {
                                                   eigvals.to_span(),
                                                   JobType::EigenVectors,
                                                   Uplo::Lower));
-                    syev<B, Real>(*q,
-                                  A_work.view(),
-                                  eigvals.to_span(),
-                                  JobType::EigenVectors,
-                                  Uplo::Lower,
-                                  ws.to_span());
+                    syev<B>(*q, A_work.view(), eigvals.to_span(), {}, ws.to_span());
                     q->wait();
 
                     VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
@@ -668,7 +656,7 @@ int run_accuracy(const Options& opt) {
                     params.relative_tolerance = static_cast<Real>(1e-6);
 
                     UnifiedVector<std::byte> ws(
-                        syevx_buffer_size<B>(*q,
+                        syevx_buffer_size(*q,
                                              A_work.view(),
                                              eigvals.to_span(),
                                              static_cast<size_t>(neigs),
@@ -676,7 +664,7 @@ int run_accuracy(const Options& opt) {
                                              V.view(),
                                              params));
 
-                    syevx<B>(*q,
+                    syevx(*q,
                              A_work.view(),
                              eigvals.to_span(),
                              static_cast<size_t>(neigs),

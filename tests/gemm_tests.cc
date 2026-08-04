@@ -135,14 +135,20 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
-        gemm<BackendType>(ctx, A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          transA, transB, ComputePrecision::Default);
+        gemm(ctx,
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(ctx, A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          transA, transB, ComputePrecision::Default);
+        gemm(ctx,
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
     }
 
     ctx.wait();
@@ -182,14 +188,20 @@ void RunForcedCuBLASDxGemmKernelCompare(Queue& ctx,
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", kernel_name);
-        gemm<BackendType>(ctx, A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          transA, transB, ComputePrecision::Default);
+        gemm(ctx,
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(ctx, A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          transA, transB, ComputePrecision::Default);
+        gemm(ctx,
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
     }
 
     ctx.wait();
@@ -338,8 +350,11 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld);
     
     // Perform C = A * B (which should equal A since B is identity)
-    gemm<BackendType>(*(this->ctx), A_view, B_view, C_view, ScalarType(1.0), ScalarType(0.0),
-                       Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    gemm(*(this->ctx),
+                      A_view,
+                      B_view,
+                      C_view,
+                      {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
 
     this->ctx->wait();
 
@@ -357,8 +372,11 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     
     // Adding the ComputePrecision parameter
-    gemm<BackendType>(*(this->ctx), A_view, B_view, C_view, ScalarType(1.0), ScalarType(0.0),
-                      Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    gemm(*(this->ctx),
+                      A_view,
+                      B_view,
+                      C_view,
+                      {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
     
     this->ctx->wait();
 
@@ -430,11 +448,10 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
             continue;
         }
 
-        gemm<BackendType>(*(this->ctx), Ab, Bb, Cb, ScalarType(1), ScalarType(0),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = ScalarType(1), .beta = ScalarType(0)});
     }
 
-    gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
+    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -532,11 +549,10 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
             continue;
         }
 
-        gemm<BackendType>(*(this->ctx), Ab, Bb, Cb, alpha, beta,
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = alpha, .beta = beta});
     }
 
-    gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
+    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -615,13 +631,13 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmForcedCuBLASDxVariant) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn");
-        gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm_heterogeneous<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 
@@ -657,12 +673,18 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     auto C = Matrix<ScalarType>::Zeros(size, size, batch_size);
     auto C_ref = Matrix<ScalarType>::Zeros(size, size, batch_size);
 
-    gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
-                      Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    gemm(*(this->ctx),
+                      A.view(),
+                      B.view(),
+                      C.view(),
+                      {.alpha = ScalarType(1), .beta = ScalarType(0)});
 
     ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-    gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(0),
-                      Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+    gemm(*(this->ctx),
+                      A.view(),
+                      B.view(),
+                      C_ref.view(),
+                      {.alpha = ScalarType(1), .beta = ScalarType(0)});
 
     this->ctx->wait();
 
@@ -683,14 +705,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
 
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -716,14 +744,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -750,14 +784,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64K16Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64k16");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -784,14 +824,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -818,14 +864,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -852,14 +904,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32s2u1");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -886,14 +944,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32s2u2");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1051,14 +1115,20 @@ TYPED_TEST(GemmTest, BatchedGemmCuBLASDxLargeSquareDoesNotThrow) {
 
     ASSERT_NO_THROW({
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     });
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1170,14 +1240,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16Kernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1202,14 +1278,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
 
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1235,14 +1317,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclTiledVariantLargeTransposed) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1272,14 +1360,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16tt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1309,14 +1403,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TNKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16tn");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1346,14 +1446,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16NTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k16nt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1383,14 +1489,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TNKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32tn");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1433,14 +1545,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32NTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32nt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1470,14 +1588,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TNKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16tn");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1507,14 +1631,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg32x128k16tt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1544,14 +1674,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16TTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg64k16tt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1581,14 +1717,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K16TTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k16tt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1618,14 +1760,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TTKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x32k32tt");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::Trans, Transpose::Trans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
 
     this->ctx->wait();
@@ -1652,14 +1800,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeKernel) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k32large");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1687,14 +1841,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeU2Kernel) {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k32largeu2");
         ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1722,14 +1882,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeTT4x8Kernel) {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k32largett4x8");
         ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1757,14 +1923,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeTT4x8U2Kernel) {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "reg128x64k32largett4x8u2");
         ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
 
     this->ctx->wait();
@@ -1789,14 +1961,20 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
 
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
-                          Transpose::ConjTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(0), .transA = Transpose::ConjTrans});
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm<BackendType>(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(0),
-                          Transpose::ConjTrans, Transpose::NoTrans, ComputePrecision::Default);
+        gemm(*(this->ctx),
+                          A.view(),
+                          B.view(),
+                          C_ref.view(),
+                          {.alpha = ScalarType(1), .beta = ScalarType(0), .transA = Transpose::ConjTrans});
     }
 
     this->ctx->wait();

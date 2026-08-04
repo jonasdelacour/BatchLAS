@@ -668,7 +668,7 @@ bool flat_merge_depth(Queue& ctx,
         auto q_input_active = parent_q_input.with_active_dims(logical_n, logical_n);
         auto qprime_active = qprime.with_active_dims(logical_n, logical_n);
         auto q_output_active = q_output.with_active_dims(logical_n, logical_n);
-        gemm<B>(ctx, q_input_active, qprime_active, q_output_active, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, q_input_active, qprime_active, q_output_active, GemmOptions<T>{});
     }
 
     return true;

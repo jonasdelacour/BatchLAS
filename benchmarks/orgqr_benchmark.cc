@@ -12,14 +12,14 @@ static void BM_ORGQR(minibench::State& state) {
     const size_t batch = state.range(2);
 
     auto A = Matrix<T>::Random(m, n, false, batch);
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     UnifiedVector<T> tau(m * batch);
-    size_t geqrf_ws = geqrf_buffer_size<B>(*q, A.view(), tau.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf<B>(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
     q->wait();
 
-    size_t org_ws = orgqr_buffer_size<B>(*q, A.view(), tau.to_span());
+    size_t org_ws = orgqr_buffer_size(*q, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws(org_ws);
 
     state.SetKernel(q,
@@ -27,7 +27,7 @@ static void BM_ORGQR(minibench::State& state) {
                     std::move(tau),
                     std::move(ws),
                     [](Queue& q, auto&&... xs) {
-                        orgqr<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        orgqr(q, std::forward<decltype(xs)>(xs)...);
                     });
     //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), minibench::Rate);

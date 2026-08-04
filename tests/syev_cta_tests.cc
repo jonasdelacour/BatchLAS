@@ -214,8 +214,12 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	// Reference (CPU LAPACKE)
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+		syev(*this->ctx,
+                        A_ref.view(),
+                        W_ref.to_span(),
+                        {.jobz = JobType::NoEigenVectors},
+                        ws_ref.to_span()).wait();
 	}
 #endif
 
@@ -261,8 +265,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 	// but we validate the CTA eigenvectors via residual + orthogonality.
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
+		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
 	}
 #endif
 
@@ -306,8 +310,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 	// Reference (CPU LAPACKE)
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper));
+		syev(*this->ctx,
+                        A_ref.view(),
+                        W_ref.to_span(),
+                        {.uplo = Uplo::Upper},
+                        ws_ref.to_span()).wait();
 	}
 #endif
 
@@ -350,8 +358,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 	// Reference (CPU LAPACKE)
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
+		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
 	}
 #endif
 
@@ -415,8 +423,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 	if (dbg) std::cerr << "[cta-test] running NETLIB reference" << std::endl;
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower, ws_ref.to_span()).wait();
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
+		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
 	}
 #endif
 	if (dbg) std::cerr << "[cta-test] NETLIB done" << std::endl;

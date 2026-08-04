@@ -40,14 +40,14 @@ static void BM_GESVD_CTA(minibench::State& state) {
     const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
     const SvdVectors jobvh = parse_job(static_cast<int>(state.range(3)));
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch);
     Matrix<T> U(n, n, batch);
     Matrix<T> Vh(n, n, batch);
     UnifiedVector<typename base_type<T>::type> s(n * batch);
 
-    const size_t ws_size = gesvd_cta_buffer_size<B, T>(*q,
+    const size_t ws_size = gesvd_cta_buffer_size(*q,
                                                        A.view(),
                                                        s.to_span(),
                                                        U.view(),
@@ -65,7 +65,7 @@ static void BM_GESVD_CTA(minibench::State& state) {
                     jobvh,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        gesvd_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        gesvd_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

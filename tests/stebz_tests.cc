@@ -83,7 +83,7 @@ TYPED_TEST(StebzTest, AllRangeMatchesClosedForm) {
 
     auto ws = UnifiedVector<std::byte>(
         stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
-    stebz<test_utils::gpu_backend>(*this->ctx, tb.d_view(), tb.e_view(),
+    stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w.data(), n, batch, 1, n),
                                    m.to_span(), ws, params);
     this->ctx->wait();
@@ -130,7 +130,7 @@ TYPED_TEST(StebzTest, IndexRangeMatchesFullSpectrum) {
 
         auto ws = UnifiedVector<std::byte>(
             stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
-        stebz<test_utils::gpu_backend>(*this->ctx, tb.d_view(), tb.e_view(),
+        stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        m.to_span(), ws, params);
         this->ctx->wait();
@@ -171,11 +171,11 @@ TYPED_TEST(StebzTest, DescendingOrderReversesTheBlock) {
     auto ws = UnifiedVector<std::byte>(
         stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
 
-    stebz<test_utils::gpu_backend>(*this->ctx, tb.d_view(), tb.e_view(),
+    stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w_asc.data(), k, batch, 1, k),
                                    m.to_span(), ws, params);
     params.order = SortOrder::Descending;
-    stebz<test_utils::gpu_backend>(*this->ctx, tb.d_view(), tb.e_view(),
+    stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w_desc.data(), k, batch, 1, k),
                                    m.to_span(), ws, params);
     this->ctx->wait();
@@ -214,7 +214,7 @@ TYPED_TEST(StebzTest, ValueRangeSelectsInterval) {
 
     auto ws = UnifiedVector<std::byte>(
         stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
-    stebz<test_utils::gpu_backend>(*this->ctx, tb.d_view(), tb.e_view(),
+    stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w.data(), n, batch, 1, n),
                                    m.to_span(), ws, params);
     this->ctx->wait();
@@ -249,7 +249,7 @@ TYPED_TEST(StebzTest, HandlesRepeatedAndZeroOffDiagonals) {
 
     auto ws = UnifiedVector<std::byte>(
         stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
-    stebz<test_utils::gpu_backend>(*this->ctx,
+    stebz(*this->ctx,
                                    VectorView<Real>(d.data(), n, batch, 1, n),
                                    VectorView<Real>(e.data(), n - 1, batch, 1, n - 1),
                                    VectorView<Real>(w.data(), n, batch, 1, n),

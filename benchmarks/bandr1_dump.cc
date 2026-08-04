@@ -124,7 +124,7 @@ int run_one(const std::string& dump_dir,
     params.max_sweeps = max_sweeps;
     params.kd_work = kd_work;
 
-    const size_t ws_bytes = sytrd_band_reduction_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
                                                                    AB.view(),
                                                                    VectorView<Real>(dvec),
                                                                    VectorView<Real>(e),
@@ -133,7 +133,7 @@ int run_one(const std::string& dump_dir,
                                                                    kd,
                                                                    params);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    sytrd_band_reduction<B, T>(*q, AB.view(), dvec, e, tau, Uplo::Lower, kd, ws.to_span(), params).wait();
+    sytrd_band_reduction(*q, AB.view(), VectorView<Real>(dvec), VectorView<Real>(e), VectorView<T>(tau), Uplo::Lower, kd, ws.to_span(), params).wait();
 
     return 0;
 }

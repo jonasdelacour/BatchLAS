@@ -47,7 +47,7 @@ static void BM_SYEV_CTA_FUSED(minibench::State& state) {
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
@@ -66,7 +66,7 @@ static void BM_SYEV_CTA_FUSED(minibench::State& state) {
                     params,
                     wg_mult,
                     [](Queue& q, auto&&... xs) {
-                        syev_cta_fused<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        syev_cta_fused(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
@@ -82,14 +82,14 @@ static void BM_SYEV_CTA_PIPELINED(minibench::State& state) {
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     SteqrParams<T> params;
     params.cta_wg_size_multiplier = wg_mult;
 
-    const size_t ws_size = syev_cta_buffer_size<B, T>(*q, A.view(), jobz, params);
+    const size_t ws_size = syev_cta_buffer_size(*q, A.view(), jobz, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -101,7 +101,7 @@ static void BM_SYEV_CTA_PIPELINED(minibench::State& state) {
                     params,
                     wg_mult,
                     [](Queue& q, auto&&... xs) {
-                        syev_cta<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        syev_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;

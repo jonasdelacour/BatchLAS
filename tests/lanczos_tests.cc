@@ -151,11 +151,11 @@ TEST_F(LanczosTestBase, LanczosTest) {
         batch_size);
         
         
-    size_t buffer_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
+    size_t buffer_size = lanczos_buffer_size(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
         eigenvectors, params);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    lanczos<test_utils::gpu_backend>(
+    lanczos(
         *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors, params);
 
     ctx->wait();
@@ -181,10 +181,10 @@ TEST_F(LanczosTestBase, LanczosTest) {
     }
 
     UnifiedVector<std::byte> spmm_workspace(
-        spmm_buffer_size<test_utils::gpu_backend>(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
 
     //Compute R = A @ V - V @ diag(W)
-    spmm<test_utils::gpu_backend>(
+    spmm(
         *ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
 
     ctx->wait();
@@ -192,8 +192,11 @@ TEST_F(LanczosTestBase, LanczosTest) {
     //Compute the norms of the residuals
     UnifiedVector<float> norms_memory(batch_size * rows * rows, 0.0f);
     
-    gemm<test_utils::gpu_backend>(
-        *ctx, residuals, residuals, MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size), 1.0f, 0.0f, Transpose::Trans, Transpose::NoTrans);
+    gemm(*ctx,
+                                  residuals,
+                                  residuals,
+                                  MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size),
+                                  {.transA = Transpose::Trans});
     ctx->wait();
     
     // Verify that the computed eigenvalues match the expected ones
@@ -223,17 +226,16 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     params.ortho_algorithm = OrthoAlgorithm::SVQB2;
     params.sort_order = SortOrder::Descending;
 
-    size_t buf_size = lanczos_buffer_size<test_utils::gpu_backend>(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
+    size_t buf_size = lanczos_buffer_size(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    lanczos<test_utils::gpu_backend>(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
+    lanczos(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
     ctx->wait();
 
     // expected eigenvalues for Toeplitz matrix
     UnifiedVector<float> expected(n * batch);
-    auto ws_syev = syev_buffer_size<test_utils::gpu_backend>(*ctx, dense, expected.to_span(), JobType::NoEigenVectors, Uplo::Upper);
-    UnifiedVector<std::byte> syev_workspace(ws_syev);
-    syev<test_utils::gpu_backend>(*ctx, dense, expected.to_span(), JobType::NoEigenVectors, Uplo::Upper, syev_workspace);
+    syev(*ctx, dense.view(), expected.to_span(),
+         {.jobz = JobType::NoEigenVectors, .uplo = Uplo::Upper});
     ctx->wait();
 
     // `syev` returns eigenvalues in ascending order; Lanczos is configured to sort descending.
@@ -259,13 +261,16 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     auto scaled_eigenvectors_view = scaled_eigenvectors.view();
 
     auto spmm_workspace = UnifiedVector<std::byte>(
-        spmm_buffer_size<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
+        spmm_buffer_size(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans));
     // Compute residuals = A*v - v*λ
 
-    spmm<test_utils::gpu_backend>(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f,
+    spmm(*ctx, A_view, eigenvectors_view, scaled_eigenvectors_view, 1.0f, 0.0f,
                         Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
-    gemm<test_utils::gpu_backend>(*ctx, residuals_view, scaled_eigenvectors_view, residuals_view, 1.0f, -1.0f,
-                        Transpose::NoTrans, Transpose::NoTrans); 
+    gemm(*ctx,
+                                  residuals_view,
+                                  scaled_eigenvectors_view,
+                                  residuals_view,
+                                  {.beta = -1.0f}); 
     ctx->wait();
     UnifiedVector<float> ritz_values(batch * n, 0.0f);
     for (int b = 0; b < batch; ++b) {

@@ -85,10 +85,10 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
                     Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
-        UnifiedVector<std::byte> ws(syev_two_stage_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
             ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
 
-        syev_two_stage<B, T>(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+        syev_two_stage(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -155,10 +155,10 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
                     Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
-        UnifiedVector<std::byte> ws(syev_two_stage_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
             ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
 
-        syev_two_stage<B, T>(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+        syev_two_stage(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -209,9 +209,9 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
                     Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
-        UnifiedVector<std::byte> ws(syev_blocked_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws(syev_blocked_buffer_size(
             ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked<B, T>(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+        syev_blocked(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -269,15 +269,15 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
         UnifiedVector<Real> w1(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
 
-        UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size(
             ctx, A1.view(), JobType::NoEigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_two_stage<B, T>(ctx, A1.view(), w1.to_span(), JobType::NoEigenVectors,
+        syev_two_stage(ctx, A1.view(), w1.to_span(), JobType::NoEigenVectors,
                              Uplo::Lower, ws1.to_span(), StedcParams<Real>{})
             .wait();
 
-        UnifiedVector<std::byte> ws2(syev_blocked_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws2(syev_blocked_buffer_size(
             ctx, A2.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked<B, T>(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
+        syev_blocked(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -318,15 +318,15 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
         UnifiedVector<Real> w1(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
 
-        UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size(
             ctx, A1.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_two_stage<B, T>(ctx, A1.view(), w1.to_span(), JobType::EigenVectors,
+        syev_two_stage(ctx, A1.view(), w1.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws1.to_span(), StedcParams<Real>{})
             .wait();
 
-        UnifiedVector<std::byte> ws2(syev_blocked_buffer_size<B, T>(
+        UnifiedVector<std::byte> ws2(syev_blocked_buffer_size(
             ctx, A2.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked<B, T>(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
+        syev_blocked(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -384,9 +384,9 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
 
         Matrix<T, MatrixFormat::Dense> ab(kd + 1, n, batch);
         Vector<T> tau1(std::max(1, n - kd), batch);
-        UnifiedVector<std::byte> ws1(sytrd_sy2sb_buffer_size<B, T>(
-            ctx, A.view(), ab.view(), tau1, Uplo::Lower, kd));
-        sytrd_sy2sb<B, T>(ctx, A.view(), ab.view(), tau1, Uplo::Lower, kd, ws1.to_span())
+        UnifiedVector<std::byte> ws1(sytrd_sy2sb_buffer_size(
+            ctx, A.view(), ab.view(), tau1.view(), Uplo::Lower, kd));
+        sytrd_sy2sb(ctx, A.view(), ab.view(), tau1.view(), Uplo::Lower, kd, ws1.to_span())
             .wait();
 
         // Expand the band back to a dense Hermitian matrix.
@@ -417,13 +417,13 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
 
         UnifiedVector<Real> wA(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> wB(static_cast<size_t>(n) * batch);
-        UnifiedVector<std::byte> wsA(syev_blocked_buffer_size<B, T>(
+        UnifiedVector<std::byte> wsA(syev_blocked_buffer_size(
             ctx, Acopy.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked<B, T>(ctx, Acopy.view(), wA.to_span(), JobType::EigenVectors,
+        syev_blocked(ctx, Acopy.view(), wA.to_span(), JobType::EigenVectors,
                            Uplo::Lower, wsA.to_span(), StedcParams<Real>{}).wait();
-        UnifiedVector<std::byte> wsB(syev_blocked_buffer_size<B, T>(
+        UnifiedVector<std::byte> wsB(syev_blocked_buffer_size(
             ctx, Bdense.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked<B, T>(ctx, Bdense.view(), wB.to_span(), JobType::EigenVectors,
+        syev_blocked(ctx, Bdense.view(), wB.to_span(), JobType::EigenVectors,
                            Uplo::Lower, wsB.to_span(), StedcParams<Real>{}).wait();
 
         for (int b = 0; b < batch; ++b) {

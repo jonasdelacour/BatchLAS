@@ -49,10 +49,10 @@ static void BM_STEDC(minibench::State& state) {
     params.secular_threads_per_root = threads_per_root;
     params.secular_cta_wg_size_multiplier = wg_multiplier;
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
-    UnifiedVector<std::byte> ws(stedc_workspace_size<B, T>(*q, n, batch, jobz, params));
+    UnifiedVector<std::byte> ws(stedc_workspace_size(*q, n, batch, jobz, params));
 
     auto kernel = [q](auto& diags,
                             auto& off_diags,
@@ -65,7 +65,7 @@ static void BM_STEDC(minibench::State& state) {
         auto e = static_cast<VectorView<T>>(off_diags);
         auto w = static_cast<VectorView<T>>(eigvals);
         auto Z = eigvects.view();
-        return stedc<B, T>(*q, d, e, w, ws.to_span(), jobz, params, Z);
+        return stedc(*q, d, e, w, ws.to_span(), jobz, params, Z);
     };
     state.SetKernel(q,
                     bench::pristine(diags),

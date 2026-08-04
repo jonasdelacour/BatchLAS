@@ -11,7 +11,7 @@ static void BM_SYR2K(minibench::State& state) {
     const size_t k = state.range(1);
     const size_t batch = state.range(3);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, k, false, batch);
     auto Bm = Matrix<T>::Random(n, k, false, batch);
     auto C = Matrix<T>::Random(n, n, false, batch);
@@ -25,7 +25,7 @@ static void BM_SYR2K(minibench::State& state) {
                     Uplo::Lower,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        syr2k<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        syr2k(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS",
                     static_cast<double>(batch) * (2e-9 * static_cast<double>(n) * static_cast<double>(n + 1) * static_cast<double>(k)),

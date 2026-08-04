@@ -235,7 +235,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     Matrix<Scalar, MatrixFormat::Dense> U_dummy(n, n, batch);
     Matrix<Scalar, MatrixFormat::Dense> Vh_dummy(n, n, batch);
 
-    const size_t ws_bytes = gesvd_buffer_size<B>(*this->ctx,
+    const size_t ws_bytes = gesvd_buffer_size(*this->ctx,
                                                   A.view(),
                                                   s.to_span(),
                                                   U_dummy.view(),
@@ -244,7 +244,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
                                                   SvdVectors::None);
     UnifiedVector<std::byte> ws(ws_bytes);
 
-    auto evt = gesvd<B>(*this->ctx,
+    auto evt = gesvd(*this->ctx,
                         A.view(),
                         s.to_span(),
                         U_dummy.view(),
@@ -378,7 +378,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
 
     try {
         const size_t ws_bytes = hermitian_uplo.has_value()
-            ? gesvd_buffer_size<B>(ctx,
+            ? gesvd_buffer_size(ctx,
                                    A.view(),
                                    s.to_span(),
                                    U.view(),
@@ -386,7 +386,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                    jobu,
                                    jobvh,
                                    *hermitian_uplo)
-            : gesvd_buffer_size<B>(ctx,
+            : gesvd_buffer_size(ctx,
                                    A.view(),
                                    s.to_span(),
                                    U.view(),
@@ -395,7 +395,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                    jobvh);
         UnifiedVector<std::byte> ws(ws_bytes);
         auto evt = hermitian_uplo.has_value()
-            ? gesvd<B>(ctx,
+            ? gesvd(ctx,
                        A.view(),
                        s.to_span(),
                        U.view(),
@@ -404,7 +404,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
                        jobvh,
                        *hermitian_uplo,
                        ws.to_span())
-            : gesvd<B>(ctx,
+            : gesvd(ctx,
                        A.view(),
                        s.to_span(),
                        U.view(),
@@ -580,7 +580,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     Matrix<Scalar, MatrixFormat::Dense> U_dummy(1, 1, batch);
     Matrix<Scalar, MatrixFormat::Dense> Vh_dummy(1, 1, batch);
 
-    const size_t ws_bytes = gesvd_buffer_size<B>(*this->ctx,
+    const size_t ws_bytes = gesvd_buffer_size(*this->ctx,
                                                  A.view(),
                                                  s.to_span(),
                                                  U_dummy.view(),
@@ -590,7 +590,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
                                                  Uplo::Lower);
     UnifiedVector<std::byte> ws(ws_bytes);
 
-    auto evt = gesvd<B>(*this->ctx,
+    auto evt = gesvd(*this->ctx,
                         A.view(),
                         s.to_span(),
                         U_dummy.view(),

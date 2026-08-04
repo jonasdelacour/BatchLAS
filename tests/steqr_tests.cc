@@ -93,7 +93,7 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
 
     // Ritz values
     auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
     this->ctx->wait();
     
     for (int i = 0; i < n; ++i) {
@@ -132,7 +132,7 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
     
     this->ctx->wait();
     UnifiedVector<float> expected(n);
@@ -178,7 +178,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
         
     this->ctx->wait();
 
-    auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
 
 #if BATCHLAS_HAS_HOST_BACKEND
     const auto ref_eigs = netlib_ref_eigs_dense(dense_A.view());
@@ -256,8 +256,8 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
         }
 
         // Compare Ritz values (validates eigenvectors)
-        auto ritz_ref = ritz_values<B>(*this->ctx, dense_A, eigvects_ref);
-        auto ritz_cta = ritz_values<B>(*this->ctx, dense_A, eigvects_cta);
+        auto ritz_ref = ritz_values(*this->ctx, dense_A, eigvects_ref);
+        auto ritz_cta = ritz_values(*this->ctx, dense_A, eigvects_cta);
         this->ctx->wait();
 
         for (int i = 0; i < n; ++i) {
@@ -315,7 +315,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
 
         // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
-        auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
         this->ctx->wait();
 
         for (int i = 0; i < n; ++i) {
@@ -374,7 +374,7 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
 
         // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-        auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
         this->ctx->wait();
         for (int j = 0; j < batch; ++j) {
             for (int i = 0; i < n; ++i) {
@@ -418,7 +418,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
-        auto ritz_vals = ritz_values<B>(*this->ctx, dense_A, eigvects);
+        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
         this->ctx->wait();
 
         // Reference eigenvalues via NETLIB double
@@ -534,8 +534,12 @@ UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
 
     UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     UnifiedVector<std::byte> ws(
-        syev_buffer_size<Backend::NETLIB, double>(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev<Backend::NETLIB, double>(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+        syev_buffer_size(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx_cpu,
+                                  A.view(),
+                                  ref_eigs.to_span(),
+                                  {.jobz = JobType::NoEigenVectors},
+                                  ws.to_span()).wait();
     ctx_cpu.wait();
 
     return ref_eigs;
@@ -551,8 +555,12 @@ UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat:
 
     UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     UnifiedVector<std::byte> ws(
-        syev_buffer_size<Backend::NETLIB, double>(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev<Backend::NETLIB, double>(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+        syev_buffer_size(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx_cpu,
+                                  A_d.view(),
+                                  ref_eigs.to_span(),
+                                  {.jobz = JobType::NoEigenVectors},
+                                  ws.to_span()).wait();
     ctx_cpu.wait();
 
     return ref_eigs;

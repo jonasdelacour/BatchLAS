@@ -19,8 +19,8 @@ static void BM_SPMM(minibench::State& state) {
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    size_t ws_size = spmm_buffer_size<B>(*q, A.view(), Bm.view(), C.view(),
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
+    size_t ws_size = spmm_buffer_size(*q, A.view(), Bm.view(), C.view(),
                                          T(1), T(0), Transpose::NoTrans,
                                          Transpose::NoTrans);
     UnifiedVector<std::byte> workspace(ws_size);

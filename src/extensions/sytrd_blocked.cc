@@ -801,7 +801,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                     if (use_syr2k_trailing_update) {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
-                            syr2k<B>(ctx, V2, W2, A22, T(-1), T(1), Uplo::Lower, Transpose::NoTrans);
+                            syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                         }
                         if (!is_legacy) {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k_symmetrize");
@@ -810,21 +810,37 @@ Event sytrd_blocked_impl(Queue& ctx,
                     } else {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                            gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                            gemm<B>(ctx,
+                                    V2,
+                                    W2,
+                                    A22,
+                                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                         }
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                            gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                            gemm<B>(ctx,
+                                    W2,
+                                    V2,
+                                    A22,
+                                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                         }
                     }
                 } else {
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                        gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        gemm<B>(ctx,
+                                V2,
+                                W2,
+                                A22,
+                                {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                     }
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                        gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        gemm<B>(ctx,
+                                W2,
+                                V2,
+                                A22,
+                                {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                     }
                 }
             }

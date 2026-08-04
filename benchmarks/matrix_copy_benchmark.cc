@@ -15,7 +15,7 @@ static void BM_MATRIX_COPY(minibench::State& state) {
     const int ld  = state.range(3) > 0 ? state.range(3) : rows ;
     const int stride = state.range(4) > 0 ? state.range(4) : ld * cols ;
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     Matrix<T> src(rows, cols, batch, ld, stride);
     Matrix<T> dst(rows, cols, batch, ld, stride);

@@ -52,6 +52,14 @@ if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
 fallback turns "my CUDA build isn't using CUDA" into a performance mystery
 rather than an error.
 
+This applies to the whole surface, extensions included: `ortho`, `syevx`,
+`lanczos`, `steqr`, `stedc`, the `sytrd_*` and `syev_*` family and the rest all
+take their backend from the queue. Where an entry point has template parameters
+that cannot be deduced from its arguments — `tridiagonal_solver_buffer_size`,
+whose arguments are all scalars — it keeps its explicit
+`f<Backend, T>(...)` spelling, because there is nothing for the compiler to
+work from.
+
 ### Backends are still compile-time internally
 
 Backend selection is a runtime switch over compile-time instantiations, not
@@ -89,6 +97,18 @@ what makes `{.alpha = 2.0f}` work: by the time the compiler considers the option
 parameter, `T` is already fixed, so the braced initialiser has a concrete type
 to initialise. An option struct in a deduced position would not compile — which
 is why `alpha` cannot be the thing that determines `T`.
+
+Two consequences worth knowing:
+
+- **You cannot name `T` on an option-struct call.** `syev<B, float>(ctx, ...)`
+  works on the positional spelling but not the option one, where the second
+  template parameter is the matrix type. Write `syev<B>(ctx, ...)` and let `T`
+  deduce, or use the positional spelling.
+- **`Matrix` and `MatrixView` are both accepted**, and may be mixed freely.
+  Elsewhere in the library, an entry point whose parameter is a `MatrixView<T>`
+  cannot deduce `T` from an owning `Matrix<T>` — deduction ignores the implicit
+  conversion — so those calls need an explicit `.view()`. `Vector` has a
+  `.view()` for the same reason.
 
 `getrf`, `getri`, `geqrf` and `orgqr` have no options to carry, so they have no
 option struct.
@@ -222,3 +242,39 @@ For the same reason, never give an arena-backed overload the same arity and
 parameter types as the positional call — the two would be genuinely ambiguous.
 That is why `getrf`/`getri`/`geqrf`/`orgqr` take no workspace parameter in their
 arena spelling.
+
+### Write `PotrfOptions{}`, never a bare `{}`
+
+Inside the library, where calls are written `potrf<B>(...)` with the backend
+fixed, an empty option struct must have its type named:
+
+```cpp
+potrf<B>(ctx, A, PotrfOptions{}, my_workspace);   // correct
+potrf<B>(ctx, A, {}, my_workspace);               // WRONG: factorises Upper
+```
+
+`potrf`'s option overload takes `(ctx, A, const PotrfOptions&, Span<std::byte>)`
+and the positional one takes `(ctx, A, Uplo, Span<std::byte>)` — same arity, and
+`{}` converts to both. Overload resolution picks the positional one, so `{}`
+means `Uplo{}`; since `Uplo` is declared `{Upper, Lower}`, that is **Upper**,
+while `PotrfOptions{}.uplo` is **Lower**. The call silently factorises the other
+triangle and returns a wrong answer with no diagnostic.
+
+This bit `ortho`'s Cholesky path, where it showed up only as LOBPCG failing to
+converge — several layers away from the call. `potrf` is the only entry point
+with this collision today; every other option overload differs from its
+positional twin in arity or in an argument type. Naming the type costs nothing
+and is immune, so do it everywhere.
+
+`OptionsApi.NamedEmptyOptionsSelectTheOptionOverload` in
+`tests/options_api_tests.cc` enforces this.
+
+### An empty workspace is a workspace
+
+The workspace-taking and arena-leasing spellings are separate overloads, not one
+function with `Span<std::byte> ws = {}` and a null check. If you add an entry
+point, keep it that way. A null span is *not* a synonym for "the caller passed
+nothing": code that sub-allocates from a `BumpAllocator` runs its algorithm once
+in sizing mode, where every pool allocation legitimately yields an empty span
+while the input matrices stay real. A null check there turns the measurement
+pass into a real factorisation over the caller's live data.

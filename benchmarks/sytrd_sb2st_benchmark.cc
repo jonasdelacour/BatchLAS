@@ -88,9 +88,9 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
     auto e = Vector<Real>::zeros(n > 0 ? n - 1 : 0, batch);
     auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
 
-    auto q = std::make_shared<Queue>("gpu", /*in_order=*/true);
+    auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
-    const size_t ws_bytes = sytrd_sb2st_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_sb2st_buffer_size(*q,
                                                          AB.view(),
                                                          VectorView<Real>(d),
                                                          VectorView<Real>(e),
@@ -111,7 +111,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
         ws,
         ib,
         [](Queue& q, auto&&... xs) {
-            sytrd_sb2st<B, T>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_sb2st(q, std::forward<decltype(xs)>(xs)...);
         });
 
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
@@ -152,9 +152,9 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     auto e = Vector<Real>::zeros(n > 0 ? n - 1 : 0, batch);
     auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
 
-    auto q = std::make_shared<Queue>("gpu", /*in_order=*/true);
+    auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
-    const size_t ws_bytes = sytrd_band_reduction_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
                                                                    AB.view(),
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
@@ -175,7 +175,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
         ws,
         ib,
         [](Queue& q, auto&&... xs) {
-            sytrd_band_reduction<B, T>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
         });
 
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

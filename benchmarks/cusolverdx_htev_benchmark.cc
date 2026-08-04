@@ -26,7 +26,7 @@ static void BM_CUSOLVERDX_HTEV(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto diags = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
     auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
     auto eigvals = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));

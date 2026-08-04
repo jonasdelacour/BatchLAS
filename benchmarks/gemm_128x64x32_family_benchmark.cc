@@ -54,7 +54,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name) {
     auto A = Matrix<float>::Random(m, k, false, batch);
     auto Bm = Matrix<float>::Random(k, n, false, batch);
     auto C = Matrix<float>::Random(m, n, false, batch);
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
 
     state.SetKernel(q,
                     std::move(A),
@@ -68,7 +68,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name) {
                         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
                         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
                         ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-                        gemm<B, float>(q, std::forward<decltype(xs)>(xs)...);
+                        gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);

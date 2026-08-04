@@ -27,9 +27,9 @@ Event trmm(Queue& ctx,
     if (n <= recursion_stop_size) {
         //A.triangularize(ctx, uplo, diag).wait();
         if (side == Side::Left) {
-            return gemm<Ba>(ctx, A, B, C, alpha, T(1.0), transA, Transpose::NoTrans);
+            return gemm<Ba>(ctx, A, B, C, {.alpha = alpha, .beta = T(1.0), .transA = transA});
         } else {
-            return gemm<Ba>(ctx, B, A, C, alpha, T(1.0), Transpose::NoTrans, transA);
+            return gemm<Ba>(ctx, B, A, C, {.alpha = alpha, .beta = T(1.0), .transB = transA});
         }
     }
     //Otherwise, split the matrix and call trmm recursively
@@ -68,8 +68,16 @@ Event trmm(Queue& ctx,
     bool is_ll_or_ur = (uplo == Uplo::Lower && side == Side::Left) || (uplo == Uplo::Upper && side == Side::Right);
     
     // Call trmm recursively on the sub-matrices
-    trmm<Ba>(ctx, A22, B2, C2, alpha, side, uplo, transA, diag);
-    trmm<Ba>(ctx, A11, B1, C1, alpha, side, uplo, transA, diag);
+    trmm<Ba>(ctx,
+             A22,
+             B2,
+             C2,
+             {.alpha = alpha, .side = side, .uplo = uplo, .trans = transA, .diag = diag});
+    trmm<Ba>(ctx,
+             A11,
+             B1,
+             C1,
+             {.alpha = alpha, .side = side, .uplo = uplo, .trans = transA, .diag = diag});
     if (!ctx.in_order()) ctx.wait();
     auto B_block = is_ll_or_ur ?
         (is_transposed ? B2 : B1) :
@@ -78,11 +86,14 @@ Event trmm(Queue& ctx,
         (is_transposed ? C1 : C2) :
         (is_transposed ? C2 : C1);
     auto A_block = uplo == Uplo::Lower ? A21 : A12;
-    return gemm<Ba>(ctx, side == Side::Left ? A_block : B_block, 
-                    side == Side::Left ? B_block : A_block, 
-                    C_block, alpha, T(1.0), 
-                    side == Side::Left ? transA : Transpose::NoTrans, 
-                    side == Side::Left ? Transpose::NoTrans : transA);
+    return gemm<Ba>(ctx,
+                    side == Side::Left ? A_block : B_block,
+                    side == Side::Left ? B_block : A_block,
+                    C_block,
+                    {.alpha = alpha,
+                     .beta = T(1.0),
+                     .transA = side == Side::Left ? transA : Transpose::NoTrans,
+                     .transB = side == Side::Left ? Transpose::NoTrans : transA});
             
 
     return ctx.get_event();

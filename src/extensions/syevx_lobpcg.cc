@@ -607,7 +607,7 @@ inline constexpr R jacobi_definiteness_floor() {
         for (int step = 0; step < init_power_steps; ++step) {
             ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
             if constexpr (MFormat == MatrixFormat::Dense) {
-                gemm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+                gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
             } else {
                 spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
@@ -621,7 +621,7 @@ inline constexpr R jacobi_definiteness_floor() {
         //Compute AX
         if constexpr (MFormat == MatrixFormat::Dense) {
             trace("syevx: gemm A*X");
-            gemm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
         } else {
             //For sparse matrices we use the spmm function
             trace("syevx: spmm A*X");
@@ -630,14 +630,14 @@ inline constexpr R jacobi_definiteness_floor() {
         trace_wait("syevx: A*X done");
         //Compute X^T AX
         trace("syevx: gemm X^T*(A*X)");
-        gemm<B>(ctx, X, AX, XtAX, T(1.0), T(0.0), trans, Transpose::NoTrans);
+        gemm<B>(ctx, X, AX, XtAX, {.transA = trans});
         trace_wait("syevx: XtAX gemm done");
         //Solve the eigenvalue problem
         trace("syevx: syev XtAX");
         if (prefer_vendor_projected_syev) {
             backend::syev_vendor<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
-            syev<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
         trace_wait("syevx: syev XtAX done");
 
@@ -651,11 +651,11 @@ inline constexpr R jacobi_definiteness_floor() {
         // `reported_col()` below.
         //Update X and corresponding implicit update of AX
         trace("syevx: gemm X*Z (update X)");
-        gemm<B>(ctx, X, XtAX, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, X, XtAX, X_new, GemmOptions<T>{});
         trace_wait("syevx: update X done");
 
         trace("syevx: gemm AX*Z (update AX)");
-        gemm<B>(ctx, AX, XtAX, AX_new , T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, AX, XtAX, AX_new, GemmOptions<T>{});
         trace_wait("syevx: update AX done");
 
         swap_subspace();
@@ -1195,7 +1195,7 @@ inline constexpr R jacobi_definiteness_floor() {
             //Compute AR
             if constexpr (MFormat == MatrixFormat::Dense) {
                 trace("syevx: gemm A*(P or R)");
-                gemm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+                gemm<B>(ctx, A, restart ? P : R, restart ? AP : AR, GemmOptions<T>{});
             } else {
                 trace("syevx: spmm A*(P or R)");
                 spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
@@ -1208,7 +1208,7 @@ inline constexpr R jacobi_definiteness_floor() {
             auto StAS = MatrixView(StAS_base, Nvecs, Nvecs, StAS_base.ld(), StAS_base.stride());
             //Compute S^T A S
             trace("syevx: gemm S^T*(A*S) (StAS)");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, T(1.0), T(0.0), trans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, {.transA = trans});
             trace_wait("syevx: StAS gemm done");
 
             // A masked residual column makes the corresponding row and column of
@@ -1267,7 +1267,7 @@ inline constexpr R jacobi_definiteness_floor() {
             if (prefer_vendor_projected_syev) {
                 backend::syev_vendor<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
-                syev<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
             trace_wait("syevx: syev StAS done");
             current_num_eigvals = static_cast<int64_t>(Nvecs);
@@ -1301,17 +1301,17 @@ inline constexpr R jacobi_definiteness_floor() {
             //Compute new search directions
             //X = [X, P, R] * C_x
             trace("syevx: update X/AX submit");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, GemmOptions<T>{});
             //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, GemmOptions<T>{});
             //Orthonormalize C_p against the best eigenvectors
             trace("syevx: ortho C_p vs Z submit");
             ortho<B>(ctx, C_p_active, Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             //Compute P = [X, P, R] * C_p
             trace("syevx: update P/AP submit");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, GemmOptions<T>{});
             //Make an implicit update of AP
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, GemmOptions<T>{});
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;

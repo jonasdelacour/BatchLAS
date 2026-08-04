@@ -191,14 +191,14 @@ Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_cta(Queue& ctx,
 	}
 
 	UnifiedVector<std::byte> ws_ormqr(
-		ormqr_buffer_size<B>(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data()));
+		ormqr_buffer_size(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data()));
 
 	// Apply Qsub := Qsub * Q (since Qsub starts as identity, this forms Qsub).
 	// ormqr applies the product of Householder reflectors encoded in Aq/tau_qr.
 	// We run it on the provided execution context.
 	//
 	// Some backends may require a non-empty workspace.
-	ormqr<B>(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
+	ormqr(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
 
 	Matrix<Real, MatrixFormat::Dense> Q = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
 	auto Qv = Q.view();
@@ -306,8 +306,8 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 	Matrix<Real, MatrixFormat::Dense> AQ(n, n, batch);
 	Matrix<Real, MatrixFormat::Dense> Tmat(n, n, batch);
-	gemm<B>(*this->ctx, A0, Q, AQ, Real(1), Real(0), Transpose::NoTrans, Transpose::NoTrans).wait();
-	gemm<B>(*this->ctx, Q, AQ, Tmat, Real(1), Real(0), Transpose::Trans, Transpose::NoTrans).wait();
+	gemm(*this->ctx, A0.view(), Q.view(), AQ.view(), {.alpha = Real(1), .beta = Real(0)}).wait();
+	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
 	this->ctx->wait();
 
 	assert_tridiagonal_matches(Tmat.view(), n, d, e, tol);
@@ -371,8 +371,8 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
 	Matrix<Real, MatrixFormat::Dense> AQ(n, n, batch);
 	Matrix<Real, MatrixFormat::Dense> Tmat(n, n, batch);
-	gemm<B>(*this->ctx, A0, Q, AQ, Real(1), Real(0), Transpose::NoTrans, Transpose::NoTrans).wait();
-	gemm<B>(*this->ctx, Q, AQ, Tmat, Real(1), Real(0), Transpose::Trans, Transpose::NoTrans).wait();
+	gemm(*this->ctx, A0.view(), Q.view(), AQ.view(), {.alpha = Real(1), .beta = Real(0)}).wait();
+	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
 	this->ctx->wait();
 
 	assert_tridiagonal_matches(Tmat.view(), n, d, e, tol);
@@ -393,7 +393,7 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
 	EXPECT_THROW(
-		(sytrd_cta<Backend::NETLIB, float>(ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
+		(sytrd_cta(ctx, A.view(), d.view(), e.view(), tau.view(), Uplo::Lower, ws.to_span(), 1), ctx.wait()),
 		std::exception);
 }
 #endif

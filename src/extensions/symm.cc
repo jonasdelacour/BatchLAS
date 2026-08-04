@@ -51,24 +51,10 @@ Event symm(Queue& ctx,
     symmetric_a_view.symmetrize(ctx, uplo).wait();
 
     if (side == Side::Left) {
-        return gemm<Ba>(ctx,
-                        symmetric_a_view,
-                        B,
-                        C,
-                        alpha,
-                        beta,
-                        Transpose::NoTrans,
-                        Transpose::NoTrans);
+        return gemm<Ba>(ctx, symmetric_a_view, B, C, {.alpha = alpha, .beta = beta});
     }
 
-    return gemm<Ba>(ctx,
-                    B,
-                    symmetric_a_view,
-                    C,
-                    alpha,
-                    beta,
-                    Transpose::NoTrans,
-                    Transpose::NoTrans);
+    return gemm<Ba>(ctx, B, symmetric_a_view, C, {.alpha = alpha, .beta = beta});
 }
 
 #define SYMM_INSTANTIATE(back, fp) \

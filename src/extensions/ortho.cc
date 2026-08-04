@@ -126,11 +126,14 @@ namespace batchlas {
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
             //Compute StS = S^T * S or StS = S * S^T (depending on transA)
-            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
+            gemm<B>(ctx, A, A, C, {.transA = inv_trans, .transB = transA});
             //Compute the Cholesky Factorization of StS
-            potrf<B>(ctx, C, Uplo::Lower, potrf_workspace);
+            potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
             //Solve X * Chol(StS) = S
-            trsm<B>(ctx, C, A, is_A_trans ? Side::Left : Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, alpha);
+            trsm<B>(ctx,
+                    C,
+                    A,
+                    {.alpha = alpha, .side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
         };
 
         auto cgs_alg = [&](){
@@ -152,8 +155,12 @@ namespace batchlas {
                 //output vector
                 if (i > 0){ //If it's the first vector we just need to normalize it
                     for (int j = 0; j < 2; j++){
-                        gemv<B>(ctx, A_i, A_next, C, T(1.0), T(0.0), inv_trans);
-                        gemv<B>(ctx, A_i, C, A_next, T(-1.0), T(1.0), transA);
+                        gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
+                        gemv<B>(ctx,
+                                A_i,
+                                C,
+                                A_next,
+                                {.alpha = T(-1.0), .beta = T(1.0), .transA = transA});
                     }
                 }
                 //Normalize A_i
@@ -188,7 +195,7 @@ namespace batchlas {
         };
 
         auto shift_chol_alg = [&](){
-            gemm<B>(ctx, A, A, C, T(1.0), T(0.0), inv_trans, transA);
+            gemm<B>(ctx, A, A, C, {.transA = inv_trans, .transB = transA});
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
@@ -209,8 +216,8 @@ namespace batchlas {
                 });
             });
             //Compute the Cholesky Factorization of StS
-            potrf<B>(ctx, C, Uplo::Lower, potrf_workspace);
-            trsm<B>(ctx, C, A, is_A_trans ? Side::Left : Side::Right, Uplo::Lower, inv_trans, Diag::NonUnit, T(1.0));
+            potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
+            trsm<B>(ctx, C, A, {.side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
             chol_alg();
             chol_alg();
         };
@@ -222,7 +229,7 @@ namespace batchlas {
 
         auto svqb_alg = [&](auto in_mat, auto out_mat) {
             //Compute A^H * A
-            gemm<B>(ctx, in_mat, in_mat, C, T(1.0), T(0.0), inv_trans, transA);
+            gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
             //Compute D = diag(A^H * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
@@ -260,7 +267,7 @@ namespace batchlas {
                 });
             });
 
-            syev<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
 
             //First Compute D * EigenVectors * Lambda^-1/2
             ctx -> submit([&](sycl::handler& h){
@@ -283,7 +290,7 @@ namespace batchlas {
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
-            gemm<B>(ctx, in_mat, C, out_mat, T(1.0), T(0.0), transA, Transpose::NoTrans);
+            gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
             //Memcpy
         };
         switch (algo) {
@@ -389,8 +396,12 @@ namespace batchlas {
         auto is_second_transposed = static_cast<Transpose>(((transA == trans) && (transM == no_trans)));
         
         for (size_t i = 0; i < iterations; i++){
-            gemm<B>(ctx, M, A, descrMA, T(1.0), T(0.0), inv_transM, transA);
-            gemm<B>(ctx, isAtrans ? descrMA : M, isAtrans ? M : descrMA, A, T(-1.0), T(1.0), is_first_transposed, is_second_transposed);
+            gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
+            gemm<B>(ctx,
+                    isAtrans ? descrMA : M,
+                    isAtrans ? M : descrMA,
+                    A,
+                    {.alpha = T(-1.0), .beta = T(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
 
             ortho<B>(ctx, A, transA, orthoworkspace, algo);
         }

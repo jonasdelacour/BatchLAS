@@ -344,10 +344,13 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
 				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo));
-			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo,
-								  ws_ref.to_span()).wait();
+			syev(*this->ctx,
+                         A_ref.view(),
+                         W_ref.to_span(),
+                         {.jobz = JobType::NoEigenVectors, .uplo = uplo},
+                         ws_ref.to_span()).wait();
 		}
 #endif
 
@@ -413,10 +416,13 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 			{
-				auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+				auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
 					*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo));
-				syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo,
-									  ws_ref.to_span()).wait();
+				syev(*this->ctx,
+                          A_ref.view(),
+                          W_ref.to_span(),
+                          {.jobz = JobType::NoEigenVectors, .uplo = uplo},
+                          ws_ref.to_span()).wait();
 			}
 #endif
 
@@ -463,10 +469,13 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
 				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower,
-								  ws_ref.to_span()).wait();
+			syev(*this->ctx,
+                         A_ref.view(),
+                         W_ref.to_span(),
+                         {.jobz = JobType::NoEigenVectors},
+                         ws_ref.to_span()).wait();
 		}
 #endif
 
@@ -618,7 +627,7 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 		}
 
 		auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-		syev_jacobi_cta<B, float>(ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+		syev_jacobi_cta(ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
 		double max_abs = 0.0;
 		for (int i = 0; i < n; ++i) {
@@ -691,7 +700,7 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 	}
 
 	auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-	syev_jacobi_cta<B, float>(ctx, A_jac.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+	syev_jacobi_cta(ctx, A_jac.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
 	double max_rel = 0.0;
 	for (int i = 0; i < n; ++i) {
@@ -723,8 +732,8 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 		auto W_tri = UnifiedVector<float>(static_cast<std::size_t>(n));
 		SteqrParams<float> sp;
 		auto ws = UnifiedVector<std::byte>(
-			syev_cta_buffer_size<B, float>(ctx, A_tri.view(), JobType::NoEigenVectors, sp));
-		syev_cta<B, float>(ctx, A_tri.view(), W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+			syev_cta_buffer_size(ctx, A_tri.view(), JobType::NoEigenVectors, sp));
+		syev_cta(ctx, A_tri.view(), W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
 						   ws.to_span(), sp).wait();
 
 		std::vector<float> w_tri(W_tri.begin(), W_tri.begin() + n);

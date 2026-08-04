@@ -75,26 +75,24 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
 
             A_ref.view().symmetrize(*(this->ctx), uplo).wait();
 
-            symm<Ba>(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, side, uplo).wait();
+            symm(*(this->ctx),
+                     A.view(),
+                     B.view(),
+                     C.view(),
+                     {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
             if (side == Side::Left) {
-                gemm<Ba>(*(this->ctx),
+                gemm(*(this->ctx),
                          A_ref.view(),
                          B.view(),
                          C_ref.view(),
-                         alpha,
-                         beta,
-                         Transpose::NoTrans,
-                         Transpose::NoTrans).wait();
+                         {.alpha = alpha, .beta = beta}).wait();
             } else {
-                gemm<Ba>(*(this->ctx),
+                gemm(*(this->ctx),
                          B.view(),
                          A_ref.view(),
                          C_ref.view(),
-                         alpha,
-                         beta,
-                         Transpose::NoTrans,
-                         Transpose::NoTrans).wait();
+                         {.alpha = alpha, .beta = beta}).wait();
             }
 
             for (int b = 0; b < batch; ++b) {
@@ -145,12 +143,20 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 
             {
                 ScopedEnvVar force_variant("BATCHLAS_SYMM_VARIANT", "cublasdx");
-                symm<Backend::CUDA>(ctx, A.view(), B.view(), C_custom.view(), alpha, beta, side, uplo).wait();
+                symm(ctx,
+                                    A.view(),
+                                    B.view(),
+                                    C_custom.view(),
+                                    {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
 
             {
                 ScopedEnvVar vendor_variant("BATCHLAS_SYMM_VARIANT", "vendor");
-                symm<Backend::CUDA>(ctx, A.view(), B.view(), C_vendor.view(), alpha, beta, side, uplo).wait();
+                symm(ctx,
+                                    A.view(),
+                                    B.view(),
+                                    C_vendor.view(),
+                                    {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
 
             for (int b = 0; b < batch; ++b) {

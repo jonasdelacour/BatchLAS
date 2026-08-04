@@ -471,8 +471,11 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         // GEMM output, so this needs no extra workspace.
         permuted_copy(ctx, eigvects, temp_Q, perm_map);
         auto product_head = eigvects(Slice{}, Slice{0, static_cast<int>(dd_max)});
-        gemm<B>(ctx, temp_Q, Qprime(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head,
-                T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx,
+                temp_Q,
+                Qprime(Slice{}, Slice{0, static_cast<int>(dd_max)}),
+                product_head,
+                GemmOptions<T>{});
         // Fold the multiplied head back over A so temp_Q holds the whole
         // product A*M; its tail columns are already correct.
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, temp_Q(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
@@ -481,7 +484,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         // Avoid full-matrix copy + permute by using out-of-place permuted_copy in scratch buffers.
         permuted_copy(ctx, Qprime, temp_Q, permutation);
         permuted_copy(ctx, eigvects, Qprime, perm_map);
-        gemm<B>(ctx, Qprime, temp_Q, eigvects, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, Qprime, temp_Q, eigvects, GemmOptions<T>{});
     }
     return ctx.get_event();
 }

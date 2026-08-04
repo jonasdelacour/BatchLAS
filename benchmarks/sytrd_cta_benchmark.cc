@@ -37,7 +37,7 @@ static void BM_SYTRD_CTA(minibench::State& state) {
     // We use ~4/3 n^3 as a rough proxy.
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
     auto d = Vector<T>::zeros(n, batch);
     auto e = Vector<T>::zeros(n - 1, batch);
@@ -49,7 +49,7 @@ static void BM_SYTRD_CTA(minibench::State& state) {
         bench::pristine(A), //sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
         d,e,tau,uplo,ws_dummy,wg_mult,
         [](Queue& q, auto&&... xs) {
-            sytrd_cta<B>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_cta(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

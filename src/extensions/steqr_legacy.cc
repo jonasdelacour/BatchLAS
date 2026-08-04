@@ -409,8 +409,11 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
     });
     
     auto p_slice = Slice(0, int64_t(Nb + 1));
-    gemm<B>(ctx, eigvects(Slice(),p_slice), givens_block(p_slice,p_slice), eigvects_dual(Slice(),p_slice), T(1), T(0),
-                        Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx,
+            eigvects(Slice(),p_slice),
+            givens_block(p_slice,p_slice),
+            eigvects_dual(Slice(),p_slice),
+            GemmOptions<T>{});
     MatrixView<T>::copy(ctx, eigvects(Slice(),p_slice), eigvects_dual(Slice(),p_slice));
 
     //Apply regular rotation sets
@@ -457,11 +460,7 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
 
         //Post-multiply a slice of eigvects by the givens-block matrix
         auto col_slice = Slice(int64_t(i - Nb + 1), int64_t(i + Nb + 1));
-        gemm<B>(ctx, eigvects(Slice{}, col_slice), 
-                     givens_block, 
-                     eigvects_dual, 
-                     T(1), T(0),
-                     Transpose::NoTrans, Transpose::NoTrans);
+        gemm<B>(ctx, eigvects(Slice{}, col_slice), givens_block, eigvects_dual, GemmOptions<T>{});
 
         MatrixView<T>::copy(ctx, eigvects(Slice{}, col_slice), eigvects_dual);
     }
@@ -510,8 +509,11 @@ Event block_rot_impl(Queue& ctx, const MatrixView<std::array<T,2>, MatrixFormat:
     //ctx -> wait();
 
     auto e_slice = Slice{int64_t(row_offset - Nb + 1), SliceEnd()};
-    gemm<B>(ctx, eigvects(Slice{},e_slice), givens_block({0, int64_t(Nb + row_remainder)}, {0, int64_t(Nb + row_remainder)}), eigvects_dual(Slice{}, {0, int64_t(Nb + row_remainder)}), T(1), T(0),
-    Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx,
+            eigvects(Slice{},e_slice),
+            givens_block({0, int64_t(Nb + row_remainder)}, {0, int64_t(Nb + row_remainder)}),
+            eigvects_dual(Slice{}, {0, int64_t(Nb + row_remainder)}),
+            GemmOptions<T>{});
     MatrixView<T>::copy(ctx, eigvects(Slice{},e_slice), eigvects_dual(Slice{}, {0, int64_t(Nb + row_remainder)}));
     //ctx -> wait();
     //std::cout << "Post-GEMM eigvects:\n" << eigvects << std::endl;

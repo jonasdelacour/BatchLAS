@@ -51,7 +51,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     [[maybe_unused]] Backend resolved = ctx.backend();
     with_backend(ctx, [&](auto Back) {
         constexpr Backend Bk = Back.value;
-        gemm<Bk, float>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+        gemm<Bk>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     });
 
     // "2. Options are structs with defaults"
@@ -65,6 +65,14 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     [[maybe_unused]] Span<std::byte> bytes = lease.span();
     [[maybe_unused]] auto capacity = ctx.workspace_capacity();
     potrf(ctx, A, {.uplo = Uplo::Lower}, my_span);
+
+    // "Write `PotrfOptions{}`, never a bare `{}`" -- the correct spelling from
+    // that section. The incorrect one is deliberately absent: it compiles, which
+    // is the whole problem, so it is pinned by an assertion instead, in
+    // OptionsApi.NamedEmptyOptionsSelectTheOptionOverload.
+    with_backend(ctx, [&](auto Back) {
+        potrf<Back.value>(ctx, A, PotrfOptions{}, my_span);
+    });
 
     // "4. The linalg convenience layer"
     [[maybe_unused]] auto product = linalg::matmul(ctx, A, B);

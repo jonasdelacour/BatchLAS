@@ -17,7 +17,7 @@ static void BM_PERMUTED_COPY(minibench::State& state) {
     const int n_blocks = state.range(3) > 0 ? state.range(3) : -1;
     const int block_size = state.range(4) > 0 ? state.range(4) : -1;
     //std::cout << "Running BM_PERMUTED_COPY with rows=" << rows << ", cols=" << cols << ", batch=" << batch << ", n_blocks=" << n_blocks << ", block_size=" << block_size << std::endl;
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto src = Matrix<T>::Random(rows, cols, false, batch);
     auto dst = Matrix<T>::Zeros(rows, cols, batch);

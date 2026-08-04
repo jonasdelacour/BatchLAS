@@ -57,7 +57,7 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
     const bool in_order = true;
     auto q = std::make_shared<Queue>(device_str, /*in_order=*/in_order);
 
-    const size_t ws_bytes = sytrd_sy2sb_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_sy2sb_buffer_size(*q,
                                                          A.view(),
                                                          AB.view(),
                                                          VectorView<T>(tau),
@@ -74,7 +74,7 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
         kd,
         ws,
         [](Queue& q, auto&&... xs) {
-            sytrd_sy2sb<B, T>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_sy2sb(q, std::forward<decltype(xs)>(xs)...);
         });
 
     // Estimate FLOPs: dense-to-band reduction involves QR + orthogonal transforms

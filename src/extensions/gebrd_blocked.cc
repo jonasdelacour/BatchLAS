@@ -361,8 +361,8 @@ Event gebrd_blocked_real(Queue& ctx,
             auto x2 = x_mat({j2, SliceEnd()}, {0, ib});
             auto u2 = a({j0, j2}, {j2, SliceEnd()});
 
-            gemm<B>(ctx, v2, y2, a22, T(-1), T(1), Transpose::NoTrans, Transpose::Trans);
-            gemm<B>(ctx, x2, u2, a22, T(-1), T(1), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, v2, y2, a22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::Trans});
+            gemm<B>(ctx, x2, u2, a22, {.alpha = T(-1), .beta = T(1)});
         }
     }
 

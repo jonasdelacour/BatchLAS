@@ -92,7 +92,7 @@ TEST(BackendDispatch, BackendSurvivesMoveAssignment) {
 }
 
 // The point of the whole phase: `gemm(ctx, ...)` must produce exactly what
-// `gemm<Backend::X, T>(ctx, ...)` produces, for the X the queue resolved to.
+// `gemm<Backend::X>(ctx, ...)` produces, for the X the queue resolved to.
 TEST(BackendDispatch, DeducedCallMatchesExplicitBackendCall) {
     Queue q;
     const int n = 16, batch = 3;

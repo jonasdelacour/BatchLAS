@@ -94,82 +94,182 @@ struct TrsmOptions {
     Diag diag = Diag::NonUnit;
 };
 
+// Each entry point gets two option-struct spellings:
+//
+//   gemm(ctx, A, B, C, {...})       backend from the queue        (callers)
+//   gemm<B>(ctx, A, B, C, {...})    backend fixed at compile time (library internals)
+//
+// The second exists because most of src/extensions/ is itself templated on
+// Backend and must stay that way: propagating B is the whole point, and going
+// through the queue there would re-dispatch at runtime on every inner call and,
+// worse, silently use ctx.backend() instead of the B the algorithm was
+// instantiated for. Those call sites still deserve to say `{.alpha = ...}`
+// rather than counting positional arguments, so both spellings exist and the
+// runtime one is written in terms of the compile-time one.
+//
+// The <B> forms are not ambiguous with the positional ones: no implicit
+// conversion exists from Uplo/Transpose/T to an option struct, so an argument
+// list either names an option struct or it does not.
+//
+// ---- how T is fixed ---------------------------------------------------------
+//
+// The matrix parameters are templates constrained to Matrix or MatrixView, and
+// T is a *defaulted* template parameter computed from the first of them:
+//
+//     template <typename MA, ..., typename T = detail::dense_scalar_t<MA>>
+//     Event gemm(Queue&, const MA& A, ..., const GemmOptions<T>& opts);
+//
+// Two things fall out of that, and both are the point.
+//
+// First, `{.alpha = 2.0f}` compiles. T is already fixed by the time the compiler
+// considers the option parameter, so the braced initialiser has a concrete type
+// to initialise. Deducing T *from* the option struct instead would make the
+// option parameter a deduced context, and a braced initialiser deduces nothing.
+//
+// Second, `Matrix` and `MatrixView` are both accepted, and may be mixed. The
+// positional entry points have always had a Matrix wrapper alongside the
+// MatrixView primary; without this the option spelling would have been the one
+// place in the library that demanded an explicit `.view()`, which is exactly the
+// kind of papercut that stops a new API from being adopted. Everything is
+// converted to MatrixView before the positional call, so mixing is fine.
+
+namespace detail {
+template <typename M>
+struct dense_scalar {};
 template <typename T>
-inline Event gemm(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  const GemmOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return gemm<Back.value, T>(ctx, A, B, C, opts.alpha, opts.beta, opts.transA, opts.transB,
-                                   opts.precision);
-    });
+struct dense_scalar<MatrixView<T, MatrixFormat::Dense>> {
+    using type = T;
+};
+template <typename T>
+struct dense_scalar<Matrix<T, MatrixFormat::Dense>> {
+    using type = T;
+};
+template <typename M>
+using dense_scalar_t = typename dense_scalar<std::remove_cvref_t<M>>::type;
+
+template <typename M>
+concept DenseMatrixLike = requires { typename dense_scalar<std::remove_cvref_t<M>>::type; };
+
+}  // namespace detail
+
+// ---- why "workspace given" is an overload, not a null check -----------------
+//
+// Each workspace-taking entry point has two spellings: one that ends in a span,
+// and one that does not and leases from the queue's arena instead. It is
+// tempting to write that as a single function with `Span<std::byte> ws = {}`
+// and an `if (ws.data() != nullptr)` inside. That is wrong, and it silently
+// corrupted results before it was caught.
+//
+// A null span is not a synonym for "I did not pass one". Library code that
+// sub-allocates from a BumpAllocator runs the whole algorithm twice: once in
+// sizing mode, where every pool allocation legitimately hands back an empty
+// span, and once for real. The input matrices are real in *both* passes -- only
+// the workspace-derived views are fabricated -- so treating the sizing pass's
+// empty span as "no workspace, allocate one and proceed" makes the measurement
+// pass actually execute the factorisation over the caller's live data.
+//
+// That failure is invisible where it happens: nothing crashes, no size is
+// wrong, and the corrupted matrix only shows up much later as an algorithm that
+// no longer converges. Splitting the two cases into two overloads removes the
+// sentinel entirely -- an argument that is present is used exactly as given.
+
+#define BATCHLAS_DENSE_VIEW(T) MatrixView<T, MatrixFormat::Dense>
+
+// ---- dense BLAS ------------------------------------------------------------
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return gemm<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.beta, opts.transA, opts.transB,
+                         opts.precision);
 }
 
-template <typename T>
-inline Event gemv(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const VectorView<T>& x,
-                  const VectorView<T>& y,
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return gemm<Back.value>(ctx, A, B, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
                   const GemvOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return gemv<Back.value, T>(ctx, A, x, y, opts.alpha, opts.beta, opts.transA);
-    });
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return gemv<Back, T>(ctx, V(A), x, y, opts.alpha, opts.beta, opts.transA);
 }
 
-template <typename T>
-inline Event symm(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  const SymmOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return symm<Back.value, T>(ctx, A, B, C, opts.alpha, opts.beta, opts.side, opts.uplo);
-    });
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
+                  const GemvOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return gemv<Back.value>(ctx, A, x, y, opts); });
 }
 
-template <typename T>
-inline Event syrk(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  const SyrkOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return syrk<Back.value, T>(ctx, A, C, opts.alpha, opts.beta, opts.uplo, opts.trans);
-    });
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return symm<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.beta, opts.side, opts.uplo);
 }
 
-template <typename T>
-inline Event syr2k(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return symm<Back.value>(ctx, A, B, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return syrk<Back, T>(ctx, V(A), V(C), opts.alpha, opts.beta, opts.uplo, opts.trans);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return syrk<Back.value>(ctx, A, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
                    const Syr2kOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return syr2k<Back.value, T>(ctx, A, B, C, opts.alpha, opts.beta, opts.uplo, opts.trans);
-    });
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return syr2k<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.beta, opts.uplo, opts.trans);
 }
 
-template <typename T>
-inline Event trmm(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  const TrmmOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return trmm<Back.value, T>(ctx, A, B, C, opts.alpha, opts.side, opts.uplo, opts.trans,
-                                   opts.diag);
-    });
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
+                   const Syr2kOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return syr2k<Back.value>(ctx, A, B, C, opts); });
 }
 
-template <typename T>
-inline Event trsm(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const TrsmOptions<T>& opts) {
-    return with_backend(ctx, [&](auto Back) {
-        return trsm<Back.value, T>(ctx, A, B, opts.side, opts.uplo, opts.trans, opts.diag,
-                                   opts.alpha);
-    });
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return trmm<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.side, opts.uplo, opts.trans,
+                         opts.diag);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return trmm<Back.value>(ctx, A, B, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return trsm<Back, T>(ctx, V(A), V(B), opts.side, opts.uplo, opts.trans, opts.diag, opts.alpha);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return trsm<Back.value>(ctx, A, B, opts); });
 }
 
 // ---- dense LAPACK ----------------------------------------------------------
@@ -198,29 +298,27 @@ struct SyevOptions {
     Uplo uplo = Uplo::Lower;
 };
 
-namespace detail {
-// Run `call` with a workspace: the caller's if it gave one, otherwise a lease
-// sized by `sizer`.
-template <typename Sizer, typename Call>
-inline Event with_workspace(Queue& ctx, Span<std::byte> ws, Sizer&& sizer, Call&& call) {
-    if (ws.data() != nullptr) return call(ws);
-    auto lease = ctx.workspace(sizer());
-    return call(lease.span());
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return potrf<B, T>(ctx, V(A), opts.uplo, ws);
 }
-}  // namespace detail
 
-template <typename T>
-inline Event potrf(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const PotrfOptions& opts = {},
-                   Span<std::byte> ws = {}) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        return detail::with_workspace(
-            ctx, ws,
-            [&] { return potrf_buffer_size<B, T>(ctx, A, opts.uplo); },
-            [&](Span<std::byte> w) { return potrf<B, T>(ctx, A, opts.uplo, w); });
-    });
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(potrf_buffer_size<B, T>(ctx, V(A), opts.uplo));
+    return potrf<B, T>(ctx, V(A), opts.uplo, lease.span());
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
+    return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts, ws); });
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts = {}) {
+    return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts); });
 }
 
 // getrf, getri, geqrf and orgqr have no options to carry, so their only new
@@ -228,80 +326,116 @@ inline Event potrf(Queue& ctx,
 // They deliberately take no workspace parameter -- an overload with one would be
 // indistinguishable from the positional call, and the two would be ambiguous.
 // To manage the workspace yourself, use the positional spelling.
-template <typename T>
-inline Event getrf(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<int64_t> pivots) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        auto lease = ctx.workspace(getrf_buffer_size<B, T>(ctx, A));
-        return getrf<B, T>(ctx, A, pivots, lease.span());
-    });
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(getrf_buffer_size<B, T>(ctx, V(A)));
+    return getrf<B, T>(ctx, V(A), pivots, lease.span());
 }
 
-template <typename T>
-inline Event getrs(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B_,
-                   Span<int64_t> pivots,
-                   const GetrsOptions& opts = {},
-                   Span<std::byte> ws = {}) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        return detail::with_workspace(
-            ctx, ws,
-            [&] { return getrs_buffer_size<B, T>(ctx, A, B_, opts.trans); },
-            [&](Span<std::byte> w) { return getrs<B, T>(ctx, A, B_, opts.trans, pivots, w); });
-    });
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
+    return with_backend(ctx, [&](auto Back) { return getrf<Back.value>(ctx, A, pivots); });
 }
 
-template <typename T>
-inline Event getri(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& Ainv,
-                   Span<int64_t> pivots) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        auto lease = ctx.workspace(getri_buffer_size<B, T>(ctx, A));
-        return getri<B, T>(ctx, A, Ainv, pivots, lease.span());
-    });
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
+                   const GetrsOptions& opts, Span<std::byte> ws) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return getrs<B, T>(ctx, V(A), V(B_), opts.trans, pivots, ws);
 }
 
-template <typename T>
-inline Event geqrf(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<T> tau) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        auto lease = ctx.workspace(geqrf_buffer_size<B, T>(ctx, A, tau));
-        return geqrf<B, T>(ctx, A, tau, lease.span());
-    });
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
+                   const GetrsOptions& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(getrs_buffer_size<B, T>(ctx, V(A), V(B_), opts.trans));
+    return getrs<B, T>(ctx, V(A), V(B_), opts.trans, pivots, lease.span());
 }
 
-template <typename T>
-inline Event orgqr(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<T> tau) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        auto lease = ctx.workspace(orgqr_buffer_size<B, T>(ctx, A, tau));
-        return orgqr<B, T>(ctx, A, tau, lease.span());
-    });
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
+                   const GetrsOptions& opts, Span<std::byte> ws) {
+    return with_backend(
+        ctx, [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts, ws); });
 }
 
-template <typename T>
-inline Event syev(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  Span<typename base_type<T>::type> W,
-                  const SyevOptions& opts = {},
-                  Span<std::byte> ws = {}) {
-    return with_backend(ctx, [&](auto Back) {
-        constexpr Backend B = Back.value;
-        return detail::with_workspace(
-            ctx, ws,
-            [&] { return syev_buffer_size<B, T>(ctx, A, W, opts.jobz, opts.uplo); },
-            [&](Span<std::byte> w) { return syev<B, T>(ctx, A, W, opts.jobz, opts.uplo, w); });
-    });
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
+                   const GetrsOptions& opts = {}) {
+    return with_backend(ctx,
+                        [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts); });
 }
+
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(getri_buffer_size<B, T>(ctx, V(A)));
+    return getri<B, T>(ctx, V(A), V(Ainv), pivots, lease.span());
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots) {
+    return with_backend(ctx, [&](auto Back) { return getri<Back.value>(ctx, A, Ainv, pivots); });
+}
+
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(geqrf_buffer_size<B, T>(ctx, V(A), tau));
+    return geqrf<B, T>(ctx, V(A), tau, lease.span());
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
+    return with_backend(ctx, [&](auto Back) { return geqrf<Back.value>(ctx, A, tau); });
+}
+
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(orgqr_buffer_size<B, T>(ctx, V(A), tau));
+    return orgqr<B, T>(ctx, V(A), tau, lease.span());
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
+    return with_backend(ctx, [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
+}
+
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
+                  const SyevOptions& opts, Span<std::byte> ws) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return syev<B, T>(ctx, V(A), W, opts.jobz, opts.uplo, ws);
+}
+
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
+                  const SyevOptions& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    auto lease = ctx.workspace(syev_buffer_size<B, T>(ctx, V(A), W, opts.jobz, opts.uplo));
+    return syev<B, T>(ctx, V(A), W, opts.jobz, opts.uplo, lease.span());
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
+                  const SyevOptions& opts, Span<std::byte> ws) {
+    return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts, ws); });
+}
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
+                  const SyevOptions& opts = {}) {
+    return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
+}
+
+#undef BATCHLAS_DENSE_VIEW
 
 }  // namespace batchlas

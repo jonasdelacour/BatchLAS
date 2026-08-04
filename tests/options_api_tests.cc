@@ -263,3 +263,106 @@ TEST(OptionsApi, CoexistsWithPositionalAndExplicitBackendSpellings) {
     q.wait();
     SUCCEED();
 }
+
+// An explicitly-passed empty workspace must be passed through, NOT treated as
+// "no workspace given, lease one".
+//
+// This is a regression test for a real corruption. The option overloads once
+// shared a single body with `Span<std::byte> ws = {}` and an
+// `if (ws.data() != nullptr)` to decide whether to lease from the arena. That
+// makes an empty span mean "I did not pass one" -- but library code that
+// sub-allocates from a BumpAllocator runs its algorithm once in sizing mode,
+// where every pool allocation legitimately yields an empty span while the input
+// matrices stay real. Under the old body the sizing pass therefore leased real
+// memory and really ran the factorisation over live data, silently destroying
+// it. `ortho`'s Cholesky and SVQB paths both did this, which showed up only as
+// LOBPCG failing to converge much further downstream.
+//
+// A backend call with a genuinely too-small workspace must fail rather than
+// quietly succeed by allocating behind the caller's back.
+TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
+    Queue q;
+    const int n = 32, batch = 2;
+    auto A = spd(n, batch);
+
+    // The discriminating case is an *explicitly passed empty* span. Under the
+    // old shared body this took the "no workspace given" branch and leased from
+    // the arena; under the split overloads it is forwarded as given. The arena's
+    // capacity is the observable difference, so assert on that. Whether the
+    // backend then rejects the empty workspace is beside the point and is not
+    // asserted -- only that the call did not go allocating behind our back.
+    const size_t before = q.workspace_capacity();
+    try {
+        potrf(q, A.view(), {.uplo = Uplo::Lower}, Span<std::byte>{});
+        q.wait();
+    } catch (const std::exception&) {
+        // A backend is entitled to refuse a zero-sized workspace.
+    }
+    EXPECT_EQ(q.workspace_capacity(), before)
+        << "an explicitly passed empty workspace was silently replaced by an arena lease";
+
+    // And the omitted-workspace spelling must still lease, or the arena-backed
+    // convenience would be doing nothing at all.
+    Queue fresh;
+    auto A2 = spd(n, batch);
+    const size_t fresh_before = fresh.workspace_capacity();
+    potrf(fresh, A2.view(), {.uplo = Uplo::Lower});
+    fresh.wait();
+    EXPECT_GT(fresh.workspace_capacity(), fresh_before)
+        << "omitting the workspace should lease one from the queue's arena";
+}
+
+// An empty option struct must be written with its type named, never as `{}`.
+//
+// Regression test for a silent wrong answer. `potrf`'s option overload
+//     potrf<B>(ctx, A, const PotrfOptions&, Span<std::byte>)
+// has the SAME ARITY as the positional one
+//     potrf<B>(ctx, A, Uplo,               Span<std::byte>)
+// and a braced-init-list converts to both. Overload resolution picks the
+// positional one, so `potrf<B>(ctx, A, {}, ws)` means `Uplo{}` -- and because
+// Uplo is `{Upper, Lower}`, `Uplo{}` is Upper while `PotrfOptions{}.uplo` is
+// Lower. The call therefore factorises the opposite triangle and returns a
+// confidently wrong answer. `ortho`'s Cholesky path did exactly this, and it
+// surfaced only as LOBPCG failing to converge several layers up.
+//
+// This is the one arity collision in the surface; the other option overloads
+// differ in arity or in argument type from their positional twins. Naming the
+// type is the rule, and this test is what enforces it.
+TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
+    Queue q;
+    const int n = 24, batch = 2;
+
+    auto A_named = spd(n, batch);
+    auto A_uplo = spd(n, batch);
+    auto A_upper = spd(n, batch);
+
+    with_backend(q, [&](auto Back) {
+        constexpr Backend B = Back.value;
+        auto w1 = q.workspace(potrf_buffer_size<B, float>(q, A_named.view(), Uplo::Lower));
+        auto w2 = q.workspace(potrf_buffer_size<B, float>(q, A_uplo.view(), Uplo::Lower));
+        auto w3 = q.workspace(potrf_buffer_size<B, float>(q, A_upper.view(), Uplo::Upper));
+        potrf<B>(q, A_named.view(), PotrfOptions{}, w1.span());
+        potrf<B>(q, A_uplo.view(), Uplo::Lower, w2.span());
+        potrf<B>(q, A_upper.view(), Uplo::Upper, w3.span());
+    });
+    q.wait();
+
+    // PotrfOptions{} defaults to Lower, so the named spelling must match the
+    // explicit Lower call...
+    expect_same(A_named.view(), A_uplo.view(), n, batch, "PotrfOptions{} == Uplo::Lower");
+
+    // ...and Lower must be distinguishable from Upper, or the assertion above
+    // would hold no matter which overload had been selected.
+    bool differs = false;
+    for (int b = 0; b < batch && !differs; ++b)
+        for (int j = 0; j < n && !differs; ++j)
+            for (int i = 0; i < n && !differs; ++i) {
+                const auto l = A_uplo.view();
+                const auto u = A_upper.view();
+                if (std::abs(l.data_ptr()[b * l.stride() + j * l.ld() + i] -
+                             u.data_ptr()[b * u.stride() + j * u.ld() + i]) > 1e-4f)
+                    differs = true;
+            }
+    EXPECT_TRUE(differs) << "Lower and Upper potrf are indistinguishable here, so this "
+                            "test could not detect the wrong triangle being used";
+}

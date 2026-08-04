@@ -18,7 +18,7 @@ static void BM_STEQR(minibench::State& state) {
     auto vec1 = Vector<T>::random(n, batch, stride, inc);
     auto vec2 = Vector<T>::random(n, batch, stride, inc);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
                     bench::pristine(std::move(vec1)),

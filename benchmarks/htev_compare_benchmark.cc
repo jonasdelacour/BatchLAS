@@ -49,7 +49,7 @@ static void BM_HTEV_STEQR(minibench::State& state) {
     params.cta_update_scheme = SteqrUpdateScheme::EXP;
     params.back_transform    = false;
 
-    auto q         = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q         = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
     auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
     auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
@@ -67,7 +67,7 @@ static void BM_HTEV_STEQR(minibench::State& state) {
                     params,
                     bench::pristine(eigvects),
                     [](Queue& q_ref, auto&&... xs) {
-                        steqr<B, T>(q_ref, std::forward<decltype(xs)>(xs)...);
+                        steqr(q_ref, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
@@ -84,13 +84,13 @@ static void BM_HTEV_STEDC(minibench::State& state) {
 
     StedcParams<T> params;
 
-    auto q         = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q         = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
     auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
     auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
     auto eigvects  = Matrix<T>::Identity(static_cast<int>(n), static_cast<int>(batch));
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size<B, T>(*q, n, batch, jobz, params));
+    UnifiedVector<std::byte> ws(stedc_workspace_size(*q, n, batch, jobz, params));
 
     // stedc has a non-standard calling convention; use a capturing lambda and
     // omit the leading Queue& parameter (the adapter will call k(xs...) form).
@@ -100,7 +100,7 @@ static void BM_HTEV_STEDC(minibench::State& state) {
         auto e = static_cast<VectorView<T>>(e_arg);
         auto w = static_cast<VectorView<T>>(w_arg);
         auto Z = z_arg.view();
-        stedc<B, T>(*q, d, e, w, ws_arg.to_span(), jz, p, Z);
+        stedc(*q, d, e, w, ws_arg.to_span(), jz, p, Z);
     };
 
     state.SetKernel(q,
@@ -124,7 +124,7 @@ static void BM_HTEV_DX(minibench::State& state) {
     const size_t n     = state.range(0);
     const size_t batch = state.range(1);
 
-    auto q         = std::make_shared<Queue>("gpu");
+    auto q         = std::make_shared<Queue>(Device("gpu"), B);
     auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
     auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
     auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));

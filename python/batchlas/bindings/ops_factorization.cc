@@ -32,7 +32,7 @@ DenseMatrix dense_potrf_impl(const DenseMatrix& a_wrapper,
                              const std::optional<std::string>& device_name) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::potrf<T>(queue, out.view(), {.uplo = uplo});
+    batchlas::potrf(queue, out.view(), {.uplo = uplo});
     queue.wait();
     return wrap_dense(std::move(out));
 }
@@ -45,7 +45,7 @@ py::tuple dense_getrf_impl(const DenseMatrix& a_wrapper,
     const int pivots_per_batch = out.rows();
     UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * out.batch_size()));
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::getrf<T>(queue, out.view(), pivots.to_span());
+    batchlas::getrf(queue, out.view(), pivots.to_span());
     queue.wait();
     return py::make_tuple(wrap_dense(std::move(out)),
                           pivots_to_numpy(pivots, pivots_per_batch, std::get<DenseMatrixT<T>>(a_wrapper.storage).batch_size()));
@@ -88,7 +88,7 @@ DenseMatrix dense_getrs_impl(const DenseMatrix& lu_wrapper,
     }
 
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::getrs<T>(queue, lu.view(), out.view(), pivots.to_span(), {.trans = trans_a});
+    batchlas::getrs(queue, lu.view(), out.view(), pivots.to_span(), {.trans = trans_a});
     queue.wait();
     return wrap_dense(std::move(out));
 }
@@ -126,7 +126,7 @@ DenseMatrix dense_getri_impl(const DenseMatrix& lu_wrapper,
     }
 
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::getri<T>(queue, lu.view(), out.view(), pivots.to_span());
+    batchlas::getri(queue, lu.view(), out.view(), pivots.to_span());
     queue.wait();
     return wrap_dense(std::move(out));
 }
@@ -138,7 +138,7 @@ py::tuple dense_geqrf_impl(const DenseMatrix& a_wrapper,
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
     Vector<T> tau(std::min(out.rows(), out.cols()), out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::geqrf<T>(queue, out.view(), tau.data());
+    batchlas::geqrf(queue, out.view(), tau.data());
     queue.wait();
     return py::make_tuple(wrap_dense(std::move(out)), wrap_vector(std::move(tau)));
 }
@@ -152,7 +152,7 @@ DenseMatrix dense_orgqr_impl(const DenseMatrix& qr_wrapper,
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(qr_wrapper.storage).clone();
     const auto& tau = std::get<Vector<T>>(tau_wrapper.storage);
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::orgqr<T>(queue, out.view(), tau.data());
+    batchlas::orgqr(queue, out.view(), tau.data());
     queue.wait();
     return wrap_dense(std::move(out));
 }

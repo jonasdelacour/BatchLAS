@@ -72,16 +72,16 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
-            syrk<Ba>(*(this->ctx), A.view(), C.view(), alpha, beta, uplo, transA).wait();
+            syrk(*(this->ctx),
+                     A.view(),
+                     C.view(),
+                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            gemm<Ba>(*(this->ctx),
+            gemm(*(this->ctx),
                      A.view(),
                      A.view(),
                      C_ref.view(),
-                     alpha,
-                     beta,
-                     transA,
-                     transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans).wait();
+                     {.alpha = alpha, .beta = beta, .transA = transA, .transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans}).wait();
 
             C.view().symmetrize(*(this->ctx), uplo).wait();
             C_ref.view().symmetrize(*(this->ctx), uplo).wait();
@@ -137,12 +137,18 @@ TEST(SyrkCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 
             {
                 ScopedEnvVar force_variant("BATCHLAS_SYRK_VARIANT", "cublasdx");
-                syrk<Backend::CUDA>(ctx, A.view(), C_custom.view(), alpha, beta, uplo, transA).wait();
+                syrk(ctx,
+                                    A.view(),
+                                    C_custom.view(),
+                                    {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
             {
                 ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
-                syrk<Backend::CUDA>(ctx, A.view(), C_vendor.view(), alpha, beta, uplo, transA).wait();
+                syrk(ctx,
+                                    A.view(),
+                                    C_vendor.view(),
+                                    {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
             C_custom.view().symmetrize(ctx, uplo).wait();

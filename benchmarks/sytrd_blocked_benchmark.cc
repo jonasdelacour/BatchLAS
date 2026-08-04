@@ -44,9 +44,9 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
     auto e = Vector<T>::zeros(n - 1, batch);
     auto tau = Vector<T>::zeros(n - 1, batch);
 
-    auto q = std::make_shared<Queue>("gpu", /*in_order=*/true);
+    auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_blocked_buffer_size(*q,
                                                            A.view(),
                                                            VectorView<T>(d),
                                                            VectorView<T>(e),
@@ -60,7 +60,7 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
         bench::pristine(A0), //sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
         d,e,tau,uplo,ws,nb,
         [](Queue& q, auto&&... xs) {
-            sytrd_blocked<B, T>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

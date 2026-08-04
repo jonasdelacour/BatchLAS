@@ -179,7 +179,7 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     Matrix<T, MatrixFormat::Dense> C(m, n, A.batch_size());
     auto o = opts;
     o.beta = T(0);  // C is fresh; anything else would read uninitialised memory
-    gemm<T>(ctx, A, B, C.view(), o);
+    gemm(ctx, A, B, C.view(), o);
     return C;
 }
 
@@ -192,7 +192,7 @@ inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                Uplo uplo = kDefaultUplo) {
     auto L = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, L.view(), A);
-    potrf<T>(ctx, L.view(), {.uplo = uplo});
+    potrf(ctx, L.view(), {.uplo = uplo});
     return L;
 }
 
@@ -206,7 +206,7 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
     // syev overwrites its input, so it gets a copy rather than the caller's A.
     auto work = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
-    syev<T>(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
+    syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
     return W;
 }
 
@@ -226,7 +226,7 @@ inline Eigh<T> eigh(Queue& ctx,
                                                  static_cast<size_t>(A.batch_size()));
     auto V = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
-    syev<T>(ctx, V.view(), W.to_span(), {.jobz = JobType::EigenVectors, .uplo = uplo});
+    syev(ctx, V.view(), W.to_span(), {.jobz = JobType::EigenVectors, .uplo = uplo});
     return Eigh<T>{std::move(W), std::move(V)};
 }
 
@@ -250,8 +250,8 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
     Span<int64_t> pivots(reinterpret_cast<int64_t*>(pivot_bytes.data()), n_pivots);
 
-    getrf<T>(ctx, LU.view(), pivots);
-    getrs<T>(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    getrf(ctx, LU.view(), pivots);
+    getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
     return X;
 }
 

@@ -109,7 +109,7 @@ namespace batchlas {
                 if constexpr (!(MF == MatrixFormat::Dense)) {
                     spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
                 } else {
-                    gemm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+                    gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{});
                 }
                 ctx -> submit([&](sycl::handler& h) {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
@@ -189,8 +189,7 @@ namespace batchlas {
                     MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size),
                     MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
                     V,
-                    T(1), T(0),
-                    Transpose::NoTrans, Transpose::NoTrans);
+                    GemmOptions<T>{});
         }
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){

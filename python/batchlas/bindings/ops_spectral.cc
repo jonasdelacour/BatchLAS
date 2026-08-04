@@ -467,7 +467,7 @@ void init_spectral_ops(py::module_& module) {
             Vector<typename base_type<scalar_type>::type> values(a_copy.rows(), a_copy.batch_size());
             Queue& queue = acquire_queue(device_name, backend);
             const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
-            batchlas::syev<scalar_type>(queue, a_copy.view(), values.data(),
+            batchlas::syev(queue, a_copy.view(), values.data(),
                                         {.jobz = jobz, .uplo = uplo});
             queue.wait();
             if (compute_vectors) {
