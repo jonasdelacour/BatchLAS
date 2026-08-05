@@ -3,12 +3,65 @@
 #include <util/sycl-device-queue.hh>
 #include "test_utils.hh"
 #include "../src/queue.hh"
+#include "../src/extensions/stedc_levels_plan.hh"
 
 using namespace batchlas;
 
 namespace {
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Level-plan shape. Host-only, no device: a bad leaf produces perfectly correct
+// eigenvalues and only shows up as lost throughput, so the numerical tests
+// below cannot catch it and these have to assert on the plan itself.
+// ---------------------------------------------------------------------------
+
+// The invariant that matters. `steqr` dispatches to the fast `steqr_cta` only
+// for n <= the device sub-group width, and the tuned STEDC threshold *is* that
+// width -- so a leaf above it silently falls back to `steqr_wg`, which measured
+// ~14x slower one step over the edge (n=32: 0.26us -> n=36: 3.76us).
+TEST(StedcLevelPlan, LeafNeverExceedsThreshold) {
+    for (int64_t threshold : {8, 16, 32, 64}) {
+        for (int64_t n = 2; n <= 4096; ++n) {
+            const auto plan = plan_stedc_levels(n, threshold);
+            if (plan.levels == 0) continue;  // caller falls back to the recursive driver
+            EXPECT_LE(plan.leaf, threshold)
+                << "leaf above the steqr_cta cap, n=" << n << " threshold=" << threshold;
+            EXPECT_EQ(plan.padded_n, plan.leaf << plan.levels)
+                << "padded_n inconsistent with the tree, n=" << n;
+            EXPECT_GE(plan.padded_n, n)
+                << "plan drops part of the problem, n=" << n;
+        }
+    }
+}
+
+// The two sizes PR #55 regressed. Both admit an exactly-fitting tree at leaf 40
+// and at leaf 20; the scoring used to prefer 40 because it sits nearer the
+// threshold, which drove the leaf solve off the steqr_cta cliff (syev n=320:
+// 74.5 -> 242.4 us/matrix, n=640: 727.5 -> 1095.9).
+TEST(StedcLevelPlan, NonPowerOfTwoPicksNarrowLeaf) {
+    const auto p320 = plan_stedc_levels(320, 32);
+    EXPECT_EQ(p320.leaf, 20);
+    EXPECT_EQ(p320.levels, 4);
+    EXPECT_EQ(p320.padded_n, 320) << "n=320 should still need no padding";
+
+    const auto p640 = plan_stedc_levels(640, 32);
+    EXPECT_EQ(p640.leaf, 20);
+    EXPECT_EQ(p640.levels, 5);
+    EXPECT_EQ(p640.padded_n, 640) << "n=640 should still need no padding";
+}
+
+// The power-of-two sizes must be unchanged: leaf lands exactly on the threshold
+// with no padding. This is the regime the level driver was tuned and measured
+// in, and the cap above must not perturb it.
+TEST(StedcLevelPlan, PowerOfTwoIsUnchanged) {
+    for (int64_t n : {64, 128, 256, 512, 1024, 2048}) {
+        const auto plan = plan_stedc_levels(n, 32);
+        EXPECT_EQ(plan.leaf, 32) << "n=" << n;
+        EXPECT_EQ(plan.padded_n, n) << "n=" << n << " should need no padding";
+    }
+}
 
 template <typename T, Backend B>
 struct StedcConfig {
@@ -148,7 +201,9 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
     using float_type = typename base_type<T>::type;
     const int batch = 8;
 
-    for (int n : {128, 100, 129}) {
+    // 320 and 640 are the sizes whose tree shape the leaf cap changes; 100 and
+    // 129 cover padding and an odd n.
+    for (int n : {128, 100, 129, 320, 640}) {
         auto a = Vector<float_type>::random(n, batch);
         auto b = Vector<float_type>::random(n - 1, batch);
 
@@ -156,10 +211,11 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         dense.view().fill_tridiag(*this->ctx, b, a, b).wait();
         this->ctx->wait();
 
-        // NOTE: merge_variant is pinned to Fused rather than left on Auto.
-        // Auto resolves to FusedCta, whose kernel hangs on this machine for
-        // every partition width -- a pre-existing defect unrelated to the
-        // driver being tested here.
+        // merge_variant is pinned rather than left on Auto so the driver is the
+        // only variable between the two arms. (It was pinned off Fused's
+        // sibling because FusedCta used to deadlock; that is fixed, and Auto
+        // resolves back to FusedCta -- but pinning is still the right thing for
+        // an A/B of the drivers.)
         StedcParams<float_type> params_rec{
             .recursion_threshold = 32,
             .algorithm = StedcAlgorithm::Recursive,

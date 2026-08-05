@@ -7,7 +7,12 @@ using namespace batchlas;
 
 template <typename Benchmark>
 static void StedcBenchSizes(Benchmark* b) {
-    for (int n : {64, 128, 256}) {
+    // 320 and 640 are here deliberately. This sweep used to register only
+    // powers of two, where the level planner lands on leaf == threshold exactly
+    // -- so the leaf-width cliff that cost syev 3.25x at n=320 was structurally
+    // unsamplable, and shipped. Any n whose tree shape is interesting is a
+    // non-power-of-two n; keep at least one in the registered sweep.
+    for (int n : {64, 128, 256, 320, 640}) {
         for (int batch : {128, 512, 2048}) {
             for (int algorithm : {static_cast<int>(StedcAlgorithm::Levels),
                                   static_cast<int>(StedcAlgorithm::Recursive)}) {

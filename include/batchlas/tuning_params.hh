@@ -75,19 +75,30 @@ inline constexpr int32_t STEDC_RECURSION_THRESHOLD_XLARGE = 32;
 // StedcMergeVariant: 1 = Fused (one work-group per merge), 2 = FusedCta
 // (sub-group partitions, one per secular root).
 //
-// These were 2. FusedCta is currently *wrong*: it fails stedc_tests'
-// BatchedRandomMatrices and FusedCtaConditionedHeavyDeflation in both
-// precisions, the latter returning NaN, and the defect is confined to its
-// partition-parallel root solve. It had been masked by a deadlock in the same
-// kernel (fixed separately), which is why the tables were tuned to it. It is
-// also 2-12% slower than Fused on an RTX 4090 across n = 64..256 x batch =
-// 128..2048, on both STEDC drivers. Point back at 2 once the root solve is
-// fixed and re-tuned.
-inline constexpr int32_t STEDC_MERGE_VARIANT_TINY = 1;
-inline constexpr int32_t STEDC_MERGE_VARIANT_SMALL = 1;
-inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 1;
-inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 1;
-inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 1;
+// These were briefly set to 1, on the grounds that FusedCta was numerically
+// wrong (NaN in FusedCtaConditionedHeavyDeflation) and 2-12% slower. Re-tested
+// once the deadlock fix in the same kernel had settled, neither claim holds:
+//
+//   Correctness: with variant 2 forced, all 16 CUDA stedc_tests pass in both
+//   precisions, plus syev_tests 8/8, syev_blocked_tests 44/44,
+//   syev_two_stage_tests 20/20. (The lone red test on the dev box is
+//   StedcTest/1.BatchedMatrices = double+NETLIB, which is the host OpenBLAS
+//   dgemm, not stedc.) The NaN was a symptom of the deadlock, not a separate
+//   defect in the partition root solve.
+//
+//   Speed: the sign was backwards. FusedCta is 11-35% *faster* than Fused on
+//   stedc across n = 64..640, on both drivers, and variant 1 was the whole
+//   cause of a 1.24x-1.37x syev regression at power-of-two n.
+//
+// Caveat for whoever revisits this: FusedCtaConditionedHeavyDeflation only
+// asserts finite-and-sorted, never accuracy, so "the tests pass" is weaker
+// evidence than it looks. Strengthen that test before trusting variant 2 on
+// hardware this has not been measured on.
+inline constexpr int32_t STEDC_MERGE_VARIANT_TINY = 2;
+inline constexpr int32_t STEDC_MERGE_VARIANT_SMALL = 2;
+inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 2;
+inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 2;
+inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 2;
 
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 4;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 4;
