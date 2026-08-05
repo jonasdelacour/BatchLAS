@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
-#include <sycl/sycl.hpp>
 #include <iostream>
 #include <vector>
 #include <cmath>

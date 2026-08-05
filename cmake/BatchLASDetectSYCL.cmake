@@ -26,7 +26,17 @@ set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -Wno-c++20-extensions
     -Wno-option-ignored
 )
+# The SYCL device link runs llvm-foreach over one device image per object.
+# Parallelising it is pure scheduling - the emitted device images come out
+# byte-identical. Measured: cta 131 s -> 56 s (2.3x), factorization 26.5 s ->
+# 17.0 s at N=4. It buys nothing on a library dominated by one large image
+# (tridiag, latrd) and nothing on executable links, which carry no device code.
+# N=4 is deliberately conservative against oversubscription under `make -j20`.
 set(BATCHLAS_SYCL_BASE_LINK_OPTIONS -fsycl)
+if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
+    list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS
+        -fsycl-max-parallel-link-jobs=${BATCHLAS_SYCL_LINK_JOBS})
+endif()
 
 function(batchlas_device_local_mem_bytes architecture device_type out_var)
     set(_local_mem_bytes 32768)

@@ -14,6 +14,9 @@ function(batchlas_install_package)
         batchlas_extensions_factorization
         batchlas_extensions_symmetric
         batchlas_extensions_tridiag
+        batchlas_extensions_sytrd
+        batchlas_extensions_latrd
+        batchlas_extensions_stedc
         batchlas_extensions_cta
         batchlas_util
         batchlas_extra

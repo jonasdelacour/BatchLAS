@@ -73,7 +73,15 @@ export CMAKE_PREFIX_PATH="/opt/netlib:$CMAKE_PREFIX_PATH"
 6. Quick Smoke Test
 
 cmake -B build .
-cmake --build build -j
+
+# Iterating on one algorithm: this builds the library and only this one test
+# binary. Do not build the default target while iterating — it also builds the
+# other 48 test executables, which you are not about to run.
+cmake --build build --target stedc_tests -j"$(nproc)"
+ctest --test-dir build -R '^stedc_tests$' --output-on-failure
+
+# Before pushing, build and run everything.
+cmake --build build -j"$(nproc)"
 ctest --test-dir build
 
 

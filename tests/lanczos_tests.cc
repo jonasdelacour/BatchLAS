@@ -3,7 +3,6 @@
 #include <blas/matrix.hh>
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
-#include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
 #include <iostream>

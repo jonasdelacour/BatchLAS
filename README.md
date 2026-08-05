@@ -136,6 +136,11 @@ Useful presets currently provided:
 - `fast-dev`: library build plus the smoke-test subset
 - `benchmarks`: benchmark build with tuning support enabled
 - `cuda`: optional CUDA-enabled build when the environment supports it
+- `dev-gpu` / `dev-gpu-tests`: fast iteration; drops the `native_cpu` SYCL
+  target (`BATCHLAS_CPU_TARGET=none`), which takes about 30% off every compile
+  and every device link. **GPU coverage only**: roughly half of every typed test
+  suite is not instantiated, and `ctest` still reports green. Use `dev-tests` or
+  `cuda` for the pre-push gate.
 
 ### Manual Configuration
 
@@ -163,6 +168,10 @@ Common CMake options:
 - `BATCHLAS_TEST_TARGET_SET`: choose `all` or `smoke`
 - `BATCHLAS_AMD_ARCH`: override ROCm target architecture
 - `BATCHLAS_NVIDIA_ARCH`: override CUDA target architecture
+- `BATCHLAS_USE_CCACHE`: cache compilations with ccache when available (default `ON`)
+- `BATCHLAS_CCACHE_SHARE_ACROSS_TREES`: let sibling checkouts and worktrees share
+  cache entries (default `ON`; turn off for source-level debugging)
+- `BATCHLAS_SYCL_LINK_JOBS`: parallelism for the SYCL device link (default `4`, `1` disables)
 
 ## Test
 
@@ -174,11 +183,31 @@ cmake --build --preset dev-tests
 ctest --test-dir build/presets/dev-tests --output-on-failure
 ```
 
-For a faster edit-build-test loop, the `fast-dev` preset builds only the smoke subset:
+The `fast-dev` preset builds only the smoke subset:
 
 - `util_span_tests`
 - `util_vector_tests`
 - `matrix_tests`
+- `mempool_tests`
+- `backend_dispatch_tests`
+- `options_api_tests`
+- `linalg_layer_tests`
+
+None of those covers a specific algorithm, so `fast-dev` is not the preset to
+iterate in. To work on one algorithm, use a full tree and build only the binary
+you care about — the library plus that one test, and nothing else:
+
+```bash
+cmake --build build/presets/dev-tests --target stedc_tests -j"$(nproc)"
+ctest --test-dir build/presets/dev-tests -R '^stedc_tests$' --output-on-failure
+```
+
+Before pushing, build and run everything:
+
+```bash
+cmake --build build/presets/dev-tests -j"$(nproc)"
+ctest --test-dir build/presets/dev-tests
+```
 
 ## Benchmarks and Tuning
 
@@ -187,6 +216,16 @@ The repository contains a large benchmark suite under `benchmarks/`, including B
 ```bash
 cmake --preset benchmarks
 cmake --build --preset benchmarks
+```
+
+Benchmark executables are **not** part of the default `all` target — they are 61
+heavy translation units that no test run needs. The preset above still builds
+them all, because it names the `batchlas_benchmarks` aggregate explicitly. In a
+hand-configured tree, ask for them by name or via the aggregate:
+
+```bash
+cmake --build build --target batchlas_benchmarks -j"$(nproc)"   # all of them
+cmake --build build --target gemm_benchmark -j"$(nproc)"        # just one
 ```
 
 The `scripts/` directory contains campaign helpers and archived CSV outputs from prior runs. Tuning support is wired through `BATCHLAS_ENABLE_TUNING` and the optional `BATCHLAS_TUNING_PROFILE` cache entry.

@@ -60,6 +60,26 @@
         "BATCHLAS_ENABLE_CUDA": "ON",
         "BATCHLAS_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "dev-gpu",
+      "displayName": "Dev (GPU only)",
+      "description": "Fast iteration: drops the native_cpu SYCL target. ~30% off every compile and every device link. GPU coverage ONLY - see dev-tests for the full build.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/dev-gpu",
+      "cacheVariables": {
+        "BATCHLAS_CPU_TARGET": "none"
+      }
+    },
+    {
+      "name": "dev-gpu-tests",
+      "displayName": "Dev Tests (GPU only)",
+      "description": "dev-gpu plus tests. Roughly half of every typed suite is not instantiated and ctest still reports green - do not use as a pre-push gate.",
+      "inherits": "dev-gpu",
+      "binaryDir": "${sourceDir}/build/presets/dev-gpu-tests",
+      "cacheVariables": {
+        "BATCHLAS_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -88,11 +108,28 @@
     {
       "name": "benchmarks",
       "configurePreset": "benchmarks",
-      "jobs": 20
+      "jobs": 20,
+      "targets": [
+        "batchlas_components",
+        "batchlas_benchmarks"
+      ]
     },
     {
       "name": "cuda",
       "configurePreset": "cuda",
+      "jobs": 20
+    },
+    {
+      "name": "dev-gpu",
+      "configurePreset": "dev-gpu",
+      "jobs": 20,
+      "targets": [
+        "batchlas_components"
+      ]
+    },
+    {
+      "name": "dev-gpu-tests",
+      "configurePreset": "dev-gpu-tests",
       "jobs": 20
     }
   ],
@@ -117,6 +154,16 @@
     {
       "name": "cuda",
       "configurePreset": "cuda",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1
+      }
+    },
+    {
+      "name": "dev-gpu-tests",
+      "configurePreset": "dev-gpu-tests",
       "output": {
         "outputOnFailure": true
       },
