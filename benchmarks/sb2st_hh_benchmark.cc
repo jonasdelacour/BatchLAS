@@ -31,7 +31,7 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
     const int batch = static_cast<int>(state.range(1));
     const int kd = static_cast<int>(state.range(2));
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     const int nrefl = std::max(1, internal::sb2st_hh_num_reflectors(n, kd));
 
     Matrix<T> ab = Matrix<T>::Random(kd + 1, n, false, batch);
@@ -58,7 +58,7 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     const int batch = static_cast<int>(state.range(1));
     const int kd = static_cast<int>(state.range(2));
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"), B);
     const auto sched = internal::build_sb2st_hh_schedule(n, kd);
     const int nrefl = std::max<int>(1, static_cast<int>(sched.size()));
 

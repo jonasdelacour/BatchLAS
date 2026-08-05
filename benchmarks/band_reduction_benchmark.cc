@@ -134,7 +134,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
         throw std::runtime_error("--nb-seq/--d-seq are only supported with --mode=sequence");
     }
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu", /*in_order=*/true);
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B, /*in_order=*/true);
 
     // Create input band matrix (kd+1 rows, n columns, in lower-band format)
     auto ab_in = Matrix<T>::Random(kd + 1, n, /*hermitian=*/false, batch, /*seed=*/2027);
@@ -162,7 +162,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     int64_t sweep_count = (g_mode == BandReductionMode::Phase) ? 1 : std::max<int64_t>(1, static_cast<int64_t>(params.max_sweeps));
     const double total_flops = double(n) * double(kd) * double(kd) * double(sweep_count) * double(batch);
 
-    const size_t ws_bytes = sytrd_band_reduction_buffer_size<B, T>(*q,
+    const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
                                                                    ab_in.view(),
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
@@ -177,7 +177,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
         bench::pristine(ab_in),
         d, e, tau, uplo, static_cast<int32_t>(kd), ws, params,
         [](Queue& q, auto&&... xs) {
-            sytrd_band_reduction<B, T>(q, std::forward<decltype(xs)>(xs)...);
+            sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

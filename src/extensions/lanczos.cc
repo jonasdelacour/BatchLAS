@@ -109,7 +109,7 @@ namespace batchlas {
                 if constexpr (!(MF == MatrixFormat::Dense)) {
                     spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
                 } else {
-                    gemm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+                    gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{});
                 }
                 ctx -> submit([&](sycl::handler& h) {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
@@ -189,8 +189,7 @@ namespace batchlas {
                     MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size),
                     MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
                     V,
-                    T(1), T(0),
-                    Transpose::NoTrans, Transpose::NoTrans);
+                    GemmOptions<T>{});
         }
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
@@ -262,27 +261,27 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
     
-    #define LANCZOS_INSANTIATE_FOR_BACKEND(back)\
+    #define LANCZOS_INSTANTIATE_FOR_BACKEND(back)\
         LANCZOS_INSTANTIATE(back, float, MatrixFormat::CSR)\
         LANCZOS_INSTANTIATE(back, float, MatrixFormat::Dense)\
         LANCZOS_INSTANTIATE(back, double, MatrixFormat::CSR)\
         LANCZOS_INSTANTIATE(back, double, MatrixFormat::Dense)
 
     #if BATCHLAS_HAS_CUDA_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::CUDA)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
     #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::ROCM)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
     #endif
     #if BATCHLAS_HAS_HOST_BACKEND
-        LANCZOS_INSANTIATE_FOR_BACKEND(Backend::NETLIB)
+        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
     #endif
 
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
 
     #undef LANCZOS_INSTANTIATE
-    #undef LANCZOS_INSTANTIATE_FOR_FP
+    #undef LANCZOS_INSTANTIATE_FOR_BACKEND
 
 
 }

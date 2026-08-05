@@ -10,7 +10,7 @@ static void BM_SYMM(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(3);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, false, batch);
     auto Bm = Matrix<T>::Random(n, n, false, batch);
     auto C = Matrix<T>::Random(n, n, false, batch);
@@ -24,7 +24,7 @@ static void BM_SYMM(minibench::State& state) {
                     Side::Left,
                     Uplo::Lower,
                     [](Queue& q, auto&&... xs) {
-                        symm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        symm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

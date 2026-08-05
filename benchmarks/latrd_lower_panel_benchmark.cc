@@ -36,7 +36,7 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
     auto tau0 = Vector<T>::zeros(n - 1, batch);
     auto W0 = Matrix<T>::Zeros(n, std::max<int>(1, ib), batch);
 
-    auto q = std::make_shared<Queue>("gpu", /*in_order=*/true);
+    auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     state.SetKernel(
         q,
@@ -59,7 +59,7 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
             auto e_panel = e(Slice(j0, j0 + ib));
             auto tau_panel = tau(Slice(j0, j0 + ib));
             auto W_panel = W({j0, SliceEnd()}, {0, ib});
-            latrd_lower_panel<B, T>(q, A_panel, e_panel, tau_panel, W_panel, 0, fuse_trailing_update);
+            latrd_lower_panel(q, A_panel, e_panel, tau_panel, W_panel, 0, fuse_trailing_update);
         });
 
     state.SetMetric("GFLOPS", approx_flops * 1e-9, minibench::Rate);

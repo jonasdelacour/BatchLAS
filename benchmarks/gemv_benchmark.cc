@@ -16,7 +16,7 @@ static void BM_GEMV(minibench::State& state) {
     auto x = Vector<T>::random(n, batch);
     auto y = Vector<T>::zeros(m, batch);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(q,
                     std::move(A),
                     std::move(x),
@@ -25,7 +25,7 @@ static void BM_GEMV(minibench::State& state) {
                     T(0),
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        gemv<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        gemv(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
                     minibench::Rate);

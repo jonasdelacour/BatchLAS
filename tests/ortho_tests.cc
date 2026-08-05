@@ -64,10 +64,18 @@ protected:
         auto transp = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
         if (transQ == Transpose::NoTrans) { // Columns are orthogonal, Q is m x k
             // Result_actual = Q^T * Q
-            gemm<BackendType>(*(this->ctx), Q_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), transp, Transpose::NoTrans);
+            gemm(*(this->ctx),
+                              Q_view,
+                              Q_view,
+                              Result_actual_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = transp});
         } else { // Rows are orthogonal, Q is k x m
             // Result_actual = Q * Q^T
-            gemm<BackendType>(*(this->ctx), Q_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, transp);
+            gemm(*(this->ctx),
+                              Q_view,
+                              Q_view,
+                              Result_actual_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transB = transp});
         }
         this->ctx->wait();
         // print_matrix(Result_actual_view, "Result_actual (Q^T*Q or Q*Q^T)");
@@ -119,15 +127,31 @@ protected:
         if (transQ == Transpose::NoTrans) { // Q is m x k_q (vectors are columns)
             // M is m x m (assuming M is symmetric and defines inner product for columns of Q)
             // Temp_MQ (m x k_q) = M (m x m) * Q (m x k_q)
-            gemm<BackendType>(*(this->ctx), M_view, Q_view, Temp_MQ_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm(*(this->ctx),
+                              M_view,
+                              Q_view,
+                              Temp_MQ_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
             // Result_actual (k_q x k_q) = Q^T (k_q x m) * Temp_MQ (m x k_q)
-            gemm<BackendType>(*(this->ctx), Q_view, Temp_MQ_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::Trans, Transpose::NoTrans);
+            gemm(*(this->ctx),
+                              Q_view,
+                              Temp_MQ_view,
+                              Result_actual_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = Transpose::Trans});
         } else { // Q is k_q x m (vectors are rows)
             // M is m x m
             // Temp_MQ (k_q x m) = Q (k_q x m) * M (m x m)
-            gemm<BackendType>(*(this->ctx), Q_view, M_view, Temp_MQ_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm(*(this->ctx),
+                              Q_view,
+                              M_view,
+                              Temp_MQ_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
             // Result_actual (k_q x k_q) = Temp_MQ (k_q x m) * Q^T (m x k_q)
-            gemm<BackendType>(*(this->ctx), Temp_MQ_view, Q_view, Result_actual_view, ScalarType(1.0), ScalarType(0.0), Transpose::NoTrans, Transpose::Trans);
+            gemm(*(this->ctx),
+                              Temp_MQ_view,
+                              Q_view,
+                              Result_actual_view,
+                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transB = Transpose::Trans});
         }
         this->ctx->wait();
 
@@ -186,7 +210,11 @@ protected:
         Matrix<ScalarType, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
         auto Result_AM_view = Result_AM.view();
 
-        gemm<BackendType>(*(this->ctx), A_view, M_basis_view, Result_AM_view, ScalarType(1.0), ScalarType(0.0), opA, opM);
+        gemm(*(this->ctx),
+                          A_view,
+                          M_basis_view,
+                          Result_AM_view,
+                          {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = opA, .transB = opM});
         this->ctx->wait();
 
         // print_matrix(Result_AM_view, "Result_AM (A vs M_basis)");
@@ -246,10 +274,10 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
 
             Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
-            size_t buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), A, transA, algo);
+            size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), transA, algo);
             UnifiedVector<std::byte> workspace(buffer_size);
 
-            ortho<BackendType, T>(*(this->ctx), A, transA, workspace.to_span(), algo);
+            ortho(*(this->ctx), A.view(), transA, workspace.to_span(), algo);
             this->ctx->wait();
 
             this->check_orthonormality(A, transA, tol);
@@ -291,18 +319,18 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
                 Matrix<T, MatrixFormat::Dense> M = Matrix<T, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
 
-                size_t ortho_M_buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), M, transM, algo);
+                size_t ortho_M_buffer_size = ortho_buffer_size(*(this->ctx), M.view(), transM, algo);
                 UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-                ortho<BackendType, T>(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
+                ortho(*(this->ctx), M.view(), transM, workspace_M_ortho.to_span(), algo);
                 this->ctx->wait();
 
                 this->check_orthonormality(M, transM, tol);
 
-                size_t buffer_size = ortho_buffer_size<BackendType, T>(*(this->ctx), A, M, transA, transM, algo);
+                size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), M.view(), transA, transM, algo);
                 UnifiedVector<std::byte> workspace(buffer_size);
                 const size_t iterations = 2;
 
-                ortho<BackendType, T>(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
+                ortho(*(this->ctx), A.view(), M.view(), transA, transM, workspace.to_span(), algo, iterations);
                 this->ctx->wait();
 
                 this->check_orthonormality(A, transA, tol);

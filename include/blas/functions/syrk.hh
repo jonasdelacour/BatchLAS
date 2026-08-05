@@ -3,8 +3,20 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
+
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using syrk = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   T, T, Uplo, Transpose);
+}  // namespace sig
+
 
 template <Backend Ba, RealScalar T>
 Event syrk(Queue& ctx,
@@ -33,3 +45,12 @@ inline Event syrk(Queue& ctx,
 }
 
 } // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(syrk)
+
+}  // namespace batchlas

@@ -89,8 +89,8 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 	Matrix<T, MatrixFormat::Dense> A_fact = A0;
 
 	UnifiedVector<T> tau(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-	UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<Backend::NETLIB>(ctx_cpu, A_fact.view(), tau.to_span()), std::byte{0});
-	geqrf<Backend::NETLIB>(ctx_cpu, A_fact.view(), tau.to_span(), ws_geqrf.to_span()).wait();
+	UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(ctx_cpu, A_fact.view(), tau.to_span()), std::byte{0});
+	geqrf(ctx_cpu, A_fact.view(), tau.to_span(), ws_geqrf.to_span()).wait();
 	ctx_cpu.wait();
 
 	VectorView<T> tau_view(tau.to_span(), /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
@@ -103,15 +103,15 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 		Matrix<T, MatrixFormat::Dense> C_cta = C0;
 
 		const Transpose trans_ref = trans;
-		UnifiedVector<std::byte> ws_ref(ormqr_buffer_size<Backend::NETLIB>(ctx_cpu, A_fact.view(), C_ref.view(), side,
+		UnifiedVector<std::byte> ws_ref(ormqr_buffer_size(ctx_cpu, A_fact.view(), C_ref.view(), side,
 																										   trans_ref, tau.to_span()),
 											std::byte{0});
-		ormqr<Backend::NETLIB>(ctx_cpu, A_fact.view(), C_ref.view(), side, trans_ref, tau.to_span(), ws_ref.to_span()).wait();
+		ormqr(ctx_cpu, A_fact.view(), C_ref.view(), side, trans_ref, tau.to_span(), ws_ref.to_span()).wait();
 		ctx_cpu.wait();
 
 		UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 		try {
-			ormqx_cta<B, T>(*this->ctx,
+			ormqx_cta(*this->ctx,
 			             A_fact.view(),
 			             tau_view,
 			             C_cta.view(),
@@ -162,7 +162,7 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 	UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
 	EXPECT_THROW(
-		(ormqx_cta<B, T>(*this->ctx,
+		(ormqx_cta(*this->ctx,
 		            A.view(),
 		            VectorView<T>(tau),
 		            C.view(),

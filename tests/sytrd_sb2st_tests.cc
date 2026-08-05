@@ -248,8 +248,8 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     // Reference eigenvalues from dense SYEV.
     UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -261,9 +261,9 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     Vector<T> tau_out(std::max(0, n - 1), batch);
 
     UnifiedVector<std::byte> ws(
-        sytrd_sb2st_buffer_size<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
+        sytrd_sb2st_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
     try {
-        sytrd_sb2st<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
+        sytrd_sb2st(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
     } catch (const std::exception& ex) {
         if (std::strstr(ex.what(), "sub_group_size=32") != nullptr) {
             GTEST_SKIP() << ex.what();
@@ -340,8 +340,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     // Reference eigenvalues from dense SYEV.
     UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -353,9 +353,9 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     Vector<T> tau_out(std::max(0, n - 1), batch);
 
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_buffer_size<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
+        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
 
-    sytrd_band_reduction<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
+    sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
     // BANDR1 implementation uses internal workspace; input AB should remain unchanged.
     ASSERT_TRUE(expect_lower_band_unchanged<T>(AB_before, AB, n, kd, tol));
@@ -372,8 +372,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     params.kd_work = 3 * kd;
 
     UnifiedVector<std::byte> ws2(
-        sytrd_band_reduction_buffer_size<B, T>(ctx, AB, d_out2, e_out2, tau_out2, Uplo::Lower, kd, params));
-    sytrd_band_reduction<B, T>(ctx, AB, d_out2, e_out2, tau_out2, Uplo::Lower, kd, ws2.to_span(), params).wait();
+        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, params));
+    sytrd_band_reduction(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, ws2.to_span(), params).wait();
 
     // Compute eigenvalues of returned tridiagonal (d,e) via host LAPACK STERF.
 #if BATCHLAS_HAS_HOST_BACKEND
@@ -443,8 +443,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
 
             UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
             UnifiedVector<std::byte> ws_syev(
-                syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-            syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+                syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+            syev(ctx,
+                       A0.view(),
+                       eig_ref,
+                       {.jobz = JobType::NoEigenVectors},
+                       ws_syev.to_span()).wait();
             for (int b = 0; b < batch; ++b) {
                 std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                           eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -454,8 +458,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
             Vector<Real> e_out(std::max(0, n - 1), batch);
             Vector<T> tau_out(std::max(0, n - 1), batch);
             UnifiedVector<std::byte> ws(
-                sytrd_band_reduction_buffer_size<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
-            sytrd_band_reduction<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
+                sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
+            sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
             UnifiedVector<Real> d_tri(static_cast<size_t>(n));
             UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
@@ -517,8 +521,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepBandContainment) {
     params.d_seq = {0};
 
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step<B, T>(ctx, AB, ABw, Uplo::Lower, kd, ws.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws.to_span(), params).wait();
 
     const Real tol = tol_for<Real>();
     for (int b = 0; b < batch; ++b) {
@@ -565,10 +569,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionDumpEvolution64) {
     Vector<Real> e_out(std::max(0, n - 1), batch);
     Vector<T> tau_out(std::max(0, n - 1), batch);
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_buffer_size<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
+        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
 
     // Intended for debug-dump visualization; correctness is covered elsewhere.
-    sytrd_band_reduction<B, T>(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
+    sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
     SUCCEED();
 }
 
@@ -602,8 +606,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     // Reference eigenvalues from dense SYEV on A0.
     UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -618,8 +622,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     params.d_seq = {0};
 
     UnifiedVector<std::byte> ws_step(
-        sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step<B, T>(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
     std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
     for (int b = 0; b < batch; ++b) {
@@ -648,8 +652,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
 
     UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev2(
-        syev_buffer_size<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower, ws_syev2.to_span()).wait();
+        syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx,
+               A_after.view(),
+               eig_after,
+               {.jobz = JobType::NoEigenVectors},
+               ws_syev2.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -693,8 +701,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
     // Reference eigenvalues from dense SYEV on A0.
     UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -712,8 +720,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
         params.max_steps = k;
 
         UnifiedVector<std::byte> ws_step(
-            sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
-        sytrd_band_reduction_single_step<B, T>(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
+            sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
+        sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
         std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
         for (int b = 0; b < batch; ++b) {
@@ -742,8 +750,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
 
         UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
         UnifiedVector<std::byte> ws_syev2(
-            syev_buffer_size<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-        syev<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower, ws_syev2.to_span()).wait();
+            syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
+        syev(ctx,
+                   A_after.view(),
+                   eig_after,
+                   {.jobz = JobType::NoEigenVectors},
+                   ws_syev2.to_span()).wait();
         for (int b = 0; b < batch; ++b) {
             std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
                       eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -775,7 +787,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
             ScopedEnvVar dump_on("BATCHLAS_DUMP_BANDR1_STEP", "1");
             ScopedEnvVar dump_batch("BATCHLAS_DUMP_BANDR1_BATCH", std::to_string(max_b).c_str());
             ScopedEnvVar dump_dir("BATCHLAS_DUMP_BANDR1_DIR", dir.c_str());
-            sytrd_band_reduction_single_step<B, T>(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
+            sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
             ADD_FAILURE() << "Spectrum not preserved after k=" << k
                           << " chase steps. max_abs_diff=" << max_abs_diff
@@ -859,8 +871,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
 
     UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower, ws_syev.to_span()).wait();
+        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
@@ -878,8 +890,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     ASSERT_GT(params.max_steps, 0) << "unexpected: sweep step count is 0";
 
     UnifiedVector<std::byte> ws_step(
-        sytrd_band_reduction_single_step_buffer_size<B, T>(ctx, AB, ABw, Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step<B, T>(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
     std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
     for (int b = 0; b < batch; ++b) {
@@ -908,8 +920,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
 
     UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
     UnifiedVector<std::byte> ws_syev2(
-        syev_buffer_size<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower, ws_syev2.to_span()).wait();
+        syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
+    syev(ctx,
+               A_after.view(),
+               eig_after,
+               {.jobz = JobType::NoEigenVectors},
+               ws_syev2.to_span()).wait();
     for (int b = 0; b < batch; ++b) {
         std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
                   eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);

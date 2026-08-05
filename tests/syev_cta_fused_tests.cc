@@ -227,10 +227,13 @@ TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
 			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors,
-							  Uplo::Lower, ws_ref.to_span())
+		syev(*this->ctx,
+                        A_ref.view(),
+                        W_ref.to_span(),
+                        {.jobz = JobType::NoEigenVectors},
+                        ws_ref.to_span())
 			.wait();
 	}
 #endif

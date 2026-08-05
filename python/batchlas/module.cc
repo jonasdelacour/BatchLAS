@@ -12,4 +12,5 @@ PYBIND11_MODULE(_batchlas, module) {
     batchlas::python::init_factorization_ops(module);
     batchlas::python::init_spectral_ops(module);
     batchlas::python::init_misc_ops(module);
+    batchlas::python::init_linalg_ops(module);
 }

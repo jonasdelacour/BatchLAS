@@ -7,6 +7,7 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 
+#include <util/env.hh>
 #include <util/sycl-local-accessor-helpers.hh>
 #include <util/group-invoke.hh>
 
@@ -89,12 +90,7 @@ inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 // working as designed, since once the batch alone saturates the SMs there is no
 // starvation left for the extra work-groups to absorb.
 inline int64_t latrd_grid_min_n() {
-    const char* v = std::getenv("BATCHLAS_LATRD_GRID_MIN_N");
-    if (v && *v) {
-        const int parsed = std::atoi(v);
-        if (parsed > 0) return parsed;
-    }
-    return 768;
+    return env_positive_int_or("BATCHLAS_LATRD_GRID_MIN_N", 768);
 }
 
 // Grid path is the default above latrd_grid_min_n(); BATCHLAS_LATRD_IMPL still
@@ -1063,13 +1059,6 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
 // Dispatcher: selects legacy or device path based on use_device_latrd().
 // Legacy supports WG = 64/128/256; device additionally supports WG = 512.
 // ---------------------------------------------------------------------------
-inline int env_int_or(const char* name, int fallback) {
-    const char* v = std::getenv(name);
-    if (!v || *v == '\0') return fallback;
-    const int value = std::atoi(v);
-    return value > 0 ? value : fallback;
-}
-
 // Chooses (G, wg) for the grid path.
 //
 // Co-residency is the hard constraint: the software grid barrier deadlocks
@@ -1102,7 +1091,7 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     const int rows = n - 1;
     int G = std::min(cap, std::max(1, (rows + 31) / 32));
 
-    const int forced_g = env_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
+    const int forced_g = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
     if (forced_g > 0) {
         G = std::min(forced_g, cap);           // never exceed the residency cap
     }
@@ -1111,7 +1100,7 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     // One work-item per trailing row, rounded up to a whole sub-group.
     int wg = ((rows + G - 1) / G + 31) / 32 * 32;
     wg = std::min(256, std::max(32, wg));
-    const int forced_wg = env_int_or("BATCHLAS_LATRD_GRID_WG", 0);
+    const int forced_wg = env_positive_int_or("BATCHLAS_LATRD_GRID_WG", 0);
     if (forced_wg == 32 || forced_wg == 64 || forced_wg == 128 || forced_wg == 256) {
         wg = forced_wg;
     }

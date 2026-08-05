@@ -14,7 +14,7 @@ static void BM_TRMM(minibench::State& state) {
     const size_t k = state.range(2);
     const size_t batch = state.range(3);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu", false);
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B, false);
     auto C = Matrix<T>::Random(m, n, false, batch);
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto A = Matrix<T>::RandomTriangular(n, Uplo::Lower, Diag::NonUnit, batch);
@@ -29,7 +29,7 @@ static void BM_TRMM(minibench::State& state) {
                     Transpose::NoTrans,
                     Diag::NonUnit,
                     [](Queue& q, auto&&... xs) {
-                        trmm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        trmm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

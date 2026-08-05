@@ -687,6 +687,395 @@ TEST_F(BumpAllocatorTest, QueueVsDeviceConsistency) {
               BumpAllocator::allocation_size<double>(*queue, 50));
 }
 
+// ---- sizing mode -----------------------------------------------------------
+
+// Replays an allocation sequence against whichever pool it is handed. This is
+// the shape every converted *_buffer_size / implementation pair takes: one
+// layout function, called once in sizing mode and once for real.
+static void replay_layout(BumpAllocator& pool, const Device& device) {
+    const size_t n = 97;      // deliberately not a multiple of any alignment
+    const size_t batch = 5;
+    pool.allocate<float>(device, n * n * batch);
+    pool.allocate<int>(device, n * batch);
+    pool.allocate<std::byte>(device, 1);
+    pool.allocate<double>(device, n);
+    pool.allocate<float*>(device, batch);
+    pool.allocate<std::complex<double>>(device, n * batch);
+    pool.allocate<char>(device, 3);
+    pool.allocate<std::byte>(device, 4096);
+    // Deliberately ends on an extent that is not a multiple of the alignment:
+    // that is the case where "bytes consumed" and "bytes required" diverge.
+    pool.allocate<float>(device, 5);
+}
+
+// The contract: a real pool given required_bytes() satisfies the same sequence.
+//
+// Note the subtlety this is guarding. allocate() checks the alignment-rounded
+// size against the bytes left, but advances the cursor only by the raw extent,
+// so "bytes the sequence consumes" is strictly smaller than "bytes the sequence
+// needs to be handed". Sizing mode has to report the latter.
+TEST_F(BumpAllocatorTest, MeasuredSizeSufficesForRealAllocation) {
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    const size_t measured = sizer.required_bytes();
+    EXPECT_GT(measured, 0u);
+
+    // A real pool of exactly that size, based at a device-aligned address.
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
+    ASSERT_NE(mem, nullptr);
+
+    BumpAllocator real(reinterpret_cast<std::byte*>(mem), measured);
+    EXPECT_NO_THROW(replay_layout(real, device));
+
+    std::free(mem);
+}
+
+// Callers add a callee's reported size into their own running total and then
+// re-serve it with allocate<std::byte>(), which rounds the request up. A sizing
+// result that is not itself an alignment multiple therefore under-provisions
+// every such caller. Summed allocation_size totals always had this property;
+// sizing mode has to keep it.
+TEST_F(BumpAllocatorTest, MeasuredSizeIsAnAlignmentMultiple) {
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    EXPECT_EQ(sizer.required_bytes() % device_align, 0u);
+
+    // Including the degenerate case of a single ragged allocation.
+    auto one = BumpAllocator::measuring();
+    one.allocate<float>(device, 5);
+    EXPECT_EQ(one.required_bytes() % device_align, 0u);
+    EXPECT_EQ(one.required_bytes(), BumpAllocator::allocation_size<float>(device, 5));
+}
+
+// ...and it is tight: what is left over is under a single alignment quantum,
+// so the figure is a real size and not a padded guess.
+TEST_F(BumpAllocatorTest, MeasuredSizeIsTight) {
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    const size_t measured = sizer.required_bytes();
+
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
+    ASSERT_NE(mem, nullptr);
+
+    BumpAllocator real(reinterpret_cast<std::byte*>(mem), measured);
+    replay_layout(real, device);
+    EXPECT_LT(real.remaining().size(), device_align);
+
+    std::free(mem);
+}
+
+// Sizing mode is never larger than the hand-summed allocation_size total that
+// the *_buffer_size functions use today, so converting a call site can only
+// shrink its workspace, never grow it.
+TEST_F(BumpAllocatorTest, MeasuredSizeNeverExceedsSummedAllocationSize) {
+    const size_t n = 97, batch = 5;
+    size_t summed = 0;
+    summed += BumpAllocator::allocation_size<float>(device, n * n * batch);
+    summed += BumpAllocator::allocation_size<int>(device, n * batch);
+    summed += BumpAllocator::allocation_size<std::byte>(device, 1);
+    summed += BumpAllocator::allocation_size<double>(device, n);
+    summed += BumpAllocator::allocation_size<float*>(device, batch);
+    summed += BumpAllocator::allocation_size<std::complex<double>>(device, n * batch);
+    summed += BumpAllocator::allocation_size<char>(device, 3);
+    summed += BumpAllocator::allocation_size<std::byte>(device, 4096);
+    summed += BumpAllocator::allocation_size<float>(device, 5);
+
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    EXPECT_LE(sizer.required_bytes(), summed);
+}
+
+// Sizing mode hands out aligned, non-null, distinct, non-overlapping addresses
+// so that views can be built over it -- it just never backs them with memory.
+TEST_F(BumpAllocatorTest, MeasuringHandsOutUsableButUnbackedAddresses) {
+    auto sizer = BumpAllocator::measuring();
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto a = sizer.allocate<float>(device, 10);
+    auto b = sizer.allocate<double>(device, 10);
+    EXPECT_NE(a.data(), nullptr);
+    EXPECT_NE(b.data(), nullptr);
+    EXPECT_EQ(a.size(), 10u);
+    EXPECT_EQ(b.size(), 10u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(a.data()) % device_align, 0u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(b.data()) % device_align, 0u);
+    EXPECT_GE(reinterpret_cast<std::byte*>(b.data()),
+              reinterpret_cast<std::byte*>(a.data()) + 10 * sizeof(float));
+
+    // Zero-size behaves as it does for a real pool, and costs nothing.
+    const size_t before = sizer.required_bytes();
+    auto z = sizer.allocate<int>(device, 0);
+    EXPECT_EQ(z.data(), nullptr);
+    EXPECT_EQ(sizer.required_bytes(), before);
+}
+
+TEST_F(BumpAllocatorTest, MeasuringRejectsQueriesThatMeanNothing) {
+    auto sizer = BumpAllocator::measuring();
+    EXPECT_TRUE(sizer.is_measuring());
+    // No real tail exists, so a callee cannot size itself against it.
+    EXPECT_THROW((void)sizer.remaining(), std::runtime_error);
+
+    BumpAllocator real(buffer.get(), buffer_size);
+    EXPECT_FALSE(real.is_measuring());
+    EXPECT_THROW((void)real.required_bytes(), std::runtime_error);
+}
+
+// ---- per-queue workspace arena --------------------------------------------
+
+TEST_F(BumpAllocatorTest, WorkspaceLeaseIsUsableAndAligned) {
+    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+
+    auto lease = queue->workspace(4096);
+    ASSERT_NE(lease.data(), nullptr);
+    EXPECT_EQ(lease.size(), 4096u);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(lease.data()) % device_align, 0u);
+
+    // It is real, writable, shared memory -- not a sizing-mode stand-in.
+    std::memset(lease.data(), 0xAB, lease.size());
+    EXPECT_EQ(static_cast<unsigned char>(lease.data()[4095]), 0xABu);
+
+    // And it feeds a BumpAllocator without the pool having to realign it.
+    BumpAllocator pool(lease.span());
+    EXPECT_NO_THROW(pool.allocate<double>(device, 64));
+}
+
+// The point of the arena: repeating the same request must stop allocating.
+TEST_F(BumpAllocatorTest, WorkspaceReusesMemoryAcrossLeases) {
+    std::byte* first = nullptr;
+    {
+        auto lease = queue->workspace(8192);
+        first = lease.data();
+    }
+    const size_t cap_after_first = queue->workspace_capacity();
+    EXPECT_GT(cap_after_first, 0u);
+
+    for (int i = 0; i < 32; ++i) {
+        auto lease = queue->workspace(8192);
+        EXPECT_EQ(lease.data(), first);                       // same bytes every time
+        EXPECT_EQ(queue->workspace_capacity(), cap_after_first);  // no new allocation
+    }
+}
+
+// Nested leases must not overlap, and -- the part that is easy to get wrong --
+// an inner lease that forces a new block must not invalidate the outer one.
+TEST_F(BumpAllocatorTest, NestedLeasesAreDisjointAndOuterSurvivesGrowth) {
+    auto outer = queue->workspace(1024);
+    std::memset(outer.data(), 0x11, outer.size());
+
+    {
+        auto inner = queue->workspace(2048);
+        EXPECT_TRUE(inner.data() + inner.size() <= outer.data() ||
+                    outer.data() + outer.size() <= inner.data());
+        std::memset(inner.data(), 0x22, inner.size());
+
+        // Force a fresh block while both leases are live.
+        auto huge = queue->workspace(4 * 1024 * 1024);
+        std::memset(huge.data(), 0x33, huge.size());
+        EXPECT_TRUE(huge.data() + huge.size() <= outer.data() ||
+                    outer.data() + outer.size() <= huge.data());
+    }
+
+    // Outer's pointer is still valid and its contents untouched.
+    for (size_t i = 0; i < outer.size(); ++i) {
+        ASSERT_EQ(static_cast<unsigned char>(outer.data()[i]), 0x11u) << "clobbered at " << i;
+    }
+}
+
+// A lease released early frees its bytes for the next borrow, and moving a
+// lease transfers the obligation rather than releasing twice.
+TEST_F(BumpAllocatorTest, WorkspaceLeaseReleaseAndMove) {
+    std::byte* p = nullptr;
+    {
+        auto a = queue->workspace(2048);
+        p = a.data();
+        a.release();
+        EXPECT_EQ(a.data(), nullptr);
+        auto b = queue->workspace(2048);
+        EXPECT_EQ(b.data(), p);   // reclaimed
+    }
+
+    auto a = queue->workspace(2048);
+    auto* pa = a.data();
+    auto b = std::move(a);
+    EXPECT_EQ(b.data(), pa);
+    EXPECT_EQ(a.data(), nullptr);
+    b.release();
+    auto c = queue->workspace(2048);
+    EXPECT_EQ(c.data(), pa);      // the moved-from handle did not release it early
+}
+
+// Growth is geometric, not one allocation per step, so a caller whose request
+// ratchets upward does not leave a trail of blocks.
+TEST_F(BumpAllocatorTest, WorkspaceGrowthIsGeometric) {
+    Queue q;
+    size_t allocations = 0;
+    size_t prev_cap = 0;
+    for (size_t bytes = 1024; bytes <= 4u * 1024 * 1024; bytes += 4096) {
+        auto lease = q.workspace(bytes);
+        const size_t cap = q.workspace_capacity();
+        if (cap != prev_cap) {
+            ++allocations;
+            prev_cap = cap;
+        }
+    }
+    // ~1000 distinct sizes; doubling from 64 KiB reaches 4 MiB in far fewer.
+    EXPECT_LT(allocations, 20u);
+}
+
+// Releasing a lease that is not the innermost one used to rewind the arena's
+// cursor over memory a live lease was still pointing at, so the next borrow
+// silently aliased it. The arena now refuses to rewind past a live lease: the
+// bytes stay reserved until the leases taken after them come back, which is
+// wasteful but never wrong.
+TEST_F(BumpAllocatorTest, WorkspaceOutOfOrderReleaseDoesNotAliasLiveLease) {
+#ifndef NDEBUG
+    // The fix asserts on exactly the call this test makes, so in a debug build
+    // the scenario cannot be run in-process. Death-testing it would fork a
+    // process with the SYCL runtime loaded, which is worse than losing the
+    // coverage in a configuration nobody runs the suite in by default.
+    GTEST_SKIP() << "arena asserts on out-of-order release when NDEBUG is not defined";
+#else
+    auto a = queue->workspace(2048);
+    auto b = queue->workspace(2048);
+    ASSERT_NE(a.data(), nullptr);
+    ASSERT_NE(b.data(), nullptr);
+    ASSERT_TRUE(a.data() + a.size() <= b.data() || b.data() + b.size() <= a.data());
+    std::memset(b.data(), 0x22, b.size());
+
+    // Out of order: b was taken after a and is still live.
+    a.release();
+
+    // Big enough that the buggy rewind-to-a would have run straight through b.
+    auto c = queue->workspace(4096);
+    ASSERT_NE(c.data(), nullptr);
+    EXPECT_TRUE(c.data() + c.size() <= b.data() || b.data() + b.size() <= c.data())
+        << "workspace handed out bytes that a live lease is still using";
+
+    std::memset(c.data(), 0x33, c.size());
+    for (size_t i = 0; i < b.size(); ++i) {
+        ASSERT_EQ(static_cast<unsigned char>(b.data()[i]), 0x22u) << "clobbered at " << i;
+    }
+#endif
+}
+
+// The arena otherwise holds its high-water mark until the queue dies, which is
+// the wrong trade for a queue that lives as long as the process.
+TEST_F(BumpAllocatorTest, WorkspaceTrimFreesBlocksOnlyWhenNothingIsLeased) {
+    // Its own queue: trim frees every block, so nothing else may be borrowing.
+    Queue q;
+    const size_t big = 1u << 20;
+
+    {
+        auto lease = q.workspace(big);
+        std::memset(lease.data(), 0x5A, lease.size());
+        const size_t held = q.workspace_capacity();
+        EXPECT_GE(held, big);
+
+        // Refused while the lease is live -- those blocks are what it points at.
+        // The bool is the only way a caller can tell "refused" from "freed
+        // nothing because there was nothing to free", so pin it.
+        EXPECT_FALSE(q.trim_workspace());
+        EXPECT_EQ(q.workspace_capacity(), held);
+        EXPECT_EQ(static_cast<unsigned char>(lease.data()[big - 1]), 0x5Au);
+    }
+
+    EXPECT_GE(q.workspace_capacity(), big);
+    EXPECT_TRUE(q.trim_workspace());
+    EXPECT_EQ(q.workspace_capacity(), 0u);
+
+    // Trimming hands the memory back; it does not retire the arena.
+    auto again = q.workspace(4096);
+    EXPECT_NE(again.data(), nullptr);
+    EXPECT_GT(q.workspace_capacity(), 0u);
+}
+
+// Reassigning a live lease is the one out-of-order release the caller cannot
+// avoid -- the right-hand borrow is taken before the left-hand one is released
+// -- so it must not abort, and it must not hand the old bytes to the next
+// borrow while the new lease still sits above them.
+//
+// This is also where the deferred-reclaim path gets its only coverage in a
+// build without NDEBUG: every other way of provoking it asserts on purpose, so
+// WorkspaceOutOfOrderReleaseDoesNotAliasLiveLease below is skipped in a debug
+// build. Reassignment is the exempt path, so it can be tested in both.
+TEST_F(BumpAllocatorTest, WorkspaceReassignedLeaseDefersReclaimAndDoesNotAlias) {
+    Queue q;  // its own queue so workspace_capacity() is only about this test
+    const size_t baseline = q.workspace_capacity();
+
+    {
+        auto ws = q.workspace(2048);
+        ASSERT_NE(ws.data(), nullptr);
+
+        // The old loan is now returned out of order, underneath the new one.
+        ws = q.workspace(4096);
+        ASSERT_NE(ws.data(), nullptr);
+        std::memset(ws.data(), 0x44, ws.size());
+
+        // The returned bytes must not be re-served while ws is live.
+        auto c = q.workspace(4096);
+        ASSERT_NE(c.data(), nullptr);
+        EXPECT_TRUE(c.data() + c.size() <= ws.data() || ws.data() + ws.size() <= c.data())
+            << "workspace re-served a deferred loan underneath a live lease";
+        std::memset(c.data(), 0x55, c.size());
+        for (size_t i = 0; i < ws.size(); ++i) {
+            ASSERT_EQ(static_cast<unsigned char>(ws.data()[i]), 0x44u) << "clobbered at " << i;
+        }
+        // c dies first, then ws: reverse order, which is what finally pops the
+        // deferred entry.
+    }
+
+    // Deferred, not leaked: once the loans above it came back the arena rewound
+    // past it, so a fresh borrow of the original size fits in what is already
+    // held rather than opening another block.
+    const size_t held = q.workspace_capacity();
+    {
+        auto again = q.workspace(2048);
+        ASSERT_NE(again.data(), nullptr);
+    }
+    EXPECT_EQ(q.workspace_capacity(), held);
+    EXPECT_GT(held, baseline);
+}
+
+// A no-pessimisation guard, not a regression test: this passes against the
+// pre-fix arena too, because a pure LIFO sequence rewound to the same place
+// under the old unconditional rewind. It is here so a future change that makes
+// the ordering check defer the *common* case is caught -- reverse-order release
+// must stay an immediate rewind, so a repeated nesting pattern keeps landing on
+// the same bytes and allocates once.
+TEST_F(BumpAllocatorTest, WorkspaceLifoReleaseStillReusesTheSameBytes) {
+    std::byte* outer_p = nullptr;
+    std::byte* inner_p = nullptr;
+    size_t settled = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        auto outer = queue->workspace(4096);
+        auto inner = queue->workspace(8192);
+        if (i == 0) {
+            outer_p = outer.data();
+            inner_p = inner.data();
+            settled = queue->workspace_capacity();
+            ASSERT_GT(settled, 0u);
+        }
+        EXPECT_EQ(outer.data(), outer_p);
+        EXPECT_EQ(inner.data(), inner_p);
+        EXPECT_EQ(queue->workspace_capacity(), settled);
+
+        // Explicit, in reverse order of acquisition -- the case the arena is
+        // built for, and the one scope exit would produce anyway.
+        inner.release();
+        outer.release();
+    }
+
+    // Everything is back, so the next borrow starts where the first one did.
+    auto reuse = queue->workspace(4096);
+    EXPECT_EQ(reuse.data(), outer_p);
+    EXPECT_EQ(queue->workspace_capacity(), settled);
+}
+
 // Stress test with many small allocations
 TEST_F(BumpAllocatorTest, ManySmallAllocations) {
     BumpAllocator pool(buffer.get(), buffer_size);

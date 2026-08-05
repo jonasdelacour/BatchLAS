@@ -42,7 +42,7 @@ Event syrk(Queue& ctx,
     validate_syrk_arguments(A, C, transA);
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    return gemm<Ba>(ctx, A, A, C, alpha, beta, transA, transB);
+    return gemm<Ba>(ctx, A, A, C, {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB});
 }
 
 #define SYRK_INSTANTIATE(back, fp) \

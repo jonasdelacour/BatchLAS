@@ -5,6 +5,7 @@
 #include <batchlas/tuning_params.hh>
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
+#include <blas/queue-dispatch.hh>
 #include <blas/functions/iluk.hh>
 #include <numeric>
 #include <limits>
@@ -2286,3 +2287,86 @@ namespace batchlas {
     template <MatrixFormat MType, typename T>
     Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto);
 }
+
+namespace batchlas {
+
+// Backend-deducing overloads for the extension surface: `f(ctx, ...)` uses
+// ctx.backend(), exactly as for the core BLAS/LAPACK entry points.
+//
+// These are generated rather than written out, so the extension surface cannot
+// drift from the core one by omission -- which is what had happened: every
+// entry point here was reachable only as `f<Backend::CUDA>(ctx, ...)`, so any
+// caller touching an extension had to name a backend even when its queue
+// already carried one.
+//
+// The macro is constrained, so a name whose remaining template parameters are
+// not deducible from the arguments simply gets no overload here rather than an
+// ill-formed one; those keep their explicit-backend spelling.
+
+BATCHLAS_DISPATCH_ON_QUEUE(ortho)
+BATCHLAS_DISPATCH_ON_QUEUE(ortho_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_direct)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_direct_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_direct_subset)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_direct_subset_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_lobpcg)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_lobpcg_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_filtered)
+BATCHLAS_DISPATCH_ON_QUEUE(syevx_filtered_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(lanczos)
+BATCHLAS_DISPATCH_ON_QUEUE(lanczos_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(tridiagonal_solver)
+BATCHLAS_DISPATCH_ON_QUEUE(tridiagonal_solver_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(stebz)
+BATCHLAS_DISPATCH_ON_QUEUE(stebz_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(stein)
+BATCHLAS_DISPATCH_ON_QUEUE(stein_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(steqr)
+BATCHLAS_DISPATCH_ON_QUEUE(steqr_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(latrd_lower_panel)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_blocked)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_blocked_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_sy2sb)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_sy2sb_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_sb2st)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_sb2st_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_single_step)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_single_step_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(hetrd_hb2st)
+BATCHLAS_DISPATCH_ON_QUEUE(hetrd_hb2st_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_fused)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_fused_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_blocked)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_blocked_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_two_stage)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_two_stage_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(gebrd_unblocked)
+BATCHLAS_DISPATCH_ON_QUEUE(gebrd_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked)
+BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(bdsqr)
+BATCHLAS_DISPATCH_ON_QUEUE(ormbr)
+BATCHLAS_DISPATCH_ON_QUEUE(ormbr_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(ormqx_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(stedc)
+BATCHLAS_DISPATCH_ON_QUEUE(stedc_workspace_size)
+BATCHLAS_DISPATCH_ON_QUEUE(ritz_values)
+BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_workspace)
+BATCHLAS_DISPATCH_ON_QUEUE(inv)
+BATCHLAS_DISPATCH_ON_QUEUE(inv_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)
+
+}  // namespace batchlas

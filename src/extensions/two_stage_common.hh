@@ -17,6 +17,7 @@
 #include <blas/extensions.hh>
 #include <blas/linalg.hh>
 #include <blas/matrix.hh>
+#include <util/env.hh>
 
 #include "../queue.hh"
 
@@ -28,11 +29,16 @@
 
 namespace batchlas::two_stage_detail {
 
+// The third copy of this parser, now routed through the shared one. Both spell
+// "a value that does not parse, or parses to <= 0, means unset": a forced band
+// width or block size is meaningless at zero or negative, and these call sites
+// want the computed default there rather than a nonsense launch geometry.
+//
+// batchlas::env_int_or parses with stoi-in-a-try rather than atoi, which differs
+// only on input atoi would silently read as 0 -- and 0 already routes to defval
+// here, so every input maps to the same result as before.
 inline int32_t env_int_or_default(const char* key, int32_t defval) {
-    const char* v = std::getenv(key);
-    if (!v || !*v) return defval;
-    const int parsed = std::atoi(v);
-    return (parsed > 0) ? static_cast<int32_t>(parsed) : defval;
+    return static_cast<int32_t>(env_positive_int_or(key, static_cast<int>(defval)));
 }
 
 inline int32_t choose_two_stage_kd(int32_t n) {

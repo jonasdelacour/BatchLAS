@@ -913,12 +913,16 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
     // Level kernels must run in order, but that ordering is the queue's job. Waiting
     // on the host between levels cost one round trip per level -- 53 of them for a
     // 4096-row ILU(1) factor -- which is why an in-order queue is used here instead.
-    Queue ordered(ctx, /*in_order=*/true);
-    Queue& q = ctx.in_order() ? ctx : ordered;
+    // std::optional for the same reason as the syev/gesvd/ormqr dispatchers: the
+    // Queue constructor builds a real sycl::queue, so declaring it by value pays
+    // that construction on the common in-order path, which never uses it.
+    std::optional<Queue> ordered;
     if (!ctx.in_order()) {
+        ordered.emplace(ctx, /*in_order=*/true);
         Event dep = ctx.get_event();
-        ordered.enqueue(dep);
+        ordered->enqueue(dep);
     }
+    Queue& q = ctx.in_order() ? ctx : *ordered;
     for (int lv = 0; lv < sym.levels.levels; ++lv) {
         const int begin = sym.levels.level_ptr[static_cast<std::size_t>(lv)];
         const int end = sym.levels.level_ptr[static_cast<std::size_t>(lv) + 1];

@@ -1,4 +1,6 @@
 #include "../queue.hh"
+#include <batchlas/backend_config.h>
+#include <util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
@@ -49,16 +51,145 @@ Queue::Queue(Device dev, bool in_order) : device_(dev), in_order_(in_order) {
     impl_ = std::make_unique<QueueImpl>(dev, in_order);
 }
 
-Queue::Queue(const Queue& base, bool in_order) : device_(base.device_), in_order_(in_order) {
+Queue::Queue(Device dev, batchlas::Backend backend, bool in_order) : Queue(dev, in_order) {
+    set_backend(backend);
+}
+
+Queue::Queue(const Queue& base, bool in_order)
+    : device_(base.device_), in_order_(in_order), backend_(base.backend_), resolved_backend_(base.resolved_backend_) {
     impl_ = std::make_unique<QueueImpl>(base.impl_->get_context(), base.impl_->get_device(), device_, in_order_);
+}
+
+bool Queue::backend_available(batchlas::Backend backend) {
+    using batchlas::Backend;
+    switch (backend) {
+        case Backend::CUDA:   return BATCHLAS_HAS_CUDA_BACKEND;
+        case Backend::ROCM:   return BATCHLAS_HAS_ROCM_BACKEND;
+        case Backend::MKL:    return BATCHLAS_HAS_MKL_BACKEND;
+        case Backend::NETLIB: return BATCHLAS_HAS_HOST_BACKEND;
+        // AUTO is a request, not a backend; MAGMA and SYCL have no dispatch
+        // targets, so claiming they are available would be a lie that only
+        // surfaces at the call.
+        default: return false;
+    }
+}
+
+void Queue::set_backend(batchlas::Backend backend) {
+    if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
+        throw std::runtime_error("Queue::set_backend: backend is not compiled into this build of BatchLAS.");
+    }
+    backend_ = backend;
+    resolved_backend_ = batchlas::Backend::AUTO;  // re-resolve on next query
+}
+
+batchlas::Backend Queue::backend() const {
+    using batchlas::Backend;
+    if (backend_ != Backend::AUTO) return backend_;
+    if (resolved_backend_ != Backend::AUTO) return resolved_backend_;
+
+    // Resolve AUTO from the device: prefer the vendor's own stack, fall back to
+    // the host implementation, which is the only one guaranteed to run anywhere.
+    Backend choice = Backend::AUTO;
+    if (device_.type == DeviceType::GPU) {
+        const Vendor vendor = device_.get_vendor();
+        if (vendor == Vendor::NVIDIA && backend_available(Backend::CUDA)) {
+            choice = Backend::CUDA;
+        } else if (vendor == Vendor::AMD && backend_available(Backend::ROCM)) {
+            choice = Backend::ROCM;
+        } else if (vendor == Vendor::INTEL && backend_available(Backend::MKL)) {
+            choice = Backend::MKL;
+        }
+    }
+    if (choice == Backend::AUTO && backend_available(Backend::NETLIB)) {
+        choice = Backend::NETLIB;
+    }
+    if (choice == Backend::AUTO) {
+        throw std::runtime_error("Queue::backend: no backend compiled into this build can serve this device.");
+    }
+    resolved_backend_ = choice;
+    return choice;
 }
 
 Queue::~Queue() = default;
 Queue::Queue(Queue&& other) = default;
-Queue& Queue::operator=(Queue&& other) = default;
+
+// Written out rather than `= default` on purpose. Move-assignment destroys the
+// destination's QueueImpl without running ~Queue, so per-queue state has to be
+// torn down on this path too. It is: the workspace arena is a member of
+// QueueImpl, so overwriting impl_ below runs ~QueueImpl, which drains the queue
+// and frees the arena's blocks. Keeping this written out documents that the
+// requirement exists and gives it somewhere to live if state is ever added
+// outside QueueImpl -- storing it in a side table keyed on impl_ would be a bug,
+// since a later heap reuse of the same address would inherit the entry.
+Queue& Queue::operator=(Queue&& other) {
+    if (this == &other) return *this;
+    device_ = other.device_;
+    in_order_ = other.in_order_;
+    backend_ = other.backend_;
+    resolved_backend_ = other.resolved_backend_;
+    impl_ = std::move(other.impl_);
+    return *this;
+}
 
 void Queue::wait() const {impl_->wait();}
 void Queue::wait_and_throw() const {impl_->wait_and_throw();}
+
+batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
+    auto loan = impl_->arena_.acquire(*impl_, bytes);
+    return batchlas::WorkspaceLease(this, loan.ptr, loan.bytes, loan.block, loan.offset, loan.seq);
+}
+
+size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
+
+bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
+
+namespace batchlas {
+
+Span<std::byte> WorkspaceLease::span() const { return Span<std::byte>(ptr_, size_); }
+WorkspaceLease::operator Span<std::byte>() const { return span(); }
+
+void WorkspaceLease::release() noexcept { release_(/*diagnose_out_of_order=*/true); }
+
+void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
+    if (!queue_) return;
+
+    // Every release funnels through here, which is why the out-of-order-queue
+    // wait lives here rather than at the call sites: reclaiming hands these bytes
+    // to the next borrow, and on an out-of-order queue nothing stops the runtime
+    // from running that borrow's kernels alongside the ones still reading ours.
+    // An in-order queue orders them for us, so it must not pay for this.
+    //
+    // Conditioned on the release actually reclaiming. A return that lands under
+    // a live lease only flips a flag -- the bytes are not re-servable until the
+    // loans above come back, and the release that pops them drains then -- so
+    // paying a full device sync for it buys nothing. Before this was scoped,
+    // every convenience overload holding a scope-bound lease drained the device
+    // twice on a nested call.
+    //
+    // Note what this does not order against: work submitted to a *derived*
+    // in-order queue (gesvd, iluk build one from ctx and run the kernels there
+    // while the lease belongs to ctx). Waiting on ctx does not wait on that; the
+    // derived queue's destructor does. See the comment on release() in
+    // util/workspace.hh.
+    if (!queue_->in_order() && queue_->impl_->arena_.release_reclaims(seq_)) {
+        try {
+            queue_->wait();
+        } catch (...) {
+            // ~WorkspaceLease calls this, and move-assignment is noexcept, so
+            // throwing here would terminate. A failure the runtime surfaces at
+            // this wait is not this lease's failure and will be reported again
+            // at the caller's next wait/wait_and_throw on the same queue.
+        }
+    }
+
+    queue_->impl_->arena_.release(block_, offset_, seq_, diagnose_out_of_order);
+    queue_ = nullptr;
+    ptr_ = nullptr;
+    size_ = 0;
+    seq_ = 0;
+}
+
+}  // namespace batchlas
 
 
 QueueImpl* Queue::operator->() const {

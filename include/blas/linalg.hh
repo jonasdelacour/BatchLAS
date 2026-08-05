@@ -10,3 +10,6 @@
 #include <blas/extra.hh>
 #include <blas/extensions.hh>
 #include <blas/csr_generators.hh>
+
+// The batchlas::linalg convenience layer.
+#include <blas/linalg-ops.hh>

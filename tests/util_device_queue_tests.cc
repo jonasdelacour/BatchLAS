@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
+#include <util/env.hh>
 #include <util/sycl-device-queue.hh>
+
+#include <cstdlib>
+#include <string>
 
 TEST(DeviceTest, DefaultConstruction) {
     Device device;
@@ -161,7 +165,7 @@ TEST(QueueTest, EnqueueMultipleEvents) {
 TEST(QueueTest, WaitAndThrow) {
     try {
         Queue queue(Device::default_device());
-        
+
         EXPECT_NO_THROW({
             queue.wait();
             queue.wait_and_throw();
@@ -169,4 +173,83 @@ TEST(QueueTest, WaitAndThrow) {
     } catch (const std::exception& e) {
         GTEST_SKIP() << "Skipping wait tests due to no devices available";
     }
+}
+
+namespace {
+// setenv/unsetenv rather than putenv: putenv keeps the caller's buffer alive in
+// the environment, which is a lifetime trap in a test that restores on scope
+// exit.
+struct ScopedEnvVar {
+    std::string key;
+    std::string prev;
+    bool had_prev;
+
+    ScopedEnvVar(const char* k, const char* v) : key(k) {
+        const char* old = std::getenv(k);
+        had_prev = old != nullptr;
+        if (had_prev) prev = old;
+        if (v) setenv(k, v, 1); else unsetenv(k);
+    }
+    ~ScopedEnvVar() {
+        if (had_prev) setenv(key.c_str(), prev.c_str(), 1); else unsetenv(key.c_str());
+    }
+};
+}  // namespace
+
+// Pins the contract that every kernel-geometry knob in src/extensions now
+// depends on. These call sites each used to carry their own atoi-plus-`> 0`
+// parser; the shared helper only preserves them if it agrees on the whole input
+// space, and the interesting half of that space (unset, empty, non-positive,
+// unparseable, trailing junk) is exactly what no existing test reaches -- the
+// knobs the suite already sets are all positive integers, where every candidate
+// parser agrees trivially.
+TEST(EnvHelpers, PositiveIntOrClampsAndFallsBack) {
+    const char* kKey = "BATCHLAS_TEST_ENV_POSITIVE_INT";
+
+    {   // unset
+        ScopedEnvVar v(kKey, nullptr);
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
+    }
+    {   // empty string: stoi throws, so fallback
+        ScopedEnvVar v(kKey, "");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
+    }
+    {   // zero and negatives are "meaningless geometry", i.e. unset
+        ScopedEnvVar v(kKey, "0");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
+    }
+    {
+        ScopedEnvVar v(kKey, "-3");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
+    }
+    {   // unparseable falls back rather than silently reading as 0
+        ScopedEnvVar v(kKey, "abc");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
+    }
+    {   // stoi takes the leading integer and ignores the tail -- documented here
+        // because atoi did the same, so routing the old call sites through this
+        // did not change them.
+        ScopedEnvVar v(kKey, "8junk");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 8);
+    }
+    {
+        ScopedEnvVar v(kKey, "16");
+        EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 16);
+    }
+}
+
+// env_truthy/env_falsy take the VALUE, not the name, and an unset variable is
+// neither -- that is what lets a caller tell "forced off" from "not specified".
+TEST(EnvHelpers, TruthyAndFalsyAreNotComplements) {
+    EXPECT_FALSE(batchlas::env_truthy(nullptr));
+    EXPECT_FALSE(batchlas::env_falsy(nullptr));
+
+    EXPECT_TRUE(batchlas::env_truthy("1"));
+    EXPECT_TRUE(batchlas::env_truthy("true"));
+    EXPECT_TRUE(batchlas::env_truthy("ON"));
+    EXPECT_FALSE(batchlas::env_truthy("True"));  // exact spellings only
+
+    EXPECT_TRUE(batchlas::env_falsy("0"));
+    EXPECT_TRUE(batchlas::env_falsy("off"));
+    EXPECT_FALSE(batchlas::env_falsy("False"));  // exact spellings only
 }

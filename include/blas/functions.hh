@@ -33,3 +33,6 @@ namespace batchlas {
 } // namespace batchlas
 
 #endif // BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
+
+// Option-struct spellings of everything declared above.
+#include <blas/options.hh>

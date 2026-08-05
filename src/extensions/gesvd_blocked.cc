@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <util/env.hh>
 
 namespace batchlas {
 
@@ -33,11 +34,6 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
 }
 
 inline bool gesvd_stage_profile_enabled() {
-    auto env_truthy = [](const char* v) {
-        if (!v) return false;
-        return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
-                std::string(v) == "on" || std::string(v) == "ON");
-    };
     return env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
 }
 

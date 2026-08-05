@@ -16,6 +16,8 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -349,52 +351,37 @@ decltype(auto) visit_iluk(const ILUKHandle& handle, F&& fn) {
     });
 }
 
+// Turn the queue's backend into a compile-time tag.
+//
+// This used to be a switch over a `Backend` argument, duplicating the table in
+// blas/queue-dispatch.hh. The backend is a property of the Queue now, so the
+// table lives in exactly one place and this just forwards to it.
+//
+// It does not translate exceptions: with_backend only throws when no compiled
+// backend matches, and acquire_queue has already rejected that case. Catching
+// here would also swallow genuine runtime errors raised from inside `fn` and
+// report them as "backend unavailable", which is far worse than the raw error.
 template <typename F>
-decltype(auto) visit_backend(Backend backend, F&& fn) {
-    switch (backend) {
-        case Backend::AUTO:
-#if BATCHLAS_HAS_CUDA_BACKEND
-            return fn(std::integral_constant<Backend, Backend::CUDA>{});
-#elif BATCHLAS_HAS_ROCM_BACKEND
-            return fn(std::integral_constant<Backend, Backend::ROCM>{});
-#elif BATCHLAS_HAS_MKL_BACKEND
-            return fn(std::integral_constant<Backend, Backend::MKL>{});
-#elif BATCHLAS_HAS_HOST_BACKEND
-            return fn(std::integral_constant<Backend, Backend::NETLIB>{});
-#else
-            throw_not_implemented("no compiled backend is available for backend='auto'");
-#endif
-#if BATCHLAS_HAS_CUDA_BACKEND
-        case Backend::CUDA:
-            return fn(std::integral_constant<Backend, Backend::CUDA>{});
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-        case Backend::ROCM:
-            return fn(std::integral_constant<Backend, Backend::ROCM>{});
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        case Backend::MKL:
-            return fn(std::integral_constant<Backend, Backend::MKL>{});
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-        case Backend::NETLIB:
-            return fn(std::integral_constant<Backend, Backend::NETLIB>{});
-#endif
-        case Backend::SYCL:
-        case Backend::MAGMA:
-            break;
-    }
-    throw_not_implemented("requested backend is not available in this build");
+decltype(auto) visit_backend(Queue& queue, F&& fn) {
+    return batchlas::with_backend(queue, std::forward<F>(fn));
 }
 
+// Size a workspace and run the call with it.
+//
+// The bytes come from the queue's arena (util/workspace.hh) rather than a fresh
+// UnifiedVector per call, so a repeated operation reuses the same allocation
+// instead of malloc/free-ing device memory on every invocation. The lease is
+// released when this returns; the queue is in-order and every binding waits
+// before handing results back to Python, so the next borrower is safely ordered
+// behind this call.
+//
+// Note this now resolves the backend once. The old version called the dispatch
+// switch twice -- once to size, once to invoke.
 template <typename SizeFn, typename InvokeFn>
-void run_backend_with_workspace(Backend backend, Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
-    const std::size_t workspace_size = visit_backend(backend, [&](auto backend_tag) -> std::size_t {
-        return static_cast<std::size_t>(size_fn(backend_tag));
-    });
-    UnifiedVector<std::byte> workspace(workspace_size);
-    visit_backend(backend, [&](auto backend_tag) {
-        invoke_fn(backend_tag, workspace.to_span());
+void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
+    visit_backend(queue, [&](auto backend_tag) {
+        auto lease = queue.workspace(static_cast<std::size_t>(size_fn(backend_tag)));
+        invoke_fn(backend_tag, lease.span());
     });
 }
 
@@ -667,8 +654,59 @@ inline Device resolve_device(const std::optional<std::string>& device_name) {
     throw py::value_error("device must be one of: default, cpu, gpu, accelerator");
 }
 
-inline Queue make_queue(const std::optional<std::string>& device_name) {
-    return Queue(resolve_device(device_name));
+inline std::string device_cache_key(const std::optional<std::string>& device_name) {
+    if (!device_name.has_value()) {
+        return "default";
+    }
+    const std::string value = lower_copy(*device_name);
+    return value.empty() ? "default" : value;
+}
+
+// One Queue per (device, backend), created on first use and reused thereafter.
+//
+// This is a cache rather than a fresh Queue per call for three reasons:
+//
+//   * The Queue owns the workspace arena. A Queue that lives for one call gives
+//     an arena that lives for one call, so every call re-allocates the workspace
+//     it needs and frees it again -- the arena can only amortise across calls if
+//     the queue outlives them. This is the change that makes P2 pay off here.
+//   * Constructing a SYCL queue is not free, and the bindings were doing it on
+//     every single operation.
+//   * The backend is a property of the Queue, so it belongs in the cache key
+//     rather than being re-selected at each call site.
+//
+// Deliberately never destroyed. ~QueueImpl waits on the queue and frees the
+// arena against the SYCL context; at static-destruction time that context may
+// already be gone, so running these destructors at exit risks a hang or crash
+// for no benefit -- the process is ending regardless. The map is heap-allocated
+// and leaked so neither it nor the Queues it owns are destroyed.
+//
+// Thread safety: these bindings never release the GIL, so calls into BatchLAS
+// are serialised and the shared arena only ever has one user at a time. Adding
+// a py::gil_scoped_release around any call below would break that assumption and
+// require per-thread queues.
+inline Queue& acquire_queue(const std::optional<std::string>& device_name, Backend backend) {
+    const Device device = resolve_device(device_name);  // validates the name
+
+    // Checked here rather than inside with_backend so the error stays a Python
+    // NotImplementedError, which is what callers have always seen.
+    if (backend != Backend::AUTO && !Queue::backend_available(backend)) {
+        throw_not_implemented("requested backend is not available in this build");
+    }
+
+    using Key = std::pair<std::string, Backend>;
+    static auto& cache = *new std::map<Key, std::unique_ptr<Queue>>();
+
+    const Key key{device_cache_key(device_name), backend};
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        // Backend::AUTO is passed through rather than resolved here: the Queue
+        // resolves it from the device vendor on first use. That is a behaviour
+        // change -- the old code picked the first *compiled* backend, so
+        // backend='auto' with device='cpu' selected CUDA on a CUDA build.
+        it = cache.emplace(key, std::make_unique<Queue>(device, backend)).first;
+    }
+    return *it->second;
 }
 
 template <typename T>

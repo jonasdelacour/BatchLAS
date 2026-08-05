@@ -23,8 +23,7 @@ static void gemm_custom(minibench::State& state) {
     state.SetMetric("GFLOPS", batch_size * (1e-9 * 2.0 * m * n * k), true);
     state.ResumeTiming();
     for (auto _ : state) {
-        gemm<Backend::CUDA>(queue, A.view(), B.view(), C.view(), 1.0f, 0.0f,
-            Transpose::NoTrans, Transpose::NoTrans);
+        gemm(queue, A.view(), B.view(), C.view(), {});
     }
     queue.wait();
     state.StopTiming();

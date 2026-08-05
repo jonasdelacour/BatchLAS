@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <string_view>
@@ -15,8 +16,30 @@
 #include <blas/dispatch/context.hh>
 #include <blas/dispatch/env.hh>
 #include <blas/dispatch/provider.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
+
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using syev = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   Span<typename base_type<T>::type>,
+                   JobType, Uplo, Span<std::byte>);
+
+template <typename T>
+using syev_buffer_size = size_t(Queue&,
+                                const MatrixView<T, MatrixFormat::Dense>&,
+                                Span<typename base_type<T>::type>,
+                                JobType, Uplo);
+
+// backend::syev_vendor / syev_vendor_buffer_size share these signatures.
+template <typename T> using syev_vendor = syev<T>;
+template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
+}  // namespace sig
+
 
 template <Backend B, typename T>
 Event syev(Queue& ctx,
@@ -636,13 +659,19 @@ inline Event syev_dispatch(Queue& ctx,
         throw std::runtime_error("syev: insufficient workspace for chosen provider");
     }
 
+    // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
+    // builds a real sycl::queue on Device::default_device(). A by-value declaration here
+    // would pay that construction (and, on a multi-GPU box, touch device 0) on every syev
+    // call, including the common in-order path that never looks at it. It also cannot be
+    // sunk into the if-block -- run_q escapes to the calls below, so the queue has to
+    // outlive the branch.
     Queue* run_q = &ctx;
+    std::optional<Queue> in_order_q;
     if (!ctx.in_order()) {
-        Queue in_order_q(run_q->device(), true);
-        in_order_q = Queue(ctx, true);
+        in_order_q.emplace(ctx, true);
         Event dep = ctx.get_event();
-        in_order_q.enqueue(dep);
-        run_q = &in_order_q;
+        in_order_q->enqueue(dep);
+        run_q = &*in_order_q;
     }
 
     Event e;
@@ -769,3 +798,13 @@ inline size_t syev_buffer_size(Queue& ctx,
 }
 
 } // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(syev)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)
+
+}  // namespace batchlas

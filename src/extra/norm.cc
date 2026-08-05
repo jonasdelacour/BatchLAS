@@ -41,13 +41,13 @@ namespace batchlas
                                                                         eigen_span,
                                                                         JobType::NoEigenVectors,
                                                                         Uplo::Lower);
-        UnifiedVector<std::byte> workspace(ws_bytes);
+        auto workspace = ctx.workspace(ws_bytes);
         Event e = backend::syev_vendor<B, T>(ctx,
                                              A_copy.view(),
                                              eigen_span,
                                              JobType::NoEigenVectors,
                                              Uplo::Lower,
-                                             workspace.to_span());
+                                             workspace.span());
         ctx.enqueue(e);
 
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {

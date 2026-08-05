@@ -75,16 +75,26 @@ TYPED_TEST(TrmmTest, AllCombinations) {
                     Matrix<T> A = Matrix<T, MatrixFormat::Dense>::RandomTriangular(n, uplo, diag, batchSize);
                     
 
-                    // compute C = trmm(A,B) with the current combination
-                    trmm<Ba>(*(this->ctx), A.view(), B.view(), C.view(), T(1.0), side, uplo, trans, diag).wait();
+                    // compute C = trmm(A.view(),B.view()) with the current combination
+                    trmm(*(this->ctx),
+                             A.view(),
+                             B.view(),
+                             C.view(),
+                             {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
 
                     // subtract the full matrix product from C to obtain the residual
                     if (side == Side::Right) {
-                        gemm<Ba>(*(this->ctx), B.view(), A.view(), C.view(), T(1.0), T(-1.0),
-                                 Transpose::NoTrans, trans).wait();
+                        gemm(*(this->ctx),
+                                 B.view(),
+                                 A.view(),
+                                 C.view(),
+                                 {.beta = T(-1.0), .transB = trans}).wait();
                     } else {
-                        gemm<Ba>(*(this->ctx), A.view(), B.view(), C.view(), T(1.0), T(-1.0),
-                                 trans, Transpose::NoTrans).wait();
+                        gemm(*(this->ctx),
+                                 A.view(),
+                                 B.view(),
+                                 C.view(),
+                                 {.beta = T(-1.0), .transA = trans}).wait();
                     }
 
                     // the residual should be close to zero for a correct implementation
@@ -131,15 +141,11 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
         {
             ScopedEnvVar force_variant("BATCHLAS_TRMM_VARIANT", "cublasdx");
             try {
-                trmm<Backend::CUDA>(ctx,
+                trmm(ctx,
                                     A.view(),
                                     B.view(),
                                     C_custom.view(),
-                                    alpha,
-                                    Side::Left,
-                                    Uplo::Lower,
-                                    Transpose::NoTrans,
-                                    diag).wait();
+                                    {.alpha = alpha, .diag = diag}).wait();
             } catch (const std::runtime_error& err) {
                 EXPECT_FALSE(batchlas::backend::trmm_cublasdx::available());
                 EXPECT_NE(std::string(err.what()).find("BATCHLAS_TRMM_VARIANT=cublasdx"), std::string::npos);
@@ -149,15 +155,11 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 
         {
             ScopedEnvVar vendor_variant("BATCHLAS_TRMM_VARIANT", "vendor");
-            trmm<Backend::CUDA>(ctx,
+            trmm(ctx,
                                 A.view(),
                                 B.view(),
                                 C_vendor.view(),
-                                alpha,
-                                Side::Left,
-                                Uplo::Lower,
-                                Transpose::NoTrans,
-                                diag).wait();
+                                {.alpha = alpha, .diag = diag}).wait();
         }
 
         for (int b = 0; b < batch; ++b) {

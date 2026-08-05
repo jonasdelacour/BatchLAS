@@ -5,6 +5,7 @@
 
 #include <blas/extensions.hh>
 #include <blas/matrix.hh>
+#include <util/env.hh>
 #include <util/mempool.hh>
 
 #include <sycl/sycl.hpp>
@@ -18,9 +19,11 @@
 #include "sytrd_sb2st_hh.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -107,14 +110,22 @@ static_assert(kTpr <= 32 && kRowsPar * kTpr == kWg);
 
 } // namespace
 
+// Single description of sytrd_sb2st_hh's workspace; see workspace_bytes() in
+// util/mempool.hh. The expanded working band is wider than the input band
+// because transient bulge fill reaches kd rows below it.
+template <typename T>
+Span<T> sytrd_sb2st_hh_layout(Queue& ctx, BumpAllocator& pool, int32_t n, int32_t kdw, int32_t batch) {
+    return pool.allocate<T>(
+        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+}
+
 template <Backend B, typename T>
 size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch) {
     if (n <= 0 || batch <= 0) return 0;
     const int32_t kdw = sb2st_hh_work_bandwidth(n, kd);
-    size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(
-        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
-    return size;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
+    });
 }
 
 // ab_in      : (kd+1) x n  lower band, read-only
@@ -152,9 +163,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
     BumpAllocator pool(ws);
 
-    // Expanded working band: transient bulge fill reaches kd rows below the band.
-    auto abw = pool.allocate<T>(
-        ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto abw = sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
 
     const int32_t ldw = kdw + 1;
 
@@ -462,12 +471,6 @@ class Sb2stHhBackWaveKernel;
 
 constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
 
-inline int env_int_or(const char* key, int defval) {
-    const char* v = std::getenv(key);
-    if (!v || !*v) return defval;
-    return std::atoi(v);
-}
-
 }
 
 // Wave back-transform: resident Z tile + concurrent application of every
@@ -712,6 +715,17 @@ Event unmqr_hb2st_tiled(Queue& ctx,
     return ctx.get_event();
 }
 
+// True for any spelling a user would plausibly write to mean "off", matched
+// case-insensitively. See the call site in unmqr_hb2st for why this is local
+// rather than a widening of util/env.hh's env_falsy.
+static bool sb2st_wave_disabled(const char* v) {
+    if (!v || !*v) return false;  // unset is not "off" -- the default is on
+    std::string s(v);
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s == "0" || s == "false" || s == "off" || s == "no" || s == "n" ||
+           s == "disable" || s == "disabled";
+}
+
 template <Backend B, typename T>
 Event unmqr_hb2st(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& v_in,
@@ -734,7 +748,28 @@ Event unmqr_hb2st(Queue& ctx,
     // BATCHLAS_SB2ST_BACK_WAVE=0 to fall through to the single-sub-group tiled
     // kernel below (kept for comparison and as a fallback if the tile does not
     // fit in local memory).
-    const bool want_wave = env_int_or("BATCHLAS_SB2ST_BACK_WAVE", 1) != 0;
+    //
+    // Read against a local case-folded disable set rather than through
+    // env_falsy/env_int_or. This knob used to be parsed with a local atoi, under
+    // which every non-numeric spelling collapsed to 0, so "=off" and "=false"
+    // disabled the wave path; routing it through the shared helpers inverted
+    // that, because env_falsy matches only {0,false,FALSE,off,OFF} and
+    // env_int_or hands an unparseable value back as the fallback 1 -- so
+    // "=False", "=Off" and "=no" silently turned the wave path *on*. The cost of
+    // that is not a wasted flag: a wave-vs-tiled A/B driven by such a spelling
+    // measures the wave kernel against itself and reports the two paths as
+    // identical.
+    //
+    // env_falsy is deliberately not widened to fix this. Its contract is "exactly
+    // the spellings the six parsers it replaced accepted", and this is the only
+    // knob that wants more; broadening it would quietly change every other call
+    // site's reading of the same strings.
+    //
+    // Anything not in the set enables the wave path, including a typo. That is
+    // the fail-open direction on purpose: a mistyped value must not silently cost
+    // the fast path, and the spellings a user would actually write to mean "off"
+    // are all here.
+    const bool want_wave = !sb2st_wave_disabled(std::getenv("BATCHLAS_SB2ST_BACK_WAVE"));
     if (want_wave) {
         const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
         const size_t per_col = static_cast<size_t>(n) * sizeof(T);
@@ -744,7 +779,7 @@ Event unmqr_hb2st(Queue& ctx,
         // no longer costs occupancy the way it did at S=1; C is chosen to keep
         // the footprint near a budget rather than as small as possible. Measured
         // best at 8 columns for every n tried (see the subs table below).
-        int tile = env_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
+        int tile = env_positive_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
         if (tile <= 0) {
             constexpr size_t kTargetLocalBytes = 32768;
             tile = 1;
@@ -765,7 +800,7 @@ Event unmqr_hb2st(Queue& ctx,
         //   subs=8      17.1    51.0    123.8    245.0    8.5 / 8.5 / 16.5
         //   subs=16     20.6    58.5    103.5    207.1
         // -- 8 wins where waves hold ~8, 16 wins where they hold ~16.
-        int subs = env_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
+        int subs = env_positive_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
         if (subs <= 0) {
             const int32_t avg = (num_waves > 0) ? (nrefl + num_waves - 1) / num_waves : 1;
             subs = (avg >= 12) ? 16 : (avg >= 6 ? 8 : 4);

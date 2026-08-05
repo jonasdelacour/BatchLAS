@@ -123,7 +123,11 @@ UnifiedVector<OutType> netlib_ref_eigs(const MatrixView<InType, MatrixFormat::De
     UnifiedVector<OutType> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     UnifiedVector<std::byte> ws(
         syev_buffer_size<Backend::NETLIB, OutType>(ctx_cpu, A_conv.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev<Backend::NETLIB, OutType>(ctx_cpu, A_conv.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+    syev<Backend::NETLIB>(ctx_cpu,
+                                   A_conv.view(),
+                                   ref_eigs.to_span(),
+                                   {.jobz = JobType::NoEigenVectors},
+                                   ws.to_span()).wait();
     ctx_cpu.wait();
     return ref_eigs;
 }
@@ -227,7 +231,7 @@ int run_accuracy(const Options& opt) {
     out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,relerr,log10_relerr\n";
     out << std::setprecision(12);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     int sample_id = 0;
     for (int bin_idx = 0; bin_idx < bins; ++bin_idx) {

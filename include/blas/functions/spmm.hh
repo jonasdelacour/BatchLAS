@@ -4,8 +4,28 @@
 #include <util/sycl-span.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
+
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T, MatrixFormat F>
+using spmm = Event(Queue&,
+                   const MatrixView<T, F>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   T, T, Transpose, Transpose, Span<std::byte>);
+
+template <typename T, MatrixFormat F>
+using spmm_buffer_size = size_t(Queue&,
+                                const MatrixView<T, F>&,
+                                const MatrixView<T, MatrixFormat::Dense>&,
+                                const MatrixView<T, MatrixFormat::Dense>&,
+                                T, T, Transpose, Transpose);
+}  // namespace sig
+
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx,
@@ -52,5 +72,15 @@ inline size_t spmm_buffer_size(Queue& ctx,
                                                 Transpose transB) {
         return spmm_buffer_size<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(spmm)
+BATCHLAS_DISPATCH_ON_QUEUE(spmm_buffer_size)
 
 }  // namespace batchlas

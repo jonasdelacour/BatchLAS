@@ -22,6 +22,7 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
+#include <util/env.hh>
 
 namespace batchlas {
 
@@ -38,18 +39,6 @@ inline bool use_device_sytrd() {
         return v && std::string(v) == "device";
     }();
     return result;
-}
-
-inline bool env_truthy(const char* v) {
-    if (!v) return false;
-    const std::string s(v);
-    return (s == "1" || s == "true" || s == "TRUE" || s == "on" || s == "ON");
-}
-
-inline bool env_falsy(const char* v) {
-    if (!v) return false;
-    const std::string s(v);
-    return (s == "0" || s == "false" || s == "FALSE" || s == "off" || s == "OFF");
 }
 
 enum class SytrdTrailingUpdateMode {
@@ -648,6 +637,18 @@ inline int resolved_nb_sytrd(int32_t block_size, int compiled_nb) {
     return std::max<int>(1, block_size);
 }
 
+// Single description of sytrd_blocked's workspace; see workspace_bytes() in
+// util/mempool.hh.
+template <typename T>
+MatrixView<T, MatrixFormat::Dense> sytrd_blocked_layout(Queue& ctx,
+                                                        BumpAllocator& pool,
+                                                        int n,
+                                                        int nb,
+                                                        int batch) {
+    auto Wbuf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    return MatrixView<T, MatrixFormat::Dense>(Wbuf.data(), n, nb, n, n * nb, batch);
+}
+
 template <Backend B, typename T, int NB>
 size_t sytrd_blocked_buffer_size_impl(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& a,
@@ -665,9 +666,9 @@ size_t sytrd_blocked_buffer_size_impl(Queue& ctx,
     const int batch = a.batch_size();
     const int nb = resolved_nb_sytrd(block_size, NB);
 
-    size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    return size;
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
+    });
 }
 
 template <Backend B, typename T, int NB>
@@ -748,8 +749,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     VectorView<T> TAU = tau_out;
 
     BumpAllocator pool(ws);
-    auto Wbuf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> Wmat(Wbuf.data(), n, nb, n, n * nb, batch);
+    MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
 
     const int k = n - 1;
     const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
@@ -801,7 +801,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                     if (use_syr2k_trailing_update) {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
-                            syr2k<B>(ctx, V2, W2, A22, T(-1), T(1), Uplo::Lower, Transpose::NoTrans);
+                            syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                         }
                         if (!is_legacy) {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k_symmetrize");
@@ -810,21 +810,37 @@ Event sytrd_blocked_impl(Queue& ctx,
                     } else {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                            gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                            gemm<B>(ctx,
+                                    V2,
+                                    W2,
+                                    A22,
+                                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                         }
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                            gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                            gemm<B>(ctx,
+                                    W2,
+                                    V2,
+                                    A22,
+                                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                         }
                     }
                 } else {
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                        gemm<B>(ctx, V2, W2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        gemm<B>(ctx,
+                                V2,
+                                W2,
+                                A22,
+                                {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                     }
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                        gemm<B>(ctx, W2, V2, A22, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+                        gemm<B>(ctx,
+                                W2,
+                                V2,
+                                A22,
+                                {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
                     }
                 }
             }

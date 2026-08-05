@@ -15,7 +15,7 @@ static void BM_GEMM_IMPL(minibench::State& state) {
     auto A = Matrix<T>::Random(m, k, false, batch);
     auto Bm = Matrix<T>::Random(k, n, false, batch);
     auto C = Matrix<T>::Random(m, n, false, batch);
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
                     std::move(A),
@@ -26,7 +26,7 @@ static void BM_GEMM_IMPL(minibench::State& state) {
                     Transpose::NoTrans,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        gemm<B, T>(q, std::forward<decltype(xs)>(xs)...);
+                        gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

@@ -13,7 +13,7 @@ static void BM_SYEVX(minibench::State& state) {
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(neigs * batch);
 
@@ -25,7 +25,7 @@ static void BM_SYEVX(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size<B>(*q, A.view(), W.to_span(), neigs,
+    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
                                           JobType::NoEigenVectors,
                                           MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
@@ -39,7 +39,7 @@ static void BM_SYEVX(minibench::State& state) {
                     MatrixView<T, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx<B>(q, std::forward<decltype(xs)>(xs)...);
+                        syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -60,7 +60,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
     const size_t neigs = state.range(2);
     const auto method = static_cast<SyevxAlgorithm>(state.range(3));
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(neigs * batch);
 
@@ -75,7 +75,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size<B>(*q, A.view(), W.to_span(), neigs,
+    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
                                           JobType::NoEigenVectors,
                                           MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
@@ -89,7 +89,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
                     MatrixView<T, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx<B>(q, std::forward<decltype(xs)>(xs)...);
+                        syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -109,7 +109,7 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     const size_t neigs = state.range(2);
     const auto method = static_cast<SyevxAlgorithm>(state.range(3));
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(neigs * batch);
     auto V = Matrix<T>(n, neigs, batch);
@@ -123,7 +123,7 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size<B>(*q, A.view(), W.to_span(), neigs,
+    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
                                           JobType::EigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
@@ -138,7 +138,7 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
                     std::move(V),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx<B>(q, std::forward<decltype(xs)>(xs)...);
+                        syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

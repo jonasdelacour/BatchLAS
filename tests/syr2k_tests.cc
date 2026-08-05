@@ -78,11 +78,23 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
-            syr2k<Ba>(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, uplo, transA).wait();
+            syr2k(*(this->ctx),
+                      A.view(),
+                      B.view(),
+                      C.view(),
+                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
             const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-            gemm<Ba>(*(this->ctx), A.view(), B.view(), C_ref.view(), alpha, beta, transA, transB).wait();
-            gemm<Ba>(*(this->ctx), B.view(), A.view(), C_ref.view(), alpha, T(1), transA, transB).wait();
+            gemm(*(this->ctx),
+                     A.view(),
+                     B.view(),
+                     C_ref.view(),
+                     {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB}).wait();
+            gemm(*(this->ctx),
+                     B.view(),
+                     A.view(),
+                     C_ref.view(),
+                     {.alpha = alpha, .beta = T(1), .transA = transA, .transB = transB}).wait();
 
             C.view().symmetrize(*(this->ctx), uplo).wait();
             C_ref.view().symmetrize(*(this->ctx), uplo).wait();
@@ -139,7 +151,11 @@ TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
             {
                 ScopedEnvVar force_variant("BATCHLAS_SYR2K_VARIANT", "cublasdx");
                 try {
-                    syr2k<Backend::CUDA>(ctx, A.view(), B.view(), C_custom.view(), alpha, beta, uplo, transA).wait();
+                    syr2k(ctx,
+                                         A.view(),
+                                         B.view(),
+                                         C_custom.view(),
+                                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 } catch (const std::runtime_error& err) {
                     EXPECT_FALSE(batchlas::backend::syr2k_cublasdx::available());
                     EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYR2K_VARIANT=cublasdx"), std::string::npos);
@@ -149,7 +165,11 @@ TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 
             {
                 ScopedEnvVar vendor_variant("BATCHLAS_SYR2K_VARIANT", "vendor");
-                syr2k<Backend::CUDA>(ctx, A.view(), B.view(), C_vendor.view(), alpha, beta, uplo, transA).wait();
+                syr2k(ctx,
+                                     A.view(),
+                                     B.view(),
+                                     C_vendor.view(),
+                                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
             C_custom.view().symmetrize(ctx, uplo).wait();

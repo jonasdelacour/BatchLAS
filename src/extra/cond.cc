@@ -150,8 +150,8 @@ namespace batchlas
                           const NormType norm_type)
     {
         UnifiedVector<T> conds(A.batch_size());
-        UnifiedVector<std::byte> workspace(cond_buffer_size<B>(ctx, A, norm_type));
-        cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.to_span()).wait();
+        auto workspace = ctx.workspace(cond_buffer_size<B>(ctx, A, norm_type));
+        cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.span()).wait();
         return conds;
     }
 

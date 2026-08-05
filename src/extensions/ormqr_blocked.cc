@@ -436,12 +436,12 @@ Event ormqr_blocked_impl(Queue& ctx,
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
 
-            gemm<B>(q, Vblk, Csub, W1, T(1), T(0), Transpose::ConjTrans, Transpose::NoTrans);
+            gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            gemm<B>(q, Tblk, W1, W2, T(1), T(0), t_eff, Transpose::NoTrans);
+            gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
 
-            gemm<B>(q, Vblk, W2, Csub, T(-1), T(1), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
             auto Csub = c(Slice(), {i0, SliceEnd()});
             auto Vblk = Vmat({0, m}, {0, ib});
@@ -452,12 +452,16 @@ Event ormqr_blocked_impl(Queue& ctx,
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
-            gemm<B>(q, Csub, Vblk, W1, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            gemm<B>(q, W1, Tblk, W2, T(1), T(0), Transpose::NoTrans, t_eff);
+            gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
 
-            gemm<B>(q, W2, Vblk, Csub, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+            gemm<B>(q,
+                    W2,
+                    Vblk,
+                    Csub,
+                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
         }
 
     };

@@ -254,15 +254,20 @@ protected:
             GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
         }
         
-        // GPU backends require GPU device
+        // The queue carries the backend. Tests are typed on a Backend, so bind
+        // it here rather than passing it at every call: that is what lets a test
+        // body say `syev(*ctx, ...)` and still be the BackendType test, and it
+        // means the suite exercises the same queue-dispatch path callers use.
+        // Pinning also makes a missing backend fail loudly here instead of
+        // silently resolving to whatever the device vendor suggests.
         if constexpr (BackendType != batchlas::Backend::NETLIB) {
             try {
-                ctx = std::make_shared<Queue>("gpu", true);
+                ctx = std::make_shared<Queue>(Device("gpu"), BackendType, true);
                 if (ctx->device().type != DeviceType::GPU) {
                     GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
                 }
             } catch (const sycl::exception& e) {
-                if (e.code() == sycl::errc::runtime || 
+                if (e.code() == sycl::errc::runtime ||
                     e.code() == sycl::errc::feature_not_supported) {
                     GTEST_SKIP() << "GPU queue creation failed: " << e.what();
                 }
@@ -274,7 +279,7 @@ protected:
 #if !BATCHLAS_HAS_CPU_TARGET
             GTEST_SKIP() << "NETLIB backend requires CPU SYCL target support (no CPU target in fsycl-targets)";
 #endif
-            ctx = std::make_shared<Queue>("cpu");
+            ctx = std::make_shared<Queue>(Device("cpu"), BackendType, true);
         }
     }
     

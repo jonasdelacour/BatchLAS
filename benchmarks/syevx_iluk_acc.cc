@@ -448,7 +448,7 @@ std::vector<MatrixMetrics<Real>> run_sparse_syevx_once(Queue& q,
     params.instrumentation = &instrumentation;
 
     UnifiedVector<std::byte> ws(
-        syevx_buffer_size<B>(q,
+        syevx_buffer_size(q,
                              csr_view,
                              buffers.eigvals.to_span(),
                              static_cast<std::size_t>(neigs),
@@ -457,7 +457,7 @@ std::vector<MatrixMetrics<Real>> run_sparse_syevx_once(Queue& q,
                              params));
 
     const auto start = std::chrono::steady_clock::now();
-    syevx<B>(q,
+    syevx(q,
              csr_view,
              buffers.eigvals.to_span(),
              static_cast<std::size_t>(neigs),
@@ -490,7 +490,7 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
     const Real tolerance = static_cast<Real>(1e-6);
     const int chunk_batch = miniacc_acc::chunk_batch_from_samples(state.samples(), 16);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetTag("impl", impl_name);
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Real>());
@@ -584,7 +584,7 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
 
         try {
             const auto factor_start = std::chrono::steady_clock::now();
-            preconditioner = iluk_factorize<B>(*q, csr.view(), iluk_params);
+            preconditioner = iluk_factorize(*q, csr.view(), iluk_params);
             q->wait_and_throw();
             factor_time_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - factor_start).count();
             precond_nnz = static_cast<double>(preconditioner->lu.nnz());

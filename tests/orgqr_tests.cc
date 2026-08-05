@@ -28,16 +28,16 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
     UnifiedVector<T> tau(n);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-    geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+    geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
-    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-    orgqr<B>(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
+    orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n);
-    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), this->trans_op, Transpose::NoTrans);
+    gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
     this->ctx->wait();
 
     auto r = Result.data();
@@ -57,16 +57,16 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
     UnifiedVector<T> tau(n * batch);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-    geqrf<B>(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
+    geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
-    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size<B>(*this->ctx, A.view(), tau.to_span()));
-    orgqr<B>(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
+    orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
-    gemm<B>(*this->ctx, A.view(), A.view(), Result.view(), T(1), T(0), this->trans_op, Transpose::NoTrans);
+    gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
     this->ctx->wait();
 
     auto r = Result.data();

@@ -47,8 +47,8 @@ Event syr2k(Queue& ctx,
     validate_syr2k_arguments(A, B, C, transA);
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    gemm<Ba>(ctx, A, B, C, alpha, beta, transA, transB).wait();
-    return gemm<Ba>(ctx, B, A, C, alpha, T(1), transA, transB);
+    gemm<Ba>(ctx, A, B, C, {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB}).wait();
+    return gemm<Ba>(ctx, B, A, C, {.alpha = alpha, .beta = T(1), .transA = transA, .transB = transB});
 }
 
 #define SYR2K_INSTANTIATE(back, fp) \

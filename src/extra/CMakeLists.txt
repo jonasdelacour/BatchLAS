@@ -3,6 +3,7 @@ set(EXTENSIONS_SOURCES
     cond.cc
     random_cond.cc
     transpose.cc
+    elementwise.cc
 )
 
 target_sources(batchlas_extra_obj PRIVATE ${EXTENSIONS_SOURCES})

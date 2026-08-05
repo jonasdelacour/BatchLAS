@@ -134,7 +134,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
     
@@ -161,7 +161,11 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::Trans); 
 
-    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
+    gemv(*(this->ctx),
+                      A_view,
+                      x_vec,
+                      y_vec,
+                      {.alpha = alpha, .beta = beta, .transA = Transpose::Trans});
 
     this->ctx->wait();
 
@@ -188,7 +192,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans);
 
-    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 
@@ -220,7 +224,11 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::Trans);
 
-    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::Trans);
+    gemv(*(this->ctx),
+                      A_view,
+                      x_vec,
+                      y_vec,
+                      {.alpha = alpha, .beta = beta, .transA = Transpose::Trans});
 
     this->ctx->wait();
 
@@ -257,7 +265,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    gemv<BackendType>(*(this->ctx), A_view, x_vec, y_vec, alpha, beta, Transpose::NoTrans);
+    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 

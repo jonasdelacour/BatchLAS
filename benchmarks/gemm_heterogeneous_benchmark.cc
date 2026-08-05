@@ -118,7 +118,7 @@ void run_heterogeneous_variant(minibench::State& state,
     const int k = state.range(2);
     const int batch = state.range(3);
 
-    auto q = std::make_shared<Queue>("gpu");
+    auto q = std::make_shared<Queue>(Device("gpu"));
     auto A = std::make_shared<Matrix<float>>(Matrix<float>::Random(max_m, k, false, batch));
     auto B = std::make_shared<Matrix<float>>(Matrix<float>::Random(k, max_n, false, batch));
     auto C = std::make_shared<Matrix<float>>(Matrix<float>::Random(max_m, max_n, false, batch));
@@ -149,7 +149,7 @@ void run_heterogeneous_variant(minibench::State& state,
     });
 
     state.SetTimedKernelMs(bench::make_event_timed_kernel_ms(q, [q, A, B, C, env]() {
-        gemm_heterogeneous<Backend::CUDA>(*q,
+        gemm_heterogeneous(*q,
                                           A->view(),
                                           B->view(),
                                           C->view(),

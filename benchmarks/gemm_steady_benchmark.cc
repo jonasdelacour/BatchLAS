@@ -45,7 +45,7 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     auto A = std::make_shared<Matrix<T>>(Matrix<T>::Random(m, k, false, batch));
     auto Bm = std::make_shared<Matrix<T>>(Matrix<T>::Random(k, n, false, batch));
     auto C = std::make_shared<Matrix<T>>(Matrix<T>::Random(m, n, false, batch));
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     bench::ManagedInputs managed(q);
     managed.prepare(*A);
@@ -56,7 +56,7 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     state.SetBeforeEachRun(managed.make_before_each_run());
 
     auto kernel_once = [q, A, Bm, C]() mutable {
-        gemm<B, T>(*q, A->view(), Bm->view(), C->view(), T(1), T(1), Transpose::NoTrans, Transpose::NoTrans);
+        gemm(*q, A->view(), Bm->view(), C->view(), {.beta = T(1)});
     };
 
     state.SetKernel(std::function<void()>(kernel_once));

@@ -134,7 +134,7 @@ Event syevx_direct(Queue& ctx,
 
         auto syev_ws = pool.allocate<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower));
-        syev<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower, syev_ws);
+        syev<B>(ctx, A_copy, lambdas, {.jobz = jobz}, syev_ws);
 
         // syev returns eigenvalues ascending, so every range reduces to picking a
         // contiguous block out of `lambdas` -- for an index block statically, for a

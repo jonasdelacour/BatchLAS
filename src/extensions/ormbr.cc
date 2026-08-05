@@ -545,9 +545,9 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
 
-            gemm<B>(ctx, Ublk, Csub, W1, T(1), T(0), Transpose::ConjTrans, Transpose::NoTrans);
-            gemm<B>(ctx, Tblk, W1, W2, T(1), T(0), t_eff, Transpose::NoTrans);
-            gemm<B>(ctx, Ublk, W2, Csub, T(-1), T(1), Transpose::NoTrans, Transpose::NoTrans);
+            gemm<B>(ctx, Ublk, Csub, W1, {.transA = Transpose::ConjTrans});
+            gemm<B>(ctx, Tblk, W1, W2, {.transA = t_eff});
+            gemm<B>(ctx, Ublk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
             auto Csub = c(Slice(), {i0 + 1, SliceEnd()});
             MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * static_cast<int64_t>(nb), batch);
@@ -555,9 +555,13 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
-            gemm<B>(ctx, Csub, Ublk, W1, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
-            gemm<B>(ctx, W1, Tblk, W2, T(1), T(0), Transpose::NoTrans, t_eff);
-            gemm<B>(ctx, W2, Ublk, Csub, T(-1), T(1), Transpose::NoTrans, Transpose::ConjTrans);
+            gemm<B>(ctx, Csub, Ublk, W1, GemmOptions<T>{});
+            gemm<B>(ctx, W1, Tblk, W2, {.transB = t_eff});
+            gemm<B>(ctx,
+                    W2,
+                    Ublk,
+                    Csub,
+                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
         }
     };
 

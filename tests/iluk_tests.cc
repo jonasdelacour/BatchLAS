@@ -216,9 +216,9 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
     for (int k : {0, 1, 2}) {
         ILUKParams<float> params;
         params.levels_of_fill = k;
-        auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+        auto M = iluk_factorize(*ctx, A, params);
 
-        iluk_apply<test_utils::gpu_backend>(*ctx, M, rhs.view(), out.view());
+        iluk_apply(*ctx, M, rhs.view(), out.view());
         ctx->wait_and_throw();
 
         for (int b = 0; b < batch; ++b) {
@@ -252,7 +252,7 @@ TEST_F(ILUKTests, SymbolicPatternUsesMaxLevelRecurrence) {
 
     ILUKParams<float> params;
     params.levels_of_fill = 2;
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
 
     const auto lu = M.lu.view();
     const auto ro = lu.row_offsets();
@@ -285,7 +285,7 @@ TEST_F(ILUKTests, HeterogeneousBatchSparsityThrows) {
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
                                             nnz, n, n, nnz, n + 1, batch);
 
-    EXPECT_THROW((iluk_factorize<test_utils::gpu_backend>(*ctx, A, ILUKParams<float>{})), std::invalid_argument);
+    EXPECT_THROW((iluk_factorize(*ctx, A, ILUKParams<float>{})), std::invalid_argument);
 }
 
 TEST_F(ILUKTests, ZeroShiftZeroPivotFactorizationThrows) {
@@ -306,7 +306,7 @@ TEST_F(ILUKTests, ZeroShiftZeroPivotFactorizationThrows) {
     params.levels_of_fill = 0;
     params.diagonal_shift = 0.0f;
     params.diag_pivot_threshold = 0.0f;
-    EXPECT_THROW((iluk_factorize<test_utils::gpu_backend>(*ctx, A, params)), std::runtime_error);
+    EXPECT_THROW((iluk_factorize(*ctx, A, params)), std::runtime_error);
 }
 
 TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
@@ -341,7 +341,7 @@ TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
     rhs(0, 0, 0) = 1.0f;
     rhs(1, 0, 0) = 2.0f;
 
-    EXPECT_THROW((iluk_apply<test_utils::gpu_backend>(*ctx, M, rhs.view(), out.view())), std::runtime_error);
+    EXPECT_THROW((iluk_apply(*ctx, M, rhs.view(), out.view())), std::runtime_error);
 }
 
 TEST_F(ILUKTests, DropToleranceRemovesTinyOffDiagonalEntries) {
@@ -363,7 +363,7 @@ TEST_F(ILUKTests, DropToleranceRemovesTinyOffDiagonalEntries) {
     ILUKParams<float> params;
     params.levels_of_fill = 0;
     params.drop_tolerance = 1e-3f;
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
 
     const auto lu = M.lu.view();
     const auto ro = lu.row_offsets();
@@ -392,7 +392,7 @@ TEST_F(ILUKTests, FillFactorCapsAdditionalFill) {
     params.levels_of_fill = 2;
     params.drop_tolerance = 0.0f;
     params.fill_factor = 1.0f;
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
 
     EXPECT_LE(M.lu.nnz(), nnz);
 
@@ -425,7 +425,7 @@ TEST_F(ILUKTests, PivotThresholdStabilizesTinyDiagonal) {
     params.levels_of_fill = 0;
     params.diagonal_shift = 0.0f;
     params.diag_pivot_threshold = 0.25f;
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
 
     const auto lu = M.lu.view();
     EXPECT_GE(lu.data()[M.diag_positions[0]], 0.25f);
@@ -449,7 +449,7 @@ TEST_F(ILUKTests, ModifiedIluAccumulatesDroppedMassOnDiagonal) {
     params.levels_of_fill = 0;
     params.drop_tolerance = 1e-2f;
     params.modified_ilu = true;
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
 
     const auto lu = M.lu.view();
     EXPECT_NEAR(lu.data()[M.diag_positions[0]], 4.001f, 1e-6f);
@@ -480,11 +480,11 @@ TEST_F(ILUKTests, InverseResidualIsNearZeroForExactTridiagonalFactorization) {
     params.diag_pivot_threshold = 0.0f;
     params.modified_ilu = false;
 
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params);
+    auto M = iluk_factorize(*ctx, A, params);
     auto identity = make_identity_matrix<float>(n, batch);
     Matrix<float, MatrixFormat::Dense> approx_inverse(n, n, batch);
 
-    iluk_apply<test_utils::gpu_backend>(*ctx, M, identity.view(), approx_inverse.view());
+    iluk_apply(*ctx, M, identity.view(), approx_inverse.view());
     ctx->wait_and_throw();
 
     const double residual = inverse_residual_frobenius(A, approx_inverse.view());
@@ -521,11 +521,11 @@ TEST_F(ILUKTests, HigherFillImprovesApproximateInverseResidualOnLargeSparseMatri
     ILUKParams<float> params_k4 = params_k0;
     params_k4.levels_of_fill = 4;
 
-    auto M0 = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params_k0);
-    auto M4 = iluk_factorize<test_utils::gpu_backend>(*ctx, A, params_k4);
+    auto M0 = iluk_factorize(*ctx, A, params_k0);
+    auto M4 = iluk_factorize(*ctx, A, params_k4);
 
-    iluk_apply<test_utils::gpu_backend>(*ctx, M0, identity.view(), approx_inverse_k0.view());
-    iluk_apply<test_utils::gpu_backend>(*ctx, M4, identity.view(), approx_inverse_k4.view());
+    iluk_apply(*ctx, M0, identity.view(), approx_inverse_k0.view());
+    iluk_apply(*ctx, M4, identity.view(), approx_inverse_k4.view());
     ctx->wait_and_throw();
 
     const double residual_k0 = inverse_residual_frobenius(A, approx_inverse_k0.view());
@@ -631,7 +631,7 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
         if (run.iluk_level >= 0) {
             ILUKParams<float> iluk_params;
             iluk_params.levels_of_fill = run.iluk_level;
-            precond = iluk_factorize<test_utils::gpu_backend>(*ctx, csr_view, iluk_params);
+            precond = iluk_factorize(*ctx, csr_view, iluk_params);
             precond_ptr = &(*precond);
         }
 
@@ -658,10 +658,10 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
         params.instrumentation = &instr;
 
         UnifiedVector<std::byte> workspace(
-            syevx_buffer_size<test_utils::gpu_backend>(*ctx, csr_view, run.W, neigs, JobType::NoEigenVectors,
+            syevx_buffer_size(*ctx, csr_view, run.W, neigs, JobType::NoEigenVectors,
                                                        MatrixView<float, MatrixFormat::Dense>(), params));
 
-        syevx<test_utils::gpu_backend>(*ctx, csr_view, run.W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, csr_view, run.W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params);
         ctx->wait_and_throw();
     };
@@ -819,7 +819,7 @@ TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
     auto csr = csr_generators::random_sparse_hermitian_csr<float>(n, 0.05f, batch, 4242u, 2.0f, true);
     auto view = csr.view();
 
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, ILUKParams<float>());
+    auto M = iluk_factorize(*ctx, view, ILUKParams<float>());
 
     UnifiedVector<float> W(neigs * batch, 0.0f);
     SyevxParams<float> params;
@@ -830,18 +830,18 @@ TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
     // Sizing the workspace for the legal (smallest-eigenpair) configuration also
     // covers the rejected one, so the throw below is the guard and not an OOM.
     UnifiedVector<std::byte> workspace(
-        syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+        syevx_buffer_size(*ctx, view, W, neigs, JobType::NoEigenVectors,
                                                    MatrixView<float, MatrixFormat::Dense>(), params));
 
     params.find_largest = true;
     EXPECT_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
 
     params.find_largest = false;
     EXPECT_NO_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
 }
@@ -872,14 +872,14 @@ TEST_F(ILUKTests, SyevxBuildsPreconditionerFromItsOwnWorkspace) {
         if (build_in_solver) {
             params.build_preconditioner = true;
         } else {
-            external = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+            external = iluk_factorize(*ctx, view, iluk_params);
             params.preconditioner = &*external;
         }
 
         UnifiedVector<std::byte> workspace(
-            syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+            syevx_buffer_size(*ctx, view, W, neigs, JobType::NoEigenVectors,
                                                        MatrixView<float, MatrixFormat::Dense>(), params));
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params);
         ctx->wait_and_throw();
     };
@@ -911,7 +911,7 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
 
     auto csr = csr_generators::random_sparse_hermitian_csr<float>(n, 0.05f, batch, 4242u, 2.0f, true);
     auto view = csr.view();
-    auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, ILUKParams<float>());
+    auto M = iluk_factorize(*ctx, view, ILUKParams<float>());
 
     UnifiedVector<float> W(neigs * batch, 0.0f);
     SyevxParams<float> params;
@@ -920,21 +920,21 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
     params.build_preconditioner = true;
 
     UnifiedVector<std::byte> workspace(
-        syevx_buffer_size<test_utils::gpu_backend>(*ctx, view, W, neigs, JobType::NoEigenVectors,
+        syevx_buffer_size(*ctx, view, W, neigs, JobType::NoEigenVectors,
                                                    MatrixView<float, MatrixFormat::Dense>(), params));
 
     // Supplying both a factor and asking for one is ambiguous rather than harmless:
     // the caller clearly disagrees with itself about which factor should be used.
     params.preconditioner = &M;
     EXPECT_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
     params.preconditioner = nullptr;
 
     params.find_largest = true;
     EXPECT_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
     params.find_largest = false;
@@ -945,12 +945,12 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
     auto dense_view = dense.view();
     UnifiedVector<std::byte> dense_ws(1024);
     EXPECT_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, dense_view, W, neigs, dense_ws, JobType::NoEigenVectors,
+        syevx(*ctx, dense_view, W, neigs, dense_ws, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
 
     EXPECT_NO_THROW(
-        syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
 }
@@ -978,7 +978,7 @@ TEST_F(ILUKTests, HostAndDeviceFactorizationsAgree) {
 
         auto factor_with = [&](const char* mode) {
             setenv("BATCHLAS_ILUK_DEVICE", mode, 1);
-            auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, params);
+            auto M = iluk_factorize(*ctx, view, params);
             ctx->wait_and_throw();
             unsetenv("BATCHLAS_ILUK_DEVICE");
             return M;
@@ -1094,15 +1094,18 @@ TEST_F(ILUKTests, DISABLED_SyevxVsSyevThreshold) {
         std::string shape_note = "";
         bool have_syev = false;
         try {
-            UnifiedVector<std::byte> ws(syev_buffer_size<test_utils::gpu_backend>(
+            UnifiedVector<std::byte> ws(syev_buffer_size(
                 *ctx, dense_work.view(), W_full, JobType::NoEigenVectors, Uplo::Lower));
             std::vector<double> samples;
             for (int r = 0; r < reps + 1; ++r) {  // first pass is a discarded warm-up
                 MatrixView<float, MatrixFormat::Dense>::copy(*ctx, dense_work.view(), dense_ref.view());
                 ctx->wait_and_throw();
                 const auto t0 = std::chrono::steady_clock::now();
-                syev<test_utils::gpu_backend>(*ctx, dense_work.view(), W_full, JobType::NoEigenVectors,
-                                              Uplo::Lower, ws);
+                syev(*ctx,
+                                              dense_work.view(),
+                                              W_full,
+                                              {.jobz = JobType::NoEigenVectors},
+                                              ws);
                 ctx->wait_and_throw();
                 if (r > 0) samples.push_back(seconds_since(t0));
             }
@@ -1129,13 +1132,13 @@ TEST_F(ILUKTests, DISABLED_SyevxVsSyevThreshold) {
             params.build_preconditioner = preconditioned;
             params.iluk_params.levels_of_fill = level;
 
-            UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+            UnifiedVector<std::byte> ws(syevx_buffer_size(
                 *ctx, csr_view, W, static_cast<size_t>(k), JobType::NoEigenVectors,
                 MatrixView<float, MatrixFormat::Dense>(), params));
             std::vector<double> samples;
             for (int r = 0; r < reps + 1; ++r) {
                 const auto t0 = std::chrono::steady_clock::now();
-                syevx<test_utils::gpu_backend>(*ctx, csr_view, W, static_cast<size_t>(k), ws,
+                syevx(*ctx, csr_view, W, static_cast<size_t>(k), ws,
                                                JobType::NoEigenVectors,
                                                MatrixView<float, MatrixFormat::Dense>(), params);
                 ctx->wait_and_throw();
@@ -1247,19 +1250,19 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
             params.iluk_params.levels_of_fill = level;
             params.instrumentation = &instr;
 
-            UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+            UnifiedVector<std::byte> ws(syevx_buffer_size(
                 *ctx, view, W, neigs, JobType::NoEigenVectors,
                 MatrixView<float, MatrixFormat::Dense>(), params));
             ctx->wait_and_throw();
 
             // Discarded warm-up: the first launch of each kernel pays JIT and
             // clock ramp, which otherwise lands entirely on whichever run goes first.
-            syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+            syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
                                            MatrixView<float, MatrixFormat::Dense>(), params);
             ctx->wait_and_throw();
 
             const auto t0 = std::chrono::steady_clock::now();
-            syevx<test_utils::gpu_backend>(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+            syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
                                            MatrixView<float, MatrixFormat::Dense>(), params);
             ctx->wait_and_throw();
             const double elapsed = seconds_since(t0);
@@ -1278,12 +1281,12 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
         std::vector<double> factor_samples;
         for (int r = 0; r < reps; ++r) {
             const auto tf = std::chrono::steady_clock::now();
-            auto tmp = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+            auto tmp = iluk_factorize(*ctx, view, iluk_params);
             ctx->wait_and_throw();
             factor_samples.push_back(seconds_since(tf));
         }
         const double factor_s = median(factor_samples);
-        auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, view, iluk_params);
+        auto M = iluk_factorize(*ctx, view, iluk_params);
         ctx->wait_and_throw();
 
         // Cost of a single preconditioner application at LOBPCG block width.
@@ -1295,7 +1298,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
         const auto ta = std::chrono::steady_clock::now();
         constexpr int apply_reps = 10;
         for (int r = 0; r < apply_reps; ++r) {
-            iluk_apply<test_utils::gpu_backend>(*ctx, M, rhs.view(), out.view());
+            iluk_apply(*ctx, M, rhs.view(), out.view());
         }
         ctx->wait_and_throw();
         const double apply_s = seconds_since(ta) / apply_reps;
@@ -1334,7 +1337,7 @@ TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
         for (const auto& s : shapes) {
             auto csr = csr_generators::random_sparse_hermitian_csr<float>(s.n, s.density, s.batch, 1234u, 2.0f, true);
             ILUKParams<float> p; p.levels_of_fill = level;
-            auto M = iluk_factorize<test_utils::gpu_backend>(*ctx, csr.view(), p);
+            auto M = iluk_factorize(*ctx, csr.view(), p);
             auto lu = M.lu.view();
             auto ro = lu.row_offsets(); auto ci = lu.col_indices();
             const int n = s.n;

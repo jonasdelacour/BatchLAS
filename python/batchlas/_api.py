@@ -1695,3 +1695,88 @@ def random_tridiagonal_with_log10_cond_metric(**kwargs):
 
 def random_hermitian_tridiagonal_with_log10_cond_metric(**kwargs):
     return _conditioned_random("random_hermitian_tridiagonal_with_log10_cond_metric", **kwargs)
+
+
+# --- elementwise arithmetic -------------------------------------------------
+#
+# These wrap batchlas::linalg (see include/blas/linalg-ops.hh). Unlike the
+# BLAS/LAPACK entry points they take no `backend`: they are SYCL kernels, not
+# vendor-library calls, so there is nothing for a backend to select. `device`
+# still applies and picks where the arithmetic runs.
+#
+# Operands must have the same shape; broadcasting is not supported. Mismatched
+# shapes raise ValueError rather than silently doing something surprising.
+
+
+def _elementwise(name: str, a: Any, b: Any, device: str | None, out: Any):
+    return _unwrap_with_out(
+        getattr(_ext, name)(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            _normalize_device(device),
+        ),
+        out,
+    )
+
+
+def add(a: Any, b: Any, *, device: str | None = None, out: Any = None):
+    """Elementwise sum of two equally-shaped (batched) matrices."""
+    return _elementwise("_elementwise_add", a, b, device, out)
+
+
+def subtract(a: Any, b: Any, *, device: str | None = None, out: Any = None):
+    """Elementwise difference a - b."""
+    return _elementwise("_elementwise_subtract", a, b, device, out)
+
+
+def multiply(a: Any, b: Any, *, device: str | None = None, out: Any = None):
+    """Elementwise (Hadamard) product.
+
+    This is not matrix multiplication -- for that use ``gemm``. The distinction
+    matters most for square operands, where both are shape-valid.
+    """
+    return _elementwise("_elementwise_multiply", a, b, device, out)
+
+
+def divide(a: Any, b: Any, *, device: str | None = None, out: Any = None):
+    """Elementwise quotient a / b."""
+    return _elementwise("_elementwise_divide", a, b, device, out)
+
+
+def axpby(
+    alpha: Any,
+    a: Any,
+    beta: Any,
+    b: Any,
+    *,
+    device: str | None = None,
+    out: Any = None,
+):
+    """alpha * a + beta * b, elementwise."""
+    return _unwrap_with_out(
+        _ext._axpby(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            alpha,
+            beta,
+            _normalize_device(device),
+        ),
+        out,
+    )
+
+
+def scale(a: Any, alpha: Any, *, device: str | None = None, out: Any = None):
+    """Return alpha * a.
+
+    The C++ ``linalg::scale`` is in-place, but in-place has no meaning across
+    this boundary: ``a`` is copied into device memory on the way in, so mutating
+    it would not be visible to the caller. This returns the scaled result.
+    """
+    return _unwrap_with_out(
+        _ext._scale(
+            _coerce_dense_matrix(a),
+            alpha,
+            _normalize_device(device),
+        ),
+        out,
+    )

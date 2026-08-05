@@ -3,8 +3,21 @@
 #include <util/sycl-device-queue.hh>
 #include <blas/matrix.hh>
 #include <blas/enums.hh>
+#include <blas/queue-dispatch.hh>
 
 namespace batchlas {
+
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using trmm = Event(Queue&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<T, MatrixFormat::Dense>&,
+                   T, Side, Uplo, Transpose, Diag);
+}  // namespace sig
+
 
 template <Backend Ba, typename T>
 Event trmm(Queue& ctx,
@@ -29,5 +42,14 @@ inline Event trmm(Queue& ctx,
                                  Diag diag) {
         return trmm<Ba,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, side, uplo, transA, diag);
 }
+
+}  // namespace batchlas
+
+namespace batchlas {
+
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+
+BATCHLAS_DISPATCH_ON_QUEUE(trmm)
 
 }  // namespace batchlas

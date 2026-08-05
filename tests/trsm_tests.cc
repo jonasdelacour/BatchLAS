@@ -153,16 +153,10 @@ protected:
             auto B_view = B_matrix.view();
             
             try {
-                trsm<BackendType>(
-                    *(this->ctx),
-                    A_view,
-                    B_view,
-                    Side::Left,
-                    uplo,
-                    trans,
-                    Diag::NonUnit,
-                    alpha
-                );
+                trsm(*(this->ctx),
+                                  A_view,
+                                  B_view,
+                                  {.alpha = alpha, .uplo = uplo, .trans = trans});
                 this->ctx->wait();
             } catch(const std::exception& e) {
                 FAIL() << "TRSM operation failed with exception: " << e.what();
@@ -177,16 +171,10 @@ protected:
                 auto B_view = B_parent_view.batch_item(b);
                 
                 try {
-                    trsm<BackendType>(
-                        *(this->ctx),
-                        A_view,
-                        B_view,
-                        Side::Left,
-                        uplo,
-                        trans,
-                        Diag::NonUnit,
-                        alpha
-                    );
+                    trsm(*(this->ctx),
+                                      A_view,
+                                      B_view,
+                                      {.alpha = alpha, .uplo = uplo, .trans = trans});
                 } catch(const std::exception& e) {
                     FAIL() << "TRSM operation failed for batch " << b << " with exception: " << e.what();
                 }

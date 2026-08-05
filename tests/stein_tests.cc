@@ -51,7 +51,7 @@ protected:
         bp.iu = iu;
         auto bws = UnifiedVector<std::byte>(
             stebz_buffer_size<test_utils::gpu_backend, Real>(*ctx, n, batch, bp));
-        stebz<test_utils::gpu_backend>(*ctx, d_view, e_view,
+        stebz(*ctx, d_view, e_view,
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        m.to_span(), bws, bp);
         ctx->wait();
@@ -60,7 +60,7 @@ protected:
         SteinParams<Real> sp;
         auto sws = UnifiedVector<std::byte>(
             stein_buffer_size<test_utils::gpu_backend, Real>(*ctx, n, k, batch, sp));
-        stein<test_utils::gpu_backend>(*ctx, d_view, e_view,
+        stein(*ctx, d_view, e_view,
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        k, Z.view(), sws, sp);
         ctx->wait();

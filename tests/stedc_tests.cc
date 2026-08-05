@@ -98,20 +98,20 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 32};
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
+    UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
-    stedc<B>(*this->ctx, a, b, eigvals,
-                      ws, JobType::EigenVectors, params, eigvects);
+    stedc(*this->ctx, a.view(), b.view(), eigvals.view(),
+                      ws, JobType::EigenVectors, params, eigvects.view());
     
     this->ctx->wait();
 
     UnifiedVector<float_type> ref_eigvals(n * batch);
 
     Matrix<float_type> reconstructed = Matrix<float_type>::TriDiagToeplitz(n, float_type(1), float_type(1), float_type(1), batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), reconstructed.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
 
     auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
-    syev<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    syev(*(this->ctx), reconstructed.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
     this->ctx->wait();
     auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
 
@@ -144,23 +144,23 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 16};
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
+    UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
     Matrix<float_type> reconstructed = Matrix<float_type>::Zeros(n, n, batch);
     reconstructed.view().fill_tridiag(*this->ctx, b, a, b).wait();
     this->ctx->wait();
     
-    stedc<B>(*this->ctx, a, b, eigvals,
-                      ws, JobType::EigenVectors, params, eigvects);
+    stedc(*this->ctx, a.view(), b.view(), eigvals.view(),
+                      ws, JobType::EigenVectors, params, eigvects.view());
     
     this->ctx->wait();
 
     UnifiedVector<float_type> ref_eigvals(n * batch);
 
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), reconstructed.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
 
     auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
-    syev<B>(*(this->ctx), reconstructed, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    syev(*(this->ctx), reconstructed.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
     this->ctx->wait();
 
     auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
@@ -234,11 +234,11 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         auto eigvecs_rec = Matrix<float_type>::Identity(n, batch);
         auto eigvecs_lvl = Matrix<float_type>::Identity(n, batch);
 
-        UnifiedVector<std::byte> ws_rec(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
-        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
+        UnifiedVector<std::byte> ws_rec(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
+        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
-        stedc<B>(*this->ctx, a_rec, b_rec, eigvals_rec, ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec);
-        stedc<B>(*this->ctx, a_lvl, b_lvl, eigvals_lvl, ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl);
+        stedc(*this->ctx, a_rec.view(), b_rec.view(), eigvals_rec.view(), ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec.view());
+        stedc(*this->ctx, a_lvl.view(), b_lvl.view(), eigvals_lvl.view(), ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
         this->ctx->wait();
 
         const auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3)
@@ -293,11 +293,11 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
         .enable_rescale = true,
     };
 
-    UnifiedVector<std::byte> ws_base(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_base));
-    UnifiedVector<std::byte> ws_fused(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
+    UnifiedVector<std::byte> ws_base(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_base));
+    UnifiedVector<std::byte> ws_fused(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
 
-    stedc<B>(*this->ctx, a_base, b_base, eigvals_base, ws_base, JobType::EigenVectors, params_base, eigvecs_base);
-    stedc<B>(*this->ctx, a_fused, b_fused, eigvals_fused, ws_fused, JobType::EigenVectors, params_fused, eigvecs_fused);
+    stedc(*this->ctx, a_base.view(), b_base.view(), eigvals_base.view(), ws_base, JobType::EigenVectors, params_base, eigvecs_base.view());
+    stedc(*this->ctx, a_fused.view(), b_fused.view(), eigvals_fused.view(), ws_fused, JobType::EigenVectors, params_fused, eigvecs_fused.view());
     this->ctx->wait();
 
     auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3);
@@ -339,14 +339,14 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
         .secular_threads_per_root = 32,
     };
 
-    UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+    UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
     // syev reference eigenvalues
     UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
     this->ctx->wait();
     auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
 
@@ -412,8 +412,8 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
                 .secular_threads_per_root = P,
             };
 
-            UnifiedVector<std::byte> ws(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params));
-            stedc<B>(*this->ctx, a_cta, b_cta, eigvals, ws, JobType::EigenVectors, params, eigvecs);
+            UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+            stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals.view(), ws, JobType::EigenVectors, params, eigvecs.view());
             this->ctx->wait();
 
             for (int j = 0; j < batch; ++j) {
@@ -451,8 +451,8 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
     this->ctx->wait();
 
     UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
     this->ctx->wait();
     auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
 
@@ -472,8 +472,8 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
             .secular_threads_per_root = P,
         };
 
-        UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-        stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+        UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+        stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
         this->ctx->wait();
 
         for (int j = 0; j < batch; ++j) {
@@ -516,13 +516,13 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
         .secular_threads_per_root = forced_threads_per_root,
     };
 
-    UnifiedVector<std::byte> ws_cta(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    stedc<B>(*this->ctx, a_cta, b_cta, eigvals_cta, ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta);
+    UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
     UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    syev<B>(*(this->ctx), T_mat, ref_eigvals, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
+    syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
     this->ctx->wait();
     auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
 

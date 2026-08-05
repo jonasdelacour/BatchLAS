@@ -164,8 +164,8 @@ namespace detail {
         auto tauv = static_cast<VectorView<T>>(tau);
 
         const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, block_size);
-        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-        sytrd_blocked<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, ws.to_span(), block_size).wait();
+        auto ws = ctx.workspace(ws_bytes);
+        sytrd_blocked<B, T>(ctx, A.view(), dv, ev, tauv, Uplo::Lower, ws.span(), block_size).wait();
 
         Matrix<T, MatrixFormat::Dense> Tmat = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch_size);
         auto Tv = Tmat.view();
@@ -278,9 +278,9 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
 
     // Orthonormalize columns of U and V
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, U.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, U.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
-    ortho<B>(ctx, V.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, U.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
+    ortho<B>(ctx, V.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     // Build singular values with the requested condition number.
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
@@ -291,9 +291,9 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
     Matrix<T> A(n, n, batch_size);
 
     // A = U * S * V^H
-    gemm<B>(ctx, U.view(), S.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx, U.view(), S.view(), tmp.view(), GemmOptions<T>{});
     const Transpose v_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), V.view(), A.view(), T(1), T(0), Transpose::NoTrans, v_trans);
+    gemm<B>(ctx, tmp.view(), V.view(), A.view(), {.transB = v_trans});
     ctx.wait();
 
     return A;
@@ -326,8 +326,8 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
 
     Matrix<T> Q = Matrix<T>::Random(n, n, false, batch_size, seed);
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, Q.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
         n, log10_kappa, metric, "random_hermitian_with_log10_cond_metric");
@@ -336,9 +336,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
+    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     return A;
@@ -383,9 +383,9 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose r_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), R.view(), A.view(), T(1), T(0), Transpose::NoTrans, r_trans);
+    gemm<B>(ctx, tmp.view(), R.view(), A.view(), {.transB = r_trans});
     ctx.wait();
 
     return A;
@@ -430,9 +430,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
+    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     return A;
@@ -496,8 +496,8 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
 
     Matrix<T> Q = Matrix<T>::Random(n, n, false, batch_size, seed);
     const size_t ortho_ws = ortho_buffer_size<B>(ctx, Q.view(), Transpose::NoTrans, ortho_algo);
-    UnifiedVector<std::byte> workspace(ortho_ws);
-    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.to_span(), ortho_algo).wait();
+    auto workspace = ctx.workspace(ortho_ws);
+    ortho<B>(ctx, Q.view(), Transpose::NoTrans, workspace.span(), ortho_algo).wait();
 
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
         n, log10_kappa, metric, "random_hermitian_tridiagonal_with_log10_cond_metric");
@@ -506,9 +506,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), T(1), T(0), Transpose::NoTrans, Transpose::NoTrans);
+    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), T(1), T(0), Transpose::NoTrans, q_trans);
+    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     constexpr int block_size = 32;

@@ -51,7 +51,7 @@ TYPED_TEST(SyevTest, DiagTest) {
     auto A_view = A.view();
 
     auto W = UnifiedVector<typename base_type<T>::type>(n);
-    auto workspace = UnifiedVector<std::byte>(syev_buffer_size<B>(*this->ctx, A_view, W.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    auto workspace = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_view, W.to_span(), JobType::NoEigenVectors, Uplo::Lower));
     std::sort(diag.begin(), diag.end(), [](const T& a, const T& b) {
         if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
             return std::real(a) < std::real(b);
@@ -59,7 +59,7 @@ TYPED_TEST(SyevTest, DiagTest) {
             return a < b;
         }
     });
-    syev<B>(*this->ctx, A_view, W.to_span(), JobType::NoEigenVectors, Uplo::Lower, workspace.to_span());
+    syev(*this->ctx, A_view, W.to_span(), {.jobz = JobType::NoEigenVectors}, workspace.to_span());
     (*this->ctx).wait();
     for (int i = 0; i < n; ++i) {
         if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {

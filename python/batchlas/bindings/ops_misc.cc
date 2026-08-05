@@ -7,7 +7,7 @@ namespace {
 
 template <typename T, MatrixFormat MF>
 DenseMatrix transpose_dense_like(const Matrix<T, MF>& input) {
-    Queue queue = Queue(Device::default_device());
+    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     auto out = batchlas::transpose(queue, input.view());
     queue.wait();
     if constexpr (MF == MatrixFormat::Dense) {
@@ -20,7 +20,7 @@ DenseMatrix transpose_dense_like(const Matrix<T, MF>& input) {
 template <typename T>
 DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(matrix_wrapper.storage).clone();
-    Queue queue = Queue(Device::default_device());
+    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     batchlas::lascl(queue, out.view(), cfrom, cto);
     queue.wait();
     return wrap_dense(std::move(out));
@@ -29,7 +29,7 @@ DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) 
 template <typename T>
 SparseMatrix sparse_lascl_impl(const SparseMatrix& matrix_wrapper, T cfrom, T cto) {
     SparseMatrixT<T> out = std::get<SparseMatrixT<T>>(matrix_wrapper.storage).clone();
-    Queue queue = Queue(Device::default_device());
+    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     batchlas::lascl(queue, out.view(), cfrom, cto);
     queue.wait();
     return wrap_sparse(std::move(out));
@@ -38,7 +38,7 @@ SparseMatrix sparse_lascl_impl(const SparseMatrix& matrix_wrapper, T cfrom, T ct
 template <typename T>
 DenseVector dense_norm_impl(const DenseMatrix& matrix_wrapper, NormType norm_type) {
     const auto& matrix = std::get<DenseMatrixT<T>>(matrix_wrapper.storage);
-    Queue queue = Queue(Device::default_device());
+    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     auto values = batchlas::norm<T, MatrixFormat::Dense>(queue, matrix.view(), norm_type);
     queue.wait();
     return wrap_vector_copy(values, matrix.batch_size(), 1);
@@ -47,7 +47,7 @@ DenseVector dense_norm_impl(const DenseMatrix& matrix_wrapper, NormType norm_typ
 template <typename T>
 DenseVector sparse_norm_impl(const SparseMatrix& matrix_wrapper, NormType norm_type) {
     const auto& matrix = std::get<SparseMatrixT<T>>(matrix_wrapper.storage);
-    Queue queue = Queue(Device::default_device());
+    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     auto values = batchlas::norm<T, MatrixFormat::CSR>(queue, matrix.view(), norm_type);
     queue.wait();
     return wrap_vector_copy(values, matrix.batch_size(), 1);
@@ -56,8 +56,8 @@ DenseVector sparse_norm_impl(const SparseMatrix& matrix_wrapper, NormType norm_t
 template <typename T, MatrixFormat MF>
 DenseVector cond_impl(const Matrix<T, MF>& matrix, NormType norm_type, Backend backend,
                       const std::optional<std::string>& device_name) {
-    Queue queue = make_queue(device_name);
-    DenseVector result = visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    DenseVector result = visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         auto values = batchlas::cond<B, T, MF>(queue, matrix.view(), norm_type);
         queue.wait();
@@ -77,9 +77,9 @@ DenseMatrix ortho_impl(const DenseMatrix& a_wrapper,
     const OrthoAlgorithm algorithm =
         options.contains("algorithm") ? parse_ortho_algorithm(py::cast<std::string>(options["algorithm"]))
                                       : OrthoAlgorithm::Chol2;
-    Queue queue = make_queue(device_name);
+    Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
-        backend, queue,
+        queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             return batchlas::ortho_buffer_size<B, T>(queue, out.view(), trans_a, algorithm);
@@ -109,9 +109,9 @@ DenseMatrix ortho_metric_impl(const DenseMatrix& a_wrapper,
         options.contains("algorithm") ? parse_ortho_algorithm(py::cast<std::string>(options["algorithm"]))
                                       : OrthoAlgorithm::Chol2;
     const std::size_t iterations = py_scalar_or_default<std::size_t>(options, "iterations", 2);
-    Queue queue = make_queue(device_name);
+    Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
-        backend, queue,
+        queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             return batchlas::ortho_buffer_size<B, T>(queue, out.view(), metric.view(), trans_a, trans_m, algorithm,
@@ -133,9 +133,9 @@ ILUKHandle iluk_factorize_impl(const SparseMatrix& matrix_wrapper,
                                const std::optional<std::string>& device_name) {
     const auto& matrix = std::get<SparseMatrixT<T>>(matrix_wrapper.storage);
     const ILUKParams<T> params = parse_iluk_params<T>(options);
-    Queue queue = make_queue(device_name);
+    Queue& queue = acquire_queue(device_name, backend);
     ILUKPreconditioner<T> handle{};
-    visit_backend(backend, [&](auto backend_tag) {
+    visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         handle = batchlas::iluk_factorize<B, T>(queue, matrix.view(), params);
     });
@@ -151,9 +151,9 @@ DenseMatrix iluk_apply_impl(const ILUKHandle& handle_wrapper,
     ensure_same_dtype(handle_wrapper, rhs_wrapper, "ILUK preconditioner and RHS dtypes must match");
     const auto& handle = std::get<ILUKPreconditioner<T>>(handle_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(rhs_wrapper.storage).clone();
-    Queue queue = make_queue(device_name);
+    Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
-        backend, queue,
+        queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             return batchlas::iluk_apply_buffer_size<B, T>(queue, handle, out.view(), out.view());
@@ -178,8 +178,8 @@ DenseMatrix conditioned_random_impl(const std::string& which,
                                     OrthoAlgorithm algorithm,
                                     Backend backend,
                                     const std::optional<std::string>& device_name) {
-    Queue queue = make_queue(device_name);
-    return visit_backend(backend, [&](auto backend_tag) {
+    Queue& queue = acquire_queue(device_name, backend);
+    return visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         if (which == "random_with_log10_cond_metric") {
             return wrap_dense(batchlas::random_with_log10_cond_metric<B, T>(queue, n, log10_kappa, metric, batch_size,
@@ -219,7 +219,7 @@ void init_misc_ops(py::module_& module) {
                 return not_implemented<DenseMatrix>(
                     "dense transpose is currently available for float32 and float64 only");
             } else {
-                Queue queue = Queue(Device::default_device());
+                Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
                 auto out = batchlas::transpose(queue, typed_matrix.view());
                 queue.wait();
                 return wrap_dense(std::move(out));

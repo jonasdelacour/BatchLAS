@@ -16,6 +16,7 @@
 #include <iostream>
 
 #include "../math-helpers.hh"
+#include <util/env.hh>
 
 namespace batchlas {
 
@@ -31,11 +32,6 @@ inline U conj_if_complex(const U& x) {
 }
 
 inline bool cta_debug_sync_enabled() {
-    auto env_truthy = [](const char* v) {
-        if (!v) return false;
-        return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
-                std::string(v) == "on" || std::string(v) == "ON");
-    };
     return env_truthy(std::getenv("BATCHLAS_CTA_DEBUG_SYNC"));
 }
 

@@ -8,6 +8,9 @@
 #include <optional>
 #include <utility>
 
+#include <util/workspace.hh>
+#include <blas/enums.hh>
+
 
 enum class Policy
 {
@@ -142,6 +145,7 @@ struct Queue{
     ~Queue();
 
     Queue(Device device, bool in_order = true);
+    Queue(Device device, batchlas::Backend backend, bool in_order = true);
     // Create a new queue sharing the same SYCL context/device as an existing queue.
     // Useful when using USM pointers/workspaces created for the base queue.
     Queue(const Queue& base, bool in_order);
@@ -170,14 +174,61 @@ struct Queue{
 
     void wait() const;
     void wait_and_throw() const;
-    
+
+    // Borrow `bytes` of device scratch backed by this queue's workspace arena.
+    // See util/workspace.hh for the lifetime rules; in short, the memory is
+    // owned by the queue, so it stays valid until the lease is released rather
+    // than until the calling function returns.
+    [[nodiscard]] batchlas::WorkspaceLease workspace(size_t bytes);
+
+    // Total bytes the arena currently holds. Diagnostics and tests only.
+    size_t workspace_capacity() const;
+
+    // Return the workspace arena's memory to the runtime, dropping the queue's
+    // high-water mark back to nothing.
+    //
+    // The arena otherwise only frees in ~Queue, so a single large call keeps its
+    // peak reserved for as long as the queue lives. That is the intended trade
+    // for a scoped queue -- it is what makes repeated calls stop allocating --
+    // but not for a long-lived one. The motivating case is the Python bindings,
+    // which hold one queue for the lifetime of the interpreter; nothing under
+    // python/batchlas/bindings/ exposes this yet, so today the only callers are
+    // C++ ones and the tests.
+    //
+    // Returns false and does nothing while any lease is outstanding, since the
+    // leases point into the blocks this would free -- the result is the only way
+    // to tell "freed the peak" from "refused", so it is [[nodiscard]] rather
+    // than advisory. Blocks until the queue is idle before freeing, for the same
+    // reason ~Queue does: enqueued-but-unfinished kernels may still be reading
+    // the blocks even though every lease has been handed back. That drain can
+    // therefore throw, surfacing an async device failure from earlier work; this
+    // is not a noexcept cleanup call.
+    [[nodiscard]] bool trim_workspace();
+
     std::unique_ptr<QueueImpl> impl_;
 
     Device device() const { return device_; }
     bool in_order() const { return in_order_; }
-    
+
+    // The backend this queue dispatches to. Never returns Backend::AUTO: an
+    // AUTO queue resolves once, on first query, to whatever suits its device.
+    // Callers that want the unresolved setting can ask requested_backend().
+    batchlas::Backend backend() const;
+    batchlas::Backend requested_backend() const { return backend_; }
+
+    // Pin this queue to a backend, or hand it back to AUTO. Throws if the
+    // backend was not compiled in, because the alternative is a call that
+    // type-checks and then fails at dispatch time with no useful context.
+    void set_backend(batchlas::Backend backend);
+
+    // Whether a backend was compiled into this build. Runtime-queryable
+    // counterpart to the BATCHLAS_HAS_*_BACKEND macros.
+    static bool backend_available(batchlas::Backend backend);
+
     private:
         Device device_;
         bool in_order_;
+        batchlas::Backend backend_ = batchlas::Backend::AUTO;
+        mutable batchlas::Backend resolved_backend_ = batchlas::Backend::AUTO;
 };
 

@@ -15,13 +15,12 @@ TEST(InverseTest, InverseIdentityCheck) {
     auto Adata = A.data();
     
     Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
-    UnifiedVector<std::byte> ws(inv_buffer_size<test_utils::gpu_backend>(ctx, A.view()));
-    inv<test_utils::gpu_backend>(ctx, A.view(), Ainverse.view(), ws);
+    UnifiedVector<std::byte> ws(inv_buffer_size(ctx, A.view()));
+    inv(ctx, A.view(), Ainverse.view(), ws);
     ctx.wait();
 
     Matrix<float, MatrixFormat::Dense> result(40,40,2);
-    gemm<test_utils::gpu_backend>(ctx, A.view(), Ainverse.view(), result.view(), 1.0f, 0.0f,
-                        Transpose::NoTrans, Transpose::NoTrans);
+    gemm(ctx, A.view(), Ainverse.view(), result.view(), {});
     ctx.wait();
 
     auto r = result.data();

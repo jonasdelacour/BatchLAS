@@ -154,7 +154,7 @@ int run_accuracy(const Options& opt) {
     out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,orthogonality,log10_orthogonality\n";
     out << std::setprecision(12);
 
-    auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto emit_rows = [&](int sample_base,
                          const std::vector<double>& target_log10s,
@@ -225,7 +225,7 @@ int run_accuracy(const Options& opt) {
                 UnifiedVector<Real> eigvals(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
                 UnifiedVector<std::byte> ws(
                     syev_buffer_size<B, Real>(*q, A.view(), eigvals.to_span(), JobType::EigenVectors, Uplo::Lower));
-                syev<B, Real>(*q, A.view(), eigvals.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span());
+                syev<B>(*q, A.view(), eigvals.to_span(), {}, ws.to_span());
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, A);
                 emit_rows(sample_id, target_log10s, conds, ortho_vals, "syev", cur_batch);
