@@ -1171,27 +1171,6 @@ def stedc(
     )
 
 
-def stedc_flat(
-    d: Any,
-    e: Any,
-    *,
-    compute_vectors: bool = True,
-    options: StedcOptions | dict[str, Any] | None = None,
-    backend: str = "auto",
-    device: str | None = None,
-):
-    return _unwrap(
-        _ext._stedc_flat(
-            _coerce_dense_vector(d),
-            _coerce_dense_vector(e),
-            compute_vectors,
-            _normalize_options(options),
-            _normalize_backend(backend, device),
-            _normalize_device(device),
-        )
-    )
-
-
 def tridiagonal_solver(
     alpha: Any,
     beta: Any,

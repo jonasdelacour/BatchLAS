@@ -59,7 +59,6 @@ set(EXTENSIONS_TRIDIAG_SOURCES
     stedc.cc
     stedc_secular.cc
     stedc_merge_kernels.cc
-    stedc_flat.cc
 )
 
 target_sources(batchlas_extensions_eigen_obj PRIVATE ${EXTENSIONS_EIGEN_SOURCES})

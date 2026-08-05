@@ -72,11 +72,22 @@ inline constexpr int32_t STEDC_RECURSION_THRESHOLD_MEDIUM = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_LARGE = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_XLARGE = 32;
 
-inline constexpr int32_t STEDC_MERGE_VARIANT_TINY = 2;
-inline constexpr int32_t STEDC_MERGE_VARIANT_SMALL = 2;
-inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 2;
-inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 2;
-inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 2;
+// StedcMergeVariant: 1 = Fused (one work-group per merge), 2 = FusedCta
+// (sub-group partitions, one per secular root).
+//
+// These were 2. FusedCta is currently *wrong*: it fails stedc_tests'
+// BatchedRandomMatrices and FusedCtaConditionedHeavyDeflation in both
+// precisions, the latter returning NaN, and the defect is confined to its
+// partition-parallel root solve. It had been masked by a deadlock in the same
+// kernel (fixed separately), which is why the tables were tuned to it. It is
+// also 2-12% slower than Fused on an RTX 4090 across n = 64..256 x batch =
+// 128..2048, on both STEDC drivers. Point back at 2 once the root solve is
+// fixed and re-tuned.
+inline constexpr int32_t STEDC_MERGE_VARIANT_TINY = 1;
+inline constexpr int32_t STEDC_MERGE_VARIANT_SMALL = 1;
+inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 1;
+inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 1;
+inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 1;
 
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 4;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 4;
