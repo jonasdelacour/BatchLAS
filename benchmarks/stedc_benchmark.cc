@@ -11,7 +11,9 @@ static void StedcBenchSizes(Benchmark* b) {
         for (int batch : {128, 512, 2048}) {
             for (int algorithm : {static_cast<int>(StedcAlgorithm::Levels),
                                   static_cast<int>(StedcAlgorithm::Recursive)}) {
-                b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::FusedCta), 0, 0, algorithm});
+                // Auto so the registered sweep measures what a caller such as
+                // syev actually gets; pass 0/1/2 on the CLI to pin a variant.
+                b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Auto), 0, 0, algorithm});
             }
         }
     }
