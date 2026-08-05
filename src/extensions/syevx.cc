@@ -26,7 +26,9 @@
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>
+#include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <stdexcept>
 #include <blas/linalg.hh>
@@ -34,6 +36,11 @@
 #include "../util/template-instantiations.hh"
 
 namespace batchlas {
+
+// Fills the caller's `m` with a statically known count, for the two solvers that
+// do not produce one themselves. See the dispatch in `syevx`.
+template <Backend B, typename T, MatrixFormat MFormat>
+struct SyevxFillCountsKernel;
 
 namespace {
 
@@ -163,13 +170,11 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
 // library's own defaults (Extremal + find_largest = true + Ascending), i.e. nearly
 // every existing call. `order` is documented as ignored for Extremal instead.
 //
-// TODO(Phase 5, routing): also reject `select != Extremal` with a resolved method of
-// LOBPCG or Filtered, and sparse input with a non-extremal range. Neither can answer
-// an interior request, and today `syevx_select_algorithm` may still route one to
-// LOBPCG or Filtered, which would silently return the extremal block. That check
-// needs the resolved algorithm, so it belongs with the routing change, not here.
-// (Direct and DirectSubset both honour every range as of Phase 4, so an Auto-routed
-// dense request is already safe.)
+// The remaining rule -- "`select != Extremal` may not resolve to LOBPCG or
+// Filtered, and sparse input may not ask for a non-extremal range" -- lives in
+// `syevx_select_algorithm` rather than here. It needs to distinguish an explicit
+// SyevxParams::method from a BATCHLAS_SYEVX_ALGORITHM override (the first throws,
+// the second degrades), and the selector is the only place that sees both.
 template <typename T, MatrixFormat MFormat>
 void validate_syevx_range_params(const SyevxParams<T>& params,
                                  int64_t n,
@@ -223,10 +228,28 @@ SyevxPreconditioner parse_syevx_preconditioner(const char* v) {
     return SyevxPreconditioner::Auto;
 }
 
-SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback) {
+// Resolves BATCHLAS_SYEVX_ALGORITHM against SyevxParams::method.
+//
+// `from_env` reports WHICH of the two won, and that distinction is load-bearing:
+// an environment default degrades where an explicit request throws (see the
+// range rules in syevx_select_algorithm, and syevx_select_preconditioner for the
+// same asymmetry). Note the environment wins whenever the variable is set at
+// all, including when its value is unrecognized -- that parses to `Auto`, i.e.
+// "ignore params.method and use the heuristics". That is pre-existing behaviour
+// and is preserved deliberately.
+SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
     const char* v = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
-    if (!v || !*v) return fallback;
+    from_env = (v != nullptr && *v != '\0');
+    if (!from_env) return fallback;
     return parse_syevx_algorithm(v);
+}
+
+const char* syevx_select_name(SyevxSelect select) {
+    switch (select) {
+        case SyevxSelect::Index: return "SyevxSelect::Index";
+        case SyevxSelect::Value: return "SyevxSelect::Value";
+        default:                 return "SyevxSelect::Extremal";
+    }
 }
 
 } // namespace
@@ -285,9 +308,71 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                       SyevxAlgorithm requested,
                                       bool subset_supported,
                                       JobType jobz,
-                                      int64_t batch_size) {
-    const SyevxAlgorithm want = algorithm_from_env(requested);
+                                      int64_t batch_size,
+                                      SyevxSelect select) {
+    bool from_env = false;
+    const SyevxAlgorithm want = algorithm_from_env(requested, from_env);
     const bool dense = (format == MatrixFormat::Dense);
+    const bool extremal = (select == SyevxSelect::Extremal);
+
+    // ---- Range feasibility ------------------------------------------------
+    //
+    // Only Direct and DirectSubset implement Index and Value ranges. LOBPCG
+    // converges to whichever *extreme* its trial block is biased toward, and
+    // syevx_filtered's Chebyshev filter is a high-pass, built by mapping the
+    // unwanted interval into [-1,1] and letting the wanted END fall outside --
+    // an interior interval has unwanted spectrum on both sides, which that
+    // construction cannot express. Neither would fail on an interior request;
+    // both would quietly answer a different question, which is why this is a
+    // throw and not a degrade. See SYEVX_RANGE_PLAN.md §2.5 and §12.
+    if (!extremal) {
+        // Sparse: LOBPCG is the only implemented path, so there is nothing to
+        // fall back to. Returning the extremal eigenpairs instead would be the
+        // worst available outcome.
+        if (!dense) {
+            throw std::invalid_argument(
+                std::string("syevx: ") + syevx_select_name(select) +
+                " is not supported for sparse input; LOBPCG is the only sparse path and it "
+                "can only converge to an extreme of the spectrum. Convert to dense, or use "
+                "SyevxSelect::Extremal");
+        }
+        if (want == SyevxAlgorithm::LOBPCG || want == SyevxAlgorithm::Filtered) {
+            const char* name = (want == SyevxAlgorithm::LOBPCG) ? "LOBPCG" : "Filtered";
+            if (!from_env) {
+                // Note the precedent immediately below, which DEGRADES an
+                // unavailable algorithm to its nearest implemented neighbour.
+                // That precedent deliberately does not apply here: substituting
+                // an algorithm changes only the performance characteristics the
+                // caller asked for, while substituting the requested part of
+                // the spectrum changes the answer.
+                throw std::invalid_argument(
+                    std::string("syevx: SyevxAlgorithm::") + name + " cannot honour " +
+                    syevx_select_name(select) +
+                    " -- it computes an extreme of the spectrum by construction, so it would "
+                    "silently return different eigenpairs than were asked for. Use "
+                    "SyevxAlgorithm::Auto, Direct or DirectSubset for a non-extremal range");
+            }
+            // Environment override: degrade rather than throw. The variable
+            // exists so that a whole application or test suite can be forced
+            // onto one algorithm for diagnosis; aborting on the first interior
+            // call would make that sweep impossible rather than informative.
+            // Exactly the reasoning syevx_select_preconditioner applies to
+            // BATCHLAS_SYEVX_PRECONDITIONER.
+            static std::once_flag warned;
+            std::call_once(warned, [name]() {
+                std::fprintf(stderr,
+                             "batchlas: BATCHLAS_SYEVX_ALGORITHM=%s cannot answer a non-extremal "
+                             "range (SyevxSelect::Index / ::Value); degrading to Direct for those "
+                             "calls. This warning is printed once per process.\n",
+                             name);
+            });
+            // Direct, not a fall-through to the heuristics below: it is the
+            // universal fallback (every scalar type, every range, every jobz),
+            // and a diagnostic sweep wants one substitute, not a shape-dependent
+            // one.
+            return SyevxAlgorithm::Direct;
+        }
+    }
 
     // Sparse input has no dense fallback: LOBPCG is the only implemented option.
     if (!dense) return SyevxAlgorithm::LOBPCG;
@@ -304,6 +389,10 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     }
 
     if (n <= kSyevxSmallN || n <= 0) return SyevxAlgorithm::Direct;
+    // k does not enter any threshold below -- see the note on that at the
+    // DirectSubset gate -- so `neigs` is unused past this point. Callers still
+    // pass the resolved max_count rather than a raw capacity, so that this stays
+    // true by construction if a k-dependent term is ever added.
     (void)neigs;
 
     // Eigenvalues-only: Direct won at every measured shape, by 3-5x. The subset
@@ -332,6 +421,15 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     //
     // k is deliberately absent: the ratio is flat in k from 0.8% to 25% of the
     // spectrum and only decays to a tie at 50%, so it does not discriminate.
+    //
+    // WHERE in the spectrum the k eigenpairs sit is absent for a stronger
+    // reason: it cannot enter the cost of either path. Direct always runs a full
+    // syev and then copies a block. DirectSubset's band width kd is a function of
+    // n alone, its bisection does the same number of steps for every index, and
+    // both back-transforms act on the same fixed n x k slice wherever the block
+    // sits. So the crossovers measured for extremal ranges carry over to Index
+    // and Value ranges unchanged, and no re-measurement was needed to extend
+    // this routing to them. (SYEVX_RANGE_PLAN.md §8.5, §9.2.)
     if (subset_supported && n >= kSyevxSubsetMinN &&
         n * batch_size >= kSyevxSubsetMinWork) {
         return SyevxAlgorithm::DirectSubset;
@@ -371,34 +469,82 @@ template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx(Queue& ctx,
             const MatrixView<T, MFormat>& A,
             Span<typename base_type<T>::type> W,
+            Span<int32_t> m,
             size_t neigs,
             Span<std::byte> workspace,
             JobType jobz,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
-    // This overload has no `m` output, so a Value range is rejected here; the
-    // overload that takes one arrives with the Phase 5 plumbing.
+    // This overload can report a data-dependent count, so a Value range is legal.
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
-                                            /*value_range_reportable=*/false);
-    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
+                                            /*value_range_reportable=*/true);
+    // A short `m` is an out-of-bounds device write with no host-side diagnostic
+    // (Span::operator[]'s assert is compiled out in release), so it is checked
+    // here rather than left to the solver. Same wording as stebz's own check.
+    if (params.select == SyevxSelect::Value || !m.empty()) {
+        if (static_cast<int64_t>(m.size()) < A.batch_size()) {
+            throw std::invalid_argument("syevx: m must cover every batch item");
+        }
+    }
+    // The resolved range decides the routing question ("can this algorithm answer
+    // it at all?") and supplies the k the thresholds are keyed on. max_count is
+    // the capacity for a Value range and the block size otherwise -- what both
+    // dense paths actually do work proportional to.
+    const auto rr = syevx_resolve_range(A.rows(), neigs, params);
+    const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
+                                              static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
+                                              params.method,
                                               syevx_direct_subset_supported<T, MFormat>(), jobz,
-                                              A.batch_size());
+                                              A.batch_size(), params.select);
     if (chosen == SyevxAlgorithm::Direct) {
-        // No `m` span to fill: an Index range's count is iu-il+1, which the caller
-        // already knows, and a Value range cannot reach here.
-        return syevx_direct<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
-                                           jobz, V, params);
+        return syevx_direct<B, T, MFormat>(ctx, A, W, m, neigs, workspace, jobz, V, params);
     }
     if (chosen == SyevxAlgorithm::DirectSubset) {
-        // As above: no `m` span to fill on this overload.
-        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, m, neigs, workspace,
                                                   jobz, V, params);
+    }
+    // LOBPCG and Filtered only ever see an Extremal range -- syevx_select_algorithm
+    // throws (or degrades to Direct) otherwise -- so the count is static and equal
+    // to the resolved block size. Neither solver takes an `m` argument; filling it
+    // here keeps the output contract uniform across all four algorithms.
+    //
+    // Submitted BEFORE the solve so that the solve's Event, which is what the
+    // caller waits on, covers it on the in-order queue this library assumes
+    // throughout. It aliases nothing the solvers touch.
+    if (!m.empty()) {
+        const int64_t batch_size = A.batch_size();
+        const int32_t count = static_cast<int32_t>(std::max<int64_t>(rr.max_count, 0));
+        int32_t* m_ptr = m.data();
+        ctx->submit([&](sycl::handler& h) {
+            h.parallel_for<SyevxFillCountsKernel<B, T, MFormat>>(
+                sycl::range<1>(static_cast<size_t>(batch_size)),
+                [=](sycl::id<1> idx) { m_ptr[idx[0]] = count; });
+        });
     }
     if (chosen == SyevxAlgorithm::Filtered) {
         return syevx_filtered<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
     }
     return syevx_lobpcg<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+}
+
+template <Backend B, typename T, MatrixFormat MFormat>
+Event syevx(Queue& ctx,
+            const MatrixView<T, MFormat>& A,
+            Span<typename base_type<T>::type> W,
+            size_t neigs,
+            Span<std::byte> workspace,
+            JobType jobz,
+            const MatrixView<T, MatrixFormat::Dense>& V,
+            const SyevxParams<T>& params) {
+    // This overload has nowhere to report a data-dependent count, so a Value
+    // range is rejected here -- before any device work, and before the m-taking
+    // overload below gets a chance to complain that `m` is empty.
+    validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
+                                            /*value_range_reportable=*/false);
+    // Extremal and Index both have m[b] == neigs by construction, which the
+    // caller already knows, so an empty span is exactly right.
+    return syevx<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace, jobz, V, params);
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -414,9 +560,19 @@ size_t syevx_buffer_size(Queue& ctx,
     // if it did, sizing the workspace for a value-range solve would be impossible.
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
                                             /*value_range_reportable=*/true);
-    const auto chosen = syevx_select_algorithm(MFormat, A.rows(), neigs, params.method,
+    // Resolve the range here too, and feed the selector the identical arguments
+    // the solve will: routing has to make the same decision on both sides or the
+    // workspace is sized for a different algorithm than the one that runs. Since
+    // Phase 4 the size itself is range-dependent as well (a Value range needs
+    // room for up to n eigenvalues per item in DirectSubset's internal stebz
+    // output, regardless of the caller's capacity), which the sizing functions
+    // derive from their own syevx_resolve_range call on the same params.
+    const auto rr = syevx_resolve_range(A.rows(), neigs, params);
+    const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
+                                              static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
+                                              params.method,
                                               syevx_direct_subset_supported<T, MFormat>(), jobz,
-                                              A.batch_size());
+                                              A.batch_size(), params.select);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
     }
@@ -434,6 +590,16 @@ size_t syevx_buffer_size(Queue& ctx,
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
         Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+        size_t,\
+        Span<std::byte>,\
+        JobType,\
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+    template Event syevx<back, BATCHLAS_UNPAREN fp, fmt>(\
+        Queue&,\
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+        Span<int32_t>,\
         size_t,\
         Span<std::byte>,\
         JobType,\

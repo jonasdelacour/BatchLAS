@@ -279,17 +279,34 @@ namespace batchlas {
     }
 
     /**
-     * @brief Computes selected eigenvalues and optionally eigenvectors of a sparse matrix
-     * 
+     * @brief Computes selected eigenvalues and optionally eigenvectors of a
+     *        Hermitian/symmetric matrix, dense or sparse.
+     *
+     * Which part of the spectrum is returned is set by `SyevxParams::select`:
+     * the `neigs` extremal eigenpairs (the default and the historical
+     * behaviour), an index block `il..iu` of the ascending spectrum, or every
+     * eigenvalue in a half-open interval `(vl, vu]`. See SyevxSelect.
+     *
      * @param ctx Execution context/device queue
-     * @param A Sparse matrix A handle
-     * @param W Output array for eigenvalues
-     * @param neigs Number of eigenvalues to compute
+     * @param A Matrix A (dense or CSR)
+     * @param W Output array for eigenvalues, `neigs` entries per batch item
+     * @param neigs CAPACITY of `W` and of `V`'s columns, per batch item -- not
+     *        necessarily the number produced. For `Extremal` it is the number
+     *        wanted and for `Index` it must equal `iu - il + 1`, so in both
+     *        cases capacity and count coincide; for `Value` the count is
+     *        data-dependent, differs per batch item, and is reported through
+     *        the `m` output of the overload below.
      * @param workspace Pre-allocated workspace buffer
      * @param jobz Whether to compute eigenvectors
      * @param V Dense matrix to store eigenvectors (if jobz = EigenVectors)
      * @param params Additional parameters for the algorithm
      * @return Event Event to track operation completion
+     *
+     * @throws std::invalid_argument if `SyevxParams::select` is `Value`: the
+     *         count is only known on the device, so a Value range requires the
+     *         `m`-taking overload below. Also if a non-extremal range is asked
+     *         of a path that cannot answer one -- sparse input, or an explicit
+     *         `method` of LOBPCG/Filtered. See `syevx_select_algorithm`.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx(Queue& ctx,
@@ -327,12 +344,85 @@ namespace batchlas {
     }
 
     /**
+     * @brief `syevx` with a per-batch-item count of how many eigenpairs were
+     *        actually found. Required for `SyevxSelect::Value`.
+     *
+     * The contract for a value range is LAPACK's: the caller declares a
+     * capacity (`neigs`), the library writes `min(m[b], neigs)` eigenpairs into
+     * slots `[0, min(m[b], neigs))` of item `b` and leaves the rest of that
+     * item's `W` and `V` untouched, and `m[b]` reports the TRUE count. So
+     * `m[b] > neigs` is the caller's overflow signal -- one comparison per item,
+     * no extra synchronization beyond reading `m`, which a value-range caller
+     * has to do anyway. When truncating, the LOWEST `neigs` eigenvalues of the
+     * interval are the ones kept, regardless of the requested output order.
+     *
+     * For `Extremal` and `Index` the count is static (`neigs` and `iu - il + 1`
+     * respectively) and `m` is filled with it for uniformity.
+     *
+     * @param m Per-item count, at least `A.batch_size()` entries. Device-writable.
+     *
+     * OVERLOAD-RESOLUTION INVARIANT, do not break it: these forms are
+     * unambiguous against the `m`-less ones above because parameter 5 of this
+     * form (`size_t neigs`) and parameter 5 of the `m`-less form
+     * (`Span<std::byte>` / `JobType`) are mutually non-convertible. It is NOT
+     * because `Span<int32_t>` and `size_t` differ in position 4 -- `Span` has a
+     * non-explicit `Span(T&)` constructor, so `Span<int32_t>` IS implicitly
+     * constructible from an `int32_t` lvalue and position 4 alone does not
+     * discriminate. Never let this form's parameter k+1 be a type the `m`-less
+     * form's parameter k+1 converts to, and never spell a bare `{}` in argument
+     * positions 4-6 (it is an identity conversion to both, hence ambiguous).
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event syevx(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz = JobType::NoEigenVectors,
+                const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
+                const SyevxParams<T>& params = SyevxParams<T>());
+
+    // Forwarding overload (owning A only, eigenvalues only)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event syevx(Queue& ctx,
+                const Matrix<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz = JobType::NoEigenVectors,
+                const SyevxParams<T>& params = SyevxParams<T>()) {
+        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    }
+
+    // Forwarding overload (owning A and V)
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event syevx(Queue& ctx,
+                const Matrix<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const Matrix<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params = SyevxParams<T>()) {
+        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
+    }
+
+    /**
      * @brief Get required buffer size for the syevx operation
-     * 
+     *
+     * Unlike the solve, this accepts `SyevxSelect::Value` on the `m`-less form:
+     * sizing writes no counts, and if it threw here then sizing the workspace
+     * for a value-range solve would be impossible. It does have to resolve the
+     * range, though -- `syevx_direct_subset`'s workspace depends on it -- which
+     * it does through the same `syevx_resolve_range` call the solve makes.
+     *
      * @param ctx Execution context/device queue
-     * @param A Sparse matrix A handle
+     * @param A Matrix A (dense or CSR)
      * @param W Output array for eigenvalues
-     * @param neigs Number of eigenvalues to compute
+     * @param neigs Capacity of W and V per batch item (see `syevx`)
      * @param jobz Whether to compute eigenvectors
      * @param V Dense matrix to store eigenvectors (if jobz = EigenVectors)
      * @param params Additional parameters for the algorithm
@@ -367,6 +457,53 @@ namespace batchlas {
                 JobType jobz,
                 const Matrix<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params = SyevxParams<T>()) {
+        return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
+    }
+
+    // `m`-taking sizing forms. `m` is ACCEPTED AND IGNORED -- sizing writes no
+    // counts and needs none; these exist only so that a value-range caller can
+    // write the sizing call and the solve call with the same argument list
+    // instead of dropping one argument in the middle of it. They are inline
+    // forwarders, so they add no instantiated symbols.
+    //
+    // The same overload-resolution invariant as `syevx` applies: parameter 5
+    // here is `size_t neigs`, parameter 5 of the `m`-less form is `JobType`,
+    // and the two are mutually non-convertible.
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t syevx_buffer_size(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                JobType jobz = JobType::NoEigenVectors,
+                const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
+                const SyevxParams<T>& params = SyevxParams<T>()) {
+        (void)m;
+        return syevx_buffer_size<B,T,MFormat>(ctx, A, W, neigs, jobz, V, params);
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t syevx_buffer_size(Queue& ctx,
+                const Matrix<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                JobType jobz = JobType::NoEigenVectors,
+                const SyevxParams<T>& params = SyevxParams<T>()) {
+        (void)m;
+        return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline size_t syevx_buffer_size(Queue& ctx,
+                const Matrix<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
+                size_t neigs,
+                JobType jobz,
+                const Matrix<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params = SyevxParams<T>()) {
+        (void)m;
         return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
     }
 
@@ -453,7 +590,23 @@ namespace batchlas {
      *        The subset solver's reduction is parallel over the batch, so at
      *        small batch it starves; measured, it loses to Direct by up to 16x
      *        at batch 1 and wins by up to 2.1x at batch 256, for the same n.
+     * @param select Which part of the spectrum was asked for
+     *        (SyevxParams::select). Only `Direct` and `DirectSubset` implement
+     *        anything other than `Extremal`, so this parameter does not choose
+     *        between algorithms -- it EXCLUDES the two that cannot answer:
+     *          - sparse + non-extremal throws (LOBPCG is the only sparse path);
+     *          - an explicit `method` of LOBPCG/Filtered + non-extremal throws;
+     *          - BATCHLAS_SYEVX_ALGORITHM=lobpcg|filtered + non-extremal
+     *            degrades to Direct and warns once per process.
+     *        Substituting an *algorithm* is a performance decision and this
+     *        function does it freely; substituting the requested *part of the
+     *        spectrum* would change the answer, so it throws instead -- except
+     *        for the environment override, whose whole purpose is to force a
+     *        whole suite onto one algorithm for diagnosis, which aborting on
+     *        the first interior call would make impossible. Same asymmetry as
+     *        `syevx_select_preconditioner`.
      * @return SyevxAlgorithm A concrete, implemented algorithm
+     * @throws std::invalid_argument for the two rejected combinations above.
      */
     SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                           int64_t n,
@@ -461,7 +614,8 @@ namespace batchlas {
                                           SyevxAlgorithm requested,
                                           bool subset_supported,
                                           JobType jobz = JobType::EigenVectors,
-                                          int64_t batch_size = 1);
+                                          int64_t batch_size = 1,
+                                          SyevxSelect select = SyevxSelect::Extremal);
 
     /**
      * @brief Resolves SyevxParams::preconditioner_type to a concrete family.
