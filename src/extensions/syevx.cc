@@ -279,13 +279,34 @@ SyevxResolvedRange syevx_resolve_range(int64_t n,
             rr.reverse = (order == SortOrder::Descending);
             break;
 
-        case SyevxSelect::Index:
+        case SyevxSelect::Index: {
             rr.value_range = false;
-            rr.il = il;
-            rr.iu = (iu < 0) ? (nn - 1) : iu;
-            rr.max_count = rr.iu - rr.il + 1;
+            // Clamped into [0, n-1], not merely translated. `max_count` is
+            // documented as an upper bound on m[b] that is already clamped to n,
+            // and its consumers rely on that: syevx_direct's selection kernel
+            // indexes `lam[il .. il+max_count-1]` straight out of an n-entry
+            // per-item array with no bound of its own. The public `syevx` rejects
+            // an out-of-range block before it ever gets here, but `syevx_direct`
+            // and `syevx_direct_subset` are public entry points too, and this
+            // function's contract is to clamp rather than throw so that it stays
+            // usable from a sizing path -- so the clamp has to live here as well.
+            const int64_t lo = std::max<int64_t>(il, 0);
+            const int64_t hi = std::min<int64_t>((iu < 0) ? (nn - 1) : iu, nn - 1);
+            if (hi < lo) {
+                // The canonical empty block, spelled the same way the zero-capacity
+                // Extremal case spells it, so that `iu - il + 1 == max_count` stays
+                // true for every resolved range.
+                rr.il = 0;
+                rr.iu = -1;
+                rr.max_count = 0;
+            } else {
+                rr.il = lo;
+                rr.iu = hi;
+                rr.max_count = hi - lo + 1;
+            }
             rr.reverse = (order == SortOrder::Descending);
             break;
+        }
 
         case SyevxSelect::Extremal:
         default:

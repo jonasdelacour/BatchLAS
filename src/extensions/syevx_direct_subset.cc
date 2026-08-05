@@ -132,6 +132,25 @@ Event syevx_direct_subset(Queue& ctx,
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch) {
             throw std::runtime_error("syevx_direct_subset: m must cover every batch item");
         }
+        // Same range checks as syevx_direct, for the same reason: this is a public
+        // entry point, not only a routing destination. An out-of-range index block
+        // would otherwise be caught by stebz -- but two layers down, as a
+        // std::runtime_error naming stebz, after the whole O(n^3) reduction has
+        // already run.
+        if (params.select == SyevxSelect::Index) {
+            const int64_t iu = (params.iu < 0) ? (int64_t(n) - 1) : params.iu;
+            if (params.il < 0 || iu >= n || params.il > iu) {
+                throw std::invalid_argument(
+                    "syevx_direct_subset: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 "
+                    "means n-1); an empty block is expressed with neigs == 0, not with il > iu");
+            }
+        }
+        if (params.select == SyevxSelect::Value && !(params.vl < params.vu)) {
+            throw std::invalid_argument(
+                "syevx_direct_subset: SyevxSelect::Value requires vl < vu for the half-open "
+                "interval (vl, vu]; an empty or inverted interval is almost always swapped "
+                "arguments");
+        }
         if (!ctx.in_order()) {
             throw std::runtime_error("syevx_direct_subset: requires an in-order Queue");
         }
@@ -577,6 +596,17 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
         Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         Span<int32_t>,\
+        size_t,\
+        Span<std::byte>,\
+        JobType,\
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+    /* See the note in syevx_direct.cc: instantiating the inline m-less forwarder \
+       preserves the symbol this library exported before `m` was added. */\
+    template Event syevx_direct_subset<back, BATCHLAS_UNPAREN fp, fmt>(\
+        Queue&,\
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         size_t,\
         Span<std::byte>,\
         JobType,\

@@ -98,6 +98,25 @@ const ResolveCase kCases[] = {
     // here would turn that loud error into an under-filled output buffer.
     {"IndexCountComesFromTheBlockNotNeigs", 100, 3, SyevxSelect::Index, true, 20, 27,
      SortOrder::Ascending,  false, 20, 27, 8, false},
+    // ---- Index, out of range --------------------------------------------
+    // The public `syevx` rejects these before resolving, but `syevx_direct` and
+    // `syevx_direct_subset` are public entry points of their own and the resolver
+    // is documented to CLAMP rather than throw so that it stays usable from a
+    // sizing path. Without the clamp, max_count would be the raw iu-il+1 and
+    // syevx_direct's selection kernel would index past the n-entry eigenvalue
+    // array -- an out-of-bounds device read, not a wrong answer. Every row here
+    // exists because that clamp is load-bearing, not decorative.
+    {"IndexUpperBoundPastN",       64,   8, SyevxSelect::Index,    true, 60, 67,
+     SortOrder::Ascending,  false, 60, 63, 4, false},
+    {"IndexLowerBoundBelowZero",   64,   8, SyevxSelect::Index,    true, -3,  4,
+     SortOrder::Ascending,  false,  0,  4, 5, false},
+    // Entirely past the end: the canonical EMPTY block (il=0, iu=-1), so that
+    // `iu - il + 1 == max_count` holds for every resolved range and no consumer
+    // sees a negative count.
+    {"IndexEntirelyPastN",         64,   8, SyevxSelect::Index,    true, 90, 99,
+     SortOrder::Ascending,  false,  0, -1, 0, false},
+    {"IndexInvertedBlock",         64,   8, SyevxSelect::Index,    true, 30, 20,
+     SortOrder::Ascending,  false,  0, -1, 0, false},
 
     // ---- Value -----------------------------------------------------------
     // il/iu carry no meaning here (there is no static block), so they are not
@@ -133,6 +152,16 @@ TEST_P(SyevxResolveRangeTest, MatchesTheNormalizationTable) {
         // The two must stay consistent, or a consumer deriving the count from the
         // block and one deriving it from max_count would silently differ.
         EXPECT_EQ(rr.iu - rr.il + 1, rr.max_count);
+        // The block itself must land inside the spectrum whenever it is non-empty.
+        // syevx_direct's selection kernel reads lam[il .. iu] out of an n-entry
+        // per-item array with no bound of its own, so this is a memory-safety
+        // assertion and not a tidiness one. (Asserted for EVERY row rather than
+        // only the deliberately out-of-range ones: a clamp that silently stopped
+        // applying would otherwise show up nowhere.)
+        if (rr.max_count > 0) {
+            EXPECT_GE(rr.il, 0);
+            EXPECT_LT(rr.iu, c.n);
+        }
     }
     // max_count is an upper bound on m[b] and is already clamped to n, so no
     // consumer needs to clamp it again -- several of them assume exactly this.

@@ -349,8 +349,9 @@ namespace batchlas {
      *
      * The contract for a value range is LAPACK's: the caller declares a
      * capacity (`neigs`), the library writes `min(m[b], neigs)` eigenpairs into
-     * slots `[0, min(m[b], neigs))` of item `b` and leaves the rest of that
-     * item's `W` and `V` untouched, and `m[b]` reports the TRUE count. So
+     * slots `[0, min(m[b], neigs))` of item `b`, leaves the rest of that item's
+     * `W` untouched, writes the remaining columns of that item's `V` as EXACTLY
+     * ZERO, and `m[b]` reports the TRUE count. So
      * `m[b] > neigs` is the caller's overflow signal -- one comparison per item,
      * no extra synchronization beyond reading `m`, which a value-range caller
      * has to do anyway. When truncating, the LOWEST `neigs` eigenvalues of the
@@ -358,6 +359,15 @@ namespace batchlas {
      *
      * For `Extremal` and `Index` the count is static (`neigs` and `iu - il + 1`
      * respectively) and `m` is filled with it for uniformity.
+     *
+     * The asymmetry between `W` (untouched) and `V` (zeroed) past `m[b]` is
+     * deliberate and is a CONTRACT, not an implementation detail: the subset
+     * path's back-transforms run over a uniform column count and need something
+     * inert in the unused columns, so it cannot leave them stale, while `Auto`
+     * routes between the two dense paths on `(n, batch)` alone. Zeroing on both
+     * paths is what keeps one call's answer independent of which one ran. `W`
+     * has no such downstream consumer, so its tail stays untouched and remains
+     * usable as a "was this slot written" sentinel.
      *
      * @param m Per-item count, at least `A.batch_size()` entries. Device-writable.
      *
@@ -526,9 +536,13 @@ namespace batchlas {
         int64_t il;           // valid iff !value_range; 0-based, inclusive
         int64_t iu;           // valid iff !value_range; 0-based, inclusive
         // Upper bound on the number of eigenpairs that can be produced per item,
-        // already clamped to n. For an index block this is exactly iu-il+1 and
-        // hence exactly m[b]; for a value range it is the caller's capacity and
-        // the true m[b] may be larger (the answer is then truncated, see `syevx`).
+        // already clamped to n -- and to [0, n] specifically, so a consumer may
+        // index [il, il + max_count) into an n-entry array without a bound of its
+        // own. For an index block this is exactly iu-il+1 AFTER il/iu have been
+        // clamped into [0, n-1] (an out-of-range block shrinks or empties rather
+        // than reading past the spectrum), and hence exactly m[b]; for a value
+        // range it is the caller's capacity and the true m[b] may be larger (the
+        // answer is then truncated, see `syevx`).
         int64_t max_count;
         bool    reverse;      // write the selected block in descending order
     };
@@ -647,9 +661,20 @@ namespace batchlas {
      * Ordering: descending when `params.find_largest` for the default `Extremal`
      * selection (matching the LOBPCG path), otherwise `params.order`.
      *
+     * BEHAVIOUR CHANGE, recorded because it is the one place an existing call's
+     * outcome moved: `neigs > n` used to throw ("neigs must not exceed the matrix
+     * dimension") and now succeeds, writing `n` values per item and leaving the
+     * tail of `W` alone. `neigs` is a capacity, and a capacity above `n` is
+     * harmless. No working caller changes behaviour; a caller that used the throw
+     * as argument validation loses it.
+     *
      * @param W Eigenvalue output, `neigs` entries per batch item. `neigs` is a
      *        CAPACITY: for a Value range only `min(m[b], neigs)` entries are
      *        written and the rest are left untouched. The stride is always `neigs`.
+     * @param V Eigenvector output, `neigs` columns per batch item. Columns past
+     *        `min(m[b], neigs)` are written as EXACTLY ZERO -- not left untouched,
+     *        unlike `W` -- so that this path and `syevx_direct_subset`, which
+     *        cannot avoid zeroing them, answer the same question the same way.
      * @param m Per-item count of eigenvalues in the requested range, or an empty
      *        span to not report it. For Index/Extremal this is always the block
      *        size; for Value it is data-dependent, and `m[b] > neigs` is the
@@ -666,6 +691,33 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
+
+    /**
+     * @brief The pre-existing `syevx_direct` signature, without the `m` output.
+     *
+     * Kept so that adding `m` is purely additive for callers outside this repo:
+     * this is the exact form that was declared here before range selection landed,
+     * and it still means what it meant. Legal for `Extremal` and `Index`, where
+     * m[b] is statically `neigs`; a `Value` range needs the form above to report
+     * its data-dependent count, and reaches the solver's own check.
+     *
+     * Distinguished from the `m`-taking form by ARITY (8 arguments against 9), so
+     * neither the parameter-pack trap nor the trailing-`{}` trap in this repo's
+     * memory can fire between them. It is an inline forwarder, so there is still
+     * exactly one solver body per (B, T, MFormat).
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event syevx_direct(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params) {
+        return syevx_direct<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                           jobz, V, params);
+    }
 
     // No `m` parameter: sizing writes no counts, and this function is
     // range-independent anyway (it sizes a full syev on n and batch alone).
@@ -698,9 +750,17 @@ namespace batchlas {
      * eigenvalues and requires ascending input, so `stebz` is never asked for
      * descending mid-chain.
      *
+     * BEHAVIOUR CHANGE, same as `syevx_direct`: `neigs > n` used to throw and now
+     * succeeds with the tail of `W` left unwritten. Zero capacity is still
+     * rejected (stein requires k >= 1).
+     *
      * @param W Eigenvalue output, `neigs` entries per batch item. `neigs` is a
      *        CAPACITY: for a Value range only `min(m[b], neigs)` entries are
      *        written and the rest are left untouched. The stride is always `neigs`.
+     * @param V Eigenvector output, `neigs` columns per batch item. Columns past
+     *        `min(m[b], neigs)` are written as EXACTLY ZERO by `stein`, and the
+     *        two orthogonal back-transforms preserve that. `syevx_direct` matches
+     *        it deliberately; see its doc comment.
      * @param m Per-item count of eigenvalues in the requested range, or an empty
      *        span to not report it. For Index/Extremal this is the block size; for
      *        Value it is data-dependent, and `m[b] > neigs` is the caller's
@@ -717,6 +777,24 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
+
+    /**
+     * @brief The pre-existing `syevx_direct_subset` signature, without the `m`
+     *        output. See the note on the `syevx_direct` form above: same reason,
+     *        same arity-based disambiguation, same inline-forwarder shape.
+     */
+    template <Backend B, typename T, MatrixFormat MFormat>
+    inline Event syevx_direct_subset(Queue& ctx,
+                const MatrixView<T, MFormat>& A,
+                Span<typename base_type<T>::type> W,
+                size_t neigs,
+                Span<std::byte> workspace,
+                JobType jobz,
+                const MatrixView<T, MatrixFormat::Dense>& V,
+                const SyevxParams<T>& params) {
+        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                                  jobz, V, params);
+    }
 
     // No `m` parameter: sizing writes no counts. It is NOT range-independent,
     // though -- a Value range needs room for up to n eigenvalues per item in the

@@ -92,9 +92,34 @@ Event syevx_direct(Queue& ctx,
         }
         // `neigs` is a capacity, so exceeding n is harmless -- the tail of W and V
         // simply goes unwritten. It is clamped inside syevx_resolve_range and is
-        // deliberately no longer rejected.
+        // deliberately no longer rejected. (This is the one place an existing
+        // call's outcome changed from a throw to a success; see the doc comment on
+        // syevx_direct in extensions.hh.)
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch_size) {
             throw std::runtime_error("syevx_direct: m must cover every batch item");
+        }
+        // The RANGE, on the other hand, is checked here and not only in the public
+        // `syevx`. This function is a public entry point in its own right -- the
+        // test suite calls it directly, and so may a caller who wants to pin the
+        // algorithm -- and an out-of-range index block would otherwise reach a
+        // device kernel that indexes an n-entry eigenvalue array with il..iu. The
+        // resolver clamps as a second line of defence, so this throw is about
+        // telling the caller rather than about memory safety; both are wanted. The
+        // wording matches validate_syevx_range_params in syevx.cc, and so does the
+        // exception type (std::invalid_argument, not the std::runtime_error the
+        // shape checks above use).
+        if (params.select == SyevxSelect::Index) {
+            const int64_t iu = (params.iu < 0) ? (n - 1) : params.iu;
+            if (params.il < 0 || iu >= n || params.il > iu) {
+                throw std::invalid_argument(
+                    "syevx_direct: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 means "
+                    "n-1); an empty block is expressed with neigs == 0, not with il > iu");
+            }
+        }
+        if (params.select == SyevxSelect::Value && !(params.vl < params.vu)) {
+            throw std::invalid_argument(
+                "syevx_direct: SyevxSelect::Value requires vl < vu for the half-open interval "
+                "(vl, vu]; an empty or inverted interval is almost always swapped arguments");
         }
 
         auto pool = BumpAllocator(workspace);
@@ -134,6 +159,13 @@ Event syevx_direct(Queue& ctx,
         T* dst_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t dst_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t dst_stride = want_eigenvectors ? V.stride() : 0;
+        // How many columns of V may be written at all. Normally the capacity, but
+        // a caller is allowed to declare a capacity above n (it is clamped, not
+        // rejected), and V is then legitimately narrower than `neigs`; the zeroing
+        // pass below must not run off the end of it.
+        const int64_t dst_cols = want_eigenvectors
+                                     ? std::min<int64_t>(static_cast<int64_t>(neigs), V.cols())
+                                     : 0;
         int32_t* m_ptr = m.empty() ? nullptr : m.data();
 
         ctx->submit([&](sycl::handler& h) {
@@ -194,6 +226,29 @@ Event syevx_direct(Queue& ctx,
                             const int64_t src_col = reverse ? (hi_src - col) : (first + col);
                             vdst[row + col * dst_ld] = vsrc[row + src_col * n];
                         }
+                        // Columns [write, dst_cols) are written as EXACTLY zero
+                        // rather than left holding whatever the caller's buffer
+                        // had. This is not tidiness: syevx_direct_subset cannot
+                        // avoid zeroing them (stein zeroes the unused columns so
+                        // that its uniform-width back-transforms have something
+                        // inert to transform, and an orthogonal map keeps zero at
+                        // zero), and `Auto` picks between the two paths on (n,
+                        // batch). Leaving them stale here would mean the identical
+                        // Value-range call returned zeros at one shape and the
+                        // caller's previous contents -- or uninitialized bytes
+                        // decoding as NaN -- at another. One contract, both paths;
+                        // see the note on V in syevx's doc comment.
+                        //
+                        // Unused W slots are NOT zeroed, deliberately: W's contract
+                        // is "untouched past m[b]", the sentinel tests depend on it,
+                        // and unlike V there is no downstream uniform-width kernel
+                        // that would consume them.
+                        for (int64_t linear = tid; linear < n * (dst_cols - write);
+                             linear += local_size) {
+                            const int64_t row = linear % n;
+                            const int64_t col = write + linear / n;
+                            vdst[row + col * dst_ld] = T(0);
+                        }
                     }
 
                     if (m_ptr != nullptr && tid == 0) {
@@ -250,6 +305,18 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
         Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         Span<int32_t>,\
+        size_t,\
+        Span<std::byte>,\
+        JobType,\
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+    /* The m-less forwarder is inline and would not need an instantiation to be \
+       CALLED, but instantiating it keeps the symbol this library exported before \
+       `m` was added, so an object file built against the old header still links. */\
+    template Event syevx_direct<back, BATCHLAS_UNPAREN fp, fmt>(\
+        Queue&,\
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
         size_t,\
         Span<std::byte>,\
         JobType,\

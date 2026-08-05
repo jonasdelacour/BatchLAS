@@ -1,6 +1,6 @@
 # SYEVX Range Selection: Implementation Plan
 
-Status: **design only, nothing implemented.** Companion to [SYEVX_PLAN.md](SYEVX_PLAN.md),
+Status: **phases 1-6 implemented; phase 7 de-scoped (see §11).** Companion to [SYEVX_PLAN.md](SYEVX_PLAN.md),
 which covers *performance* of the partial eigensolve. This document covers the
 *capability* gap: BatchLAS `syevx` can currently return only the top-`k` or
 bottom-`k` of the spectrum, while a LAPACK-conformant `?syevx` also offers
@@ -720,6 +720,28 @@ against zero.
 ---
 
 ## 11. Phase 7 — bindings, benchmarks, docs
+
+> **STATUS: not implemented, and deliberately so.** Phases 1-6 landed; nothing in
+> this section did except §11.3's cross-reference (SYEVX_PLAN.md §13 now points
+> here) and the `extensions.hh` doc rewrite, which happened as part of phase 5.
+> Where that leaves each item:
+>
+> * **§11.1 Python — deferred, not cancelled.** `_options.py` still exposes only
+>   `find_largest` and `ops_spectral.cc` still sizes outputs from `neigs`
+>   unconditionally, so ranges are a C++-only capability today. The C++ contract
+>   it would wrap is settled now, which is what made deferring it cheap.
+> * **§11.2 The one benchmark point — NOT MEASURED, and this is the one gap worth
+>   naming out loud.** The routing extension in §9.2 rests on the claim that
+>   position within the spectrum cannot enter the cost of either dense path. That
+>   claim is argued structurally (§8.5: `kd`, the reflector schedule and both
+>   back-transform shapes are functions of `n` and the capacity alone, and
+>   `stebz` bisects the same number of steps for any index) and is asserted by
+>   `PositionInTheSpectrumDoesNotChangeRouting`, which pins the *decision* — but
+>   the *timing* was never taken at saturation as this section asked. The
+>   structural argument is strong enough that no re-measurement was thought
+>   necessary; it is still an argument and not a measurement, and if it is wrong
+>   the symptom is a mis-routed interior request, not a wrong answer.
+> * **§11.3 Docs — done.**
 
 ### 11.1 Python
 

@@ -900,6 +900,17 @@ Dense eigensolver performance on GPUs:
 
 ## 13. Implementation status
 
+> **Range selection lives in its own document.** This plan covers the
+> *performance* of the partial eigensolve. The *capability* gap — LAPACK's
+> `range = 'I'` (`il..iu`) and `range = 'V'` (`vl..vu`), which §7.9/§9 Tier 1 named
+> but never exposed above the tridiagonal layer — is
+> [SYEVX_RANGE_PLAN.md](SYEVX_RANGE_PLAN.md). Status there: phases 1-6 implemented
+> (`SyevxSelect`, the resolver, `syevx_direct`, `stein` per-item counts,
+> `syevx_direct_subset`, routing, the public `m` output and the test matrix);
+> phase 7 (Python bindings, one benchmark point, this cross-reference) is
+> de-scoped except for this paragraph. The routing thresholds below are unchanged
+> by it: position within the spectrum cannot enter the cost of either dense path.
+
 ### Tier 0 — done
 
 - `SyevxAlgorithm {Auto, Direct, DirectSubset, Filtered, LOBPCG}` on

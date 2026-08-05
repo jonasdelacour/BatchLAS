@@ -329,12 +329,26 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
 // counts-less overload bit for bit: same kernels, same inputs, same launch
 // geometry, and the deliberately fixed LCG seed makes inverse iteration
 // reproducible. A difference here is a bounding bug, not a rounding difference.
+//
+// Deliberately NOT asserted here: that `stein_all_counts` (an empty span) matches
+// the counts-less overload. It cannot fail -- the counts-less overload is DEFINED
+// as a forwarder that passes an empty span (stein.cc), so the two are literally
+// the same call, and comparing them would measure run-to-run determinism while
+// reading as though it validated a bound. The second half of this test is a case
+// where the counts genuinely bind differently, which is what makes the first half
+// worth stating.
 TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
     using Real = TypeParam;
     CountsFixture<Real> f;
     constexpr int n = CountsFixture<Real>::n;
     constexpr int k = CountsFixture<Real>::k;
     constexpr int batch = CountsFixture<Real>::batch;
+    static_assert(batch >= 2, "the short-item half of this test needs a second item");
+
+    // The reason the empty-span comparison is not here, as an assertion rather
+    // than as a claim in a comment: `stein_all_counts` IS the empty span the
+    // counts-less overload forwards, so the two calls are indistinguishable.
+    ASSERT_TRUE(stein_all_counts.empty());
 
     f.FillEigenvalues(*this->ctx);
     for (int b = 0; b < batch; ++b) f.counts[b] = k;
@@ -354,23 +368,53 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
                                    Z_counts.view(), sws, sp);
     this->ctx->wait();
 
-    Matrix<Real, MatrixFormat::Dense> Z_empty(n, k, batch);
-    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
-                                   stein_all_counts, Z_empty.view(), sws, sp);
-    this->ctx->wait();
-
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < k; ++j) {
             for (int i = 0; i < n; ++i) {
                 EXPECT_EQ(Z_counts.view()(i, j, b), Z_uniform.view()(i, j, b))
                     << "counts==k diverged from the uniform overload at ("
                     << i << "," << j << "," << b << ")";
-                EXPECT_EQ(Z_empty.view()(i, j, b), Z_uniform.view()(i, j, b))
-                    << "empty counts diverged from the uniform overload at ("
-                    << i << "," << j << "," << b << ")";
             }
         }
     }
+
+    // Now the discriminating half: one item drops a single column. The bound must
+    // bind EXACTLY there and nowhere else -- item 0 is untouched, item 1's columns
+    // 0..k-2 are untouched, and only its column k-1 changes, to exact zero. A
+    // bound that was off by one, applied to the wrong item, or applied to the
+    // whole batch shows up as a difference in one of the first two.
+    for (int b = 0; b < batch; ++b) f.counts[b] = k;
+    f.counts[1] = k - 1;
+
+    Matrix<Real, MatrixFormat::Dense> Z_short(n, k, batch);
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   Span<const int32_t>(f.counts.data(), f.counts.size()),
+                                   Z_short.view(), sws, sp);
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < k; ++j) {
+            const bool dropped = (b == 1 && j == k - 1);
+            for (int i = 0; i < n; ++i) {
+                if (dropped) {
+                    EXPECT_EQ(Z_short.view()(i, j, b), Real(0))
+                        << "the dropped column was not zeroed at (" << i << "," << j << "," << b << ")";
+                } else {
+                    EXPECT_EQ(Z_short.view()(i, j, b), Z_uniform.view()(i, j, b))
+                        << "a kept column moved when a different column was dropped at ("
+                        << i << "," << j << "," << b << ")";
+                }
+            }
+        }
+    }
+    // Guard against the whole comparison being vacuous: the dropped column has to
+    // have been NON-zero in the uniform run, or "it is zero now" proves nothing.
+    Real dropped_norm2 = 0;
+    for (int i = 0; i < n; ++i) {
+        const Real v = Z_uniform.view()(i, k - 1, 1);
+        dropped_norm2 += v * v;
+    }
+    EXPECT_GT(dropped_norm2, Real(0.5)) << "the uniform run left the dropped column empty too";
 }
 
 // counts[b] == 0: the item wants nothing (an empty value interval). Every column
