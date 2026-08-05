@@ -36,19 +36,45 @@ def _dtype_to_filesafe_suffix(dtype: str) -> str:
         return dt.replace(" ", "").replace("<", "_").replace(">", "_")
 
 
-def _default_csv_path(dtype: str = "float") -> str:
+def _jobz_suffix(jobz: int) -> str:
+    """Filename tag for the eigenvector mode.
+
+    Eigenvalues-only and eigenvector runs are different workloads; tagging the
+    default paths keeps a run of one from silently overwriting (or being plotted
+    against) the other.
+    """
+    return "vec" if jobz else "novec"
+
+
+def _jobz_label(jobz: int) -> str:
+    return "with eigenvectors" if jobz else "eigenvalues only"
+
+
+def _default_gflops_factor(jobz: int) -> float:
+    """Operation-count model for effective GFLOPS ~= factor * N^3 / time.
+
+    Eigenvalues-only is the tridiagonal reduction alone (4/3 N^3); computing
+    eigenvectors adds the backtransform and the QR/DC sweep, for which 9 N^3 is
+    the usual rule of thumb.
+    """
+    return 9.0 if jobz else 4.0 / 3.0
+
+
+def _default_csv_path(dtype: str = "float", jobz: int = 1) -> str:
     suffix = _dtype_to_filesafe_suffix(dtype)
-    return os.path.join(_here(), "..", "build", f"syev_vendor_{suffix}.csv")
+    return os.path.join(_here(), "..", "build", f"syev_vendor_{suffix}_{_jobz_suffix(jobz)}.csv")
 
 
-def _default_csv_compare_path(dtype: str = "float") -> str:
+def _default_csv_compare_path(dtype: str = "float", jobz: int = 1) -> str:
     suffix = _dtype_to_filesafe_suffix(dtype)
-    return os.path.join(_here(), "..", "build", f"syev_compare_{suffix}.csv")
+    return os.path.join(_here(), "..", "build", f"syev_compare_{suffix}_{_jobz_suffix(jobz)}.csv")
 
 
-def _default_plot_path(dtype: str = "float") -> str:
+def _default_plot_path(dtype: str = "float", jobz: int = 1) -> str:
     suffix = _dtype_to_filesafe_suffix(dtype)
-    return os.path.join(_here(), "..", "output", "plots", f"syev_provider_compare_{suffix}.png")
+    return os.path.join(
+        _here(), "..", "output", "plots", f"syev_provider_compare_{suffix}_{_jobz_suffix(jobz)}.png"
+    )
 
 
 def _default_n_values() -> list[int]:
@@ -314,10 +340,13 @@ def plot_provider_compare_vs_n(
     compare_label: str,
     n_values: Sequence[int],
     dtype: str = "float",
+    jobz: int = 1,
     savepath: Optional[str] = None,
     y_metric: str = "gflops",
-    gflops_factor: float = 9.0,
+    gflops_factor: Optional[float] = None,
 ) -> None:
+    if gflops_factor is None:
+        gflops_factor = _default_gflops_factor(jobz)
     metric_time = _pick_metric_column(df_base)
     metric_time_cmp = _pick_metric_column(df_compare)
     if metric_time != metric_time_cmp:
@@ -470,10 +499,15 @@ def plot_provider_compare_vs_n(
         ax_bottom.tick_params(axis="x", labelrotation=30)
 
         dtype_label = _dtype_to_label(dtype)
-        fig.suptitle(with_device_title(f"SYEV Performance Comparison ({dtype_label})"), fontsize=13)
+        fig.suptitle(
+            with_device_title(
+                f"SYEV Performance Comparison ({dtype_label}, {_jobz_label(jobz)})"
+            ),
+            fontsize=13,
+        )
         fig.tight_layout(rect=[0, 0, 1, 0.95])
 
-    target_path = savepath or _default_plot_path()
+    target_path = savepath or _default_plot_path(dtype, jobz)
     save_figure(fig, target_path)
 
 
@@ -481,9 +515,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run and plot SYEV provider comparison")
     parser.add_argument("--run", action="store_true", help="run benchmarks before plotting")
     parser.add_argument("--bench-bin", default=_default_bench_path(), help="path to syev_benchmark binary")
-    parser.add_argument("--csv-base", default=None, help="CSV output path for base provider (defaults based on --type)")
-    parser.add_argument("--csv-compare", default=None, help="CSV output path for compared provider (defaults based on --type)")
-    parser.add_argument("--output", default=None, help="optional path to save the plot (defaults based on --type)")
+    parser.add_argument("--csv-base", default=None, help="CSV output path for base provider (defaults based on --type/--jobz)")
+    parser.add_argument("--csv-compare", default=None, help="CSV output path for compared provider (defaults based on --type/--jobz)")
+    parser.add_argument("--output", default=None, help="optional path to save the plot (defaults based on --type/--jobz)")
 
     parser.add_argument("--provider-base", default="VENDOR", help="baseline BATCHLAS_SYEV_PROVIDER")
     parser.add_argument("--provider-compare", default="CTA", help="compared BATCHLAS_SYEV_PROVIDER")
@@ -492,6 +526,13 @@ def main() -> None:
 
     parser.add_argument("--backend", default="CUDA", help="minibench backend filter")
     parser.add_argument("--type", dest="dtype", default="float", help="minibench type filter")
+    parser.add_argument(
+        "--jobz",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="syev_benchmark jobz (arg4): 0 = eigenvalues only, 1 = eigenvectors (default)",
+    )
     parser.add_argument("--warmup", type=int, default=10, help="benchmark warmup iterations")
     parser.add_argument("--no-metric-stddev", action="store_true", help="do not request metric stddev columns")
     parser.add_argument(
@@ -503,8 +544,9 @@ def main() -> None:
     parser.add_argument(
         "--gflops-factor",
         type=float,
-        default=9.0,
-        help="operation model factor in effective GFLOPS ~= factor * N^3 / time",
+        default=None,
+        help="operation model factor in effective GFLOPS ~= factor * N^3 / time "
+        "(default: 9 with eigenvectors, 4/3 for eigenvalues only)",
     )
 
     parser.add_argument("--n", type=int, nargs="+", default=_default_n_values(), help="matrix sizes N to compare")
@@ -525,13 +567,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Apply dtype-aware defaults for file paths
+    # Apply dtype/jobz-aware defaults for file paths
     if args.csv_base is None:
-        args.csv_base = _default_csv_path(args.dtype)
+        args.csv_base = _default_csv_path(args.dtype, args.jobz)
     if args.csv_compare is None:
-        args.csv_compare = _default_csv_compare_path(args.dtype)
+        args.csv_compare = _default_csv_compare_path(args.dtype, args.jobz)
     if args.output is None:
-        args.output = _default_plot_path(args.dtype)
+        args.output = _default_plot_path(args.dtype, args.jobz)
 
     if args.batches is None:
         args.batches = _default_batches_for_n(args.n, batch_at_n4=65536)
@@ -546,13 +588,19 @@ def main() -> None:
         if not args.no_metric_stddev:
             common_args.append("--metric_stddev")
 
+        # syev_benchmark positionals are (n, batch, sytrd_block_size, fuse_panel_update,
+        # jobz, uplo) and any omitted trailing positional reads back as 0. jobz therefore
+        # cannot be set without also spelling out args 2 and 3; 0 means "auto block size"
+        # and "no fused panel update", which is what this script has always run with.
+        point_args = ["0", "0", str(args.jobz), *args.bench_args]
+
         _run_benchmark_pairs(
             binary=args.bench_bin,
             csv_out=args.csv_base,
             n_values=args.n,
             batches=args.batches,
             common_args=common_args,
-            bench_args=args.bench_args,
+            bench_args=point_args,
             env={"BATCHLAS_SYEV_PROVIDER": args.provider_base},
         )
         _run_benchmark_pairs(
@@ -561,7 +609,7 @@ def main() -> None:
             n_values=args.n,
             batches=args.batches,
             common_args=common_args,
-            bench_args=args.bench_args,
+            bench_args=point_args,
             env={"BATCHLAS_SYEV_PROVIDER": args.provider_compare},
         )
 
@@ -586,6 +634,7 @@ def main() -> None:
         compare_label=args.label_compare,
         n_values=args.n,
         dtype=args.dtype,
+        jobz=args.jobz,
         savepath=args.output,
         y_metric=args.y_metric,
         gflops_factor=args.gflops_factor,
