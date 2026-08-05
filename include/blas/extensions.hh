@@ -531,17 +531,43 @@ namespace batchlas {
      *
      * Real scalar types and dense input only; callers should route complex or
      * sparse input elsewhere (`syevx` does this automatically).
+     *
+     * Supports every `SyevxSelect` range. Position within the spectrum costs it
+     * nothing: the reduction, the band width `kd` and the reflector schedule
+     * depend on `n` alone, `stebz` runs the same number of bisection steps for
+     * every index, and both back-transforms act on the same fixed `n x neigs`
+     * slice wherever the block sits.
+     *
+     * Ordering: descending when `params.find_largest` for the default `Extremal`
+     * selection, otherwise `params.order`. The reversal is applied at the very
+     * end, in the finalize kernel: `stein`'s cluster detection walks consecutive
+     * eigenvalues and requires ascending input, so `stebz` is never asked for
+     * descending mid-chain.
+     *
+     * @param W Eigenvalue output, `neigs` entries per batch item. `neigs` is a
+     *        CAPACITY: for a Value range only `min(m[b], neigs)` entries are
+     *        written and the rest are left untouched. The stride is always `neigs`.
+     * @param m Per-item count of eigenvalues in the requested range, or an empty
+     *        span to not report it. For Index/Extremal this is the block size; for
+     *        Value it is data-dependent, and `m[b] > neigs` is the caller's
+     *        truncation signal. When truncating, the LOWEST `neigs` eigenvalues of
+     *        the interval are kept.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_direct_subset(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
                 Span<typename base_type<T>::type> W,
+                Span<int32_t> m,
                 size_t neigs,
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
 
+    // No `m` parameter: sizing writes no counts. It is NOT range-independent,
+    // though -- a Value range needs room for up to n eigenvalues per item in the
+    // internal stebz output regardless of the caller's capacity -- so it derives
+    // its sizes from the same `syevx_resolve_range` call the solver makes.
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_direct_subset_buffer_size(Queue& ctx,
                 const MatrixView<T, MFormat>& A,

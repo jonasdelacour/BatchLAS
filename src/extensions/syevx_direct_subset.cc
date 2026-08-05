@@ -73,14 +73,22 @@ struct SyevxSubsetFinalizeKernel;
 
 namespace {
 
-// Index range of the wanted block within the ascending spectrum.
-struct WantedRange {
-    int64_t il;
-    int64_t iu;
-};
-
-inline WantedRange wanted_range(int64_t n, int64_t k, bool find_largest) {
-    return find_largest ? WantedRange{n - k, n - 1} : WantedRange{0, k - 1};
+// Per-item length of the internal stebz eigenvalue buffer.
+//
+// For an index block stebz produces exactly `rr.max_count` values, which is what
+// the caller's capacity already covers. For a value range the count is
+// data-dependent and bounded only by n, and stebz throws outright unless its `w`
+// holds n entries per item (src/extensions/stebz.cc:94-98) -- so the internal
+// buffer is widened to max(n, capacity) independently of the caller's capacity.
+// The max() with capacity keeps `stein`'s `w.size() >= k` precondition satisfied
+// when a caller declares a capacity above n.
+//
+// THIS EXPRESSION IS DUPLICATED in syevx_direct_subset_buffer_size below and the
+// two must stay identical -- it is a BumpAllocator size, and this repo's memory
+// records that an under-computed workspace size is the failure mode here.
+inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
+    return value_range ? static_cast<size_t>(std::max<int64_t>(n, capacity))
+                       : static_cast<size_t>(capacity);
 }
 
 } // namespace
@@ -89,6 +97,7 @@ template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<T, MFormat>& A,
                           Span<typename base_type<T>::type> W,
+                          Span<int32_t> m,
                           size_t neigs,
                           Span<std::byte> workspace,
                           JobType jobz,
@@ -97,21 +106,41 @@ Event syevx_direct_subset(Queue& ctx,
     using Real = typename base_type<T>::type;
 
     if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {
-        (void)ctx; (void)A; (void)W; (void)neigs; (void)workspace;
+        (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
         (void)jobz; (void)V; (void)params;
         throw std::runtime_error(
             "syevx_direct_subset: only real scalar types with dense input are supported");
     } else {
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
-        const int64_t k = static_cast<int64_t>(neigs);
+        // `capacity` is the caller's declared room per item: the stride of W and
+        // the column count of V. It is deliberately NOT the number of eigenvalues
+        // produced (that is the per-item `count` the finalize kernel reads out of
+        // m_span) nor the stride of the internal stebz buffer (`w_sub_len`).
+        // Conflating those three -- they used to be one `k` -- is how a batched
+        // solver writes item b's answers into item b+1's slots.
+        const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
         if (A.rows() != A.cols()) throw std::runtime_error("syevx_direct_subset: A must be square");
-        if (k < 1 || k > n) throw std::runtime_error("syevx_direct_subset: invalid neigs");
+        // A capacity above n is no longer rejected: `neigs` is a capacity now, so
+        // an over-large one just leaves the tail of W and V unwritten. The work
+        // count is clamped to n inside syevx_resolve_range instead. Zero capacity
+        // is still rejected -- stein requires k >= 1 and the finalize geometry is
+        // untested at zero.
+        if (capacity < 1) throw std::runtime_error("syevx_direct_subset: invalid neigs");
+        if (!m.empty() && static_cast<int64_t>(m.size()) < batch) {
+            throw std::runtime_error("syevx_direct_subset: m must cover every batch item");
+        }
         if (!ctx.in_order()) {
             throw std::runtime_error("syevx_direct_subset: requires an in-order Queue");
         }
+
+        // Resolved once, here, and used for both the stebz range and the workspace
+        // sizes so that this function and syevx_direct_subset_buffer_size can never
+        // disagree about what was asked for.
+        const auto rr = syevx_resolve_range(n, neigs, params);
+        const size_t w_sub_len = subset_w_sub_len(n, capacity, rr.value_range);
 
         using namespace two_stage_detail;
         const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
@@ -233,16 +262,23 @@ Event syevx_direct_subset(Queue& ctx,
         }
 
         // Subset tridiagonal solve. Internally always ascending: stein's cluster
-        // detection walks consecutive eigenvalues and requires that order.
-        const auto range = wanted_range(n, k, params.find_largest);
-        auto w_sub_span = pool.allocate<Real>(ctx, static_cast<size_t>(k) * batch);
+        // detection walks consecutive eigenvalues and requires that order, so
+        // bp.order is pinned to Ascending for EVERY range and params.order is
+        // honoured only by the finalize kernel at the bottom of this function.
+        // Asking stebz for Descending mid-chain would silently corrupt stein's
+        // cluster grouping.
+        auto w_sub_span = pool.allocate<Real>(ctx, w_sub_len * batch);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
-        VectorView<Real> w_sub(w_sub_span, static_cast<int>(k), batch, 1, static_cast<int>(k));
+        VectorView<Real> w_sub(w_sub_span, static_cast<int>(w_sub_len), batch, 1,
+                               static_cast<int>(w_sub_len));
 
         StebzParams<Real> bp;
-        bp.range = EigenRangeType::Index;
-        bp.il = range.il;
-        bp.iu = range.iu;
+        bp.range = rr.value_range ? EigenRangeType::Value : EigenRangeType::Index;
+        bp.il = rr.il;
+        bp.iu = rr.iu;
+        bp.vl = params.vl;
+        bp.vu = params.vu;
+        bp.abstol = params.abstol;
         bp.order = SortOrder::Ascending;
         {
             const size_t bytes = stebz_buffer_size<B, Real>(ctx, n, batch, bp);
@@ -255,15 +291,41 @@ Event syevx_direct_subset(Queue& ctx,
             // ordering fix-up at the end.
             SteinParams<Real> sp;
             {
-                const size_t bytes = stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(k), batch, sp);
+                const size_t bytes = stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp);
                 auto stein_ws = pool.allocate<std::byte>(ctx, bytes);
-                auto V_sub = V({0, n}, {0, static_cast<int64_t>(k)});
-                stein<B, Real>(ctx, d_view, e_view, w_sub, static_cast<size_t>(k), V_sub, stein_ws, sp);
+                auto V_sub = V({0, n}, {0, capacity});
+                // Per-item counts, straight from the m stebz just wrote -- read on
+                // the device, so no host sync is introduced between the two calls.
+                // Span has no Span<T> -> Span<const T> converting constructor, so
+                // this must be spelled explicitly (same as the reflector schedule
+                // spans below).
+                //
+                // For an index range every count equals the block size and this is
+                // exactly the old uniform-k behaviour; for a value range it stops
+                // inverse iteration at m[b] and, critically, makes stein ZERO the
+                // columns [m[b], capacity) rather than leave stale workspace there.
+                // The back-transforms below rely on that.
+                stein<B, Real>(ctx, d_view, e_view, w_sub, static_cast<size_t>(capacity),
+                               Span<const int32_t>(m_span.data(), m_span.size()),
+                               V_sub, stein_ws, sp);
 
                 apply_phase_rows<Real>(ctx, V_sub,
                                        VectorView<Real>(phase_span.data(), n, batch, 1, n));
 
-                // V := Q2 V, over k columns rather than n.
+                // V := Q2 V, over `capacity` columns rather than n.
+                //
+                // Both back-transforms stay at the UNIFORM column count even for a
+                // value range where item b found only m[b] < capacity eigenvalues.
+                // Columns [m[b], capacity) hold the zeros stein wrote and an
+                // orthogonal transform maps zero to zero, so nothing propagates.
+                //
+                // The tradeoff, stated because it is real: if one item finds 3 and
+                // another finds 200, every item pays the 200-column transform. The
+                // alternative -- reading max_b m[b] back to the host to shape the
+                // call -- would add a device->host sync per call, which is exactly
+                // the defect SYEVX_PLAN.md §7.1 catalogues in LOBPCG. Uniform shape
+                // across the batch is also what keeps these two kernels fast. A
+                // caller who cares should use an index range or split the batch.
                 if (nrefl > 0) {
                     internal::unmqr_hb2st<B, T>(
                         ctx, v_sb2st_view, tau_sb2st_hh_view, V_sub, n, kd,
@@ -272,9 +334,9 @@ Event syevx_direct_subset(Queue& ctx,
                         Span<const int32_t>(sb2st_waves.data(), sb2st_waves.size()));
                 }
 
-                // V(kd:, :) := Q1 V(kd:, :), again over k columns rather than n.
-                // Narrowing these two back-transforms from n to k columns is the
-                // term Tier 2 exists to shrink.
+                // V(kd:, :) := Q1 V(kd:, :), again over `capacity` columns rather
+                // than n. Narrowing these two back-transforms from n to capacity
+                // columns is the term Tier 2 exists to shrink.
                 //
                 // sy2sb factors panel i with GEQRF starting at row i+kd, so
                 // a(kd:, 0:n-kd) is already a GEQRF-style reflector layout and the
@@ -308,13 +370,26 @@ Event syevx_direct_subset(Queue& ctx,
         }
 
         // Write the eigenvalues out in the requested order, reversing V's columns
-        // in place when the largest were asked for.
-        const bool reverse = params.find_largest;
+        // in place when a descending block was asked for.
+        //
+        // `reverse` comes from the RESOLVED range, not from params.find_largest:
+        // find_largest is meaningful only for SyevxSelect::Extremal, and an Index
+        // or Value range takes its order from params.order. Deriving it from
+        // find_largest here -- as this kernel used to -- is a second, independent
+        // place the extremal assumption was baked in, and it would have quietly
+        // returned an interior block in the wrong order.
+        const bool reverse = rr.reverse;
         auto* w_out = W.data();
         const auto* w_in = w_sub_span.data();
         T* v_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t v_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t v_stride = want_eigenvectors ? V.stride() : 0;
+        // Two strides that used to be one `k` and must not be re-merged: the output
+        // side keeps the caller's capacity, the input side uses the internal
+        // (possibly wider) stebz buffer.
+        const int64_t w_in_stride = static_cast<int64_t>(w_sub_len);
+        const int32_t* m_in = m_span.data();
+        int32_t* m_out = m.empty() ? nullptr : m.data();
 
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         ctx->submit([&](sycl::handler& h) {
@@ -325,23 +400,43 @@ Event syevx_direct_subset(Queue& ctx,
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
 
-                    for (int64_t i = tid; i < k; i += local_size) {
-                        const int64_t src = reverse ? (k - 1 - i) : i;
-                        w_out[bid * k + i] = w_in[bid * k + src];
+                    // True count for this item, as stebz found it. For an index
+                    // block this is the block size; for a value range it is data
+                    // dependent and may exceed the capacity. Read with signed
+                    // arithmetic and clamped at zero: stebz does not itself clamp a
+                    // Sturm-count difference, so a swapped interval can leave a
+                    // negative here and an unsigned loop bound would be an enormous
+                    // write.
+                    const int64_t raw_count = static_cast<int64_t>(m_in[bid]);
+                    const int64_t count = (raw_count > 0) ? raw_count : int64_t(0);
+                    // Only the VALID PREFIX is written and reversed; slots
+                    // [write, capacity) of W are left untouched, and so are the
+                    // matching columns of V (which stein already zeroed).
+                    const int64_t write = (count < capacity) ? count : capacity;
+
+                    for (int64_t i = tid; i < write; i += local_size) {
+                        const int64_t src = reverse ? (write - 1 - i) : i;
+                        w_out[bid * capacity + i] = w_in[bid * w_in_stride + src];
                     }
 
                     if (v_ptr != nullptr && reverse) {
                         // Swap column pairs; the loop covers each pair once.
                         auto* vb = v_ptr + bid * v_stride;
-                        const int64_t half = k / 2;
+                        const int64_t half = write / 2;
                         for (int64_t linear = tid; linear < n * half; linear += local_size) {
                             const int64_t row = linear % n;
                             const int64_t c = linear / n;
-                            const int64_t c2 = k - 1 - c;
+                            const int64_t c2 = write - 1 - c;
                             const T tmp = vb[row + c * v_ld];
                             vb[row + c * v_ld] = vb[row + c2 * v_ld];
                             vb[row + c2 * v_ld] = tmp;
                         }
+                    }
+
+                    if (m_out != nullptr && tid == 0) {
+                        // The TRUE count, not `write`: m[b] > capacity is the
+                        // caller's truncation signal.
+                        m_out[bid] = static_cast<int32_t>(count);
                     }
                 });
         });
@@ -369,11 +464,18 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         (void)ctx; (void)A; (void)W; (void)neigs; (void)jobz; (void)V; (void)params;
         return 0;
     } else {
-        (void)W; (void)V; (void)params;
+        (void)W; (void)V;
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
-        const int64_t k = static_cast<int64_t>(neigs);
+        const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
+
+        // Same resolution, same expression, as the solver above. A Value range
+        // widens the internal stebz buffer to n entries per item independently of
+        // the caller's capacity, so this function is NOT range-independent and
+        // must not be simplified back to `neigs`.
+        const auto rr = syevx_resolve_range(n, neigs, params);
+        const size_t w_sub_len = subset_w_sub_len(n, capacity, rr.value_range);
 
         using namespace two_stage_detail;
         const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
@@ -426,26 +528,31 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                                                     Uplo::Lower, kd, sb2st_block_size));
         }
 
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(k) * batch);
+        // w_sub, then m. Mirrors the runtime allocation order exactly.
+        bytes += BumpAllocator::allocation_size<Real>(ctx, w_sub_len * batch);
         bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(batch));
 
         StebzParams<Real> bp;
-        bp.range = EigenRangeType::Index;
+        bp.range = rr.value_range ? EigenRangeType::Value : EigenRangeType::Index;
         bytes += BumpAllocator::allocation_size<std::byte>(ctx, stebz_buffer_size<B, Real>(ctx, n, batch, bp));
 
         if (want_eigenvectors) {
             SteinParams<Real> sp;
+            // Sized on the CAPACITY, which is what the solver passes as stein's k:
+            // stein's scratch grid is n * k * batch whether or not a column ends up
+            // used, so per-item counts do not shrink it.
             bytes += BumpAllocator::allocation_size<std::byte>(
-                ctx, stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(k), batch, sp));
+                ctx, stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp));
 
             // Q1 back-transform. Shapes mirror the runtime slices exactly:
-            // v1 = a(kd:, 0:n-kd) and the target is V(kd:, 0:k).
+            // v1 = a(kd:, 0:n-kd) and the target is V(kd:, 0:capacity).
             if (tau_sy2sb_n > 0) {
                 const int32_t rows_below_kd = std::max<int32_t>(0, n - kd);
                 MatrixView<T, MatrixFormat::Dense> v1_dummy(nullptr, rows_below_kd, tau_sy2sb_n, n,
                                                             static_cast<int64_t>(n) * n, batch);
-                MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, rows_below_kd, static_cast<int>(k), n,
-                                                           static_cast<int64_t>(n) * k, batch);
+                MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, rows_below_kd,
+                                                           static_cast<int>(capacity), n,
+                                                           static_cast<int64_t>(n) * capacity, batch);
                 Span<T> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
                 if constexpr (B == Backend::NETLIB) {
@@ -469,6 +576,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
         Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+        Span<int32_t>,\
         size_t,\
         Span<std::byte>,\
         JobType,\

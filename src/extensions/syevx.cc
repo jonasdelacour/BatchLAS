@@ -166,8 +166,10 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
 // TODO(Phase 5, routing): also reject `select != Extremal` with a resolved method of
 // LOBPCG or Filtered, and sparse input with a non-extremal range. Neither can answer
 // an interior request, and today `syevx_select_algorithm` may still route one to
-// DirectSubset (which ignores `select` until Phase 4) or to LOBPCG. That check needs
-// the resolved algorithm, so it belongs with the routing change, not here.
+// LOBPCG or Filtered, which would silently return the extremal block. That check
+// needs the resolved algorithm, so it belongs with the routing change, not here.
+// (Direct and DirectSubset both honour every range as of Phase 4, so an Auto-routed
+// dense request is already safe.)
 template <typename T, MatrixFormat MFormat>
 void validate_syevx_range_params(const SyevxParams<T>& params,
                                  int64_t n,
@@ -389,7 +391,9 @@ Event syevx(Queue& ctx,
                                            jobz, V, params);
     }
     if (chosen == SyevxAlgorithm::DirectSubset) {
-        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+        // As above: no `m` span to fill on this overload.
+        return syevx_direct_subset<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                                  jobz, V, params);
     }
     if (chosen == SyevxAlgorithm::Filtered) {
         return syevx_filtered<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
