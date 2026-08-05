@@ -5,6 +5,7 @@
 #include <util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
+#include <stdexcept>
 #include <oneapi/dpl/random>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
@@ -238,6 +239,19 @@ inline constexpr R jacobi_definiteness_floor() {
                 const SyevxParams<T>& params 
         ) {
         using float_type = typename base_type<T>::type;
+
+        // LOBPCG's Rayleigh-Ritz converges to whichever EXTREME the trial block is
+        // biased toward; there is no il/iu for it to honour and no interval it can
+        // target. `syevx` never routes a non-extremal request here, but this is a
+        // public entry point in its own right, and silently returning the extremal
+        // eigenpairs to someone who asked for an interior block is the one failure
+        // mode no downstream check can catch. See SYEVX_RANGE_PLAN.md §2.5, §12.1.
+        if (params.select != SyevxSelect::Extremal) {
+            throw std::invalid_argument(
+                "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
+                "extreme of the spectrum by construction. Use syevx_direct or "
+                "syevx_direct_subset for an index or value range");
+        }
 
         const bool trace_enabled = []() {
             const char* v = std::getenv("BATCHLAS_SYEVX_TRACE");
@@ -1423,6 +1437,14 @@ inline constexpr R jacobi_definiteness_floor() {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params){
+        // Must reject exactly what the solver rejects: a sizing call that returns a
+        // number for a request the solve will refuse is a caller-visible
+        // inconsistency.
+        if (params.select != SyevxSelect::Extremal) {
+            throw std::invalid_argument(
+                "syevx_lobpcg_buffer_size: only SyevxSelect::Extremal is supported; see "
+                "syevx_lobpcg");
+        }
         auto block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
             auto batch_size = A.batch_size();
             auto n = A.rows();

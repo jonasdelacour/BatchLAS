@@ -138,6 +138,25 @@ namespace batchlas {
         LOBPCG          // Locally Optimal Block Preconditioned Conjugate Gradient
     };
 
+    // How `syevx` chooses which part of the spectrum to return.
+    //
+    // `Extremal` is the historical behaviour and the default: `neigs` eigenpairs
+    // from one end, chosen by SyevxParams::find_largest, returned descending for
+    // the largest and ascending for the smallest. It is a special case of `Index`
+    // -- [n-neigs, n-1] or [0, neigs-1] -- and is normalized to one internally by
+    // `syevx_resolve_range`; it exists as a distinct value so that no existing
+    // caller's behaviour depends on a default that changed meaning.
+    //
+    // Deliberately NOT `EigenRangeType`, whose `All` member -- the natural default
+    // -- means "every eigenvalue", which is not what syevx's default does.
+    // `EigenRangeType` stays the tridiagonal-layer vocabulary; `SyevxSelect` is the
+    // user-facing one, and the two are converted in exactly one place.
+    enum class SyevxSelect {
+        Extremal,  // neigs from one end; SyevxParams::find_largest picks the end
+        Index,     // SyevxParams::il .. iu inclusive, 0-based, ascending spectrum
+        Value      // every eigenvalue in the half-open interval (vl, vu]
+    };
+
     // Preconditioner family used by the LOBPCG path of `syevx`. Set per call via
     // SyevxParams::preconditioner_type; `Auto` picks ILU(k) when a factor has been
     // supplied (or requested via SyevxParams::build_preconditioner) and otherwise

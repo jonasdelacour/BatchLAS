@@ -144,6 +144,20 @@ struct PartitionAdapter {
         return value;
     }
 
+    // Force a value to be identical in every lane of the partition.
+    //
+    // Needed on every loop-exit test in the root solvers. Those tests read
+    // reduced quantities, which are *mathematically* the same in every lane --
+    // but the compiler cannot see that, so it treats the branch as divergent.
+    // If the hardware then actually diverges, the lanes that left the loop stop
+    // participating in the butterfly shuffles that the lanes still iterating are
+    // waiting on, and the partition deadlocks. Broadcasting from lane 0 makes
+    // the condition provably uniform and the branch convergent.
+    template <typename T>
+    inline T broadcast(T value) const {
+        return select_from_group(partition, value, 0u);
+    }
+
     // Partition-local reductions never need a work-group barrier: every lane of
     // a partition executes the same trip count, so the shuffles are convergent.
     inline void sync() const {}
@@ -174,6 +188,11 @@ struct WorkgroupAdapter {
     template <typename T>
     inline T reduce_sum(T value) const {
         return sycl::reduce_over_group(wg, value, sycl::plus<T>());
+    }
+
+    template <typename T>
+    inline T broadcast(T value) const {
+        return sycl::group_broadcast(wg, value, 0);
     }
 };
 
@@ -391,7 +410,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     T err = state.err;
     T ratio_sq = state.ratio_sq;
 
-    if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
+    if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
         return {origin, tau};
     }
 
@@ -415,7 +434,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
                      > (sycl::fabs(prev_f) / T(10));
 
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
+        if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             break;
         }
 
@@ -542,7 +561,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
           - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
+        if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             break;
         }
 

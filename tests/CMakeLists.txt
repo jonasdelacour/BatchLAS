@@ -27,6 +27,7 @@ set(TEST_TARGETS
     linalg_layer_tests
     gemm_tests
     syevx_tests
+    syevx_range_tests
     lanczos_tests
     gemv_tests
     matrix_tests
@@ -129,7 +130,7 @@ set(BATCHLAS_TEST_LABELS_tridiag
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
-    syev_tests syevx_tests syev_cta_tests syev_jacobi_cta_tests
+    syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests)
 set(BATCHLAS_TEST_LABELS_sparse

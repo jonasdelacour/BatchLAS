@@ -245,7 +245,7 @@ def test_syev_without_eigenvectors_returns_the_full_spectrum():
     np.testing.assert_allclose(np.sort(values, axis=-1), np.linalg.eigvalsh(a), rtol=1e-8, atol=1e-8)
 
 
-@pytest.mark.parametrize("name", ["stedc", "stedc_flat", "steqr", "steqr_cta"])
+@pytest.mark.parametrize("name", ["stedc", "steqr", "steqr_cta"])
 def test_tridiagonal_solvers_without_eigenvectors(name):
     rng = np.random.default_rng(3)
     d = rng.standard_normal((2, 16))
@@ -542,3 +542,267 @@ def test_elementwise_out_parameter_is_written():
     out = np.zeros((2, 2), dtype=np.float64)
     bl.add(a, b, out=out)
     np.testing.assert_allclose(out, a + b)
+
+
+# ---------------------------------------------------------------------------
+# syevx range selection (LAPACK ?syevx's RANGE = 'I' and 'V')
+#
+# These mirror tests/syevx_tests.cc's range suites. The oracle here is
+# numpy.linalg.eigvalsh, which is exactly the "run a full solve on the host,
+# sort ascending, then select in plain code" oracle SYEVX_RANGE_PLAN.md section
+# 10.1 asks for -- trivially correct, which is what makes it worth trusting.
+# ---------------------------------------------------------------------------
+
+
+def _tridiag_toeplitz(n: int, diag: float, off: float) -> np.ndarray:
+    """Symmetric tridiagonal Toeplitz matrix with a closed-form spectrum.
+
+    Eigenvalues are ``diag + 2*off*cos(j*pi/(n+1))`` for ``j = 1..n``, so both
+    the values and the exact count in any interval are known analytically. That
+    lets a value-range test place vl and vu in genuine spectral GAPS, where the
+    count is unambiguous and cannot move by one under rounding.
+    """
+    return (
+        np.diag(np.full(n, float(diag)))
+        + np.diag(np.full(n - 1, float(off)), 1)
+        + np.diag(np.full(n - 1, float(off)), -1)
+    )
+
+
+def _toeplitz_eigenvalues(n: int, diag: float, off: float) -> np.ndarray:
+    j = np.arange(1, n + 1, dtype=np.float64)
+    return np.sort(diag + 2.0 * off * np.cos(j * np.pi / (n + 1)))
+
+
+def test_syevx_index_range_matches_numpy_oracle():
+    n = 16
+    a = _symmetric_batch(2, n, seed=21).astype(np.float64)
+    il, iu = 5, 8
+
+    try:
+        result = bl.syevx_range(a, select="index", il=il, iu=iu, compute_vectors=False)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    # An index range has a statically known count, so m is neigs for every item
+    # and nothing can be truncated.
+    assert result.capacity == iu - il + 1
+    np.testing.assert_array_equal(result.counts, np.full(2, iu - il + 1))
+    assert result.truncated is False
+    assert result.vectors is None
+
+    for item in range(2):
+        expected = np.sort(np.linalg.eigvalsh(a[item]))[il : iu + 1]
+        assert result.values[item].shape == (iu - il + 1,)
+        np.testing.assert_allclose(result.values[item], expected, rtol=1e-8, atol=1e-8)
+
+
+def test_syevx_index_range_at_the_top_reproduces_find_largest():
+    # A block touching an end must reproduce the extremal answer: normalization
+    # turns Extremal into exactly this index block, so a difference here is a
+    # bug in the resolver rather than in either solver.
+    n = 12
+    k = 4
+    a = _symmetric_batch(1, n, seed=22).astype(np.float64)
+
+    try:
+        largest = bl.syevx(
+            a,
+            k,
+            compute_vectors=False,
+            options=bl.SyevxOptions(find_largest=True),
+        )
+        block = bl.syevx_range(a, select="index", il=n - k, iu=n - 1, compute_vectors=False)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    # find_largest returns DESCENDING; an explicit index range defaults to
+    # ascending (LAPACK's order). That asymmetry is the documented contract, so
+    # compare after sorting both.
+    np.testing.assert_allclose(
+        np.sort(np.ravel(np.asarray(largest))),
+        np.sort(block.values[0]),
+        rtol=1e-8,
+        atol=1e-8,
+    )
+
+
+def test_syevx_index_range_with_eigenvectors_satisfies_the_residual():
+    n = 12
+    il, iu = 3, 6
+    a = _symmetric_batch(1, n, seed=23).astype(np.float64)
+
+    try:
+        result = bl.syevx_range(a, select="index", il=il, iu=iu, compute_vectors=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    values = result.values[0]
+    vectors = result.vectors[0]
+    assert vectors.shape == (n, iu - il + 1)
+    # A*V - V*diag(w) is the only check that catches a selection kernel that
+    # picked the right eigenvalues and the wrong columns.
+    residual = a[0] @ vectors - vectors * values[np.newaxis, :]
+    assert np.abs(residual).max() < 1e-7
+
+
+def test_syevx_value_range_counts_a_known_spectrum():
+    # Boundaries placed in spectral GAPS, so the expected count is exact and
+    # cannot move by one under rounding.
+    n = 24
+    diag, off = 2.0, -1.0
+    exact = _toeplitz_eigenvalues(n, diag, off)
+    vl = float((exact[7] + exact[8]) / 2.0)
+    vu = float((exact[15] + exact[16]) / 2.0)
+    expected = exact[8:16]
+
+    a = np.stack([_tridiag_toeplitz(n, diag, off)] * 2)
+
+    try:
+        result = bl.syevx_range(a, select="value", neigs=n, vl=vl, vu=vu, compute_vectors=False)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    np.testing.assert_array_equal(result.counts, np.full(2, len(expected)))
+    assert result.truncated is False
+    for item in range(2):
+        np.testing.assert_allclose(result.values[item], expected, rtol=1e-7, atol=1e-7)
+
+
+def test_syevx_value_range_empty_interval_reports_zero():
+    n = 16
+    diag, off = 2.0, -1.0
+    exact = _toeplitz_eigenvalues(n, diag, off)
+    # Entirely above the spectrum.
+    vl = float(exact[-1] + 1.0)
+    vu = float(exact[-1] + 2.0)
+
+    a = np.stack([_tridiag_toeplitz(n, diag, off)])
+
+    try:
+        result = bl.syevx_range(a, select="value", neigs=n, vl=vl, vu=vu, compute_vectors=False)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    np.testing.assert_array_equal(result.counts, np.zeros(1, dtype=np.int64))
+    assert result.values[0].size == 0
+    assert result.truncated is False
+
+
+def test_syevx_value_range_batch_items_may_disagree_on_the_count():
+    # THE test for the per-item count: item 0's entire spectrum sits inside the
+    # interval and item 1's sits entirely outside it. Run with eigenvectors,
+    # because the failure this catches is stein reorthogonalizing a genuine
+    # vector against a garbage neighbour, not a wrong count.
+    n = 12
+    diag, off = 0.0, -1.0
+    inside = _tridiag_toeplitz(n, diag, off)
+    outside = _tridiag_toeplitz(n, diag + 100.0, off)
+    exact = _toeplitz_eigenvalues(n, diag, off)
+    vl = float(exact[0] - 1.0)
+    vu = float(exact[-1] + 1.0)
+
+    a = np.stack([inside, outside])
+
+    try:
+        result = bl.syevx_range(a, select="value", neigs=n, vl=vl, vu=vu, compute_vectors=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    np.testing.assert_array_equal(result.counts, np.array([n, 0]))
+    assert result.values[0].shape == (n,)
+    assert result.values[1].size == 0
+    assert result.vectors[0].shape == (n, n)
+    assert result.vectors[1].shape == (n, 0)
+    np.testing.assert_allclose(result.values[0], exact, rtol=1e-7, atol=1e-7)
+    residual = inside @ result.vectors[0] - result.vectors[0] * result.values[0][np.newaxis, :]
+    assert np.abs(residual).max() < 1e-6
+
+
+def test_syevx_value_range_overflow_is_reported_not_silently_truncated():
+    # capacity 5 against an interval holding 12: m must carry the TRUE count,
+    # and the 5 kept must be the 5 LOWEST of the interval.
+    n = 24
+    diag, off = 2.0, -1.0
+    exact = _toeplitz_eigenvalues(n, diag, off)
+    vl = float((exact[3] + exact[4]) / 2.0)
+    vu = float((exact[15] + exact[16]) / 2.0)
+    contained = exact[4:16]
+    capacity = 5
+
+    a = np.stack([_tridiag_toeplitz(n, diag, off)])
+
+    try:
+        result = bl.syevx_range(
+            a, select="value", neigs=capacity, vl=vl, vu=vu, compute_vectors=False
+        )
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    np.testing.assert_array_equal(result.counts, np.full(1, len(contained)))
+    assert result.truncated is True
+    assert result.values[0].shape == (capacity,)
+    np.testing.assert_allclose(result.values[0], contained[:capacity], rtol=1e-7, atol=1e-7)
+
+
+def test_syevx_raw_binding_returns_the_count_array_for_a_range():
+    # syevx_range slices; the raw entry point returns the uniform-width buffers
+    # plus m, and this pins that shape. w[b, m[b]:] is undefined, so only the
+    # first m[b] entries are ever looked at.
+    n = 10
+    il, iu = 2, 5
+    a = _symmetric_batch(3, n, seed=24).astype(np.float64)
+    options = bl.SyevxOptions(select="index", il=il, iu=iu)
+
+    try:
+        values, counts = bl.syevx(a, iu - il + 1, compute_vectors=False, options=options)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    values = np.asarray(values)
+    counts = np.asarray(counts)
+    assert values.shape == (3, iu - il + 1)
+    assert counts.shape == (3,)
+    np.testing.assert_array_equal(counts, np.full(3, iu - il + 1))
+
+
+def test_syevx_extremal_return_shape_is_unchanged_by_the_range_work():
+    # The compatibility claim, asserted rather than assumed: an extremal call
+    # gets no count array appended, so no existing caller's unpacking breaks.
+    a = _symmetric_batch(2, 8, seed=25).astype(np.float64)
+
+    try:
+        values = bl.syevx(a, 3, compute_vectors=False)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    assert isinstance(values, np.ndarray)
+    assert values.shape == (2, 3)
+
+
+def test_syevx_range_rejects_malformed_requests():
+    # Pure host-side argument checking in _api.py -- no device needed, so these
+    # do not skip on an unavailable backend.
+    a = _symmetric_batch(1, 8, seed=26).astype(np.float64)
+
+    with pytest.raises(ValueError):
+        bl.syevx_range(a, select="extremal", neigs=2)
+    with pytest.raises(ValueError):
+        bl.syevx_range(a, select="index", il=1, iu=4, neigs=2)
+    with pytest.raises(ValueError):
+        bl.syevx_range(a, select="value", vl=0.0, vu=1.0)
+
+
+def test_syevx_inverted_value_interval_raises():
+    # vl >= vu is almost always swapped arguments, and the cost of being wrong
+    # is a full O(n^3) reduction that returns nothing, so the C++ validator
+    # throws host-side before any device work.
+    a = _symmetric_batch(1, 8, seed=27).astype(np.float64)
+
+    try:
+        bl.syevx_range(a, select="value", neigs=4, vl=1.0, vu=1.0)
+    except (ValueError, RuntimeError):
+        return
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+    pytest.fail("an empty (vl, vu] interval must be rejected")

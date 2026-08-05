@@ -8,11 +8,14 @@
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
 #include <batchlas/backend_config.h>
+#include <util/mempool.hh>
 #include "test_utils.hh"
 #include <tuple>
 #include <cstdlib>
 #include <string>
 #include <limits>
+#include <algorithm>
+#include <type_traits>
 
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -1507,6 +1510,1852 @@ TEST_F(SyevxSelectAlgorithmTest, SparseAlwaysUsesLobpcg) {
                                      true, JobType::EigenVectors, 1024),
               SyevxAlgorithm::LOBPCG);
 }
+
+// ---------------------------------------------------------------------------
+// Range selection (SyevxSelect::Index / ::Value) on the Direct path.
+//
+// Direct is the universal fallback -- dense, every scalar type, every range -- so
+// it is where range support is pinned down first. Everything here calls
+// `syevx_direct` explicitly rather than going through `syevx`, so the tests keep
+// testing this path regardless of how routing is later retuned, and so the `m`
+// output can be inspected before Phase 5 wires it through the public entry point.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Sentinel written into W before every call, so that "this slot was not touched"
+// is an assertion rather than an assumption. Finite (not NaN) so that a stray
+// comparison fails loudly instead of silently evaluating false.
+constexpr float kUntouched = -123456.0f;
+
+struct DirectRangeRun {
+    std::vector<float> W;
+    std::vector<int32_t> m;
+};
+
+DirectRangeRun RunDirectRange(Queue& ctx,
+                              const Matrix<float, MatrixFormat::Dense>& A,
+                              int batch,
+                              int capacity,
+                              const SyevxParams<float>& params,
+                              JobType jobz,
+                              Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+    UnifiedVector<float> W(static_cast<size_t>(std::max(capacity, 1)) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(
+        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            ctx, A.view(), W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
+    syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        ctx, A.view(), W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
+        Vv, params);
+    ctx.wait();
+
+    return DirectRangeRun{std::vector<float>(W.begin(), W.end()),
+                          std::vector<int32_t>(m.begin(), m.end())};
+}
+
+// Eigenvalues of TriDiagToeplitz(n, diag, s, s), ascending.
+//
+// The closed form is diag + 2*sqrt(sub*super)*cos(j*pi/(n+1)), j = 1..n. It is a
+// valid oracle for syevx ONLY when the two off-diagonals are equal (real) or
+// conjugate (complex): every dense path reads Uplo::Lower only and mirrors it, so
+// an unequal pair means syevx is solving a different matrix than the formula
+// describes. Never parameterize these tests over sub != super.
+std::vector<float> ToeplitzSpectrumAscending(int n, float diag, float s) {
+    std::vector<float> lam(n);
+    for (int j = 1; j <= n; ++j) {
+        lam[n - j] = diag + 2.0f * std::abs(s) * std::cos(float(j) * float(M_PI) / float(n + 1));
+    }
+    return lam;  // cos is decreasing in j, so index n-j is ascending
+}
+
+// Per-item spectra that genuinely disagree: item b's diagonal sits around 10*b,
+// so one fixed value interval catches a different count in every batch item.
+Matrix<float, MatrixFormat::Dense> MakeShiftedPerItem(int n, int batch, unsigned seed = 4242u) {
+    Matrix<float, MatrixFormat::Dense> A(n, n, batch);
+    unsigned state = seed;
+    auto next = [&]() {
+        state = state * 1664525u + 1013904223u;
+        return (float(state >> 8) / float(1u << 24)) - 0.5f;
+    };
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = j; i < n; ++i) {
+                // Small off-diagonal noise: enough that the matrix is not diagonal,
+                // small enough that item b's spectrum stays inside [10b-1, 10b+2].
+                const float v = (i == j) ? 0.0f : 0.01f * next();
+                A.view()(i, j, b) = v;
+                A.view()(j, i, b) = v;
+            }
+            A.view()(j, j, b) = 10.0f * float(b) + float(j) / float(n);
+        }
+    }
+    return A;
+}
+
+// ---------------------------------------------------------------------------
+// The shared reference oracle.
+//
+// `ReferenceSpectrum` already produces the full ascending spectrum, so the oracle
+// is only the SELECTION, done in plain host code -- which is what makes it
+// trivially correct, and therefore a usable reference for two solver paths that
+// reach the same answer by completely different means.
+//
+// Two things worth stating rather than rediscovering:
+//   * syev already returns ASCENDING. There is deliberately no sort step here; one
+//     would only mask a regression in syev.
+//   * the value predicate is the HALF-OPEN interval (vl, vu], i.e. `upper_bound`
+//     twice -- the number of eigenvalues <= x. NOT `lower_bound`, despite the plan
+//     calling it `lower(x)`. Matching stebz's Sturm count exactly is what lets
+//     Direct and DirectSubset agree on `m`.
+// ---------------------------------------------------------------------------
+
+// Item b's eigenvalues at ascending positions [il, iu], reversed if asked.
+std::vector<float> ExpectedIndexBlock(const std::vector<float>& W_ref, int n, int b,
+                                      int il, int iu, bool reverse) {
+    const auto first = W_ref.begin() + static_cast<size_t>(b) * n;
+    std::vector<float> out(first + il, first + iu + 1);
+    if (reverse) std::reverse(out.begin(), out.end());
+    return out;
+}
+
+// Every eigenvalue of item b in (vl, vu], ascending. Its SIZE is the oracle for m[b].
+std::vector<float> ExpectedValueBlock(const std::vector<float>& W_ref, int n, int b,
+                                      float vl, float vu) {
+    const auto first = W_ref.begin() + static_cast<size_t>(b) * n;
+    const auto lo = std::upper_bound(first, first + n, vl);
+    const auto hi = std::upper_bound(first, first + n, vu);
+    return (hi > lo) ? std::vector<float>(lo, hi) : std::vector<float>();
+}
+
+// Columns [m[b], capacity) of V must be exactly zero, not merely small and not
+// stale caller memory. This is a CONTRACT and it is asserted against BOTH dense
+// paths, which is the point: DirectSubset cannot avoid zeroing them (stein zeroes
+// the unused columns so its uniform-width back-transforms have something inert to
+// transform, and an orthogonal map keeps zero at zero), while Direct has to be
+// made to do it. `Auto` picks between the two on (n, batch) alone, so if only one
+// zeroed, the identical Value-range call would return zeros at one shape and the
+// caller's previous buffer contents -- or uninitialized bytes decoding as NaN --
+// at another.
+//
+// Note the asymmetry with W, which stays UNTOUCHED past m[b] on both paths and is
+// asserted that way elsewhere with the kUntouched sentinel. Both halves are
+// documented on `syevx`; neither is an implementation detail.
+void ExpectUnusedColumnsAreZero(const Matrix<float, MatrixFormat::Dense>& V,
+                                int n, int batch, int capacity,
+                                const std::vector<int32_t>& m) {
+    for (int b = 0; b < batch; ++b) {
+        for (int j = std::min(m[b], capacity); j < capacity; ++j) {
+            for (int r = 0; r < n; ++r) {
+                const float v = V.view()(r, j, b);
+                ASSERT_TRUE(std::isfinite(v))
+                    << "non-finite in unused column, batch " << b << " column " << j;
+                EXPECT_EQ(v, 0.0f)
+                    << "unused column not zero, batch " << b << " column " << j << " row " << r;
+            }
+        }
+    }
+}
+
+// Fills V with a finite sentinel before a call, so that "this column was written"
+// is an assertion rather than an assumption. Freshly allocated device memory is
+// often already zero, which would make ExpectUnusedColumnsAreZero pass against a
+// path that writes nothing at all.
+void PoisonEigenvectorBuffer(Matrix<float, MatrixFormat::Dense>& V,
+                             int n, int cols, int batch) {
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int r = 0; r < n; ++r) V.view()(r, j, b) = 7.0f;
+}
+
+} // namespace
+
+TEST(SyevxDirectRangeTest, EndBlocksReproduceExtremalBitForBit) {
+    // An index block touching an end takes the same code path with the same inputs
+    // as the Extremal request it is equivalent to, so any difference at all is a
+    // normalization bug rather than a rounding difference.
+    //
+    // Assumption: syev is run-to-run deterministic here (same kernels, same input,
+    // same launch geometry). If this ever flakes, investigate the normalization
+    // before loosening the comparison.
+    constexpr int n = 64, batch = 2, k = 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    for (const bool find_largest : {true, false}) {
+        SyevxParams<float> extremal;
+        extremal.method = SyevxAlgorithm::Direct;
+        extremal.find_largest = find_largest;
+        const auto a = RunDirectRange(*ctx, A, batch, k, extremal, JobType::NoEigenVectors);
+
+        SyevxParams<float> indexed;
+        indexed.method = SyevxAlgorithm::Direct;
+        indexed.select = SyevxSelect::Index;
+        indexed.il = find_largest ? (n - k) : 0;
+        indexed.iu = find_largest ? (n - 1) : (k - 1);
+        indexed.order = find_largest ? SortOrder::Descending : SortOrder::Ascending;
+        const auto b_run = RunDirectRange(*ctx, A, batch, k, indexed, JobType::NoEigenVectors);
+
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(a.m[b], k);
+            EXPECT_EQ(b_run.m[b], k);
+            for (int i = 0; i < k; ++i) {
+                EXPECT_EQ(a.W[b * k + i], b_run.W[b * k + i])
+                    << "find_largest=" << find_largest << " batch " << b << " slot " << i;
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, DescendingInteriorBlockIsTheAscendingBlockReversed) {
+    constexpr int n = 64, batch = 2, il = 25, iu = 32, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+    const auto asc = RunDirectRange(*ctx, A, batch, k, params, JobType::NoEigenVectors);
+    params.order = SortOrder::Descending;
+    const auto desc = RunDirectRange(*ctx, A, batch, k, params, JobType::NoEigenVectors);
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < k; ++i) {
+            EXPECT_EQ(asc.W[b * k + i], desc.W[b * k + (k - 1 - i)]) << "batch " << b;
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
+    // TriDiagToeplitz with EQUAL off-diagonals: see ToeplitzSpectrumAscending.
+    constexpr int n = 64, batch = 2;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+
+    // Boundaries in the middle third, where the gaps are ~2*pi/(n+1); at the ends
+    // they collapse as O(1/n^2) and a boundary there is not unambiguous.
+    constexpr int p = 24, q = 33;
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+    ASSERT_GT(0.5f * (lam[p] - lam[p - 1]), 1e-2f * std::max(std::abs(lam[p]), 1.0f));
+    ASSERT_GT(0.5f * (lam[q + 1] - lam[q]), 1e-2f * std::max(std::abs(lam[q]), 1.0f));
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    constexpr int capacity = 16;
+    Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::EigenVectors, &V);
+
+    const int expected = q - p + 1;
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], expected) << "batch " << b;
+        for (int i = 0; i < expected; ++i) {
+            EXPECT_NEAR(run.W[b * capacity + i], lam[p + i], 3e-4f) << "batch " << b << " slot " << i;
+        }
+        for (int i = expected; i < capacity; ++i) {
+            EXPECT_EQ(run.W[b * capacity + i], kUntouched)
+                << "slot beyond m[b] was written, batch " << b << " slot " << i;
+        }
+    }
+    // CheckResiduals indexes W with stride `neig`; here W's stride is the capacity,
+    // which is deliberately larger. Repack rather than widen the shared helper.
+    std::vector<float> W_packed(static_cast<size_t>(expected) * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < expected; ++i) W_packed[b * expected + i] = run.W[b * capacity + i];
+    }
+    CheckResiduals(A, V, W_packed, n, batch, expected, 2e-3f);
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeEmptyAndFullIntervals) {
+    constexpr int n = 32, batch = 2;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+
+    // Nothing in the interval: m == 0 and not one slot written.
+    params.vl = lam[n - 1] + 1.0f;
+    params.vu = lam[n - 1] + 2.0f;
+    const auto empty = RunDirectRange(*ctx, A, batch, 8, params, JobType::NoEigenVectors);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(empty.m[b], 0);
+        for (int i = 0; i < 8; ++i) EXPECT_EQ(empty.W[b * 8 + i], kUntouched);
+    }
+
+    // Everything in the interval.
+    params.vl = lam[0] - 1.0f;
+    params.vu = lam[n - 1] + 1.0f;
+    const auto full = RunDirectRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(full.m[b], n);
+        for (int i = 0; i < n; ++i) EXPECT_NEAR(full.W[b * n + i], lam[i], 3e-4f);
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
+    constexpr int n = 64, batch = 2, capacity = 5;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    constexpr int p = 20, q = 39;  // 20 eigenvalues, capacity 5
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+        params.order = order;
+        const auto run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+        for (int b = 0; b < batch; ++b) {
+            // The TRUE count, which is the caller's overflow signal.
+            EXPECT_EQ(run.m[b], q - p + 1) << "batch " << b;
+            // Truncation keeps the LOWEST `capacity` of the interval regardless of
+            // the requested order; `order` only flips them within what was kept.
+            for (int i = 0; i < capacity; ++i) {
+                const int src = (order == SortOrder::Descending) ? (p + capacity - 1 - i) : (p + i);
+                EXPECT_NEAR(run.W[b * capacity + i], lam[src], 3e-4f) << "batch " << b;
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
+    // Item b's spectrum sits around 10*b, so the interval (-1, 9] catches all of
+    // item 0, none of item 1 and none of item 2 -- and (-1, 10.5] catches item 0
+    // in full plus a handful of item 1.
+    constexpr int n = 32, batch = 3;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = MakeShiftedPerItem(n, batch);
+    ctx->wait();
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.select = SyevxSelect::Value;
+    params.vl = -1.0f;
+    params.vu = 10.5f;
+
+    Matrix<float, MatrixFormat::Dense> V(n, n, batch);
+    PoisonEigenvectorBuffer(V, n, n, batch);
+    const auto run = RunDirectRange(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
+
+    for (int b = 0; b < batch; ++b) {
+        SCOPED_TRACE(::testing::Message() << "batch " << b);
+        const auto expected = ExpectedValueBlock(W_ref, n, b, params.vl, params.vu);
+        EXPECT_EQ(run.m[b], static_cast<int32_t>(expected.size()));
+        for (size_t i = 0; i < expected.size(); ++i) {
+            EXPECT_NEAR(std::abs(run.W[b * n + i] - expected[i]) /
+                            std::max(std::abs(expected[i]), 1e-5f), 0.0f, 1e-3f)
+                << "slot " << i;
+        }
+        for (size_t i = expected.size(); i < size_t(n); ++i) {
+            EXPECT_EQ(run.W[b * n + i], kUntouched) << "slot " << i;
+        }
+    }
+    // The counts must genuinely differ, or this test proves nothing.
+    EXPECT_EQ(run.m[0], n);
+    EXPECT_LT(run.m[1], n);
+    EXPECT_EQ(run.m[2], 0);
+
+    // Same contract as the DirectSubset suite asserts, on the path that had to be
+    // taught it: V's poisoned columns past m[b] come back exactly zero. Item 2
+    // finds nothing at all, so for it this covers the whole of V.
+    ExpectUnusedColumnsAreZero(V, n, batch, n, run.m);
+}
+
+TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
+    // `neigs` is a capacity now, so asking for more than n is legal: the first n
+    // slots get the whole spectrum and the tail is left alone. The stride stays at
+    // the caller's capacity, which is what keeps item b out of item b+1's slots.
+    constexpr int n = 24, batch = 3, capacity = n + 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::Direct;
+    params.find_largest = false;
+
+    DirectRangeRun run;
+    ASSERT_NO_THROW(run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors));
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], n);
+        for (int i = 0; i < n; ++i) {
+            const float ref = W_ref[b * n + i];
+            EXPECT_NEAR(std::abs(run.W[b * capacity + i] - ref) / std::max(std::abs(ref), 1e-6f),
+                        0.0f, 1e-4f) << "batch " << b << " slot " << i;
+        }
+        for (int i = n; i < capacity; ++i) EXPECT_EQ(run.W[b * capacity + i], kUntouched);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Range selection (SyevxSelect::Index / ::Value) on the DirectSubset path.
+//
+// Same contract as Direct, reached by a completely different route: stebz's
+// Sturm-count bisection instead of a binary search over a full syev's output,
+// stein instead of a column copy, and two back-transforms after both. So these
+// are not redundant with the Direct suite -- they are the second, independent
+// implementation of the same specification, and the cross-path test at the end
+// is what pins them to each other.
+//
+// Every call here sizes its workspace with the real
+// syevx_direct_subset_buffer_size and passes exactly that many bytes -- but note
+// that this does NOT by itself catch a missing sizing mirror; see
+// ValueRangeWorkspaceMirrorsTheWidenedStebzBuffer below, which was written after
+// measuring that it does not.
+// ---------------------------------------------------------------------------
+namespace {
+
+DirectRangeRun RunSubsetRange(Queue& ctx,
+                              const Matrix<float, MatrixFormat::Dense>& A,
+                              int batch,
+                              int capacity,
+                              const SyevxParams<float>& params,
+                              JobType jobz,
+                              Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+    UnifiedVector<float> W(static_cast<size_t>(std::max(capacity, 1)) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
+
+    auto ws = UnifiedVector<std::byte>(
+        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            ctx, A.view(), W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
+    syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        ctx, A.view(), W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
+        Vv, params);
+    ctx.wait();
+
+    return DirectRangeRun{std::vector<float>(W.begin(), W.end()),
+                          std::vector<int32_t>(m.begin(), m.end())};
+}
+
+} // namespace
+
+// An Index block that happens to touch an end must take the same code path with
+// the same inputs as the Extremal request that names it, so any difference at all
+// is a normalization bug rather than rounding.
+//
+// The assumption this makes explicit: the two calls each run their own reduction
+// on their own copy of A, so bit-identity relies on the pipeline being
+// run-to-run deterministic at fixed launch geometry. It is (same kernels, same
+// input, same shapes). A failure here is a normalization bug -- investigate it
+// before loosening the comparison.
+TEST(SyevxDirectSubsetRangeTest, EndBlocksReproduceExtremalBitForBit) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 2, k = 6;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    for (const bool find_largest : {true, false}) {
+        SCOPED_TRACE(::testing::Message() << "find_largest=" << find_largest);
+
+        SyevxParams<float> extremal;
+        extremal.find_largest = find_largest;
+        Matrix<float, MatrixFormat::Dense> V_ext(n, k, batch);
+        const auto ext = RunSubsetRange(*ctx, A, batch, k, extremal, JobType::EigenVectors, &V_ext);
+
+        SyevxParams<float> indexed;
+        indexed.select = SyevxSelect::Index;
+        indexed.il = find_largest ? (n - k) : 0;
+        indexed.iu = find_largest ? (n - 1) : (k - 1);
+        indexed.order = find_largest ? SortOrder::Descending : SortOrder::Ascending;
+        Matrix<float, MatrixFormat::Dense> V_idx(n, k, batch);
+        const auto idx = RunSubsetRange(*ctx, A, batch, k, indexed, JobType::EigenVectors, &V_idx);
+
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(ext.m[b], k);
+            EXPECT_EQ(idx.m[b], k);
+            for (int i = 0; i < k; ++i) {
+                EXPECT_EQ(ext.W[b * k + i], idx.W[b * k + i]) << "batch " << b << " slot " << i;
+            }
+            for (int j = 0; j < k; ++j) {
+                for (int r = 0; r < n; ++r) {
+                    EXPECT_EQ(V_ext.view()(r, j, b), V_idx.view()(r, j, b))
+                        << "batch " << b << " column " << j << " row " << r;
+                }
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectSubsetRangeTest, DescendingInteriorBlockIsTheAscendingBlockReversed) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 2, il = 18, iu = 25, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+
+    Matrix<float, MatrixFormat::Dense> V_asc(n, k, batch);
+    params.order = SortOrder::Ascending;
+    const auto asc = RunSubsetRange(*ctx, A, batch, k, params, JobType::EigenVectors, &V_asc);
+
+    Matrix<float, MatrixFormat::Dense> V_desc(n, k, batch);
+    params.order = SortOrder::Descending;
+    const auto desc = RunSubsetRange(*ctx, A, batch, k, params, JobType::EigenVectors, &V_desc);
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < k; ++i) {
+            // Same block, same stebz output, only the finalize permutation differs,
+            // so this is exact rather than approximate.
+            EXPECT_EQ(desc.W[b * k + i], asc.W[b * k + k - 1 - i])
+                << "batch " << b << " slot " << i;
+            for (int r = 0; r < n; ++r) {
+                EXPECT_EQ(V_desc.view()(r, i, b), V_asc.view()(r, k - 1 - i, b))
+                    << "batch " << b << " column " << i << " row " << r;
+            }
+        }
+    }
+}
+
+TEST(SyevxDirectSubsetRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    // TriDiagToeplitz with EQUAL off-diagonals: see ToeplitzSpectrumAscending.
+    constexpr int n = 64, batch = 2;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+
+    // Boundaries in the middle third, where the gaps are widest; at the ends they
+    // collapse as O(1/n^2) and the count would not be unambiguous.
+    constexpr int p = 24, q = 33;
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+    ASSERT_GT(0.5f * (lam[p] - lam[p - 1]), 1e-2f * std::max(std::abs(lam[p]), 1.0f));
+    ASSERT_GT(0.5f * (lam[q + 1] - lam[q]), 1e-2f * std::max(std::abs(lam[q]), 1.0f));
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    constexpr int capacity = 16;
+    Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
+    PoisonEigenvectorBuffer(V, n, capacity, batch);
+    const auto run = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::EigenVectors, &V);
+
+    const int expected = q - p + 1;
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(run.m[b], expected) << "batch " << b;
+        for (int i = 0; i < expected; ++i) {
+            EXPECT_NEAR(run.W[b * capacity + i], lam[p + i], 1e-3f) << "batch " << b << " slot " << i;
+        }
+        for (int i = expected; i < capacity; ++i) {
+            EXPECT_EQ(run.W[b * capacity + i], kUntouched)
+                << "slot beyond m[b] was written, batch " << b << " slot " << i;
+        }
+    }
+    ExpectUnusedColumnsAreZero(V, n, batch, capacity, run.m);
+
+    std::vector<float> W_packed(static_cast<size_t>(expected) * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < expected; ++i) W_packed[b * expected + i] = run.W[b * capacity + i];
+    }
+    CheckResiduals(A, V, W_packed, n, batch, expected, 5e-3f);
+}
+
+// The shape the whole per-item-count machinery exists for: one call in which the
+// batch items genuinely find different numbers of eigenvalues, including one that
+// finds none and one that finds only a handful. Run with EigenVectors -- the
+// values-only path cannot exercise stein at all.
+TEST(SyevxDirectSubsetRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 32, batch = 3;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeShiftedPerItem(n, batch);
+    ctx->wait();
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = -1.0f;
+    params.vu = 10.5f;
+
+    Matrix<float, MatrixFormat::Dense> V(n, n, batch);
+    PoisonEigenvectorBuffer(V, n, n, batch);
+    const auto run = RunSubsetRange(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
+
+    std::vector<int> expected(batch, 0);
+    for (int b = 0; b < batch; ++b) {
+        SCOPED_TRACE(::testing::Message() << "batch " << b);
+        const auto want = ExpectedValueBlock(W_ref, n, b, params.vl, params.vu);
+        expected[b] = static_cast<int>(want.size());
+        EXPECT_EQ(run.m[b], expected[b]);
+        for (size_t i = 0; i < want.size(); ++i) {
+            EXPECT_NEAR(std::abs(run.W[b * n + i] - want[i]) /
+                            std::max(std::abs(want[i]), 1e-5f), 0.0f, 1e-3f)
+                << "slot " << i;
+        }
+        for (size_t i = want.size(); i < size_t(n); ++i) {
+            EXPECT_EQ(run.W[b * n + i], kUntouched) << "slot " << i;
+        }
+    }
+    // The counts must genuinely differ, or this test proves nothing.
+    EXPECT_EQ(run.m[0], n);
+    EXPECT_GT(run.m[1], 0);
+    EXPECT_LT(run.m[1], n);
+    EXPECT_EQ(run.m[2], 0);
+
+    ExpectUnusedColumnsAreZero(V, n, batch, n, run.m);
+
+    // Residuals on the valid prefix only, against the ORIGINAL A.
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < expected[b]; ++j) {
+            const float lambda = run.W[b * n + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
+                << "eigenvector not normalized, batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1.0f), 5e-3f)
+                << "residual too large, batch " << b << " column " << j;
+        }
+    }
+}
+
+TEST(SyevxDirectSubsetRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 2, capacity = 5;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    constexpr int p = 20, q = 39;  // 20 eigenvalues in the interval, capacity 5
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+        params.order = order;
+        const auto run = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(run.m[b], q - p + 1) << "batch " << b;
+            // Truncation keeps the LOWEST `capacity` of the interval regardless of
+            // the requested order; `order` only flips them within what was kept.
+            for (int i = 0; i < capacity; ++i) {
+                const int src = (order == SortOrder::Descending) ? (p + capacity - 1 - i) : (p + i);
+                EXPECT_NEAR(run.W[b * capacity + i], lam[src], 1e-3f) << "batch " << b;
+            }
+        }
+    }
+}
+
+// The internal stebz buffer must hold n eigenvalues per item for a value range no
+// matter how small the caller's capacity is -- stebz throws outright otherwise.
+// That widening lives in the solver and, 300 lines away, in the sizing function,
+// and this asserts the second one directly.
+//
+// It has to assert on the SIZE, not on a solve, and that is a measured fact rather
+// than a stylistic choice. Reverting the sizing mirror alone (leaving the solver's
+// widening in place) left all seven range tests above PASSING even though every one
+// of them passes exactly buffer_size() bytes. Two independent reasons, both worth
+// knowing before trusting an "exactly sized" workspace as a guard:
+//
+//   * BumpAllocator::allocation_size rounds every request up to the device's base
+//     address alignment -- 512 bytes on this CUDA device, not the 16 the header's
+//     comment suggests -- while allocate() deducts only the bytes actually used.
+//     At n = 64, capacity = 16, batch = 2 the entire 384-byte widening rounds away
+//     and the two sizes are bit-identical with the mirror present or absent. That
+//     is why this test uses a shape where the widening is many alignment quanta.
+//   * The nested buffer_size calls in this pipeline compound the same slack, so
+//     even a real shortfall can be absorbed downstream.
+//
+// This test does no device work at all -- it only calls the sizing function -- so
+// the large n costs nothing.
+TEST(SyevxDirectSubsetRangeTest, ValueRangeWorkspaceMirrorsTheWidenedStebzBuffer) {
+    constexpr int n = 512, batch = 4, capacity = 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+
+    UnifiedVector<float> W(static_cast<size_t>(capacity) * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
+
+    SyevxParams<float> extremal;
+    SyevxParams<float> value;
+    value.select = SyevxSelect::Value;
+    value.vl = -1.0f;
+    value.vu = 1.0f;
+
+    MatrixView<float, MatrixFormat::Dense> A_dummy(nullptr, n, n, n,
+                                                   static_cast<int64_t>(n) * n, batch);
+    const auto size_of = [&](const SyevxParams<float>& p) {
+        return syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+                                               MatrixFormat::Dense>(
+            *ctx, A_dummy, W.to_span(), static_cast<size_t>(capacity),
+            JobType::EigenVectors, V.view(), p);
+    };
+
+    // Everything else in the two sizings is identical -- kd, the reflector
+    // schedule, stein (sized on the capacity) and both back-transforms are all
+    // range-independent -- so the whole difference is the widened w_sub, computed
+    // through the same allocation_size the solver's allocation goes through.
+    const size_t expected =
+        BumpAllocator::allocation_size<float>(*ctx, static_cast<size_t>(n) * batch) -
+        BumpAllocator::allocation_size<float>(*ctx, static_cast<size_t>(capacity) * batch);
+    ASSERT_GT(expected, 0u) << "shape too small to discriminate; see the comment above";
+    EXPECT_EQ(size_of(value) - size_of(extremal), expected);
+}
+
+// The two degenerate intervals, on the path where they are actually dangerous.
+// An empty interval drives stebz to m = 0 and then stein to a zero count for
+// every item -- the shape that makes a "walk the whole capacity" loop read
+// workspace that was never written -- while a saturating interval is the
+// opposite extreme, m == n with the capacity exactly full.
+TEST(SyevxDirectSubsetRangeTest, ValueRangeEmptyAndFullIntervals) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 32, batch = 2, capacity = 8;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+
+    // Nothing in the interval. Run with EigenVectors: the values-only path would
+    // not exercise stein at all, and stein is where a zero count bites.
+    params.vl = lam[n - 1] + 1.0f;
+    params.vu = lam[n - 1] + 2.0f;
+    Matrix<float, MatrixFormat::Dense> V_empty(n, capacity, batch);
+    PoisonEigenvectorBuffer(V_empty, n, capacity, batch);
+    const auto empty = RunSubsetRange(*ctx, A, batch, capacity, params,
+                                      JobType::EigenVectors, &V_empty);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(empty.m[b], 0) << "batch " << b;
+        for (int i = 0; i < capacity; ++i) {
+            EXPECT_EQ(empty.W[b * capacity + i], kUntouched) << "batch " << b << " slot " << i;
+        }
+    }
+    // With m == 0 every column is unused, so the whole of V must be exact zero --
+    // the strongest form of the contract the uniform-width back-transforms rely on.
+    ExpectUnusedColumnsAreZero(V_empty, n, batch, capacity, empty.m);
+
+    // Everything in the interval, with the capacity exactly saturated.
+    params.vl = lam[0] - 1.0f;
+    params.vu = lam[n - 1] + 1.0f;
+    const auto full = RunSubsetRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(full.m[b], n) << "batch " << b;
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(full.W[b * n + i], lam[i], 1e-3f) << "batch " << b << " slot " << i;
+        }
+    }
+}
+
+// Direct and DirectSubset compute the count by genuinely different means -- a
+// binary search over a full syev's ascending output versus two Sturm counts on
+// the tridiagonal form. With the boundaries placed in wide spectral gaps they
+// must agree exactly; only a boundary landing within rounding distance of an
+// eigenvalue is allowed to make them differ, and that case is not tested here.
+TEST(SyevxDirectSubsetRangeTest, AgreesWithDirectOnTheSameValueRange) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 2, capacity = 24;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    constexpr int p = 22, q = 40;
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(d.m[b], q - p + 1) << "Direct, batch " << b;
+        EXPECT_EQ(s.m[b], d.m[b]) << "paths disagree on m, batch " << b;
+        for (int i = 0; i < d.m[b]; ++i) {
+            const float a = d.W[b * capacity + i];
+            const float c = s.W[b * capacity + i];
+            EXPECT_NEAR(std::abs(a - c) / std::max(std::abs(a), 1e-5f), 0.0f, 1e-3f)
+                << "batch " << b << " slot " << i;
+        }
+    }
+}
+
+// The unused-column contract, asserted across the routing boundary rather than
+// per path.
+//
+// This is the test the two suites above cannot be: `Auto` chooses between Direct
+// and DirectSubset on (n, batch) alone, so a caller can hit either one with the
+// same source line. If only DirectSubset zeroed V's columns past m[b] -- which it
+// gets for free from stein, while Direct had to be taught it -- then the same
+// Value-range call would return exact zeros at n=2048/batch=256 and the caller's
+// previous buffer contents at n=64/batch=2. That is a routing-dependent answer,
+// which is the one thing the whole range design is supposed to prevent.
+//
+// V is poisoned with a finite sentinel first: freshly allocated device memory is
+// frequently already zero, so without the poison this would pass against a path
+// that writes nothing at all.
+TEST(SyevxDirectSubsetRangeTest, BothPathsZeroTheSameUnusedColumns) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 48, batch = 2, capacity = 20;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    // Boundaries in wide mid-spectrum gaps, so both paths must agree on m exactly
+    // (see BoundaryOnAnEigenvalueMayDisagreeByOne for the case where they need not).
+    constexpr int p = 18, q = 25;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = 0.5f * (lam[p - 1] + lam[p]);
+    params.vu = 0.5f * (lam[q] + lam[q + 1]);
+
+    Matrix<float, MatrixFormat::Dense> V_direct(n, capacity, batch);
+    Matrix<float, MatrixFormat::Dense> V_subset(n, capacity, batch);
+    PoisonEigenvectorBuffer(V_direct, n, capacity, batch);
+    PoisonEigenvectorBuffer(V_subset, n, capacity, batch);
+
+    const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::EigenVectors,
+                                  &V_direct);
+    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::EigenVectors,
+                                  &V_subset);
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(d.m[b], q - p + 1) << "batch " << b;
+        ASSERT_EQ(s.m[b], d.m[b]) << "the two paths disagree on m, batch " << b;
+        ASSERT_LT(d.m[b], capacity) << "the case is vacuous unless some columns go unused";
+    }
+    ExpectUnusedColumnsAreZero(V_direct, n, batch, capacity, d.m);
+    ExpectUnusedColumnsAreZero(V_subset, n, batch, capacity, s.m);
+}
+
+// The documented tolerance, asserted rather than hoped for: a boundary placed
+// exactly ON an eigenvalue is the one input where the two paths are ALLOWED to
+// disagree about m, and they may disagree by at most one.
+//
+// Why it is inherent and not a bug in either. `m = #{lambda : vl < lambda <= vu}`
+// is a discontinuous function of vu at every eigenvalue. Direct evaluates the
+// predicate against syev's computed eigenvalues of A; DirectSubset evaluates a
+// Sturm count on the tridiagonal T that sy2sb + sb2st produced from A. Both carry
+// backward error ~eps*||A||, they are different algorithms, so the error budget is
+// the SUM of two independent perturbations -- and with vu sitting on the
+// discontinuity, either side of it is a defensible answer.
+//
+// The assertion is deliberately weak on the count and STRONG on everything else:
+// whichever eigenvalues each path did return must still be right, and must agree
+// with each other on the prefix both produced. A path that answered this by
+// returning garbage would pass the count check and fail the value check.
+//
+// MEASURED, so that the next reader does not mistake this for an observed bug:
+// on this machine both paths currently return the SAME count here (19 = q-p+1,
+// i.e. both count lam[q]). The +/-1 is headroom that the arithmetic permits, not
+// a disagreement anyone has seen. It is written as a tolerance anyway because
+// tightening it to EXPECT_EQ would be a latent flake -- the inputs that would
+// trip it are a recompile or a different device away, and the failure would look
+// like a correctness bug rather than the boundary ambiguity it is.
+//
+// Everywhere else -- see AgreesWithDirectOnTheSameValueRange -- the boundaries go
+// in wide spectral gaps and exact equality is required. Do not copy this
+// tolerance to a test whose boundaries are in gaps.
+TEST(SyevxDirectSubsetRangeTest, BoundaryOnAnEigenvalueMayDisagreeByOne) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 2, capacity = 24;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    constexpr int p = 22, q = 40;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = 0.5f * (lam[p - 1] + lam[p]);  // in a gap: unambiguous
+    params.vu = lam[q];                        // ON an eigenvalue: ambiguous by one
+
+    const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+
+    for (int b = 0; b < batch; ++b) {
+        SCOPED_TRACE(::testing::Message() << "batch " << b);
+        // Either lam[q] is counted or it is not; nothing else is defensible.
+        EXPECT_GE(d.m[b], q - p);
+        EXPECT_LE(d.m[b], q - p + 1);
+        EXPECT_GE(s.m[b], q - p);
+        EXPECT_LE(s.m[b], q - p + 1);
+        EXPECT_LE(std::abs(d.m[b] - s.m[b]), 1) << "disagreement larger than the ambiguity";
+
+        // The values themselves are NOT ambiguous: whatever each path returned is
+        // the ascending block starting at p, and the two agree where they overlap.
+        const int common = std::min(d.m[b], s.m[b]);
+        for (int i = 0; i < common; ++i) {
+            EXPECT_NEAR(d.W[b * capacity + i], lam[p + i], 3e-4f) << "Direct, slot " << i;
+            EXPECT_NEAR(s.W[b * capacity + i], lam[p + i], 1e-3f) << "Subset, slot " << i;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Index ranges, parameterized over (n, batch, il, iu, order) x path x jobz.
+//
+// The two dense paths implement the SAME specification by completely different
+// means -- a copy out of a full syev's ascending output versus stebz bisection
+// plus stein plus two back-transforms -- and `jobz` selects genuinely different
+// code in both. Running one case table across all four combinations is what makes
+// "the eigenvalues do not depend on whether you also asked for vectors" an
+// assertion instead of an assumption; it has its own failure mode, since the
+// values-only path skips stein entirely.
+//
+// Every case is checked against the host-side oracle (ExpectedIndexBlock over
+// ReferenceSpectrum), never against the other path, so a shared bug cannot hide.
+// ---------------------------------------------------------------------------
+namespace {
+
+enum class RangePath { Direct, DirectSubset };
+
+const char* PathName(RangePath p) {
+    return p == RangePath::Direct ? "Direct" : "DirectSubset";
+}
+
+DirectRangeRun RunRange(RangePath path, Queue& ctx,
+                        const Matrix<float, MatrixFormat::Dense>& A,
+                        int batch, int capacity, const SyevxParams<float>& params,
+                        JobType jobz, Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+    return path == RangePath::Direct
+               ? RunDirectRange(ctx, A, batch, capacity, params, jobz, V)
+               : RunSubsetRange(ctx, A, batch, capacity, params, jobz, V);
+}
+
+struct IndexRangeCase {
+    const char* name;
+    int n;
+    int batch;
+    int il;
+    int iu;
+    SortOrder order;
+};
+
+struct IndexRangeParam {
+    RangePath path;
+    JobType jobz;
+    IndexRangeCase c;
+};
+
+std::vector<IndexRangeParam> AllIndexRangeParams() {
+    // n <= 128 and batch <= 4 throughout: these are correctness tests, and the
+    // host-side residual check is O(n^2 * k * batch) scalar code.
+    const IndexRangeCase cases[] = {
+        // The case that has never worked before this change.
+        {"InteriorBlock",      64, 3, 20, 27, SortOrder::Ascending},
+        // Same block, descending: `order` must permute the block and nothing else.
+        {"InteriorDescending", 64, 2, 20, 27, SortOrder::Descending},
+        // A single interior eigenpair -- k == 1 exercises every "is the block
+        // wide enough" assumption in both paths at its narrowest.
+        {"SingleInterior",     48, 2, 17, 17, SortOrder::Ascending},
+        // The whole spectrum through the range machinery: must equal a full syev.
+        {"FullSpectrum",       40, 2,  0, 39, SortOrder::Ascending},
+        // Blocks flush against each end, which is where Extremal lives.
+        {"BottomEnd",          64, 2,  0,  5, SortOrder::Ascending},
+        {"TopEnd",             64, 2, 58, 63, SortOrder::Descending},
+    };
+    std::vector<IndexRangeParam> out;
+    for (const auto path : {RangePath::Direct, RangePath::DirectSubset}) {
+        for (const auto jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+            for (const auto& c : cases) out.push_back(IndexRangeParam{path, jobz, c});
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+class SyevxIndexRangeTest : public ::testing::TestWithParam<IndexRangeParam> {};
+
+TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
+    const auto& p = GetParam();
+    const auto& c = p.c;
+    if (p.path == RangePath::DirectSubset &&
+        syevx_algorithm_overridden_to_other("direct_subset")) {
+        GTEST_SKIP() << "algorithm forced via env";
+    }
+    const int k = c.iu - c.il + 1;
+    const bool want_vectors = (p.jobz == JobType::EigenVectors);
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(c.n, c.n, /*symmetric=*/true, c.batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    // Pinned explicitly: at these sizes Auto would route everything to Direct, so
+    // the DirectSubset half of this matrix would silently never run.
+    params.method = (p.path == RangePath::Direct) ? SyevxAlgorithm::Direct
+                                                  : SyevxAlgorithm::DirectSubset;
+    params.select = SyevxSelect::Index;
+    params.il = c.il;
+    params.iu = c.iu;
+    params.order = c.order;
+
+    Matrix<float, MatrixFormat::Dense> V(c.n, k, c.batch);
+    const auto run = RunRange(p.path, *ctx, A, c.batch, k, params, p.jobz,
+                              want_vectors ? &V : nullptr);
+    const auto W_ref = ReferenceSpectrum(*ctx, A, c.n, c.batch);
+
+    // DirectSubset reaches the same numbers through a two-stage reduction and
+    // bisection, so it is the looser of the two paths; see the tolerances used by
+    // the pre-existing suites for each.
+    const float tol = (p.path == RangePath::Direct) ? 1e-4f : 1e-3f;
+    const float floor = (p.path == RangePath::Direct) ? 1e-6f : 1e-5f;
+    const bool reverse = (c.order == SortOrder::Descending);
+
+    for (int b = 0; b < c.batch; ++b) {
+        SCOPED_TRACE(::testing::Message() << "batch " << b);
+        // An index block's count is static and known on the host, which is the
+        // whole reason the m-less overload stays legal for Index.
+        ASSERT_EQ(run.m[b], k);
+        const auto expected = ExpectedIndexBlock(W_ref, c.n, b, c.il, c.iu, reverse);
+        ASSERT_EQ(static_cast<int>(expected.size()), k);
+        for (int i = 0; i < k; ++i) {
+            const float got = run.W[b * k + i];
+            EXPECT_NEAR(std::abs(got - expected[i]) / std::max(std::abs(expected[i]), floor),
+                        0.0f, tol) << "slot " << i;
+        }
+        // The requested order is honoured, not merely close to it.
+        for (int i = 1; i < k; ++i) {
+            if (reverse) EXPECT_GE(run.W[b * k + i - 1], run.W[b * k + i]) << "slot " << i;
+            else         EXPECT_LE(run.W[b * k + i - 1], run.W[b * k + i]) << "slot " << i;
+        }
+    }
+
+    if (want_vectors) {
+        CheckResiduals(A, V, run.W, c.n, c.batch, k,
+                       p.path == RangePath::Direct ? 2e-3f : 5e-3f);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PathsAndJobTypes, SyevxIndexRangeTest, ::testing::ValuesIn(AllIndexRangeParams()),
+    [](const ::testing::TestParamInfo<IndexRangeParam>& info) {
+        return std::string(PathName(info.param.path)) +
+               (info.param.jobz == JobType::EigenVectors ? "Vectors" : "ValuesOnly") +
+               info.param.c.name;
+    });
+
+// The host-side validator. Every rejection is asserted through BOTH entry points
+// that call it -- a validator wired into only one of them is an easy and real
+// mistake, and its failure mode is that sizing succeeds and the solve throws
+// halfway through a pipeline.
+TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
+    constexpr int n = 32, batch = 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+    UnifiedVector<float> W(n * batch);
+
+    // syevx_direct_buffer_size is range-independent (it sizes a full syev on n and
+    // batch alone), so one sizing call with the defaults covers every case below.
+    const SyevxParams<float> defaults;
+    UnifiedVector<std::byte> ws(std::max<size_t>(
+        syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), 8, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), defaults),
+        1));
+
+    auto size_call = [&](const SyevxParams<float>& p, size_t neigs) {
+        return syevx_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neigs, JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), p);
+    };
+    auto solve_call = [&](const SyevxParams<float>& p, size_t neigs) {
+        return syevx<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neigs, ws.to_span(), JobType::NoEigenVectors,
+            MatrixView<float, MatrixFormat::Dense>(), p);
+    };
+
+    // Rule 1: il/iu out of range or inverted.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = -1; p.iu = 4;
+        EXPECT_THROW(size_call(p, 6), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 6), std::invalid_argument);
+        p.il = 4; p.iu = n;
+        EXPECT_THROW(size_call(p, n - 3), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, n - 3), std::invalid_argument);
+        p.il = 9; p.iu = 4;
+        EXPECT_THROW(size_call(p, 1), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 1), std::invalid_argument);
+    }
+    // Rule 2: neigs must equal iu - il + 1.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = 4; p.iu = 11;   // 8 wanted
+        EXPECT_THROW(size_call(p, 7), std::invalid_argument);
+        EXPECT_THROW(solve_call(p, 7), std::invalid_argument);
+        EXPECT_NO_THROW(size_call(p, 8));
+        EXPECT_NO_THROW(solve_call(p, 8));
+    }
+    // Rule 3: an empty or inverted value interval.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Value;
+        p.vl = 1.0f; p.vu = 1.0f;
+        EXPECT_THROW(size_call(p, 8), std::invalid_argument);
+        p.vl = 2.0f; p.vu = 1.0f;
+        EXPECT_THROW(size_call(p, 8), std::invalid_argument);
+    }
+    // Rule 4: a Value range needs the `m`-taking overload. Sizing must still accept
+    // it on the `m`-less form, or sizing a value-range solve would be impossible --
+    // note the deliberate asymmetry here, it is not an oversight.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Value;
+        p.vl = -1.0f; p.vu = 1.0f;
+        EXPECT_NO_THROW(size_call(p, 8));
+        EXPECT_THROW(solve_call(p, 8), std::invalid_argument);
+
+        // ...and the same call with an `m` span is accepted. Which overload ran is
+        // not observable in the return type, so this pair of assertions is what
+        // proves the resolution went where it was meant to.
+        UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+        EXPECT_NO_THROW(syevx<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), m.to_span(), size_t(8), ws.to_span(),
+            JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), p));
+        ctx->wait();
+
+        // A short `m` is an out-of-bounds device write with no host-side
+        // diagnostic, so it is rejected before any device work.
+        UnifiedVector<int32_t> m_short(0);
+        EXPECT_THROW(syevx<test_utils::gpu_backend>(
+                         *ctx, A.view(), W.to_span(), m_short.to_span(), size_t(8),
+                         ws.to_span(), JobType::NoEigenVectors,
+                         MatrixView<float, MatrixFormat::Dense>(), p),
+                     std::invalid_argument);
+    }
+}
+
+// The two dense solvers are public entry points in their own right, not only
+// routing destinations -- this suite calls them directly, and so may a caller who
+// wants to pin the algorithm. So they validate the range themselves rather than
+// inheriting the public `syevx`'s check.
+//
+// This is a memory-safety test wearing a validation test's clothes. Before the
+// check existed, `syevx_direct` with il=60, iu=67 at n=64 resolved to a block of
+// 8 starting at 60 and its selection kernel read lam[60..67] out of a 64-entry
+// per-item array -- and, with eigenvectors, column 67 of a 64-column matrix. That
+// is an out-of-bounds device read, which is why the resolver ALSO clamps
+// (syevx_range_tests.cc pins that half): the throw is the diagnostic, the clamp is
+// the seatbelt, and neither makes the other redundant.
+TEST(SyevxRangeValidationTest, SolverEntryPointsRejectMalformedRangesThemselves) {
+    constexpr int n = 64, batch = 2, k = 8;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), /*in_order=*/true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    UnifiedVector<float> W(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    const auto no_V = MatrixView<float, MatrixFormat::Dense>();
+    const SyevxParams<float> defaults;
+
+    UnifiedVector<std::byte> ws_direct(
+        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            *ctx, A.view(), W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
+    UnifiedVector<std::byte> ws_subset(
+        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            *ctx, A.view(), W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
+
+    auto direct = [&](const SyevxParams<float>& p) {
+        return syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            *ctx, A.view(), W.to_span(), m.to_span(), size_t(k), ws_direct.to_span(),
+            JobType::NoEigenVectors, no_V, p);
+    };
+    auto subset = [&](const SyevxParams<float>& p) {
+        return syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            *ctx, A.view(), W.to_span(), m.to_span(), size_t(k), ws_subset.to_span(),
+            JobType::NoEigenVectors, no_V, p);
+    };
+
+    // iu past the end of the spectrum -- the out-of-bounds read.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = 60; p.iu = 67;
+        EXPECT_THROW(direct(p), std::invalid_argument);
+        EXPECT_THROW(subset(p), std::invalid_argument);
+    }
+    // il below zero.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = -1; p.iu = 6;
+        EXPECT_THROW(direct(p), std::invalid_argument);
+        EXPECT_THROW(subset(p), std::invalid_argument);
+    }
+    // An inverted block.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = 30; p.iu = 20;
+        EXPECT_THROW(direct(p), std::invalid_argument);
+        EXPECT_THROW(subset(p), std::invalid_argument);
+    }
+    // An empty or inverted value interval.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Value;
+        p.vl = 1.0f; p.vu = 1.0f;
+        EXPECT_THROW(direct(p), std::invalid_argument);
+        EXPECT_THROW(subset(p), std::invalid_argument);
+        p.vl = 2.0f; p.vu = 1.0f;
+        EXPECT_THROW(direct(p), std::invalid_argument);
+        EXPECT_THROW(subset(p), std::invalid_argument);
+    }
+    // Positive control: an in-range interior block is accepted by both.
+    {
+        SyevxParams<float> p;
+        p.select = SyevxSelect::Index;
+        p.il = 20; p.iu = 27;
+        EXPECT_NO_THROW(direct(p));
+        EXPECT_NO_THROW(subset(p));
+        ctx->wait();
+    }
+}
+
+// The `m`-less forms of both solvers are the signatures this library exported
+// before range selection added `m`, and they must keep working: adding an output
+// has to be purely additive for callers outside this repo. Nothing else in-tree
+// calls them, so without this test the break would be invisible to this build --
+// which is exactly how they came to be deleted in the first place.
+//
+// It pins three things at once: that the m-less form still COMPILES (an
+// arity-based overload, so neither the parameter-pack trap nor the trailing-`{}`
+// trap can fire between the two), that it LINKS, and that it computes the same
+// answer as the m-taking form.
+TEST(SyevxRangeValidationTest, SolverEntryPointsKeepTheirMLessOverloads) {
+    constexpr int n = 48, batch = 2, il = 10, iu = 17, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), /*in_order=*/true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+
+    const auto no_V = MatrixView<float, MatrixFormat::Dense>();
+    UnifiedVector<float> W_m(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<float> W_plain(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+
+    for (const bool subset_path : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "path=" << (subset_path ? "DirectSubset" : "Direct"));
+        if (subset_path && syevx_algorithm_overridden_to_other("direct_subset")) continue;
+        std::fill(W_m.begin(), W_m.end(), kUntouched);
+        std::fill(W_plain.begin(), W_plain.end(), kUntouched);
+
+        if (!subset_path) {
+            UnifiedVector<std::byte> ws(
+                syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                    *ctx, A.view(), W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
+                    params));
+            syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                *ctx, A.view(), W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
+                JobType::NoEigenVectors, no_V, params);
+            // The m-less form: eight arguments, no `m`.
+            syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                *ctx, A.view(), W_plain.to_span(), size_t(k), ws.to_span(),
+                JobType::NoEigenVectors, no_V, params);
+        } else {
+            UnifiedVector<std::byte> ws(
+                syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+                                                MatrixFormat::Dense>(
+                    *ctx, A.view(), W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
+                    params));
+            syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                *ctx, A.view(), W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
+                JobType::NoEigenVectors, no_V, params);
+            syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                *ctx, A.view(), W_plain.to_span(), size_t(k), ws.to_span(),
+                JobType::NoEigenVectors, no_V, params);
+        }
+        ctx->wait();
+
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(m[b], k) << "batch " << b;
+            for (int i = 0; i < k; ++i) {
+                EXPECT_EQ(W_m[b * k + i], W_plain[b * k + i])
+                    << "the m-less form answered differently, batch " << b << " slot " << i;
+                EXPECT_NE(W_plain[b * k + i], kUntouched)
+                    << "the m-less form wrote nothing, batch " << b << " slot " << i;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: routing and the public entry point.
+//
+// Only Direct and DirectSubset implement Index and Value ranges. The rules below
+// are what keeps a non-extremal request from reaching a solver that would answer
+// a DIFFERENT question rather than fail -- the one failure mode that no
+// correctness test downstream can catch, because every path returns plausible
+// eigenpairs.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Sets BATCHLAS_SYEVX_ALGORITHM for the duration of a scope and restores whatever
+// was there before, including "not set at all".
+class ScopedSyevxAlgorithmEnv {
+public:
+    explicit ScopedSyevxAlgorithmEnv(const char* value) {
+        const char* prev = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
+        had_prev_ = (prev != nullptr);
+        if (had_prev_) prev_ = prev;
+        if (value) setenv("BATCHLAS_SYEVX_ALGORITHM", value, 1);
+        else       unsetenv("BATCHLAS_SYEVX_ALGORITHM");
+    }
+    ~ScopedSyevxAlgorithmEnv() {
+        if (had_prev_) setenv("BATCHLAS_SYEVX_ALGORITHM", prev_.c_str(), 1);
+        else           unsetenv("BATCHLAS_SYEVX_ALGORITHM");
+    }
+private:
+    bool had_prev_ = false;
+    std::string prev_;
+};
+
+SyevxAlgorithm pick_range(MatrixFormat format, SyevxAlgorithm requested, SyevxSelect select,
+                          int64_t n = 1024, int64_t batch = 128) {
+    return syevx_select_algorithm(format, n, /*neigs=*/8, requested,
+                                  /*subset_supported=*/true, JobType::EigenVectors, batch,
+                                  select);
+}
+
+} // namespace
+
+// Sparse has no dense fallback: LOBPCG is the only implemented sparse path, and it
+// converges to an EXTREME of the spectrum by construction. Returning those instead
+// of the requested interior block would be the worst available outcome, so this
+// throws regardless of what any environment override says -- there is nothing to
+// degrade to.
+TEST(SyevxRangeRoutingTest, SparseRejectsEveryNonExtremalRange) {
+    EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
+              SyevxAlgorithm::LOBPCG);
+    EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Index),
+                 std::invalid_argument);
+    EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Value),
+                 std::invalid_argument);
+
+    ScopedSyevxAlgorithmEnv forced("lobpcg");
+    EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Index),
+                 std::invalid_argument);
+}
+
+// An explicitly requested LOBPCG/Filtered throws rather than degrading. Note the
+// contrast with the line directly above it in the selector, which DOES degrade an
+// unavailable DirectSubset to Direct: substituting an algorithm changes only the
+// performance characteristics that were asked for, while substituting the part of
+// the spectrum would change the answer.
+TEST(SyevxRangeRoutingTest, ExplicitIterativeMethodRejectsNonExtremalRange) {
+    if (std::getenv("BATCHLAS_SYEVX_ALGORITHM")) GTEST_SKIP() << "algorithm forced via env";
+
+    // Positive controls: the same explicit requests are honoured for Extremal.
+    EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::LOBPCG, SyevxSelect::Extremal),
+              SyevxAlgorithm::LOBPCG);
+    EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Filtered, SyevxSelect::Extremal),
+              SyevxAlgorithm::Filtered);
+
+    for (const auto method : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered}) {
+        SCOPED_TRACE(::testing::Message() << "method=" << static_cast<int>(method));
+        EXPECT_THROW(pick_range(MatrixFormat::Dense, method, SyevxSelect::Index),
+                     std::invalid_argument);
+        EXPECT_THROW(pick_range(MatrixFormat::Dense, method, SyevxSelect::Value),
+                     std::invalid_argument);
+    }
+
+    // Direct and DirectSubset answer every range, so an explicit request for either
+    // is untouched by the rule.
+    EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Direct, SyevxSelect::Value),
+              SyevxAlgorithm::Direct);
+    EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::DirectSubset, SyevxSelect::Index),
+              SyevxAlgorithm::DirectSubset);
+}
+
+// The environment override is the one case where degrading is right: the variable
+// exists so that a whole suite can be forced onto one algorithm for diagnosis, and
+// aborting on the first interior call would make that sweep impossible rather than
+// informative. Same reasoning as BATCHLAS_SYEVX_PRECONDITIONER.
+TEST(SyevxRangeRoutingTest, EnvironmentOverrideDegradesInsteadOfThrowing) {
+    for (const char* forced : {"lobpcg", "filtered"}) {
+        SCOPED_TRACE(forced);
+        ScopedSyevxAlgorithmEnv env(forced);
+        // Extremal: the override is honoured, as it always was.
+        EXPECT_NE(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
+                  SyevxAlgorithm::Direct);
+        // Non-extremal: degrade to the universal fallback, do not throw.
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, SyevxSelect::Index),
+                  SyevxAlgorithm::Direct);
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, SyevxSelect::Value),
+                  SyevxAlgorithm::Direct);
+        // The override still wins over an explicit params.method, which is what it
+        // has always done -- and it degrades rather than throwing even when the
+        // explicit method would have thrown on its own.
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::LOBPCG, SyevxSelect::Index),
+                  SyevxAlgorithm::Direct);
+    }
+}
+
+// The measured crossovers are functions of (n, batch, jobz) and not of k, and
+// position within the spectrum cannot enter the cost of either dense path at all
+// (kd depends on n alone, bisection does the same work at every index, and both
+// back-transforms act on the same n x k slice). So routing must be identical for
+// an interior block and for the extremal block of the same size.
+TEST(SyevxRangeRoutingTest, PositionInTheSpectrumDoesNotChangeRouting) {
+    if (std::getenv("BATCHLAS_SYEVX_ALGORITHM")) GTEST_SKIP() << "algorithm forced via env";
+    for (const auto select : {SyevxSelect::Extremal, SyevxSelect::Index, SyevxSelect::Value}) {
+        SCOPED_TRACE(::testing::Message() << "select=" << static_cast<int>(select));
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, select, 1024, 128),
+                  SyevxAlgorithm::DirectSubset);
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, select, 1024, 1),
+                  SyevxAlgorithm::Direct);
+        EXPECT_EQ(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, select, 32, 128),
+                  SyevxAlgorithm::Direct);
+    }
+}
+
+// The routing rules have to be applied identically by `syevx` and by
+// `syevx_buffer_size`, or the two disagree about which algorithm will run -- and
+// under an environment override that disagreement is observable: sizing would ask
+// LOBPCG (which refuses an interior range) while the solve degrades to Direct and
+// succeeds. Both must degrade.
+TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
+    constexpr int n = 32, batch = 2, il = 10, iu = 13, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+    UnifiedVector<float> W(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    const auto no_V = MatrixView<float, MatrixFormat::Dense>();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+
+    ScopedSyevxAlgorithmEnv env("lobpcg");
+    size_t bytes = 0;
+    ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, params));
+    UnifiedVector<std::byte> ws(std::max<size_t>(bytes, 1));
+    ASSERT_NO_THROW(syevx<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), m.to_span(), size_t(k), ws.to_span(),
+        JobType::NoEigenVectors, no_V, params));
+    ctx->wait();
+
+    // ...and the degraded path really answered the question that was asked.
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(m[b], k);
+        for (int i = 0; i < k; ++i) {
+            const float ref = W_ref[b * n + il + i];
+            EXPECT_NEAR(std::abs(W[b * k + i] - ref) / std::max(std::abs(ref), 1e-6f), 0.0f, 1e-4f)
+                << "batch " << b << " slot " << i;
+        }
+    }
+}
+
+// syevx_lobpcg and syevx_filtered are public entry points in their own right, not
+// only routing destinations, so they also reject what they cannot answer -- and
+// their buffer_size forms reject identically. A sizing call that returns a number
+// for a request the solve refuses is a caller-visible inconsistency.
+TEST(SyevxRangeRoutingTest, IterativeSolversRejectRangesDirectly) {
+    constexpr int n = 32, batch = 1, neig = 4;
+    auto ctx = std::make_shared<Queue>(Device::default_device());
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+    UnifiedVector<float> W(static_cast<size_t>(neig) * batch);
+    const auto no_V = MatrixView<float, MatrixFormat::Dense>();
+
+    SyevxParams<float> interior;
+    interior.select = SyevxSelect::Index;
+    interior.il = 10;
+    interior.iu = 13;
+
+    EXPECT_THROW(syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+                     *ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
+                 std::invalid_argument);
+    EXPECT_THROW(syevx_filtered_buffer_size<test_utils::gpu_backend>(
+                     *ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
+                 std::invalid_argument);
+
+    // Positive control, and the workspace for the solve attempts below: the same
+    // calls with the default Extremal range are untouched.
+    size_t ws_bytes = 0;
+    ASSERT_NO_THROW(ws_bytes = std::max(
+        syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>()),
+        syevx_filtered_buffer_size<test_utils::gpu_backend>(
+            *ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>())));
+    UnifiedVector<std::byte> ws(std::max<size_t>(ws_bytes, 1));
+
+    // A real workspace, so the throw is provably the range check and not an
+    // allocation failure.
+    EXPECT_THROW(syevx_lobpcg<test_utils::gpu_backend>(
+                     *ctx, A.view(), W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
+                     no_V, interior),
+                 std::invalid_argument);
+    EXPECT_THROW(syevx_filtered<test_utils::gpu_backend>(
+                     *ctx, A.view(), W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
+                     no_V, interior),
+                 std::invalid_argument);
+}
+
+// End-to-end through the public entry point, which is what Phase 5 actually
+// delivers: before it, a Value range could not be expressed at all above
+// syevx_direct / syevx_direct_subset.
+TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
+    constexpr int n = 64, batch = 3, capacity = 12;
+    // Middle third of the spectrum, boundaries in gaps: the mid-spectrum gaps of
+    // this Toeplitz are ~0.097 while the end gaps collapse to ~0.007, so a
+    // boundary near either end is the fragile one.
+    constexpr int p = 24, q = 31;
+    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const float vl = 0.5f * (lam[p - 1] + lam[p]);
+    const float vu = 0.5f * (lam[q] + lam[q + 1]);
+    ASSERT_GT(0.5f * (lam[p] - lam[p - 1]), 2e-2f) << "lower boundary is not in a clear gap";
+    ASSERT_GT(0.5f * (lam[q + 1] - lam[q]), 2e-2f) << "upper boundary is not in a clear gap";
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Value;
+    params.vl = vl;
+    params.vu = vu;
+
+    UnifiedVector<float> W(static_cast<size_t>(capacity) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
+
+    // Sized through the `m`-taking sizing form, purely to pin that the two calls
+    // can be written with the same argument list. `m` is ignored by sizing.
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), m.to_span(), size_t(capacity), JobType::EigenVectors,
+        V.view(), params));
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W.to_span(), m.to_span(),
+                                   size_t(capacity), ws.to_span(), JobType::EigenVectors,
+                                   V.view(), params);
+    ctx->wait();
+
+    const std::vector<float> W_host(W.begin(), W.end());
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(m[b], q - p + 1) << "batch " << b;
+        for (int i = 0; i < m[b]; ++i) {
+            EXPECT_NEAR(W_host[b * capacity + i], lam[p + i], 3e-4f)
+                << "batch " << b << " slot " << i;
+        }
+        for (int i = m[b]; i < capacity; ++i) {
+            EXPECT_EQ(W_host[b * capacity + i], kUntouched)
+                << "wrote past m[b], batch " << b << " slot " << i;
+        }
+        // Residuals over the valid prefix only. CheckResiduals cannot be reused
+        // here: it uses one number as both the count and the stride of W, and
+        // under a value range those differ (m[b] vs the capacity).
+        for (int j = 0; j < m[b]; ++j) {
+            const float lambda = W_host[b * capacity + j];
+            float res2 = 0.0f, vnorm2 = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                float av = 0.0f;
+                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
+                const float d = av - lambda * V.view()(r, j, b);
+                res2 += d * d;
+                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
+            }
+            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f) << "batch " << b << " column " << j;
+            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1.0f), 2e-3f)
+                << "batch " << b << " column " << j;
+        }
+    }
+}
+
+// An index block through the public entry point, and the `m`-less overload
+// answering the same question -- Index has a statically known count, so both
+// forms are legal.
+//
+// Be honest about what each half of this proves. The m-less `syevx` is DEFINED as
+// a forwarder to the m-taking one (syevx.cc), so `W_m == W_plain` cannot fail on
+// a divergence between two implementations -- there is only one. What it pins is
+// the FORWARDING RELATIONSHIP: that the m-less form still resolves to the m-taking
+// solver with the same range, the same capacity and the same output stride, which
+// is exactly what a wrong overload or a transposed forwarded argument would break,
+// and which is not otherwise checked anywhere. The `W_ref` comparison in the same
+// loop is the discriminating half; do not delete it in favour of the first.
+//
+// The place where the two forms genuinely DIFFER in behaviour is a Value range,
+// which only the m-taking form accepts; that is asserted in RejectsMalformedRanges
+// rule 4.
+TEST(SyevxPublicRangeTest, IndexRangeThroughBothOverloadsAgree) {
+    constexpr int n = 64, batch = 2, il = 20, iu = 27, k = iu - il + 1;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.select = SyevxSelect::Index;
+    params.il = il;
+    params.iu = iu;
+
+    UnifiedVector<float> W_m(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<float> W_plain(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W_m.to_span(), size_t(k), JobType::NoEigenVectors,
+        MatrixView<float, MatrixFormat::Dense>(), params));
+
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_m.to_span(), m.to_span(), size_t(k),
+                                   ws.to_span(), JobType::NoEigenVectors,
+                                   MatrixView<float, MatrixFormat::Dense>(), params);
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_plain.to_span(), size_t(k), ws.to_span(),
+                                   JobType::NoEigenVectors,
+                                   MatrixView<float, MatrixFormat::Dense>(), params);
+    ctx->wait();
+
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(m[b], k) << "an index block's count is static, batch " << b;
+        for (int i = 0; i < k; ++i) {
+            const float got = W_m[b * k + i];
+            EXPECT_EQ(got, W_plain[b * k + i])
+                << "the m-less form did not forward identically, batch " << b
+                << " slot " << i;
+            const float ref = W_ref[b * n + il + i];
+            EXPECT_NEAR(std::abs(got - ref) / std::max(std::abs(ref), 1e-6f), 0.0f, 1e-4f)
+                << "batch " << b << " slot " << i;
+        }
+    }
+}
+
+// LOBPCG and Filtered never take an `m` argument, so `syevx` fills it for them.
+// They only ever see an Extremal range, where the count is static. Forcing LOBPCG
+// explicitly is legal here precisely because the range IS extremal.
+TEST(SyevxPublicRangeTest, IterativePathsStillReportACount) {
+    constexpr int n = 64, batch = 3, neig = 5;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+
+    UnifiedVector<float> W(static_cast<size_t>(neig) * batch, kUntouched);
+    UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W.to_span(), size_t(neig), JobType::NoEigenVectors,
+        MatrixView<float, MatrixFormat::Dense>(), params));
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W.to_span(), m.to_span(), size_t(neig),
+                                   ws.to_span(), JobType::NoEigenVectors,
+                                   MatrixView<float, MatrixFormat::Dense>(), params);
+    ctx->wait();
+
+    // Note this holds whichever algorithm actually ran: if the environment forces
+    // another one, Direct/DirectSubset write the same static count themselves.
+    for (int b = 0; b < batch; ++b) EXPECT_EQ(m[b], neig) << "batch " << b;
+}
+
+// ---------------------------------------------------------------------------
+// Overload resolution between the `m`-taking and `m`-less forms.
+//
+// This repo has two scars that meet exactly here: a parameter pack that
+// out-ranked every specific overload, and a bare `{}` for a trailing params
+// argument that selected a different positional overload and silently returned
+// different numbers. The `m` overloads reopen that surface, so it is pinned in
+// two complementary ways -- neither is sufficient alone.
+//
+// The invariant, stated because the obvious version of it is FALSE: the two forms
+// are unambiguous because parameter 5 of the m-form (`size_t neigs`) and
+// parameter 5 of the m-less form (`Span<std::byte>` / `JobType`) are mutually
+// non-convertible. NOT because `Span<int32_t>` and `size_t` differ in position 4:
+// `Span` has a non-explicit `Span(T&)` constructor, so a `Span<int32_t>` IS
+// implicitly constructible from an `int32_t` lvalue and position 4 alone
+// discriminates nothing. The `Int32LvalueInPosition4` case below is that trap,
+// written down as a compiling assertion.
+// ---------------------------------------------------------------------------
+namespace {
+
+// An AMBIGUOUS call is a substitution failure in the immediate context of this
+// decltype, so `false` means "no viable overload" OR "more than one" -- and both
+// are the failure this guards against.
+template <typename... Args>
+using SyevxCallExpr = decltype(syevx<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+    std::declval<Args>()...));
+
+template <typename Void, typename... Args>
+struct SyevxCallableImpl : std::false_type {};
+template <typename... Args>
+struct SyevxCallableImpl<std::void_t<SyevxCallExpr<Args...>>, Args...> : std::true_type {};
+
+template <typename... Args>
+inline constexpr bool syevx_callable = SyevxCallableImpl<void, Args...>::value;
+
+using Q  = Queue&;
+using AV = const MatrixView<float, MatrixFormat::Dense>&;
+using Wv = Span<float>;
+using Mv = Span<int32_t>;
+using Ws = Span<std::byte>;
+using Pv = const SyevxParams<float>&;
+
+// The two full spellings, which differ only by the presence of `m`.
+static_assert(syevx_callable<Q, AV, Wv, size_t, Ws, JobType, AV, Pv>,
+              "the m-less syevx must remain callable");
+static_assert(syevx_callable<Q, AV, Wv, Mv, size_t, Ws, JobType, AV, Pv>,
+              "the m-taking syevx must be callable");
+
+// The arity band where both forms have the same argument COUNT (8): the m-less
+// form with params explicit, and the m-form with params defaulted. Only the type
+// of argument 4 separates them, and both must stay unambiguously viable.
+static_assert(syevx_callable<Q, AV, Wv, Mv, size_t, Ws, JobType, AV>,
+              "m-form with a defaulted params must be unambiguous at 8 arguments");
+
+// Trailing defaults on both forms, down to the shortest legal call.
+static_assert(syevx_callable<Q, AV, Wv, size_t, Ws>, "m-less, everything defaulted");
+static_assert(syevx_callable<Q, AV, Wv, Mv, size_t, Ws>, "m-form, everything defaulted");
+
+// THE TRAP. `k` is an int32_t lvalue, so argument 4 converts to BOTH `size_t` and
+// `Span<int32_t>`. The m-form is nonetheless killed at argument 5, where a
+// `Span<std::byte>` would have to become a `size_t`. If a future edit makes the
+// m-form's parameter 5 accept what the m-less form's parameter 5 is, this stops
+// compiling -- which is the point.
+static_assert(syevx_callable<Q, AV, Wv, int32_t&, Ws, JobType, AV, Pv>,
+              "an int32_t neigs must still select the m-less form, not go ambiguous");
+
+// The same guard for the sizing forms, which carry an `m` parameter purely so
+// that a value-range caller can write the sizing and the solve with the same
+// argument list. Sizing IGNORES `m`; both spellings must stay viable, and note
+// that the m-less sizing form must keep accepting a Value range or sizing a
+// value-range solve would be impossible.
+template <typename... Args>
+using SyevxSizeExpr = decltype(syevx_buffer_size<test_utils::gpu_backend, float,
+                                                 MatrixFormat::Dense>(
+    std::declval<Args>()...));
+
+template <typename Void, typename... Args>
+struct SyevxSizeCallableImpl : std::false_type {};
+template <typename... Args>
+struct SyevxSizeCallableImpl<std::void_t<SyevxSizeExpr<Args...>>, Args...> : std::true_type {};
+
+template <typename... Args>
+inline constexpr bool syevx_size_callable = SyevxSizeCallableImpl<void, Args...>::value;
+
+static_assert(syevx_size_callable<Q, AV, Wv, size_t, JobType, AV, Pv>,
+              "syevx_buffer_size m-less must remain callable");
+static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV, Pv>,
+              "syevx_buffer_size m-taking must be callable");
+// The 7-argument band, where the m-less form has params explicit and the m-form
+// has it defaulted: separated only by the type of argument 4, exactly as in the
+// solve. Both must stay unambiguously viable.
+static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV>,
+              "m-taking sizing with a defaulted params must be unambiguous");
+
+} // namespace
+
+// House rule: a bare `{}` in the trailing params position must select the SAME
+// overload as an explicit SyevxParams, on both forms. The previous incident in
+// this repo was silent -- the wrong overload ran and returned different numbers --
+// so this asserts on the numbers, not merely that it compiles.
+//
+// Which overload actually ran is not observable in the return type; the proof
+// that the m-form is genuinely reached lives in RejectsMalformedRanges rule 4,
+// where a Value range throws on one form and succeeds on the other.
+TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOne) {
+    constexpr int n = 32, batch = 2, k = 6;
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    ctx->wait();
+    const auto no_V = MatrixView<float, MatrixFormat::Dense>();
+
+    UnifiedVector<float> W_explicit(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<float> W_braced(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<float> W_m_explicit(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<float> W_m_braced(static_cast<size_t>(k) * batch, kUntouched);
+    UnifiedVector<int32_t> m_explicit(static_cast<size_t>(batch), -1);
+    UnifiedVector<int32_t> m_braced(static_cast<size_t>(batch), -1);
+
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+        *ctx, A.view(), W_explicit.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
+        SyevxParams<float>()));
+
+    // m-less: explicit params vs `{}`.
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_explicit.to_span(), size_t(k),
+                                   ws.to_span(), JobType::NoEigenVectors, no_V,
+                                   SyevxParams<float>());
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_braced.to_span(), size_t(k),
+                                   ws.to_span(), JobType::NoEigenVectors, no_V, {});
+    // m-form: explicit params vs `{}`.
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_m_explicit.to_span(),
+                                   m_explicit.to_span(), size_t(k), ws.to_span(),
+                                   JobType::NoEigenVectors, no_V, SyevxParams<float>());
+    syevx<test_utils::gpu_backend>(*ctx, A.view(), W_m_braced.to_span(),
+                                   m_braced.to_span(), size_t(k), ws.to_span(),
+                                   JobType::NoEigenVectors, no_V, {});
+    ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(m_explicit[b], k);
+        EXPECT_EQ(m_braced[b], k) << "`{}` params changed the m-form's answer, batch " << b;
+        for (int i = 0; i < k; ++i) {
+            const int idx = b * k + i;
+            EXPECT_EQ(W_explicit[idx], W_braced[idx])
+                << "`{}` params changed the m-less form, batch " << b << " slot " << i;
+            EXPECT_EQ(W_m_explicit[idx], W_m_braced[idx])
+                << "`{}` params changed the m-form, batch " << b << " slot " << i;
+            // ...and the two forms answer the same question.
+            EXPECT_EQ(W_explicit[idx], W_m_explicit[idx])
+                << "the m and m-less forms disagree, batch " << b << " slot " << i;
+        }
+    }
+}
+
+// The resolver's own normalization table now lives in tests/syevx_range_tests.cc:
+// it needs no device, so it belongs in a binary that is not labelled `slow`.
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

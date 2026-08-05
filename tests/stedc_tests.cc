@@ -1,169 +1,67 @@
 #include <gtest/gtest.h>
 #include <blas/linalg.hh>
 #include <util/sycl-device-queue.hh>
-#include <filesystem>
-#include <fstream>
 #include "test_utils.hh"
 #include "../src/queue.hh"
-#include "../src/extensions/stedc_flattened.hh"
-#include "../src/util/kernel-trace.hh"
+#include "../src/extensions/stedc_levels_plan.hh"
 
 using namespace batchlas;
 
 namespace {
 
-std::size_t count_trace_entries(const std::string& trace, const std::string& needle) {
-    std::size_t count = 0;
-    std::size_t pos = 0;
-    while ((pos = trace.find(needle, pos)) != std::string::npos) {
-        ++count;
-        pos += needle.size();
-    }
-    return count;
-}
-
-void reset_kernel_trace(const std::string& path) {
-    {
-        std::lock_guard<std::mutex> lock(batchlas_kernel_trace::g_mu);
-        batchlas_kernel_trace::g_records.clear();
-    }
-    batchlas_kernel_trace::g_submit_counter.store(0);
-    batchlas_kernel_trace::g_enabled.store(false);
-    batchlas_kernel_trace::g_initialized.store(false);
-    setenv("BATCHLAS_KERNEL_TRACE", "1", 1);
-    setenv("BATCHLAS_KERNEL_TRACE_PATH", path.c_str(), 1);
-    setenv("BATCHLAS_EXPERIMENTAL_STEDC_FLAT", "1", 1);
-    std::filesystem::remove(path);
-}
-
-void disable_kernel_trace() {
-    {
-        std::lock_guard<std::mutex> lock(batchlas_kernel_trace::g_mu);
-        batchlas_kernel_trace::g_records.clear();
-    }
-    batchlas_kernel_trace::g_submit_counter.store(0);
-    batchlas_kernel_trace::g_enabled.store(false);
-    batchlas_kernel_trace::g_initialized.store(false);
-    unsetenv("BATCHLAS_KERNEL_TRACE");
-    unsetenv("BATCHLAS_KERNEL_TRACE_PATH");
-    unsetenv("BATCHLAS_EXPERIMENTAL_STEDC_FLAT");
-}
-
-std::string read_trace_file(const std::string& path) {
-    std::ifstream in(path);
-    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-}
-
-template <Backend B, typename T>
-void expect_flat_matches_recursive_case(Queue& ctx,
-                                        int n,
-                                        int batch,
-                                        JobType jobz,
-                                        StedcParams<T> params,
-                                        T eigenvalue_tol,
-                                        bool check_ritz = false,
-                                        T ritz_tol = T(0)) {
-    auto diag_input = Vector<T>::random(n, batch);
-    auto offdiag_input = Vector<T>::random(n - 1, batch);
-    auto diag_ref = diag_input;
-    auto offdiag_ref = offdiag_input;
-    auto diag_flat = diag_input;
-    auto offdiag_flat = offdiag_input;
-
-    auto eigvals_ref = Vector<T>::zeros(n, batch);
-    auto eigvals_flat = Vector<T>::zeros(n, batch);
-    auto eigvecs_ref = Matrix<T>::Identity(n, batch);
-    auto eigvecs_flat = Matrix<T>::Identity(n, batch);
-
-    UnifiedVector<std::byte> ws_ref(stedc_workspace_size(ctx, n, batch, jobz, params));
-    UnifiedVector<std::byte> ws_flat(stedc_flat_workspace_size(ctx, n, batch, jobz, params));
-
-    stedc(ctx, diag_ref.view(), offdiag_ref.view(), eigvals_ref.view(), ws_ref, jobz, params, eigvecs_ref.view());
-    stedc_flat(ctx, diag_flat.view(), offdiag_flat.view(), eigvals_flat.view(), ws_flat, jobz, params, eigvecs_flat.view());
-    ctx.wait();
-
-    const T effective_eigenvalue_tol = std::is_same_v<T, double>
-        ? std::max<T>(eigenvalue_tol, std::numeric_limits<T>::epsilon() * T(1.2e5))
-        : eigenvalue_tol;
-
-    for (int batch_ix = 0; batch_ix < batch; ++batch_ix) {
-        for (int i = 0; i < n; ++i) {
-            const T diff = std::abs(eigvals_ref(i, batch_ix) - eigvals_flat(i, batch_ix));
-            ASSERT_LE(diff, effective_eigenvalue_tol)
-                << "Flat eigenvalue mismatch at n=" << n
-                << ", batch=" << batch_ix
-                << ", index=" << i
-                << ": recursive=" << eigvals_ref(i, batch_ix)
-                << " flat=" << eigvals_flat(i, batch_ix)
-                << " diff=" << diff
-                << " tol=" << effective_eigenvalue_tol;
-        }
-    }
-
-    if (!check_ritz || jobz != JobType::EigenVectors) {
-        return;
-    }
-
-    const T effective_ritz_tol = std::is_same_v<T, double>
-        ? std::max<T>(ritz_tol, std::numeric_limits<T>::epsilon() * T(3e6))
-        : ritz_tol;
-
-    Matrix<T> reconstructed = Matrix<T>::Zeros(n, n, batch);
-    reconstructed.view().fill_tridiag(ctx, offdiag_input, diag_input, offdiag_input).wait();
-    ctx.wait();
-    auto flat_ritz = ritz_values(ctx, reconstructed.view(), eigvecs_flat.view());
-    ctx.wait();
-
-    for (int batch_ix = 0; batch_ix < batch; ++batch_ix) {
-        for (int i = 0; i < n; ++i) {
-            const T diff = std::abs(flat_ritz(i, batch_ix) - eigvals_flat(i, batch_ix));
-            ASSERT_LE(diff, effective_ritz_tol)
-                << "Flat Ritz mismatch at n=" << n
-                << ", batch=" << batch_ix
-                << ", index=" << i
-                << ": ritz=" << flat_ritz(i, batch_ix)
-                << " eig=" << eigvals_flat(i, batch_ix)
-                << " diff=" << diff
-                << " tol=" << effective_ritz_tol;
-        }
-    }
-}
-
-template <Backend B, typename T>
-void expect_flat_trace_counts(Queue& ctx,
-                              int n,
-                              int batch,
-                              StedcParams<T> params,
-                              std::size_t expected_merge_depths,
-                              const std::string& trace_path) {
-    (void)ctx;
-    reset_kernel_trace(trace_path);
-
-    Queue trace_ctx("gpu", true);
-
-    auto diag = Vector<T>::random(n, batch);
-    auto offdiag = Vector<T>::random(n - 1, batch);
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvecs = Matrix<T>::Identity(n, batch);
-
-    UnifiedVector<std::byte> ws_flat(stedc_flat_workspace_size(trace_ctx, n, batch, JobType::EigenVectors, params));
-    stedc_flat(trace_ctx, diag.view(), offdiag.view(), eigvals.view(), ws_flat, JobType::EigenVectors, params, eigvecs.view());
-    trace_ctx.wait();
-    batchlas_kernel_trace::flush();
-
-    const auto trace = read_trace_file(trace_path);
-    disable_kernel_trace();
-    ASSERT_FALSE(trace.empty()) << "Expected a kernel trace file at " << trace_path;
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:leaf_pack\""), 1u);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:leaf_steqr\""), 1u);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:parent_pack\""), expected_merge_depths);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:build_v\""), expected_merge_depths);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:deflation\""), expected_merge_depths);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:merge_fused_cta\""), expected_merge_depths);
-    EXPECT_EQ(count_trace_entries(trace, "\"name\":\"stedc_flat:update_q\""), expected_merge_depths);
-}
-
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Level-plan shape. Host-only, no device: a bad leaf produces perfectly correct
+// eigenvalues and only shows up as lost throughput, so the numerical tests
+// below cannot catch it and these have to assert on the plan itself.
+// ---------------------------------------------------------------------------
+
+// The invariant that matters. `steqr` dispatches to the fast `steqr_cta` only
+// for n <= the device sub-group width, and the tuned STEDC threshold *is* that
+// width -- so a leaf above it silently falls back to `steqr_wg`, which measured
+// ~14x slower one step over the edge (n=32: 0.26us -> n=36: 3.76us).
+TEST(StedcLevelPlan, LeafNeverExceedsThreshold) {
+    for (int64_t threshold : {8, 16, 32, 64}) {
+        for (int64_t n = 2; n <= 4096; ++n) {
+            const auto plan = plan_stedc_levels(n, threshold);
+            if (plan.levels == 0) continue;  // caller falls back to the recursive driver
+            EXPECT_LE(plan.leaf, threshold)
+                << "leaf above the steqr_cta cap, n=" << n << " threshold=" << threshold;
+            EXPECT_EQ(plan.padded_n, plan.leaf << plan.levels)
+                << "padded_n inconsistent with the tree, n=" << n;
+            EXPECT_GE(plan.padded_n, n)
+                << "plan drops part of the problem, n=" << n;
+        }
+    }
+}
+
+// The two sizes PR #55 regressed. Both admit an exactly-fitting tree at leaf 40
+// and at leaf 20; the scoring used to prefer 40 because it sits nearer the
+// threshold, which drove the leaf solve off the steqr_cta cliff (syev n=320:
+// 74.5 -> 242.4 us/matrix, n=640: 727.5 -> 1095.9).
+TEST(StedcLevelPlan, NonPowerOfTwoPicksNarrowLeaf) {
+    const auto p320 = plan_stedc_levels(320, 32);
+    EXPECT_EQ(p320.leaf, 20);
+    EXPECT_EQ(p320.levels, 4);
+    EXPECT_EQ(p320.padded_n, 320) << "n=320 should still need no padding";
+
+    const auto p640 = plan_stedc_levels(640, 32);
+    EXPECT_EQ(p640.leaf, 20);
+    EXPECT_EQ(p640.levels, 5);
+    EXPECT_EQ(p640.padded_n, 640) << "n=640 should still need no padding";
+}
+
+// The power-of-two sizes must be unchanged: leaf lands exactly on the threshold
+// with no padding. This is the regime the level driver was tuned and measured
+// in, and the cap above must not perturb it.
+TEST(StedcLevelPlan, PowerOfTwoIsUnchanged) {
+    for (int64_t n : {64, 128, 256, 512, 1024, 2048}) {
+        const auto plan = plan_stedc_levels(n, 32);
+        EXPECT_EQ(plan.leaf, 32) << "n=" << n;
+        EXPECT_EQ(plan.padded_n, n) << "n=" << n << " should need no padding";
+    }
+}
 
 template <typename T, Backend B>
 struct StedcConfig {
@@ -292,177 +190,78 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     } */
 }
 
-TYPED_TEST(StedcTest, FlatMatchesRecursive) {
+// The level-synchronous driver is the default; this pins it against the
+// recursive one it replaced. n = 128 needs no padding (32 * 2^2 = 128), n = 100
+// and n = 129 both do, which is where the padded diagonal tail and the
+// leading-block extraction get exercised.
+TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "Level driver is GPU-only"; }
     using float_type = typename base_type<T>::type;
-    StedcParams<float_type> params{
-        .recursion_threshold = 32,
-        .merge_variant = StedcMergeVariant::FusedCta,
-        .enable_rescale = true,
-        .secular_threads_per_root = 32,
-    };
-    expect_flat_matches_recursive_case<B, float_type>(
-        *this->ctx,
-        128,
-        16,
-        JobType::EigenVectors,
-        params,
-        std::numeric_limits<float_type>::epsilon() * float_type(5e3),
-        true,
-        std::numeric_limits<float_type>::epsilon() * float_type(2e4));
-}
+    const int batch = 8;
 
-TYPED_TEST(StedcTest, FlatRaggedMatchesRecursive) {
-    using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
-    using float_type = typename base_type<T>::type;
+    // 320 and 640 are the sizes whose tree shape the leaf cap changes; 100 and
+    // 129 cover padding and an odd n.
+    for (int n : {128, 100, 129, 320, 640}) {
+        auto a = Vector<float_type>::random(n, batch);
+        auto b = Vector<float_type>::random(n - 1, batch);
 
-    StedcParams<float_type> params{
-        .recursion_threshold = 32,
-        .merge_variant = StedcMergeVariant::FusedCta,
-        .enable_rescale = true,
-        .secular_threads_per_root = 32,
-    };
+        Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
+        dense.view().fill_tridiag(*this->ctx, b, a, b).wait();
+        this->ctx->wait();
 
-    for (int n : {70, 100, 129}) {
-        SCOPED_TRACE(::testing::Message() << "n=" << n);
-        expect_flat_matches_recursive_case<B, float_type>(
-            *this->ctx,
-            n,
-            8,
-            JobType::EigenVectors,
-            params,
-            std::numeric_limits<float_type>::epsilon() * float_type(5e3),
-            true,
-            std::numeric_limits<float_type>::epsilon() * float_type(2e4));
-    }
-}
+        // merge_variant is pinned rather than left on Auto so the driver is the
+        // only variable between the two arms. (It was pinned off Fused's
+        // sibling because FusedCta used to deadlock; that is fixed, and Auto
+        // resolves back to FusedCta -- but pinning is still the right thing for
+        // an A/B of the drivers.)
+        StedcParams<float_type> params_rec{
+            .recursion_threshold = 32,
+            .algorithm = StedcAlgorithm::Recursive,
+            .merge_variant = StedcMergeVariant::Fused,
+        };
+        StedcParams<float_type> params_lvl{
+            .recursion_threshold = 32,
+            .algorithm = StedcAlgorithm::Levels,
+            .merge_variant = StedcMergeVariant::Fused,
+        };
 
-TYPED_TEST(StedcTest, FlatMatchesRecursiveAcrossMergeVariants) {
-    using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "Explicit GPU merge variant coverage is GPU-only";
-    } else {
-        using float_type = typename base_type<T>::type;
-        const auto eig_tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3);
-        const auto ritz_tol = std::numeric_limits<float_type>::epsilon() * float_type(2e4);
-        for (auto variant : {StedcMergeVariant::Baseline, StedcMergeVariant::Fused, StedcMergeVariant::FusedCta}) {
-            SCOPED_TRACE(::testing::Message() << "merge_variant=" << static_cast<int>(variant));
-            StedcParams<float_type> params{
-                .recursion_threshold = 32,
-                .merge_variant = variant,
-                .enable_rescale = true,
-                .secular_threads_per_root = 32,
-            };
-            expect_flat_matches_recursive_case<B, float_type>(
-                *this->ctx,
-                128,
-                8,
-                JobType::EigenVectors,
-                params,
-                eig_tol,
-                true,
-                ritz_tol);
-        }
-    }
-}
+        auto a_rec = a; auto b_rec = b;
+        auto a_lvl = a; auto b_lvl = b;
+        auto eigvals_rec = Vector<float_type>::zeros(n, batch);
+        auto eigvals_lvl = Vector<float_type>::zeros(n, batch);
+        auto eigvecs_rec = Matrix<float_type>::Identity(n, batch);
+        auto eigvecs_lvl = Matrix<float_type>::Identity(n, batch);
 
-TYPED_TEST(StedcTest, FlatNoEigenVectorsMatchesRecursiveAcrossMergeVariants) {
-    using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "Explicit GPU merge variant coverage is GPU-only";
-    } else {
-        using float_type = typename base_type<T>::type;
-        const auto eig_tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3);
-        for (auto variant : {StedcMergeVariant::Baseline, StedcMergeVariant::Fused, StedcMergeVariant::FusedCta}) {
-            SCOPED_TRACE(::testing::Message() << "merge_variant=" << static_cast<int>(variant));
-            StedcParams<float_type> params{
-                .recursion_threshold = 32,
-                .merge_variant = variant,
-                .enable_rescale = true,
-                .secular_threads_per_root = 32,
-            };
-            expect_flat_matches_recursive_case<B, float_type>(
-                *this->ctx,
-                129,
-                8,
-                JobType::NoEigenVectors,
-                params,
-                eig_tol);
-        }
-    }
-}
+        UnifiedVector<std::byte> ws_rec(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
+        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
-TYPED_TEST(StedcTest, FlatTraceCollapsesByDepth) {
-    using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "Flat trace collapse is GPU-only";
-    } else {
-        bool has32 = false;
-        for (auto sgs : (*this->ctx)->get_device().template get_info<sycl::info::device::sub_group_sizes>()) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
+        stedc<B>(*this->ctx, a_rec, b_rec, eigvals_rec, ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec);
+        stedc<B>(*this->ctx, a_lvl, b_lvl, eigvals_lvl, ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl);
+        this->ctx->wait();
+
+        const auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3)
+                       * std::max(float_type(1), std::abs(eigvals_rec(n - 1, 0)));
+        for (int j = 0; j < batch; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const float_type diff = std::abs(eigvals_rec(i, j) - eigvals_lvl(i, j));
+                ASSERT_LE(diff, tol) << "n=" << n << " eigenvalue mismatch at (" << i << ", batch " << j
+                                     << "): recursive=" << eigvals_rec(i, j) << " levels=" << eigvals_lvl(i, j);
             }
         }
-        if (!has32) {
-            GTEST_SKIP() << "Trace collapse test requires subgroup size 32 for deterministic CTA leaf path";
-        }
 
-        using float_type = typename base_type<T>::type;
-        StedcParams<float_type> params{
-            .recursion_threshold = 32,
-            .merge_variant = StedcMergeVariant::FusedCta,
-            .enable_rescale = true,
-            .secular_threads_per_root = 32,
-        };
-        const auto schedule = build_flat_schedule(128, params.recursion_threshold);
-        expect_flat_trace_counts<B, float_type>(
-            *this->ctx,
-            128,
-            4,
-            params,
-            schedule.levels.size() - 1,
-            "/tmp/batchlas_stedc_flat_trace_balanced.json");
-    }
-}
-
-TYPED_TEST(StedcTest, FlatTraceCollapsesByDepthRagged) {
-    using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "Flat trace collapse is GPU-only";
-    } else {
-        bool has32 = false;
-        for (auto sgs : (*this->ctx)->get_device().template get_info<sycl::info::device::sub_group_sizes>()) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
+        // Eigenvectors are only defined up to sign, so compare Ritz values
+        // rather than the columns themselves.
+        auto ritz = ritz_values<B, float_type>(*this->ctx, dense, eigvecs_lvl);
+        this->ctx->wait();
+        for (int j = 0; j < batch; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const float_type diff = std::abs(ritz(i, j) - eigvals_lvl(i, j));
+                ASSERT_LE(diff, tol) << "n=" << n << " Ritz mismatch at (" << i << ", batch " << j
+                                     << "): ritz=" << ritz(i, j) << " eig=" << eigvals_lvl(i, j);
             }
         }
-        if (!has32) {
-            GTEST_SKIP() << "Trace collapse test requires subgroup size 32 for deterministic CTA leaf path";
-        }
-
-        using float_type = typename base_type<T>::type;
-        StedcParams<float_type> params{
-            .recursion_threshold = 32,
-            .merge_variant = StedcMergeVariant::FusedCta,
-            .enable_rescale = true,
-            .secular_threads_per_root = 32,
-        };
-        const auto schedule = build_flat_schedule(129, params.recursion_threshold);
-        expect_flat_trace_counts<B, float_type>(
-            *this->ctx,
-            129,
-            4,
-            params,
-            schedule.levels.size() - 1,
-            "/tmp/batchlas_stedc_flat_trace_ragged.json");
     }
 }
 

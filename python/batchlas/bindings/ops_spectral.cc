@@ -36,6 +36,29 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     std::vector<int32_t> iterations_done(static_cast<std::size_t>(matrix.batch_size()), 0);
     std::optional<SyevxInstrumentation<T>> instrumentation;
     SyevxParams<T> syevx_params = parse_syevx_params<T>(options, preconditioner, nullptr);
+
+    // Per-batch-item count of eigenpairs actually found (LAPACK's M).
+    //
+    // For SyevxSelect::Value this is the ONLY way to know how much of `values` /
+    // `vectors` is meaningful: the count depends on the data, differs from one
+    // batch item to the next, and `neigs` is merely the capacity the caller
+    // declared. m[b] > neigs is therefore the caller's overflow signal, and
+    // w[b, m[b]:] is undefined -- syevx leaves those slots of W untouched (it
+    // does zero the corresponding columns of V, but do not rely on that here).
+    // For Extremal and Index the count is static and syevx fills `m` with it.
+    //
+    // Allocated for every syevx call -- batch_size int32s is nothing next to the
+    // workspace -- but RETURNED only when a range was actually requested, so no
+    // existing caller's return shape changes.
+    const bool report_counts = !use_lanczos && syevx_params.select != SyevxSelect::Extremal;
+    // Default-constructed then resized, exactly like the history buffers below:
+    // the lanczos path never calls syevx and must not allocate a zero-length
+    // unified allocation just to leave it unused.
+    UnifiedVector<int32_t> counts;
+    if (!use_lanczos) {
+        counts.resize(static_cast<std::size_t>(matrix.batch_size()));
+    }
+
     if (!use_lanczos && return_history) {
         const std::size_t store_every = py_scalar_or_default<std::size_t>(options, "store_every", 1);
         const bool store_current = py_scalar_or_default<bool>(options, "store_current_residual", false);
@@ -87,12 +110,17 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
                 batchlas::lanczos<B, T, MF>(queue, matrix.view(), values.data(), workspace, jobz, vectors->view(),
                                             parse_lanczos_params<T>(options));
             } else {
+                // Always the `m`-taking overload: SyevxSelect::Value REQUIRES it
+                // (the m-less form throws for a value range, by design, because it
+                // has nowhere to report a data-dependent count), and for Extremal
+                // and Index it costs one extra batch_size-wide fill.
                 if (compute_vectors) {
-                    batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), neigs, workspace, jobz,
-                                              vectors->view(), syevx_params);
+                    batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), counts.to_span(), neigs,
+                                              workspace, jobz, vectors->view(), syevx_params);
                 } else {
-                    batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), neigs, workspace, jobz,
-                                              MatrixView<T, MatrixFormat::Dense>(), syevx_params);
+                    batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), counts.to_span(), neigs,
+                                              workspace, jobz, MatrixView<T, MatrixFormat::Dense>(),
+                                              syevx_params);
                 }
             }
         });
@@ -101,9 +129,29 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     py::object values_object = dense_vector_to_python(wrap_vector(std::move(values)));
     py::object vectors_object =
         compute_vectors ? dense_matrix_to_python(wrap_dense(std::move(*vectors))) : py::none();
+
+    // Return layout: (values[, vectors][, m][, history]). `m` sits immediately
+    // after the eigenvectors, mirroring the C++ argument order where the count
+    // span follows W, and `history` stays last.
+    py::object counts_object = py::none();
+    if (report_counts) {
+        py::array_t<int32_t> counts_out({static_cast<py::ssize_t>(matrix.batch_size())});
+        auto counts_view = counts_out.mutable_unchecked<1>();
+        for (int batch = 0; batch < matrix.batch_size(); ++batch) {
+            counts_view(static_cast<py::ssize_t>(batch)) = counts[static_cast<std::size_t>(batch)];
+        }
+        counts_object = std::move(counts_out);
+    }
+
     if (!return_history || use_lanczos) {
+        if (compute_vectors && report_counts) {
+            return py::make_tuple(values_object, vectors_object, counts_object);
+        }
         if (compute_vectors) {
             return py::make_tuple(values_object, vectors_object);
+        }
+        if (report_counts) {
+            return py::make_tuple(values_object, counts_object);
         }
         return values_object;
     }
@@ -143,8 +191,14 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     }
     history["iterations_done"] = std::move(iterations_out);
 
+    if (compute_vectors && report_counts) {
+        return py::make_tuple(values_object, vectors_object, counts_object, history);
+    }
     if (compute_vectors) {
         return py::make_tuple(values_object, vectors_object, history);
+    }
+    if (report_counts) {
+        return py::make_tuple(values_object, counts_object, history);
     }
     return py::make_tuple(values_object, history);
 }
@@ -195,8 +249,7 @@ py::object stedc_common(const DenseVector& d_wrapper,
                         bool compute_vectors,
                         const py::dict& options,
                         Backend backend,
-                        const std::optional<std::string>& device_name,
-                        bool flat) {
+                        const std::optional<std::string>& device_name) {
     ensure_same_dtype(d_wrapper, e_wrapper, "d and e dtypes must match");
     const auto& d = std::get<Vector<T>>(d_wrapper.storage);
     const auto& e = std::get<Vector<T>>(e_wrapper.storage);
@@ -211,21 +264,13 @@ py::object stedc_common(const DenseVector& d_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     const std::size_t workspace_size = visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        if (flat) {
-            return batchlas::stedc_flat_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
-        }
         return batchlas::stedc_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
     });
     UnifiedVector<std::byte> workspace(workspace_size);
     visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        if (flat) {
-            batchlas::stedc_flat<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
-                                       workspace.to_span(), jobz, params, vectors.view());
-        } else {
-            batchlas::stedc<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
-                                  workspace.to_span(), jobz, params, vectors.view());
-        }
+        batchlas::stedc<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
+                              workspace.to_span(), jobz, params, vectors.view());
     });
     queue.wait();
     if (compute_vectors) {
@@ -680,21 +725,7 @@ void init_spectral_ops(py::module_& module) {
             if constexpr (!std::is_floating_point_v<scalar_type>) {
                 throw_not_implemented("stedc only supports float32 and float64");
             } else {
-                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name, false);
-            }
-        });
-    });
-
-    module.def("_stedc_flat", [](const DenseVector& d, const DenseVector& e, bool compute_vectors, const py::dict& options,
-                                  const std::string& backend_name, const py::object& device_name_obj) {
-        const Backend backend = parse_backend(backend_name);
-        const auto device_name = optional_string_from_obj(device_name_obj);
-        return visit_vector(d, [&](auto tag, const auto&) -> py::object {
-            using scalar_type = typename decltype(tag)::type;
-            if constexpr (!std::is_floating_point_v<scalar_type>) {
-                throw_not_implemented("stedc_flat only supports float32 and float64");
-            } else {
-                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name, true);
+                return stedc_common<scalar_type>(d, e, compute_vectors, options, backend, device_name);
             }
         });
     });

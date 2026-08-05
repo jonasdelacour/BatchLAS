@@ -115,6 +115,18 @@ Event syevx_filtered(Queue& ctx,
 
     if (A.rows() != A.cols()) throw std::runtime_error("syevx_filtered: A must be square");
     if (k < 1 || k > n) throw std::runtime_error("syevx_filtered: invalid neigs");
+    // The Chebyshev filter is a HIGH-PASS: it is built by mapping the unwanted
+    // interval into [-1,1], where |T_m| <= 1, and letting the wanted END fall
+    // outside. An interior interval has unwanted spectrum on both sides, which that
+    // construction cannot express -- it would quietly return an extremal block
+    // instead of failing. `syevx` never routes a non-extremal request here, but
+    // this is also a public entry point. See SYEVX_RANGE_PLAN.md §2.5, §12.2.
+    if (params.select != SyevxSelect::Extremal) {
+        throw std::invalid_argument(
+            "syevx_filtered: only SyevxSelect::Extremal is supported; the Chebyshev filter is a "
+            "high-pass and cannot express an interior interval. Use syevx_direct or "
+            "syevx_direct_subset for an index or value range");
+    }
 
     // Block size. Extra directions give the filter room to resolve the boundary
     // between wanted and unwanted; without any, the cut sits exactly at the edge
@@ -774,6 +786,14 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     // allocation at all (the recurrence reuses Y/Yprev regardless of length).
     using Real = typename base_type<T>::type;
     (void)W; (void)V; (void)jobz;
+
+    // Must reject exactly what the solver rejects: a sizing call that returns a
+    // number for a request the solve will refuse is a caller-visible inconsistency.
+    if (params.select != SyevxSelect::Extremal) {
+        throw std::invalid_argument(
+            "syevx_filtered_buffer_size: only SyevxSelect::Extremal is supported; see "
+            "syevx_filtered");
+    }
 
     const int64_t n = A.rows();
     const int64_t batch = A.batch_size();

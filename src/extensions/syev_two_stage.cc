@@ -1,4 +1,5 @@
 #include <blas/extensions.hh>
+#include "uplo_mirror.hh"
 #include <blas/functions.hh>
 #include <blas/linalg.hh>
 #include <blas/matrix.hh>
@@ -38,9 +39,7 @@ inline void validate_syev_two_stage_dims(const MatrixView<T, MatrixFormat::Dense
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
         throw std::invalid_argument("syev_two_stage: invalid JobType.");
     }
-    if (uplo != Uplo::Lower) {
-        throw std::invalid_argument("syev_two_stage: only Uplo::Lower is currently implemented.");
-    }
+    // Uplo::Upper is accepted; the solve mirrors it into Lower first. See uplo_mirror.hh.
 
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
@@ -69,6 +68,13 @@ Event syev_two_stage(Queue& ctx,
 
     if (!ctx.in_order()) {
         throw std::runtime_error("syev_two_stage: requires an in-order Queue");
+    }
+
+    // Uplo::Upper: mirror into Lower, then run the ordinary Lower pipeline (sytrd_sy2sb ->
+    // sb2st -> stedc -> back-transform), none of which implements Upper. See uplo_mirror.hh.
+    if (uplo == Uplo::Upper) {
+        mirror_upper_to_lower<B, T>(ctx, a_in);
+        uplo = Uplo::Lower;
     }
 
     if constexpr (B == Backend::NETLIB) {
@@ -388,9 +394,7 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
         throw std::invalid_argument("syev_two_stage_buffer_size: invalid JobType.");
     }
-    if (uplo != Uplo::Lower) {
-        throw std::invalid_argument("syev_two_stage_buffer_size: only Uplo::Lower is currently implemented.");
-    }
+    // Uplo::Upper is accepted; workspace is identical, the mirror is in-place.
 
     if constexpr (B == Backend::NETLIB) {
         if (jobz == JobType::EigenVectors) {

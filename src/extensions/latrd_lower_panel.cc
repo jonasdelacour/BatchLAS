@@ -68,6 +68,26 @@ inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 //
 // A knob rather than a formula because the crossover is a barrier-latency
 // property of the device, not of the algorithm -- re-measure on new hardware.
+//
+// EIGENVECTOR MODE RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8,
+// float, blocked provider, legacy/grid so > 1 means the grid path wins). The
+// grid above was taken eigenvalues-only, but the gate is applied in BOTH modes,
+// so that was an untested extrapolation. It holds:
+//
+//    n      b=1    b=8    b=64
+//   256    0.734  0.734  0.788
+//   384    0.885  0.894  0.881
+//   512    1.012  1.018  0.956
+//   768    1.379  1.375  1.090
+//   1024   1.843  1.781    -
+//
+// Same crossover as eigenvalues-only: a loss below 512, neutral at 512, a clear
+// win from 768. The 768 gate does NOT need splitting per mode.
+//
+// Note the win shrinks as batch grows (n=768: 1.38 at batch 1, 1.09 at batch 64;
+// n=1024/128 is a dead heat, 475.5 vs 475.7 ms) -- which is the mechanism
+// working as designed, since once the batch alone saturates the SMs there is no
+// starvation left for the extra work-groups to absorb.
 inline int64_t latrd_grid_min_n() {
     const char* v = std::getenv("BATCHLAS_LATRD_GRID_MIN_N");
     if (v && *v) {

@@ -54,6 +54,10 @@ set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_SMALL 32)
 set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_MEDIUM 32)
 set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_LARGE 32)
 set(BATCHLAS_TUNE_DEFAULT_STEDC_RECURSION_THRESHOLD_XLARGE 32)
+# StedcMergeVariant: 1 = Fused, 2 = FusedCta. Briefly 1, on a correctness and a
+# speed claim that both failed to reproduce on re-test -- FusedCta is in fact
+# 11-35% faster and passes the whole stedc/syev suite. See
+# include/batchlas/tuning_params.hh for the full note.
 set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_TINY 2)
 set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_SMALL 2)
 set(BATCHLAS_TUNE_DEFAULT_STEDC_MERGE_VARIANT_MEDIUM 2)
