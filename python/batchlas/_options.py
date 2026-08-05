@@ -34,6 +34,29 @@ class SyevxOptions:
     iluk_levels_of_fill: int = 0
     iluk_drop_tolerance: object = None
     iluk_fill_factor: object = None
+    # ---- Range selection (LAPACK ?syevx's RANGE argument) ------------------
+    # Every default below is byte-for-byte the C++ SyevxParams default, so an
+    # existing caller who never touches them gets exactly the historical
+    # top-k / bottom-k behaviour selected by find_largest.
+    #
+    # "extremal": neigs eigenpairs from the end picked by find_largest.
+    # "index":    the block il..iu (inclusive, 0-based) of the ASCENDING
+    #             spectrum. neigs must equal iu - il + 1.
+    # "value":    every eigenvalue in the half-open interval (vl, vu]. The
+    #             count is data-dependent and differs per batch item, so neigs
+    #             is only a CAPACITY and the true per-item count comes back as
+    #             an extra `m` array; see batchlas.syevx / batchlas.syevx_range.
+    select: str = "extremal"
+    il: int = 0
+    iu: int = -1  # -1 means n-1
+    vl: float = 0.0
+    vu: float = 0.0
+    # Absolute tolerance per eigenvalue for the bisection-based paths.
+    # Non-positive means eps * ||T||, i.e. full working precision.
+    abstol: float = 0.0
+    # Output order within the selected block. Honoured for "index" and "value"
+    # only -- for "extremal" the order comes from find_largest.
+    order: str = "ascending"
 
 
 @dataclass(slots=True)

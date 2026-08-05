@@ -110,6 +110,7 @@ Event stein(Queue& ctx,
             const VectorView<T>& e,
             const VectorView<T>& w,
             size_t k_in,
+            Span<const int32_t> counts,
             const MatrixView<T, MatrixFormat::Dense>& Z,
             const Span<std::byte>& ws,
             SteinParams<T> params) {
@@ -126,6 +127,13 @@ Event stein(Queue& ctx,
         throw std::runtime_error("stein: Z must be at least n x k");
     }
     if (w.size() < k) throw std::runtime_error("stein: w must hold k eigenvalues");
+    if (!counts.empty() && counts.size() < static_cast<size_t>(batch_size)) {
+        throw std::runtime_error("stein: counts must cover every batch item");
+    }
+
+    // Null means "no per-item count": every item uses the full capacity k, which
+    // is exactly the counts-less overload's behaviour.
+    const int32_t* counts_ptr = counts.empty() ? nullptr : counts.data();
 
     auto pool = BumpAllocator(ws);
     // Five length-n scratch arrays plus the pivot flags, per (batch, vector).
@@ -181,7 +189,21 @@ Event stein(Queue& ctx,
                 const T eps = std::numeric_limits<T>::epsilon();
                 const T pivot_floor = eps * tnorm;
 
+                // Valid prefix for this item. Slots [kb, k) of w are undefined --
+                // for a stebz value range the count is data-dependent and per item.
+                const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
+                const int64_t kb = (raw < 0) ? int64_t(0) : ((raw > k) ? k : raw);
+
                 for (int64_t j = tid; j < k; j += local_size) {
+                    // Zero the unused columns rather than skipping them: callers run
+                    // uniform-width orthogonal back-transforms over all k columns,
+                    // and zero is inert under those while uninitialized workspace is
+                    // not. No group barrier in this loop, so the divergence is safe.
+                    if (j >= kb) {
+                        for (int64_t i = 0; i < n; ++i) Zv(i, j, bid) = T(0);
+                        continue;
+                    }
+
                     const int64_t base = (bid * k + j) * n;
                     T* my_dl = dl_ptr + base;
                     T* my_dd = dd_ptr + base;
@@ -276,10 +298,29 @@ Event stein(Queue& ctx,
                     std::numeric_limits<T>::min());
                 const T gap_tol = ortho_threshold * tnorm;
 
+                const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
+                const int64_t kb = (raw < 0) ? int64_t(0) : ((raw > k) ? k : raw);
+
                 // Walk the (ascending) eigenvalues; a gap wider than gap_tol
                 // starts a new cluster. Only within-cluster pairs need work.
+                //
+                // The walk stops at kb, not k. Past kb the entries of w are stale
+                // workspace, so a monotone-looking tail joins the last real
+                // eigenvalue into one arbitrarily large bogus cluster and phase 2
+                // degenerates into an O(n*k^2) barrier-synchronized pass over
+                // columns phase 1 already knows are zero.
+                //
+                // This bound is a COST and hygiene bound, not a correctness one, and
+                // the distinction is worth stating because SYEVX_RANGE_PLAN.md 2.4
+                // gets it wrong. The modified Gram-Schmidt below writes only column
+                // j while reading columns i < j, and cluster_start is derived only
+                // from w(0..j); so for every j < kb the result depends solely on
+                // valid data, and nothing past kb can flow back into a valid column.
+                // What actually protects the valid prefix is phase 1's kb bound (it
+                // keeps garbage shifts out of inverse iteration) -- verified by
+                // reverting each bound separately.
                 int64_t cluster_start = 0;
-                for (int64_t j = 0; j < k; ++j) {
+                for (int64_t j = 0; j < kb; ++j) {
                     if (j > 0 && (w(j, bid) - w(j - 1, bid)) > gap_tol) {
                         cluster_start = j;
                     }
@@ -318,6 +359,20 @@ Event stein(Queue& ctx,
     return ctx.get_event();
 }
 
+// Uniform-capacity form: every item uses all k slots. Forwards rather than
+// duplicating, so there is exactly one kernel definition per (B, T).
+template <Backend B, typename T>
+Event stein(Queue& ctx,
+            const VectorView<T>& d,
+            const VectorView<T>& e,
+            const VectorView<T>& w,
+            size_t k_in,
+            const MatrixView<T, MatrixFormat::Dense>& Z,
+            const Span<std::byte>& ws,
+            SteinParams<T> params) {
+    return stein<B, T>(ctx, d, e, w, k_in, Span<const int32_t>(), Z, ws, params);
+}
+
 template <Backend B, typename T>
 size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, SteinParams<T> params) {
     (void)params;
@@ -334,6 +389,15 @@ size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, Stei
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         size_t, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const Span<std::byte>&, \
+        SteinParams<BATCHLAS_UNPAREN fp>); \
+    template Event stein<back, BATCHLAS_UNPAREN fp>(Queue&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        size_t, \
+        Span<const int32_t>, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const Span<std::byte>&, \
         SteinParams<BATCHLAS_UNPAREN fp>); \
