@@ -839,7 +839,61 @@ namespace batchlas {
                 SteinParams<T> params = SteinParams<T>());
 
     /**
+     * @brief Sentinel meaning "every batch item has all `k` eigenvalues valid",
+     *        i.e. exactly the behaviour of the `counts`-less `stein` overload.
+     *
+     * Spell this rather than a bare `{}` at the `counts` argument: a bare `{}` in
+     * an argument position that two overloads both accept has previously selected
+     * the wrong overload in this codebase and silently changed results.
+     */
+    inline constexpr Span<const int32_t> stein_all_counts{};
+
+    /**
+     * @brief `stein` with a per-batch-item count of valid eigenvalues.
+     *
+     * Identical to the overload above except that `k` is a *capacity* -- the number
+     * of columns of `Z` and entries of `w` per item -- while `counts[b]` is the
+     * number of leading entries of item `b`'s `w` that are real eigenvalues. This is
+     * what a `stebz` value range (`EigenRangeType::Value`) produces: the count is
+     * data-dependent and differs from one batch item to the next, so the slots
+     * `[counts[b], k)` of `w` hold whatever the workspace last contained.
+     *
+     * Two consequences, both guaranteed here:
+     *
+     *  - inverse iteration is not run on those invalid shifts, and
+     *  - the cluster walk of phase 2 stops at `counts[b]`, so a real eigenvalue is
+     *    never grouped with a garbage neighbour.
+     *
+     * Columns `[counts[b], k)` of `Z` are **written as exactly zero**, not left
+     * untouched. Callers may therefore run a uniform-width back-transform over all
+     * `k` columns: an orthogonal transform maps zero to zero, so nothing propagates.
+     *
+     * `counts` is read on the device, so it may be the `m` span `stebz` just wrote;
+     * no host synchronization is introduced between the two calls. Pass
+     * `stein_all_counts` (or an empty span) for the uniform-`k` behaviour.
+     *
+     * @param counts Per-item valid prefix length, at least `d.batch_size()` entries;
+     *               empty means "all `k` for every item". Values are clamped to
+     *               `[0, k]`.
+     */
+    template <Backend B, typename T>
+    Event stein(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                const VectorView<T>& w,
+                size_t k,
+                Span<const int32_t> counts,
+                const MatrixView<T, MatrixFormat::Dense>& Z,
+                const Span<std::byte>& ws,
+                SteinParams<T> params = SteinParams<T>());
+
+    /**
      * @brief Required workspace size, in bytes, for `stein`.
+     *
+     * Sizes on the capacity `k`, which is what is allocated regardless of any
+     * per-item `counts`: every scratch array is indexed by `(batch, column)` over
+     * the full `n * k * batch_size` grid whether or not a column is used. So the
+     * `counts` overload needs no separate sizing entry point.
      */
     template <Backend B, typename T>
     size_t stein_buffer_size(Queue& ctx,

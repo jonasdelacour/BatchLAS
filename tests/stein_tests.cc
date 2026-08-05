@@ -166,6 +166,254 @@ TYPED_TEST(SteinTest, GradedMatrix) {
                        SteinTol<Real>::residual(), SteinTol<Real>::ortho());
 }
 
+namespace {
+
+// Shared fixture for the per-item-count overload. Builds the 1D-Laplacian
+// tridiagonal (d = 2, e = -1), whose spectrum 2 - 2cos(j*pi/(n+1)) is simple and
+// whose smallest gaps near the bottom are still far wider than stein's default
+// clustering threshold of 1e-3 * ||T||.
+template <typename Real>
+struct CountsFixture {
+    static constexpr int n = 64;
+    static constexpr int k = 8;      // capacity: columns of Z, entries of w per item
+    static constexpr int batch = 2;
+
+    std::vector<Real> d, e;
+    UnifiedVector<Real> d_dev, e_dev, w;
+    UnifiedVector<int32_t> counts;
+    Real tnorm = 0;
+
+    CountsFixture()
+        : d(n, Real(2)), e(n - 1, Real(-1)),
+          d_dev(n * batch), e_dev((n - 1) * batch), w(k * batch), counts(batch) {
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) d_dev[b * n + i] = d[i];
+            for (int i = 0; i < n - 1; ++i) e_dev[b * (n - 1) + i] = e[i];
+        }
+        for (int i = 0; i < n; ++i) {
+            const Real left = (i > 0) ? std::abs(e[i - 1]) : Real(0);
+            const Real right = (i < n - 1) ? std::abs(e[i]) : Real(0);
+            tnorm = std::max(tnorm, std::abs(d[i]) + left + right);
+        }
+    }
+
+    VectorView<Real> dv() { return VectorView<Real>(d_dev.data(), n, batch, 1, n); }
+    VectorView<Real> ev() { return VectorView<Real>(e_dev.data(), n - 1, batch, 1, n - 1); }
+    VectorView<Real> wv() { return VectorView<Real>(w.data(), k, batch, 1, k); }
+
+    // Fills w with the k lowest eigenvalues (identical for every item) via stebz.
+    void FillEigenvalues(Queue& ctx) {
+        UnifiedVector<int32_t> m(batch);
+        StebzParams<Real> bp;
+        bp.range = EigenRangeType::Index;
+        bp.il = 0;
+        bp.iu = k - 1;
+        auto bws = UnifiedVector<std::byte>(
+            stebz_buffer_size<test_utils::gpu_backend, Real>(ctx, n, batch, bp));
+        stebz<test_utils::gpu_backend>(ctx, dv(), ev(), wv(), m.to_span(), bws, bp);
+        ctx.wait();
+    }
+
+    Real residual(const MatrixView<Real, MatrixFormat::Dense>& Z,
+                  int b, int j, Real lambda) const {
+        Real res2 = 0;
+        for (int i = 0; i < n; ++i) {
+            Real tv = d[i] * Z(i, j, b);
+            if (i > 0) tv += e[i - 1] * Z(i - 1, j, b);
+            if (i < n - 1) tv += e[i] * Z(i + 1, j, b);
+            const Real r = tv - lambda * Z(i, j, b);
+            res2 += r * r;
+        }
+        return std::sqrt(res2) / tnorm;
+    }
+};
+
+} // namespace
+
+// Per-item counts: item 0 wants all 8 vectors, item 1 wants only 3.
+//
+// Item 1's slots 3..7 are deliberately poisoned with values a hair above its last
+// real eigenvalue -- close enough that the phase-2 gap test would fold them into
+// one bogus cluster anchored on that real eigenvalue, which is exactly the shape a
+// stebz value range produces when one batch item finds fewer eigenvalues than the
+// capacity and the tail of the workspace is stale.
+//
+// Two independent properties are asserted:
+//   (a) item 1's three real eigenpairs are orthonormal and have a small residual;
+//   (b) item 1's unused columns 3..7 are written as EXACTLY zero (they are
+//       pre-poisoned with a sentinel, so this proves stein wrote them).
+//
+// (b) is the discriminating assertion, and (a) is not. SYEVX_RANGE_PLAN.md 7.3
+// asks for (a) alone on the theory that the phase-2 cluster walk corrupts valid
+// eigenvectors; it does not. Measured on this test: with the counts bound removed
+// from BOTH phases, (a) reports zero failures and (b) reports 639. The phase-2
+// MGS writes only column j while reading columns i < j and cluster_start comes
+// only from w(0..j), so garbage past the prefix cannot reach a valid column.
+// Keep (b); it is what makes this test fail when the bound regresses.
+TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
+    using Real = TypeParam;
+    CountsFixture<Real> f;
+    constexpr int n = CountsFixture<Real>::n;
+    constexpr int k = CountsFixture<Real>::k;
+
+    f.FillEigenvalues(*this->ctx);
+
+    // Item 0 keeps all k; item 1 keeps 3 and gets a bogus cluster in the tail.
+    const int kb1 = 3;
+    f.counts[0] = k;
+    f.counts[1] = kb1;
+    const Real anchor = f.w[1 * k + (kb1 - 1)];
+    for (int j = kb1; j < k; ++j) {
+        // Well inside gap_tol = 1e-3 * ||T|| = 4e-3, and inside the phase-1
+        // degeneracy-separation window too, so both phases would treat these as
+        // continuations of the last real eigenvalue.
+        f.w[1 * k + j] = anchor + Real(1e-7) * Real(j - kb1 + 1);
+    }
+
+    Matrix<Real, MatrixFormat::Dense> Z(n, k, CountsFixture<Real>::batch);
+    const Real sentinel = Real(-12345);
+    for (int b = 0; b < CountsFixture<Real>::batch; ++b)
+        for (int j = 0; j < k; ++j)
+            for (int i = 0; i < n; ++i) Z.view()(i, j, b) = sentinel;
+
+    SteinParams<Real> sp;
+    auto sws = UnifiedVector<std::byte>(
+        stein_buffer_size<test_utils::gpu_backend, Real>(
+            *this->ctx, n, k, CountsFixture<Real>::batch, sp));
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   Span<const int32_t>(f.counts.data(), f.counts.size()),
+                                   Z.view(), sws, sp);
+    this->ctx->wait();
+
+    const Real res_tol = SteinTol<Real>::residual();
+    const Real ortho_tol = SteinTol<Real>::ortho();
+
+    for (int b = 0; b < CountsFixture<Real>::batch; ++b) {
+        const int kb = f.counts[b];
+
+        // (a) the declared prefix is a genuine orthonormal invariant-subspace basis.
+        for (int j = 0; j < kb; ++j) {
+            const Real lambda = f.w[b * k + j];
+            EXPECT_LE(f.residual(Z.view(), b, j, lambda), res_tol)
+                << "residual too large, batch " << b << " vector " << j
+                << " (lambda=" << lambda << ")";
+        }
+        for (int i = 0; i < kb; ++i) {
+            for (int j = i; j < kb; ++j) {
+                Real dot = 0;
+                for (int r = 0; r < n; ++r) dot += Z.view()(r, i, b) * Z.view()(r, j, b);
+                const Real want = (i == j) ? Real(1) : Real(0);
+                EXPECT_LE(std::abs(dot - want), ortho_tol)
+                    << "orthogonality failure, batch " << b
+                    << " columns (" << i << "," << j << "): dot=" << dot;
+            }
+        }
+
+        // (b) everything past the prefix is exactly zero -- not the sentinel, not
+        // an inverse-iteration result on a garbage shift, and above all not NaN.
+        for (int j = kb; j < k; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const Real z = Z.view()(i, j, b);
+                EXPECT_TRUE(std::isfinite(z))
+                    << "non-finite in unused column, batch " << b << " column " << j
+                    << " row " << i;
+                EXPECT_EQ(z, Real(0))
+                    << "unused column not zeroed, batch " << b << " column " << j
+                    << " row " << i << " (value " << z << ")";
+            }
+        }
+    }
+}
+
+// The counts overload with counts[b] == k for every item must reproduce the
+// counts-less overload bit for bit: same kernels, same inputs, same launch
+// geometry, and the deliberately fixed LCG seed makes inverse iteration
+// reproducible. A difference here is a bounding bug, not a rounding difference.
+TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
+    using Real = TypeParam;
+    CountsFixture<Real> f;
+    constexpr int n = CountsFixture<Real>::n;
+    constexpr int k = CountsFixture<Real>::k;
+    constexpr int batch = CountsFixture<Real>::batch;
+
+    f.FillEigenvalues(*this->ctx);
+    for (int b = 0; b < batch; ++b) f.counts[b] = k;
+
+    SteinParams<Real> sp;
+    auto sws = UnifiedVector<std::byte>(
+        stein_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, k, batch, sp));
+
+    Matrix<Real, MatrixFormat::Dense> Z_uniform(n, k, batch);
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   Z_uniform.view(), sws, sp);
+    this->ctx->wait();
+
+    Matrix<Real, MatrixFormat::Dense> Z_counts(n, k, batch);
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   Span<const int32_t>(f.counts.data(), f.counts.size()),
+                                   Z_counts.view(), sws, sp);
+    this->ctx->wait();
+
+    Matrix<Real, MatrixFormat::Dense> Z_empty(n, k, batch);
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   stein_all_counts, Z_empty.view(), sws, sp);
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < k; ++j) {
+            for (int i = 0; i < n; ++i) {
+                EXPECT_EQ(Z_counts.view()(i, j, b), Z_uniform.view()(i, j, b))
+                    << "counts==k diverged from the uniform overload at ("
+                    << i << "," << j << "," << b << ")";
+                EXPECT_EQ(Z_empty.view()(i, j, b), Z_uniform.view()(i, j, b))
+                    << "empty counts diverged from the uniform overload at ("
+                    << i << "," << j << "," << b << ")";
+            }
+        }
+    }
+}
+
+// counts[b] == 0: the item wants nothing (an empty value interval). Every column
+// must come back zero and nothing may be run on its garbage shifts.
+TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
+    using Real = TypeParam;
+    CountsFixture<Real> f;
+    constexpr int n = CountsFixture<Real>::n;
+    constexpr int k = CountsFixture<Real>::k;
+
+    f.FillEigenvalues(*this->ctx);
+    f.counts[0] = k;
+    f.counts[1] = 0;
+    // Item 1's whole w is now meaningless; make that explicit.
+    for (int j = 0; j < k; ++j) f.w[1 * k + j] = Real(0);
+
+    Matrix<Real, MatrixFormat::Dense> Z(n, k, CountsFixture<Real>::batch);
+    for (int b = 0; b < CountsFixture<Real>::batch; ++b)
+        for (int j = 0; j < k; ++j)
+            for (int i = 0; i < n; ++i) Z.view()(i, j, b) = Real(-12345);
+
+    SteinParams<Real> sp;
+    auto sws = UnifiedVector<std::byte>(
+        stein_buffer_size<test_utils::gpu_backend, Real>(
+            *this->ctx, n, k, CountsFixture<Real>::batch, sp));
+    stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+                                   Span<const int32_t>(f.counts.data(), f.counts.size()),
+                                   Z.view(), sws, sp);
+    this->ctx->wait();
+
+    for (int j = 0; j < k; ++j) {
+        for (int i = 0; i < n; ++i) {
+            EXPECT_EQ(Z.view()(i, j, 1), Real(0))
+                << "zero-count item wrote a non-zero at (" << i << "," << j << ")";
+        }
+    }
+    // Item 0 is unaffected by its neighbour's empty request.
+    for (int j = 0; j < k; ++j) {
+        EXPECT_LE(f.residual(Z.view(), 0, j, f.w[j]), SteinTol<Real>::residual())
+            << "batch 0 vector " << j << " damaged by batch 1's zero count";
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
