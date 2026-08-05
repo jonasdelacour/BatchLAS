@@ -516,6 +516,24 @@ inline SortOrder parse_sort_order(std::string value) {
     throw py::value_error("invalid sort_order");
 }
 
+// LAPACK ?syevx's RANGE argument, spelled the way SyevxOptions.select spells it.
+// Deliberately NOT parse_eigen_range_type: EigenRangeType is the tridiagonal
+// layer's vocabulary and its `All` member has no SyevxSelect counterpart (syevx's
+// default is "the neigs extremal ones", not "all of them").
+inline SyevxSelect parse_syevx_select(std::string value) {
+    value = lower_copy(std::move(value));
+    if (value == "extremal") {
+        return SyevxSelect::Extremal;
+    }
+    if (value == "index" || value == "i") {
+        return SyevxSelect::Index;
+    }
+    if (value == "value" || value == "v") {
+        return SyevxSelect::Value;
+    }
+    throw py::value_error("invalid syevx select: expected 'extremal', 'index' or 'value'");
+}
+
 inline OrthoAlgorithm parse_ortho_algorithm(std::string value) {
     value = lower_copy(std::move(value));
     if (value == "chol2") {
@@ -1186,6 +1204,20 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
         options, "iluk_drop_tolerance", params.iluk_params.drop_tolerance);
     params.iluk_params.fill_factor = py_scalar_or_default<typename base_type<T>::type>(
         options, "iluk_fill_factor", params.iluk_params.fill_factor);
+    // Range selection. vl/vu/abstol are base_type<T>, not T: the eigenvalues of a
+    // Hermitian matrix are real, so a complex caller must not have to spell
+    // complex(vl) for a real quantity. See SyevxParams's comment on the same point.
+    if (options.contains(py::str("select"))) {
+        params.select = parse_syevx_select(py::cast<std::string>(options["select"]));
+    }
+    params.il = py_scalar_or_default<std::int64_t>(options, "il", params.il);
+    params.iu = py_scalar_or_default<std::int64_t>(options, "iu", params.iu);
+    params.vl = py_scalar_or_default<typename base_type<T>::type>(options, "vl", params.vl);
+    params.vu = py_scalar_or_default<typename base_type<T>::type>(options, "vu", params.vu);
+    params.abstol = py_scalar_or_default<typename base_type<T>::type>(options, "abstol", params.abstol);
+    if (options.contains(py::str("order"))) {
+        params.order = parse_sort_order(py::cast<std::string>(options["order"]));
+    }
     params.instrumentation = instrumentation;
     return params;
 }

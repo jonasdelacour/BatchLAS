@@ -1,6 +1,10 @@
 # SYEVX Range Selection: Implementation Plan
 
-Status: **phases 1-6 implemented; phase 7 de-scoped (see §11).** Companion to [SYEVX_PLAN.md](SYEVX_PLAN.md),
+Status: **phases 1-7 implemented; phase 8 deferred by design (see §12 and §17).**
+Index and value ranges work end to end from C++ and from Python, on both dense
+paths, for every instantiated scalar type. One claim the routing rests on is
+argued structurally and has a benchmark written for it that has not been run;
+§17 says exactly which. Companion to [SYEVX_PLAN.md](SYEVX_PLAN.md),
 which covers *performance* of the partial eigensolve. This document covers the
 *capability* gap: BatchLAS `syevx` can currently return only the top-`k` or
 bottom-`k` of the spectrum, while a LAPACK-conformant `?syevx` also offers
@@ -28,6 +32,7 @@ bottom-`k` of the spectrum, while a LAPACK-conformant `?syevx` also offers
 14. [Risks, ranked](#14-risks-ranked)
 15. [Non-goals](#15-non-goals)
 16. [Sequencing and effort](#16-sequencing)
+17. [What actually landed](#17-what-actually-landed)
 
 ---
 
@@ -721,27 +726,10 @@ against zero.
 
 ## 11. Phase 7 — bindings, benchmarks, docs
 
-> **STATUS: not implemented, and deliberately so.** Phases 1-6 landed; nothing in
-> this section did except §11.3's cross-reference (SYEVX_PLAN.md §13 now points
-> here) and the `extensions.hh` doc rewrite, which happened as part of phase 5.
-> Where that leaves each item:
->
-> * **§11.1 Python — deferred, not cancelled.** `_options.py` still exposes only
->   `find_largest` and `ops_spectral.cc` still sizes outputs from `neigs`
->   unconditionally, so ranges are a C++-only capability today. The C++ contract
->   it would wrap is settled now, which is what made deferring it cheap.
-> * **§11.2 The one benchmark point — NOT MEASURED, and this is the one gap worth
->   naming out loud.** The routing extension in §9.2 rests on the claim that
->   position within the spectrum cannot enter the cost of either dense path. That
->   claim is argued structurally (§8.5: `kd`, the reflector schedule and both
->   back-transform shapes are functions of `n` and the capacity alone, and
->   `stebz` bisects the same number of steps for any index) and is asserted by
->   `PositionInTheSpectrumDoesNotChangeRouting`, which pins the *decision* — but
->   the *timing* was never taken at saturation as this section asked. The
->   structural argument is strong enough that no re-measurement was thought
->   necessary; it is still an argument and not a measurement, and if it is wrong
->   the symptom is a mis-routed interior request, not a wrong answer.
-> * **§11.3 Docs — done.**
+> **STATUS: implemented.** §11.1 (Python) and §11.3 (docs) are done; §11.2's
+> benchmark exists as `BM_SYEVX_RangePosition` but **has not been run**, which is
+> the one honest gap in this document. See §17.3 for what that leaves unverified
+> and §17.4 for the exact command that would close it.
 
 ### 11.1 Python
 
@@ -924,3 +912,134 @@ A reasonable first PR is **Phases 1 + 2 + the §10.2 index-range tests against
 `Direct`**: it closes the capability gap for every scalar type and every matrix size,
 with the simplest possible implementation and a trivially correct oracle, and it gives
 Phase 4 a reference to test against.
+
+---
+
+## 17. What actually landed
+
+Written after the fact. The plan above is left as it was written so the two can be
+compared; this section is the correction where they differ.
+
+### 17.1 Phases 1–7, as designed
+
+Everything in §5–§11 is implemented and tested. The parts worth restating because
+they are the *contract* and not an implementation detail:
+
+* `SyevxSelect { Extremal, Index, Value }` in `include/blas/enums.hh`, with
+  `SyevxParams::{select, il, iu, vl, vu, abstol, order}` all defaulted so that an
+  existing caller's behaviour is byte-for-byte unchanged.
+* `syevx_resolve_range` is the single normalization point, shared by every solve
+  and every `buffer_size`, so the two can never disagree about what was asked for
+  or how big the workspace has to be.
+* `neigs` means **capacity**. For `Extremal` and `Index` capacity equals count;
+  for `Value` the count is data-dependent, per batch item, and comes back through
+  `m`. `m[b] > neigs` is the overflow signal, and the kept eigenvalues are the
+  **lowest `neigs` of the interval**.
+* **`W` past `m[b]` is untouched; `V` past `m[b]` is exactly zero.** The asymmetry
+  is deliberate and is documented at the declaration: the subset path's
+  back-transforms run over a uniform column count and need something inert there,
+  and since `Auto` routes between the two dense paths on `(n, batch)` alone, both
+  paths must agree. `W` has no such consumer, so its tail stays usable as a "was
+  this slot written" sentinel.
+
+§11.3's `extensions.hh` edits were already made during phase 5, ahead of the
+schedule here: the `@brief` no longer says "of a sparse matrix" (wrong since dense
+input started routing to `Direct`/`DirectSubset`) and neither `@param neigs` line
+still says "Number of eigenvalues to compute" (the single most misleading line
+once capacity semantics landed). Nothing was left to do in that file for phase 7.
+
+### 17.2 Where the implementation departed from the plan
+
+* **§5.3 rule 3 (`vl >= vu` throws) was kept, but rule 1 gained a clamp as well.**
+  The plan offered a host-side throw *or* a clamp in the resolver; both landed,
+  because they answer different questions. The throw tells the caller they made a
+  mistake; the clamp is what makes `max_count`'s "already clamped to `n`" claim
+  true for any future consumer that indexes `[il, il + max_count)` without a bound
+  of its own. An entirely out-of-range or inverted `Index` block resolves to the
+  canonical empty block (`il = 0`, `iu = -1`, `max_count = 0`) so that
+  `iu - il + 1 == max_count` holds for *every* resolved range.
+* **§4.4's overload-resolution argument was wrong about the mechanism, and the
+  code comment now says so.** The plan claimed the `m`-taking and `m`-less forms
+  are told apart by `Span<int32_t>` vs `size_t` in position 4. They are not:
+  `Span` has a non-explicit `Span(T&)` constructor, so `Span<int32_t>` *is*
+  implicitly constructible from an `int32_t` lvalue. What actually discriminates
+  is parameter **5** — `size_t neigs` against `Span<std::byte>` / `JobType`, which
+  are mutually non-convertible. The conclusion (the two forms are unambiguous)
+  survived; the reason did not.
+* **§5.3 rule 5 ("`Extremal` + a contradicting `order` throws") was NOT
+  implemented, deliberately.** `order` is simply *ignored* for `Extremal`:
+  `syevx_resolve_range` takes `reverse` from `find_largest` there and never looks
+  at `order`, and the declaration says so. Throwing would have been actively
+  harmful once the Python layer landed, because `SyevxOptions` sends every field
+  it has on every call — so an ordinary `bl.syevx(a, k)` would carry
+  `order = "ascending"` alongside the default `find_largest = True` and would have
+  started throwing for no reason. Ignoring is the behaviour that keeps "no
+  existing caller's output changes" true.
+* **§8.3's uniform-column back-transform was kept, and the optional `max_m`
+  refinement was not built.** It needs `max_m` on the host to shape the `ormqr`
+  call, i.e. one sync per call — the exact defect SYEVX_PLAN.md §7.1 catalogues in
+  LOBPCG. The plan said measure first; nothing has been measured, so nothing was
+  changed.
+* **§11.1's Python surface grew a wrapper the plan only sketched.** `bl.syevx`
+  returns `m` as an extra element *only* when a range was requested, so no
+  existing caller's unpacking changes; `bl.syevx_range` is the NumPy-shaped form
+  that returns per-item arrays already sliced to `min(m[b], capacity)`, plus
+  `counts`, `truncated` and `capacity`. A rectangular array cannot express a
+  ragged value-range answer without lying about the slots past `m[b]`, which is
+  why the wrapper returns lists.
+* **The `m`-less `syevx_direct` / `syevx_direct_subset` overloads were briefly
+  deleted and then restored.** They were edited in place rather than added
+  alongside, which broke source and ABI compatibility for two exported symbols
+  that nothing in-tree calls — which is exactly why it was invisible. Restored as
+  inline forwarders distinguished by arity, with a test
+  (`SolverEntryPointsKeepTheirMLessOverloads`) that fails if they go missing again.
+
+### 17.3 What is NOT verified
+
+* **§11.2 was never measured.** `BM_SYEVX_RangePosition` exists in
+  `benchmarks/syevx_benchmark.cc` and has not been run. So §9.2's claim — that
+  position within the spectrum cannot enter the cost of either dense path, and
+  therefore that the extremal crossover thresholds carry over to index and value
+  ranges unchanged — remains a *structural argument* (§8.5) plus a routing unit
+  test that pins the *decision*, not a timing. The failure mode if it is wrong is
+  a mis-routed interior request: a slower correct answer, never a wrong one.
+* **The Python layer is unverified by compilation.** `BATCHLAS_BUILD_PYTHON` is
+  `OFF` in the working build directory, so `_options.py`, `_api.py`,
+  `bindings/support.hh`, `bindings/ops_spectral.cc` and the new tests in
+  `python/tests/test_batchlas.py` have never been built or run. The Python files
+  are syntax-checked only.
+* **The benchmark is unverified by compilation.** `BATCHLAS_BUILD_BENCHMARKS` is
+  `OFF` in the same build directory.
+
+### 17.4 The commands that would close §17.3
+
+```sh
+# Python bindings + the new range tests
+cmake -S . -B build-py -DBATCHLAS_BUILD_PYTHON=ON
+cmake --build build-py -j 32
+python -m pytest python/tests/test_batchlas.py -k syevx
+
+# The one benchmark point. Quiet GPU, saturation only -- this repo's
+# measurement-hygiene rule makes an unsaturated comparison meaningless.
+cmake -S . -B build-bench -DBATCHLAS_BUILD_BENCHMARKS=ON
+cmake --build build-bench -j 32 --target syevx_benchmark
+./build-bench/benchmarks/syevx_benchmark --name BM_SYEVX_RangePosition
+```
+
+Read the benchmark output as: `Direct` (algo 1) is the control and cannot depend
+on position, so its spread across the three positions is the noise floor.
+`DirectSubset` (algo 2) is flat if its spread sits inside that band. If it does
+not, §9.2 is wrong and `syevx.cc`'s `kSyevxSubsetMinN` / `kSyevxSubsetMinWork`
+gate needs a range-aware term.
+
+### 17.5 Still open, and independent of this work
+
+* **Phase 8 (§12) stays deferred, on purpose.** Folded-spectrum LOBPCG and a
+  band-pass polynomial filter are real algorithms, not plumbing, and
+  `DirectSubset` answers interior ranges at no extra cost — which removes most of
+  the motivation. Do not build them speculatively.
+* **`stein`'s workspace (§13).** `5 * n * k * batch` scratch, ~2.8 GB at
+  `n = 1024`, `batch = 128`, float, when a defensive value-range caller passes
+  `neigs = n`. Re-indexing the five scratch arrays by work-item instead of by
+  `(b, j)` would cut it to `O(n * resident)` and would benefit every `stein`
+  caller including today's extremal path. Not a blocker; do not lose it.

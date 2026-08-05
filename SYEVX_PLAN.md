@@ -904,12 +904,21 @@ Dense eigensolver performance on GPUs:
 > *performance* of the partial eigensolve. The *capability* gap — LAPACK's
 > `range = 'I'` (`il..iu`) and `range = 'V'` (`vl..vu`), which §7.9/§9 Tier 1 named
 > but never exposed above the tridiagonal layer — is
-> [SYEVX_RANGE_PLAN.md](SYEVX_RANGE_PLAN.md). Status there: phases 1-6 implemented
-> (`SyevxSelect`, the resolver, `syevx_direct`, `stein` per-item counts,
-> `syevx_direct_subset`, routing, the public `m` output and the test matrix);
-> phase 7 (Python bindings, one benchmark point, this cross-reference) is
-> de-scoped except for this paragraph. The routing thresholds below are unchanged
-> by it: position within the spectrum cannot enter the cost of either dense path.
+> [SYEVX_RANGE_PLAN.md](SYEVX_RANGE_PLAN.md). Status there: **phases 1-7
+> implemented** — `SyevxSelect`, the resolver, `syevx_direct`, `stein` per-item
+> counts, `syevx_direct_subset`, routing, the public `m` output, the test matrix,
+> and the Python bindings (`bl.syevx` gains an `m` output for a range;
+> `bl.syevx_range` is the NumPy-shaped wrapper). Phase 8 — interior ranges for
+> the *iterative* paths, which need real new algorithms — is deferred by design.
+>
+> **The routing thresholds below are unchanged by it, and that is an argument
+> rather than a measurement.** Position within the spectrum cannot enter the cost
+> of either dense path: `Direct` runs a full `syev` and copies a block, and
+> `DirectSubset`'s `kd`, bisection step count and back-transform shapes are
+> functions of `n` and the capacity alone. `BM_SYEVX_RangePosition` in
+> `benchmarks/syevx_benchmark.cc` exists to check that and **has not been run**;
+> see SYEVX_RANGE_PLAN.md §17.3-17.4. If it turns out non-flat, the symptom is a
+> mis-routed interior request — a slower correct answer, never a wrong one.
 
 ### Tier 0 — done
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -1052,6 +1052,43 @@ def syevx(
     return_history: bool = False,
     preconditioner: ILUKPreconditioner | None = None,
 ):
+    """Selected eigenvalues (and optionally eigenvectors) of a Hermitian matrix.
+
+    Which part of the spectrum comes back is set by ``options.select``:
+
+    ``"extremal"`` (default)
+        ``neigs`` eigenpairs from the end picked by ``find_largest``. This is the
+        historical behaviour and the return shape is unchanged:
+        ``values`` or ``(values, vectors)``, plus ``history`` last when
+        ``return_history``.
+
+    ``"index"``
+        The block ``il..iu`` (inclusive, 0-based) of the ASCENDING spectrum.
+        ``neigs`` must equal ``iu - il + 1``.
+
+    ``"value"``
+        Every eigenvalue in the half-open interval ``(vl, vu]``. Here ``neigs``
+        is only a CAPACITY: the count is data-dependent and differs per batch
+        item.
+
+    For ``"index"`` and ``"value"`` an extra per-item count array ``m`` is
+    returned immediately after ``vectors`` (and before ``history``), i.e.
+    ``(values, m)``, ``(values, vectors, m)``, ``(values, vectors, m, history)``.
+    Two things about it are load-bearing:
+
+    * ``m[b]`` is the TRUE count, so ``m[b] > neigs`` means the answer for item
+      ``b`` was TRUNCATED to the ``neigs`` LOWEST eigenvalues of the interval.
+      That comparison is the only overflow signal there is.
+    * ``values[b, m[b]:]`` is UNDEFINED -- those slots were never written. (The
+      corresponding columns of ``vectors`` are zeroed, but do not rely on that
+      to detect the boundary; use ``m``.)
+
+    :func:`syevx_range` wraps all of that in a NumPy-shaped result and is what
+    you probably want for a value range.
+
+    Interior ranges are answered only by the dense paths, so a non-extremal
+    range on a sparse matrix raises.
+    """
     normalized = _normalize_options(options)
     if _is_sparse_object(a) or _is_sparse_batch(a):
         raw = _ext._syevx_sparse(
@@ -1076,6 +1113,181 @@ def syevx(
             preconditioner,
         )
     return _unwrap(raw)
+
+
+class SyevxRangeResult(NamedTuple):
+    """What :func:`syevx_range` returns.
+
+    ``values[b]`` and ``vectors[b]`` are already sliced to the ``min(m[b],
+    capacity)`` entries that were actually written, so there is no undefined
+    tail to reason about and no uniform-width padding to strip. That is the
+    whole point of this wrapper: a value range produces a genuinely ragged
+    answer, and a rectangular NumPy array cannot express it without lying about
+    the slots past ``m[b]``.
+
+    counts
+        ``m[b]``, the TRUE number of eigenvalues in the requested range for item
+        ``b``. It may exceed ``capacity``; see ``truncated``.
+    truncated
+        ``True`` iff some ``counts[b] > capacity``, i.e. the buffers were too
+        small and item ``b``'s answer keeps only the ``capacity`` LOWEST
+        eigenvalues of the range. Re-run with a larger ``neigs`` to get the
+        rest -- nothing is recoverable from this call.
+    capacity
+        The ``neigs`` that was passed down, echoed back so ``truncated`` can be
+        re-derived and so the caller can size a retry.
+    """
+
+    values: list[np.ndarray]
+    vectors: list[np.ndarray] | None
+    counts: np.ndarray
+    truncated: bool
+    capacity: int
+
+
+def syevx_range(
+    a: Any,
+    *,
+    select: str = "value",
+    neigs: int | None = None,
+    il: int = 0,
+    iu: int = -1,
+    vl: float = 0.0,
+    vu: float = 0.0,
+    # None, not a default value: these two are TUNING knobs rather than part of
+    # the range, so an `options` object that sets them must not be silently
+    # overridden by a default this signature happened to spell. The range-defining
+    # arguments (select, il, iu, vl, vu) do win over `options` -- they are what the
+    # caller came here to say.
+    abstol: float | None = None,
+    order: str | None = None,
+    compute_vectors: bool = True,
+    options: SyevxOptions | dict[str, Any] | None = None,
+    backend: str = "auto",
+    device: str | None = None,
+) -> SyevxRangeResult:
+    """NumPy-friendly LAPACK-style range selection on top of :func:`syevx`.
+
+    ``select="index"`` selects the block ``il..iu`` (inclusive, 0-based) of the
+    ascending spectrum; ``neigs`` is derived from it when omitted and must equal
+    ``iu - il + 1`` when given.
+
+    ``select="value"`` selects every eigenvalue in the half-open interval
+    ``(vl, vu]``. The count is data-dependent and differs per batch item, so
+    ``neigs`` here is a CAPACITY and is required -- there is no safe default
+    short of ``n``, and ``n`` is a worst case that costs
+    ``O(n^2 * batch)`` of eigenvector storage plus a much larger ``stein``
+    scratch (see SYEVX_RANGE_PLAN.md section 13). Pass an estimate you believe,
+    then check ``result.truncated``.
+
+    ``abstol`` and ``order`` default to ``None`` meaning "leave whatever
+    ``options`` says", so passing an ``SyevxOptions`` that sets them still works.
+    The range-defining arguments do override ``options``.
+
+    ``order`` is honoured within the selected block only; truncation of a value
+    range always keeps the LOWEST ``neigs`` of the interval regardless of it.
+
+    Returns a :class:`SyevxRangeResult` whose ``values``/``vectors`` are LISTS of
+    per-item arrays already sliced to the valid prefix.
+    """
+    normalized_select = str(select).lower()
+    if normalized_select == "extremal":
+        raise ValueError(
+            "syevx_range is for index and value ranges; use syevx(...) for the "
+            "extremal (top-k / bottom-k) case"
+        )
+    if normalized_select not in ("index", "value"):
+        raise ValueError(f"invalid select {select!r}: expected 'index' or 'value'")
+
+    il = int(il)
+    iu = int(iu)
+    if normalized_select == "index":
+        if iu < 0:
+            # Only the library knows n once `a` has been coerced, and -1 means
+            # n-1 there. Deriving neigs from it here would need n, so require
+            # the caller to be explicit rather than guess.
+            if neigs is None:
+                raise ValueError(
+                    "syevx_range(select='index') needs either an explicit iu or an "
+                    "explicit neigs; iu=-1 means n-1, which is not known here"
+                )
+        elif neigs is None:
+            neigs = iu - il + 1
+        if neigs is not None and iu >= 0 and int(neigs) != iu - il + 1:
+            raise ValueError(
+                f"syevx_range(select='index'): neigs ({neigs}) must equal "
+                f"iu - il + 1 ({iu - il + 1})"
+            )
+    elif neigs is None:
+        raise ValueError(
+            "syevx_range(select='value') needs an explicit neigs: it is the "
+            "capacity of the output buffers, and the number of eigenvalues in "
+            "(vl, vu] is not known until the matrix has been reduced"
+        )
+
+    capacity = int(neigs)
+    if capacity < 0:
+        raise ValueError("neigs must be non-negative")
+
+    merged = dict(_normalize_options(options))
+    merged.update(
+        {
+            "select": normalized_select,
+            "il": il,
+            "iu": iu,
+            "vl": float(vl),
+            "vu": float(vu),
+        }
+    )
+    if abstol is not None:
+        merged["abstol"] = float(abstol)
+    if order is not None:
+        merged["order"] = str(order).lower()
+
+    raw = syevx(
+        a,
+        capacity,
+        compute_vectors=compute_vectors,
+        options=merged,
+        backend=backend,
+        device=device,
+        return_history=False,
+    )
+
+    if compute_vectors:
+        values, vectors, counts = raw
+    else:
+        values, counts = raw
+        vectors = None
+
+    counts = np.asarray(counts).astype(np.int64, copy=False)
+    batch = int(counts.shape[0])
+
+    # batch == 1 comes back unbatched -- (neigs,) and (n, neigs) -- so restore the
+    # leading axis before slicing rather than special-casing every index below.
+    values = np.asarray(values)
+    if values.ndim == 1:
+        values = values.reshape(1, -1)
+    if vectors is not None:
+        vectors = np.asarray(vectors)
+        if vectors.ndim == 2:
+            vectors = vectors.reshape(1, *vectors.shape)
+
+    kept = np.minimum(counts, capacity)
+    values_list = [np.array(values[b, : kept[b]], copy=True) for b in range(batch)]
+    vectors_list = (
+        None
+        if vectors is None
+        else [np.array(vectors[b][:, : kept[b]], copy=True) for b in range(batch)]
+    )
+
+    return SyevxRangeResult(
+        values=values_list,
+        vectors=vectors_list,
+        counts=counts,
+        truncated=bool(np.any(counts > capacity)),
+        capacity=capacity,
+    )
 
 
 def lanczos(
