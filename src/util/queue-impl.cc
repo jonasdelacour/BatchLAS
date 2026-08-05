@@ -136,22 +136,57 @@ void Queue::wait_and_throw() const {impl_->wait_and_throw();}
 
 batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
     auto loan = impl_->arena_.acquire(*impl_, bytes);
-    return batchlas::WorkspaceLease(this, loan.ptr, loan.bytes, loan.block, loan.offset);
+    return batchlas::WorkspaceLease(this, loan.ptr, loan.bytes, loan.block, loan.offset, loan.seq);
 }
 
 size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
+
+bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
 
 namespace batchlas {
 
 Span<std::byte> WorkspaceLease::span() const { return Span<std::byte>(ptr_, size_); }
 WorkspaceLease::operator Span<std::byte>() const { return span(); }
 
-void WorkspaceLease::release() {
+void WorkspaceLease::release() noexcept { release_(/*diagnose_out_of_order=*/true); }
+
+void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     if (!queue_) return;
-    queue_->impl_->arena_.release(block_, offset_);
+
+    // Every release funnels through here, which is why the out-of-order-queue
+    // wait lives here rather than at the call sites: reclaiming hands these bytes
+    // to the next borrow, and on an out-of-order queue nothing stops the runtime
+    // from running that borrow's kernels alongside the ones still reading ours.
+    // An in-order queue orders them for us, so it must not pay for this.
+    //
+    // Conditioned on the release actually reclaiming. A return that lands under
+    // a live lease only flips a flag -- the bytes are not re-servable until the
+    // loans above come back, and the release that pops them drains then -- so
+    // paying a full device sync for it buys nothing. Before this was scoped,
+    // every convenience overload holding a scope-bound lease drained the device
+    // twice on a nested call.
+    //
+    // Note what this does not order against: work submitted to a *derived*
+    // in-order queue (gesvd, iluk build one from ctx and run the kernels there
+    // while the lease belongs to ctx). Waiting on ctx does not wait on that; the
+    // derived queue's destructor does. See the comment on release() in
+    // util/workspace.hh.
+    if (!queue_->in_order() && queue_->impl_->arena_.release_reclaims(seq_)) {
+        try {
+            queue_->wait();
+        } catch (...) {
+            // ~WorkspaceLease calls this, and move-assignment is noexcept, so
+            // throwing here would terminate. A failure the runtime surfaces at
+            // this wait is not this lease's failure and will be reported again
+            // at the caller's next wait/wait_and_throw on the same queue.
+        }
+    }
+
+    queue_->impl_->arena_.release(block_, offset_, seq_, diagnose_out_of_order);
     queue_ = nullptr;
     ptr_ = nullptr;
     size_ = 0;
+    seq_ = 0;
 }
 
 }  // namespace batchlas

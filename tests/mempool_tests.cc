@@ -926,6 +926,156 @@ TEST_F(BumpAllocatorTest, WorkspaceGrowthIsGeometric) {
     EXPECT_LT(allocations, 20u);
 }
 
+// Releasing a lease that is not the innermost one used to rewind the arena's
+// cursor over memory a live lease was still pointing at, so the next borrow
+// silently aliased it. The arena now refuses to rewind past a live lease: the
+// bytes stay reserved until the leases taken after them come back, which is
+// wasteful but never wrong.
+TEST_F(BumpAllocatorTest, WorkspaceOutOfOrderReleaseDoesNotAliasLiveLease) {
+#ifndef NDEBUG
+    // The fix asserts on exactly the call this test makes, so in a debug build
+    // the scenario cannot be run in-process. Death-testing it would fork a
+    // process with the SYCL runtime loaded, which is worse than losing the
+    // coverage in a configuration nobody runs the suite in by default.
+    GTEST_SKIP() << "arena asserts on out-of-order release when NDEBUG is not defined";
+#else
+    auto a = queue->workspace(2048);
+    auto b = queue->workspace(2048);
+    ASSERT_NE(a.data(), nullptr);
+    ASSERT_NE(b.data(), nullptr);
+    ASSERT_TRUE(a.data() + a.size() <= b.data() || b.data() + b.size() <= a.data());
+    std::memset(b.data(), 0x22, b.size());
+
+    // Out of order: b was taken after a and is still live.
+    a.release();
+
+    // Big enough that the buggy rewind-to-a would have run straight through b.
+    auto c = queue->workspace(4096);
+    ASSERT_NE(c.data(), nullptr);
+    EXPECT_TRUE(c.data() + c.size() <= b.data() || b.data() + b.size() <= c.data())
+        << "workspace handed out bytes that a live lease is still using";
+
+    std::memset(c.data(), 0x33, c.size());
+    for (size_t i = 0; i < b.size(); ++i) {
+        ASSERT_EQ(static_cast<unsigned char>(b.data()[i]), 0x22u) << "clobbered at " << i;
+    }
+#endif
+}
+
+// The arena otherwise holds its high-water mark until the queue dies, which is
+// the wrong trade for a queue that lives as long as the process.
+TEST_F(BumpAllocatorTest, WorkspaceTrimFreesBlocksOnlyWhenNothingIsLeased) {
+    // Its own queue: trim frees every block, so nothing else may be borrowing.
+    Queue q;
+    const size_t big = 1u << 20;
+
+    {
+        auto lease = q.workspace(big);
+        std::memset(lease.data(), 0x5A, lease.size());
+        const size_t held = q.workspace_capacity();
+        EXPECT_GE(held, big);
+
+        // Refused while the lease is live -- those blocks are what it points at.
+        // The bool is the only way a caller can tell "refused" from "freed
+        // nothing because there was nothing to free", so pin it.
+        EXPECT_FALSE(q.trim_workspace());
+        EXPECT_EQ(q.workspace_capacity(), held);
+        EXPECT_EQ(static_cast<unsigned char>(lease.data()[big - 1]), 0x5Au);
+    }
+
+    EXPECT_GE(q.workspace_capacity(), big);
+    EXPECT_TRUE(q.trim_workspace());
+    EXPECT_EQ(q.workspace_capacity(), 0u);
+
+    // Trimming hands the memory back; it does not retire the arena.
+    auto again = q.workspace(4096);
+    EXPECT_NE(again.data(), nullptr);
+    EXPECT_GT(q.workspace_capacity(), 0u);
+}
+
+// Reassigning a live lease is the one out-of-order release the caller cannot
+// avoid -- the right-hand borrow is taken before the left-hand one is released
+// -- so it must not abort, and it must not hand the old bytes to the next
+// borrow while the new lease still sits above them.
+//
+// This is also where the deferred-reclaim path gets its only coverage in a
+// build without NDEBUG: every other way of provoking it asserts on purpose, so
+// WorkspaceOutOfOrderReleaseDoesNotAliasLiveLease below is skipped in a debug
+// build. Reassignment is the exempt path, so it can be tested in both.
+TEST_F(BumpAllocatorTest, WorkspaceReassignedLeaseDefersReclaimAndDoesNotAlias) {
+    Queue q;  // its own queue so workspace_capacity() is only about this test
+    const size_t baseline = q.workspace_capacity();
+
+    {
+        auto ws = q.workspace(2048);
+        ASSERT_NE(ws.data(), nullptr);
+
+        // The old loan is now returned out of order, underneath the new one.
+        ws = q.workspace(4096);
+        ASSERT_NE(ws.data(), nullptr);
+        std::memset(ws.data(), 0x44, ws.size());
+
+        // The returned bytes must not be re-served while ws is live.
+        auto c = q.workspace(4096);
+        ASSERT_NE(c.data(), nullptr);
+        EXPECT_TRUE(c.data() + c.size() <= ws.data() || ws.data() + ws.size() <= c.data())
+            << "workspace re-served a deferred loan underneath a live lease";
+        std::memset(c.data(), 0x55, c.size());
+        for (size_t i = 0; i < ws.size(); ++i) {
+            ASSERT_EQ(static_cast<unsigned char>(ws.data()[i]), 0x44u) << "clobbered at " << i;
+        }
+        // c dies first, then ws: reverse order, which is what finally pops the
+        // deferred entry.
+    }
+
+    // Deferred, not leaked: once the loans above it came back the arena rewound
+    // past it, so a fresh borrow of the original size fits in what is already
+    // held rather than opening another block.
+    const size_t held = q.workspace_capacity();
+    {
+        auto again = q.workspace(2048);
+        ASSERT_NE(again.data(), nullptr);
+    }
+    EXPECT_EQ(q.workspace_capacity(), held);
+    EXPECT_GT(held, baseline);
+}
+
+// A no-pessimisation guard, not a regression test: this passes against the
+// pre-fix arena too, because a pure LIFO sequence rewound to the same place
+// under the old unconditional rewind. It is here so a future change that makes
+// the ordering check defer the *common* case is caught -- reverse-order release
+// must stay an immediate rewind, so a repeated nesting pattern keeps landing on
+// the same bytes and allocates once.
+TEST_F(BumpAllocatorTest, WorkspaceLifoReleaseStillReusesTheSameBytes) {
+    std::byte* outer_p = nullptr;
+    std::byte* inner_p = nullptr;
+    size_t settled = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        auto outer = queue->workspace(4096);
+        auto inner = queue->workspace(8192);
+        if (i == 0) {
+            outer_p = outer.data();
+            inner_p = inner.data();
+            settled = queue->workspace_capacity();
+            ASSERT_GT(settled, 0u);
+        }
+        EXPECT_EQ(outer.data(), outer_p);
+        EXPECT_EQ(inner.data(), inner_p);
+        EXPECT_EQ(queue->workspace_capacity(), settled);
+
+        // Explicit, in reverse order of acquisition -- the case the arena is
+        // built for, and the one scope exit would produce anyway.
+        inner.release();
+        outer.release();
+    }
+
+    // Everything is back, so the next borrow starts where the first one did.
+    auto reuse = queue->workspace(4096);
+    EXPECT_EQ(reuse.data(), outer_p);
+    EXPECT_EQ(queue->workspace_capacity(), settled);
+}
+
 // Stress test with many small allocations
 TEST_F(BumpAllocatorTest, ManySmallAllocations) {
     BumpAllocator pool(buffer.get(), buffer_size);

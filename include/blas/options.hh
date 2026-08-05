@@ -282,8 +282,16 @@ inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& op
 //
 // The lease is released when the call returns, so those bytes go to the next
 // borrower rather than being freed. On an in-order queue the next borrower's
-// work is ordered behind this call's; on an out-of-order queue it is not, so
-// there the caller must either wait or pass its own span. See util/workspace.hh.
+// work is ordered behind this call's, and the call returns as soon as the work
+// is enqueued.
+//
+// On an OUT-OF-ORDER queue nothing orders the two, so releasing the lease drains
+// the queue first -- these leases are innermost, which is the case that actually
+// hands bytes back. Concretely: on an out-of-order Queue every overload below
+// blocks until the device is idle before it returns, where the positional
+// (caller-supplied span) spelling does not. That is the price of not managing
+// the workspace yourself; pass your own span to keep the call asynchronous.
+// See util/workspace.hh.
 
 struct PotrfOptions {
     Uplo uplo = Uplo::Lower;

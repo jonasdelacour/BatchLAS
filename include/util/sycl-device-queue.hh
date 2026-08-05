@@ -184,6 +184,27 @@ struct Queue{
     // Total bytes the arena currently holds. Diagnostics and tests only.
     size_t workspace_capacity() const;
 
+    // Return the workspace arena's memory to the runtime, dropping the queue's
+    // high-water mark back to nothing.
+    //
+    // The arena otherwise only frees in ~Queue, so a single large call keeps its
+    // peak reserved for as long as the queue lives. That is the intended trade
+    // for a scoped queue -- it is what makes repeated calls stop allocating --
+    // but not for a long-lived one. The motivating case is the Python bindings,
+    // which hold one queue for the lifetime of the interpreter; nothing under
+    // python/batchlas/bindings/ exposes this yet, so today the only callers are
+    // C++ ones and the tests.
+    //
+    // Returns false and does nothing while any lease is outstanding, since the
+    // leases point into the blocks this would free -- the result is the only way
+    // to tell "freed the peak" from "refused", so it is [[nodiscard]] rather
+    // than advisory. Blocks until the queue is idle before freeing, for the same
+    // reason ~Queue does: enqueued-but-unfinished kernels may still be reading
+    // the blocks even though every lease has been handed back. That drain can
+    // therefore throw, surfacing an async device failure from earlier work; this
+    // is not a noexcept cleanup call.
+    [[nodiscard]] bool trim_workspace();
+
     std::unique_ptr<QueueImpl> impl_;
 
     Device device() const { return device_; }

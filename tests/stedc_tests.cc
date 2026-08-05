@@ -234,11 +234,11 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         auto eigvecs_rec = Matrix<float_type>::Identity(n, batch);
         auto eigvecs_lvl = Matrix<float_type>::Identity(n, batch);
 
-        UnifiedVector<std::byte> ws_rec(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
-        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size<B>(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
+        UnifiedVector<std::byte> ws_rec(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
+        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
-        stedc<B>(*this->ctx, a_rec, b_rec, eigvals_rec, ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec);
-        stedc<B>(*this->ctx, a_lvl, b_lvl, eigvals_lvl, ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl);
+        stedc(*this->ctx, a_rec.view(), b_rec.view(), eigvals_rec.view(), ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec.view());
+        stedc(*this->ctx, a_lvl.view(), b_lvl.view(), eigvals_lvl.view(), ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
         this->ctx->wait();
 
         const auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3)

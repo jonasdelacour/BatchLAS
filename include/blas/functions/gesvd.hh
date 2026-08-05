@@ -431,13 +431,19 @@ inline Event gesvd_dispatch(Queue& ctx,
         throw std::runtime_error("gesvd: insufficient workspace for chosen provider");
     }
 
+    // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
+    // builds a real sycl::queue on Device::default_device(). A by-value declaration here
+    // would pay that construction (and, on a multi-GPU box, touch device 0) on every gesvd
+    // call, including the common in-order path that never looks at it. It also cannot be
+    // sunk into the if-block -- run_q escapes to the calls below, so the queue has to
+    // outlive the branch.
     Queue* run_q = &ctx;
-    Queue in_order_q;
+    std::optional<Queue> in_order_q;
     if (!ctx.in_order()) {
-        in_order_q = Queue(ctx, true);
+        in_order_q.emplace(ctx, true);
         Event dep = ctx.get_event();
-        in_order_q.enqueue(dep);
-        run_q = &in_order_q;
+        in_order_q->enqueue(dep);
+        run_q = &*in_order_q;
     }
 
     if (chosen == Provider::Vendor) {

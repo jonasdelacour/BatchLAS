@@ -2,7 +2,9 @@
 #include <util/sycl-device-queue.hh>
 #include <sycl/sycl.hpp>
 
+#include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 
 #include <atomic>
@@ -10,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "util/kernel-trace.hh"
 #include <util/env.hh>
@@ -29,6 +32,12 @@ inline bool batchlas_queue_profiling_enabled() {
 // current block opens a new one rather than growing the old one. Released bytes
 // are rewound, not freed, so the steady state is one allocation per distinct
 // high-water mark rather than one per call.
+//
+// The rewind is what makes release order matter, so the order is enforced here
+// rather than left to the caller's discipline: see release(). Documenting the
+// invariant was not enough, because WorkspaceLease::release() exists precisely
+// so that a caller can hand bytes back early, and doing that to anything but the
+// innermost lease used to re-serve memory a live lease was still pointing at.
 struct WorkspaceArena {
     struct Block {
         std::byte* ptr = nullptr;
@@ -53,9 +62,49 @@ struct WorkspaceArena {
     struct Loan {
         std::byte* ptr;
         size_t bytes;
-        size_t block;   // rewind target
+        size_t block;        // rewind target
         size_t offset;
+        std::uint64_t seq;   // identifies this loan among the outstanding ones
     };
+
+    // One entry per outstanding loan, innermost last. It exists so release() can
+    // tell "this is the innermost loan" from "this loan has live leases stacked
+    // on top of it"; a sequence number alone cannot answer the second question
+    // once more than one loan has been returned out of order.
+    //
+    // std::vector rather than a fixed array because nesting depth is a property
+    // of the call graph, not of this file. It keeps its capacity between calls,
+    // so after the first few leases the LIFO path is a push_back/pop_back into a
+    // warm buffer and allocates nothing.
+    struct LiveLoan {
+        std::uint64_t seq;
+        size_t block;
+        size_t offset;
+        bool returned;  // released out of order; reclaimed once it reaches the top
+    };
+    std::vector<LiveLoan> live_;
+    std::uint64_t next_seq_ = 0;
+
+    // An entry that has been returned is only kept while something above it is
+    // still live -- release() pops it the moment it reaches the top -- so a
+    // non-empty stack always means at least one lease is genuinely outstanding.
+    bool has_outstanding_loans() const { return !live_.empty(); }
+
+    // Would releasing `seq` right now move the cursor, i.e. make bytes
+    // re-servable to the next borrow? WorkspaceLease::release asks before it
+    // releases, because that -- and only that -- is when an out-of-order queue
+    // has to be drained: bytes that merely change state from live to `returned`
+    // are not handed to anyone until the loans above them come back, and that
+    // later release does its own drain.
+    bool release_reclaims(std::uint64_t seq) const {
+        return !live_.empty() && live_.back().seq == seq;
+    }
+
+    Loan record_loan(std::byte* ptr, size_t bytes, size_t block, size_t offset) {
+        const std::uint64_t seq = ++next_seq_;  // 0 is left as "no loan"
+        live_.push_back(LiveLoan{seq, block, offset, false});
+        return Loan{ptr, bytes, block, offset, seq};
+    }
 
     Loan acquire(sycl::queue& q, size_t bytes) {
         const size_t align = alignment_for(q.get_device());
@@ -68,7 +117,7 @@ struct WorkspaceArena {
             if (off + want <= blocks_[cur_block_].size) {
                 const size_t start = off;
                 cur_offset_ = off + want;
-                return Loan{blocks_[cur_block_].ptr + start, bytes, cur_block_, start};
+                return record_loan(blocks_[cur_block_].ptr + start, bytes, cur_block_, start);
             }
             ++cur_block_;
             cur_offset_ = 0;
@@ -83,12 +132,70 @@ struct WorkspaceArena {
         blocks_.push_back(Block{p, block_size});
         cur_block_ = blocks_.size() - 1;
         cur_offset_ = want;
-        return Loan{p, bytes, cur_block_, size_t{0}};
+        return record_loan(p, bytes, cur_block_, size_t{0});
     }
 
-    void release(size_t block, size_t offset) {
-        cur_block_ = block;
-        cur_offset_ = offset;
+    // Hand back the bytes of the loan identified by `seq`.
+    //
+    // Only the innermost outstanding loan may move the cursor. Rewinding for any
+    // other one would re-serve memory that a lease above it still points at, and
+    // the next borrow would silently alias it -- a wrong answer rather than a
+    // diagnosable failure. An out-of-order return is therefore recorded in place
+    // and its bytes are reclaimed later, when the loans stacked on top of it come
+    // back. That leaves the arena holding more than it needs to for a while,
+    // which is a cost, not a correctness problem.
+    //
+    // `diagnose_out_of_order` is false for the one caller that knows it is about
+    // to return out of order and has no way not to: WorkspaceLease's
+    // move-assignment, where the right-hand lease is necessarily acquired before
+    // the left-hand one is released. Asserting there would abort perfectly legal
+    // code (`ws = q.workspace(n);`) in every non-NDEBUG build. Everywhere else
+    // the assert is the point -- an out-of-order return from a scope-bound lease
+    // means the scopes are not nested the way the caller thinks they are.
+    void release(size_t block, size_t offset, std::uint64_t seq, bool diagnose_out_of_order = true) {
+        if (!live_.empty() && live_.back().seq == seq) {
+            live_.pop_back();
+            cur_block_ = block;
+            cur_offset_ = offset;
+            // Whatever was returned out of order underneath is now innermost, so
+            // this is the point at which its bytes become reclaimable.
+            while (!live_.empty() && live_.back().returned) {
+                cur_block_ = live_.back().block;
+                cur_offset_ = live_.back().offset;
+                live_.pop_back();
+            }
+            return;
+        }
+
+        assert(!diagnose_out_of_order &&
+               "WorkspaceArena: workspace lease released out of order; its bytes stay "
+               "reserved until the leases taken after it are released");
+        (void)diagnose_out_of_order;  // unused once NDEBUG drops the assert
+        // Linear, but only on a path that has already been declared a mistake,
+        // and over a stack whose depth is the nesting depth of the call graph.
+        for (auto it = live_.rbegin(); it != live_.rend(); ++it) {
+            if (it->seq == seq) {
+                it->returned = true;
+                return;
+            }
+        }
+    }
+
+    // Return the arena's memory to the runtime. Refuses while any lease is
+    // outstanding -- the blocks are what those leases point at -- and reports
+    // that back rather than trimming partially.
+    //
+    // Drains the queue first, for the same reason ~QueueImpl does: a released
+    // lease only says the *caller* is finished with the bytes, not that the
+    // kernels it enqueued over them have finished reading them. Freeing shared
+    // USM out from under work still in flight is a use-after-free that usually
+    // only shows up under load.
+    bool trim(sycl::queue& q) {
+        if (has_outstanding_loans()) return false;
+        if (blocks_.empty()) return true;
+        q.wait();
+        free_all(q.get_context());
+        return true;
     }
 
     size_t capacity() const {
@@ -97,7 +204,9 @@ struct WorkspaceArena {
         return total;
     }
 
-    // Caller must have drained the queue first -- see ~QueueImpl.
+    // Caller must have drained the queue first -- see ~QueueImpl -- and must
+    // have checked has_outstanding_loans(); ~QueueImpl runs after every lease is
+    // gone by construction, trim() checks.
     void free_all(const sycl::context& ctx) {
         for (auto& b : blocks_) {
             try {
@@ -110,6 +219,9 @@ struct WorkspaceArena {
         blocks_.clear();
         cur_block_ = 0;
         cur_offset_ = 0;
+        live_.clear();
+        // next_seq_ deliberately keeps counting: a sequence number must never be
+        // handed out twice, or a stale lease could match a later loan's entry.
     }
 };
 
@@ -117,6 +229,17 @@ struct QueueImpl : public sycl::queue{
     using sycl::queue::queue;
 
     ~QueueImpl() {
+        // A live lease at this point is a dangling one: WorkspaceLease holds a
+        // Queue*, so releasing it after the arena is gone would hand a stale
+        // block/offset to whatever arena the Queue has next. Scope-bound leases
+        // make this impossible for ~Queue, but Queue's move-assignment also runs
+        // ~QueueImpl (it replaces impl_), and nothing about that spelling forces
+        // the leases to be gone first. Assert rather than defend: a Queue moved
+        // out from under a live lease is a bug in the caller, and silently
+        // draining and freeing here would only hide it.
+        assert(!arena_.has_outstanding_loans() &&
+               "QueueImpl destroyed (or its Queue move-assigned) while a workspace lease is live");
+
         // The arena's blocks may still be referenced by enqueued-but-unfinished
         // kernels. Freeing shared USM out from under them is a use-after-free
         // that usually only shows up under load, so drain first.
