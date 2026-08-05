@@ -11,6 +11,7 @@
 #include "steqr_internal.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
+#include "stedc_levels_plan.hh"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -588,40 +589,10 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 // stay inside the padded subspace, so the answer is the leading n x n block.
 // Padding is nil whenever 2^L divides n, which covers the power-of-two sizes
 // the library is normally driven with.
+//
+// `StedcLevelPlan` / `plan_stedc_levels` live in stedc_levels_plan.hh so the
+// tree shape can be asserted on without a device.
 // ---------------------------------------------------------------------------
-struct StedcLevelPlan {
-    int64_t leaf = 0;      // leaf sub-problem size
-    int32_t levels = 0;    // merge levels; the tree has 2^levels leaves
-    int64_t padded_n = 0;  // leaf << levels
-};
-
-inline StedcLevelPlan plan_stedc_levels(int64_t n, int64_t threshold) {
-    StedcLevelPlan plan{n, 0, n};
-    if (n <= threshold || threshold <= 0) {
-        return plan;
-    }
-    // Leaves must stay in the same ballpark as the tuned threshold; within that
-    // band prefer the tree that pads least, since padding costs (N/n)^3 in the
-    // top-level GEMM.
-    const int64_t lo = std::max<int64_t>(2, threshold / 2);
-    const int64_t hi = std::max<int64_t>(lo, threshold * 2);
-    double best_score = std::numeric_limits<double>::max();
-    for (int32_t L = 1; L <= 24; ++L) {
-        const int64_t k = int64_t(1) << L;
-        if (k > n) break;
-        const int64_t leaf = (n + k - 1) / k;
-        if (leaf > hi) continue;
-        if (leaf < lo) break;
-        const int64_t N = leaf * k;
-        const double score = static_cast<double>(N - n) / static_cast<double>(n)
-                           + 1e-3 * std::abs(static_cast<double>(leaf - threshold)) / static_cast<double>(threshold);
-        if (score < best_score) {
-            best_score = score;
-            plan = StedcLevelPlan{leaf, L, N};
-        }
-    }
-    return plan;
-}
 
 // Total scratch the flattened driver needs, given a plan. `own_top` tells it
 // whether it has to allocate the top-level N x N eigenvector buffer itself

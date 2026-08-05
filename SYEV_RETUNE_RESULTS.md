@@ -476,3 +476,100 @@ Upper is **not** implemented natively in `sytrd_blocked` / `sytrd_sy2sb` / `sytr
 remain Lower-only and the mirror converts the problem instead. A native implementation could
 recover at most the 0.3–2.0% the mirror costs, at the price of an Upper variant of every
 reduction kernel. Not worth it on these numbers.
+
+---
+
+# Part 5 — the PR #55 regression: found and fixed (2026-08-05)
+
+Same provenance rules. RTX 4090 **device 1 only**, float, eigenvectors, µs/matrix,
+single measuring process, saturated batches from §11. Baseline column is §11/§12
+(pre-#55); "HEAD" is merge commit `0bb92fb`.
+
+## 13. What regressed
+
+PR #55 (`0bb92fb`, the STEDC level-driver rework) cost `syev` **1.05×–3.25×** at every
+size measured. The **vendor column is the control** and reproduced §11 to three digits at
+all eight sizes (2.02 / 7.85 / 37.1 / 215.1 / 504.1 / 1006.9 / 1414.6 / 2704.7), so the
+machine, clocks and harness were identical to the §11 session and the deltas are code.
+
+| n | batch | baseline | HEAD | ratio | **fixed** | fixed vs baseline |
+|---|---|---|---|---|---|---|
+| 64 | 16384 | 1.64 | 2.25 | 1.37× | **1.70** | 0.96× |
+| 128 | 4069 | 6.65 | 8.76 | 1.32× | **6.58** | 1.01× |
+| 256 | 2034 | 36.92 | 45.64 | 1.24× | **35.84** | 1.03× |
+| 320 | 1302 | 74.53 | 242.43 | **3.25×** | **70.96** | 1.05× |
+| 512 | 508 | 380.02 | 411.19 | 1.08× | **372.14** | 1.02× |
+| 640 | 651 | 727.48 | 1095.9 | **1.51×** | **714.99** | 1.02× |
+| 768 | 452 | 1184.11 | 1258.9 | 1.06× | **1162.3** | 1.02× |
+| 1024 | 254 | 2441.93 | 2559.1 | 1.05× | **2394.7** | 1.02× |
+
+Two independent defects, each isolated by a runtime A/B needing no rebuild.
+
+## 14. Defect A — the merge-variant flip was backwards
+
+`3072ea6` moved `STEDC_MERGE_VARIANT_*` from FusedCta (2) to Fused (1), on two claims.
+Both were re-tested at `0bb92fb` and **neither reproduces**:
+
+- *"FusedCta is numerically wrong."* With variant 2 forced, all 16 CUDA `stedc_tests`
+  pass in both precisions, plus `syev_tests` 8/8, `syev_blocked_tests` 44/44,
+  `syev_two_stage_tests` 20/20. The only red test on this box is
+  `StedcTest/1.BatchedMatrices` = double + NETLIB, i.e. the host OpenBLAS `dgemm`.
+  The NaN was a symptom of the deadlock `4bde59a` fixed, not a separate defect.
+- *"FusedCta is 2–12% slower."* The sign is inverted. FusedCta is **11–35% faster** on
+  `stedc` across n = 64..640, on **both** drivers:
+
+| n | Levels+Fused | Levels+FusedCta | Recursive+Fused | Recursive+FusedCta |
+|---|---|---|---|---|
+| 64 | 0.672 | **0.499** | 0.640 | **0.500** |
+| 128 | 2.236 | **1.752** | 2.249 | **1.736** |
+| 256 | 7.387 | **6.257** | 7.620 | **6.233** |
+| 512 | 24.744 | **22.228** | 30.897 | **26.505** |
+
+This alone is the **entire** regression at power-of-two n: forcing variant 2 restored the
+baseline exactly at n = 64/128/256/512/768/1024.
+
+**Caveat, load-bearing.** `FusedCtaConditionedHeavyDeflation` only asserts finite-and-sorted,
+never accuracy, and the test file was rewritten in `47a58c8` with its batch halved in
+`c80fd86`. "The tests pass" is therefore weaker evidence than it looks. Strengthen that
+test before trusting variant 2 on hardware this has not been measured on.
+
+## 15. Defect B — the level planner picked a leaf off the STEQR cliff
+
+`plan_stedc_levels` searched leaves in `[threshold/2, threshold*2]` and tie-broke toward
+the leaf nearest the threshold. At **n = 320 and 640** that chose **leaf = 40** over
+leaf = 20 (both pad zero; 40 is nearer 32). But `steqr` only takes the fast `steqr_cta`
+path for `n <= device sub-group width`; `steqr_cta.cc:168` throws above it, falling back
+to the far slower `steqr_wg`. Measured (batch 10416, eigenvectors, µs/matrix):
+
+| n | 16 | 20 | 24 | 32 | **36** | 40 | 48 | 64 | 80 |
+|---|---|---|---|---|---|---|---|---|---|
+| steqr | 0.252 | 0.273 | 0.292 | 0.262 | **3.761** | 4.870 | 16.98 | 36.78 | 54.41 |
+
+A 12.5% width increase costs 14×. That is a code-path cliff, not scaling. Confirmed by
+sweeping the threshold at n = 320 (level driver, µs/matrix), which moves the chosen leaf:
+
+| threshold | 16 | 20 | 24 | **32** | 40 | 48 | 64 |
+|---|---|---|---|---|---|---|---|
+| chosen leaf | 20 | 20 | 20 | **40** | 40 | 40 | 80 |
+| stedc | 13.1 | 12.5 | 12.7 | **168.4** | 168.4 | 168.5 | 649.7 |
+
+**`STEDC_RECURSION_THRESHOLD = 32` is not an arbitrary tuning constant — it is the
+sub-group width**, and keeping leaves at or below it is an invariant. The recursive driver
+satisfied it structurally (it bisects, so leaf ≤ threshold always); the level planner had
+to state it, and did not. Fix: hard-cap the leaf at the threshold (`hi = threshold`).
+
+After the cap the level driver is the faster one at these sizes, as it was designed to be
+— n = 320: 10.8 (Levels) vs 11.1 (Recursive); n = 640: 35.6 vs 36.2.
+
+## 16. Why it escaped review
+
+`stedc_benchmark` registered only n ∈ {64, 128, 256}, and `47a58c8` measured n = 64..512 —
+**all powers of two**, where the planner lands on leaf = 32 exactly and the cliff is
+structurally unsamplable. The defect was not missed by a careless sweep; it was invisible
+to the sweep that existed. n = 320 and 640 are now in the registered sweep, and the plan
+shape is asserted directly in `stedc_tests` (`StedcLevelPlan.*`, host-only, 0 ms) because
+a bad leaf yields perfectly correct eigenvalues and no numerical test can catch it.
+
+**This is the fourth table in this repo invalidated by an unsampled regime** (§7, §9.1,
+§11.4, and now this). The pattern is consistent enough to state as a rule: *a benchmark
+whose parameter grid is all one shape measures that shape, not the code.*
