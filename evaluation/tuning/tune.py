@@ -468,6 +468,16 @@ def main() -> int:
     parser.add_argument("--skip-missing", action="store_true", help="Skip benches whose executables are missing")
     parser.add_argument("--skip-failed", action="store_true", help="Skip benches that fail to run (e.g., unsupported backend)")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Run one cheap invocation per bench to check the executable exists and the "
+            "metric column parses, then exit without tuning. Do this before a real "
+            "sweep: benches run sequentially, so a wrong metric name in the last one "
+            "otherwise surfaces after every earlier bench has already been measured."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -477,6 +487,46 @@ def main() -> int:
     out_path = args.out or _default_output_path(build_dir)
 
     spaces = _load_spaces(space_path)
+
+    if args.validate:
+        problems: List[str] = []
+        for space in spaces:
+            exe = default_benchmark_path(build_dir, space.exe)
+            if not exe.exists() or not os.access(exe, os.X_OK):
+                problems.append(f"{space.bench}: missing executable {exe}")
+                continue
+            case = space.cases[0]
+            fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
+            # pre_tune params are resolved before the main sweep and so are
+            # absent from any case's `tune` grid; take their first candidate.
+            pre: Dict[str, int] = {}
+            for phase in space.pre_tune:
+                for key, values in (phase.get("params") or {}).items():
+                    if isinstance(values, list) and values:
+                        pre[str(key)] = int(values[0])
+            params = {**pre, **_representative_case_params(case)}
+            try:
+                _run_one_case(
+                    exe=exe,
+                    backend=args.backend,
+                    dtype=args.dtype,
+                    metric=space.metric,
+                    warmup=0,
+                    min_time_ms=0.0,
+                    min_iters=1,
+                    max_iters=1,
+                    args=_args_from_spec(space.arg_spec, fixed=fixed, params=params),
+                    env_overrides=_env_from_spec(space.env, fixed=fixed, params=params),
+                )
+            except Exception as exc:  # noqa: BLE001 - report every bench, not just the first
+                problems.append(f"{space.bench}: {exc}")
+            else:
+                print(f"[ok] {space.bench} via {exe.name} (metric {space.metric!r})")
+
+        for problem in problems:
+            print(f"[FAIL] {problem}")
+        print(f"\n{len(spaces) - len(problems)}/{len(spaces)} benches OK")
+        return 1 if problems else 0
 
     results: List[Dict[str, Any]] = []
     for space in spaces:

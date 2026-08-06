@@ -114,7 +114,7 @@
     {
       "bench": "latrd_lower_panel",
       "exe": "latrd_lower_panel_benchmark",
-      "metric": "Time (µs) / matrix",
+      "metric": "T(µs)/matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "ib", "j0", "fuse"],
       "env": { "wg": "BATCHLAS_TUNE_LATRD_WG_HINT" },
