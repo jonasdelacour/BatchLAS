@@ -102,6 +102,74 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
     }
 }
 
+// MatchesGemmReference above pins one shape, n = 96, which reaches exactly one
+// of the narrow kernel's three tile widths. The other two -- and the wider
+// range ortho actually asks for, where k is the block size and n is tens of
+// vectors -- went unexercised, so the band-split bug that broke n = 96 could
+// equally have hidden at n = 32 or 64 with nothing to catch it. Each n here
+// selects a different instantiation: 32 and 24 the 32-wide tile, 64 and 48 the
+// 64-wide one, 128 and 96 the 128-wide one, with the odd sizes checking the
+// masking of a tile the matrix does not fill.
+TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+
+    const int k = 200;   // deliberately not a multiple of the k chunk
+    const int batch = 3;
+    const T alpha = T(0.9);
+    const T beta = T(-0.35);
+    const real_t tol = test_utils::tolerance<T>() * real_t(12 * k);
+
+    for (int n : {24, 32, 48, 64, 96, 128}) {
+        for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
+            for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+                const int a_rows = transA == Transpose::NoTrans ? n : k;
+                const int a_cols = transA == Transpose::NoTrans ? k : n;
+
+                Matrix<T, MatrixFormat::Dense> A =
+                    Matrix<T, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch);
+                Matrix<T, MatrixFormat::Dense> C0 =
+                    Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
+                Matrix<T, MatrixFormat::Dense> C(n, n, batch);
+                Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
+
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
+
+                syrk(*(this->ctx), A.view(), C.view(),
+                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+
+                gemm(*(this->ctx), A.view(), A.view(), C_ref.view(),
+                     {.alpha = alpha, .beta = beta, .transA = transA,
+                      .transB = transA == Transpose::NoTrans ? Transpose::Trans
+                                                            : Transpose::NoTrans}).wait();
+
+                // Comparing the untouched half would only compare C0 with
+                // itself, so both sides are mirrored from the half syrk was
+                // asked for -- that way every element of the answer is checked
+                // against the reference, including the ones a wrongly indexed
+                // thread tile would have left at their input value.
+                C.view().symmetrize(*(this->ctx), uplo).wait();
+                C_ref.view().symmetrize(*(this->ctx), uplo).wait();
+
+                for (int b = 0; b < batch; ++b) {
+                    for (int j = 0; j < n; ++j) {
+                        for (int i = 0; i < n; ++i) {
+                            ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
+                                << "n=" << n
+                                << ", trans=" << static_cast<int>(transA)
+                                << ", uplo=" << static_cast<int>(uplo)
+                                << ", batch=" << b
+                                << ", row=" << i
+                                << ", col=" << j;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
