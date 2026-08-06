@@ -75,6 +75,22 @@ inline void TWSizes(minibench::Benchmark* b) {
 }
 inline void TWSizesNetlib(minibench::Benchmark* b) { TWSizes(b); }
 
+// ------------------------------------------------------------- Square sizes
+// (m, nC, batch), m the triangular side. The TW shapes above are the regime
+// where trmm cannot win and the roofline says so: m is in the tens, so B and C
+// dominate the traffic, the GEMM being replaced is already bandwidth bound at
+// ~800 GB/s, and halving its arithmetic buys nothing it can spend. Halving the
+// arithmetic only pays once the GEMM is compute bound, which needs m past
+// ~160 -- intensity is m/4 flop per byte against a ridge near 40. These are
+// those shapes, at batches that still saturate.
+inline void SquareSizes(minibench::Benchmark* b) {
+    b->Args({256, 256, 512});
+    b->Args({512, 512, 128});
+    b->Args({512, 1024, 64});
+    b->Args({1024, 1024, 32});
+}
+inline void SquareSizesNetlib(minibench::Benchmark* b) { SquareSizes(b); }
+
 template <typename T>
 constexpr Transpose conj_trans_for() {
     return sycl::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
@@ -219,11 +235,15 @@ void configure_tw(minibench::State& state) {
                          * static_cast<double>(nC);
 
     if constexpr (UseTrmm) {
-        // trmm accumulates into C with an implicit beta = 1, so W2 is charged a
-        // zeroing the gemm spelling gets for free from beta = 0. Left side,
-        // upper triangle, non-unit diagonal: larft's T exactly.
+        // Left side, upper triangle, non-unit diagonal: larft's T exactly.
+        //
+        // The CUDA and ROCm paths overwrite C (beta = 0); only the MKL fallback
+        // in src/extensions accumulates into it. PR #61 charged trmm a zeroing
+        // pass here to be safe against that, which on a GPU is pure overhead --
+        // at ib = 32, nC = 256, batch 2048 the fill alone is ~70 us of a 189 us
+        // measurement, and it inflated every trmm row in that report. The GPU
+        // spelling is what these shapes are here to measure, so it is gone.
         auto kernel = [q, Tm, W1, W2]() mutable {
-            W2->view().fill(*q, T(0));
             trmm<B, T>(*q, Tm->view(), W1->view(), W2->view(), T(1),
                        Side::Left, Uplo::Upper, conj_trans_for<T>(), Diag::NonUnit);
         };
@@ -242,6 +262,12 @@ static void BM_TW_gemm(minibench::State& state) { configure_tw<T, B, false>(stat
 template <typename T, Backend B>
 static void BM_TW_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
 
+// Same operation, same code, shapes chosen from the other side of the ridge.
+template <typename T, Backend B>
+static void BM_Square_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
+template <typename T, Backend B>
+static void BM_Square_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
+
 }  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_Gram_gemm, GramSizes)
@@ -253,5 +279,8 @@ BATCHLAS_REGISTER_BENCHMARK(BM_Trailing_syr2k_sym, TrailingSizes)
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_TW_gemm, TWSizes)
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_TW_trmm, TWSizes)
+
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_Square_gemm, SquareSizes)
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_Square_trmm, SquareSizes)
 
 MINI_BENCHMARK_MAIN();
