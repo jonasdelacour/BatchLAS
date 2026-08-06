@@ -7,6 +7,7 @@
 #include <sycl/sycl.hpp>
 #include <internal/ormqr_blocked.hh>
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 #include <blas/functions.hh>
@@ -307,8 +308,12 @@ namespace batchlas {
             throw std::runtime_error("HEMM: incompatible matrix dimensions");
         }
 
+        // Unlike cublas?trmm, cublas?hemm is quick enough that a per-batch loop
+        // over it beats the expansion on a launch-bound call, so the shape has
+        // to be worth the extra kernel before the scratch is worth allocating.
         const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
-        if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes)) {
+        if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes) &&
+            detail::expansion_preferred(std::max({m, n, k}), A.batch_size())) {
             const int ld = detail::expanded_ld<T>(k);
 
             auto ws = ctx.workspace(expansion_bytes);

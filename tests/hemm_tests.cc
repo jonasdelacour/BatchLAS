@@ -64,9 +64,10 @@ TYPED_TEST_SUITE(HemmTest, HemmTestTypes);
 // The shapes are ragged on purpose. The CUDA backend materialises the triangle
 // into packed scratch a 32x32 tile at a time, so what matters is the sizes
 // where that tiling does not divide evenly and where the scratch's leading
-// dimension is not the matrix width. The sweep runs twice there: capping the
-// scratch budget at zero bytes sends it down the per-batch cublas?hemm route it
-// otherwise only reaches when the expansion will not fit on the device.
+// dimension is not the matrix width. On CUDA the sweep then runs once per route
+// with the choice pinned, because the two routes are separate implementations
+// and which one a given shape picks is a tuning decision that is free to
+// change; pinning keeps both covered whatever the heuristic later decides.
 TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -165,8 +166,14 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
     sweep("default");
 
     if constexpr (TestFixture::BackendType == Backend::CUDA) {
-        ScopedEnvVar no_scratch("BATCHLAS_EXPAND_MAX_BYTES", "0");
-        sweep("no-scratch");
+        {
+            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+            sweep("expansion");
+        }
+        {
+            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            sweep("vendor-loop");
+        }
     }
 }
 

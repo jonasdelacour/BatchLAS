@@ -18,15 +18,6 @@ namespace batchlas::backend {
 
 namespace {
 
-// Where the expansion route starts beating the vendor's per-batch cublasSsymm
-// loop. Measured on sm_89 in float over square shapes, n in 16..2048 and batch
-// in 1..512: the expansion wins by 1.2x to 72x everywhere except batch <= 2
-// with n <= 128, where the call is launch-bound and the two extra launches cost
-// more than the loop they replace -- there it loses by up to 1.9x. At n = 256
-// even batch 1 goes the other way (1.26x).
-constexpr int kSymmExpandMinBatch = 4;
-constexpr int kSymmExpandMinDim = 256;
-
 enum class SymmVariantRequest {
     Vendor,
     CuBLASDx,
@@ -75,7 +66,7 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
 
     // Skewed shapes are excluded above because the expansion always costs a
     // full k x k pass, which stops paying for itself once k dwarfs m and n.
-    return A.batch_size() >= kSymmExpandMinBatch || max_dim >= kSymmExpandMinDim;
+    return detail::expansion_preferred(max_dim, A.batch_size());
 }
 
 Event symm_cublasdx_fallback_gemm(Queue& ctx,
