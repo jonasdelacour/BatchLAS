@@ -241,18 +241,51 @@ Where its time does go, from the same trace (n=512, batch 1024, nb=16):
 
 **The conclusion for anyone chasing syev is that level-3 substitution is not the
 lever.** Nearly two thirds of it is one band-to-tridiagonal Householder kernel,
-and no triangular BLAS-3 op appears anywhere in that route. The ~9% in
-`ormqr_blocked.larft` is the one place trmm could be wired -- see below -- and
-even a perfect result there is bounded by that 9%.
+and no triangular BLAS-3 op appears anywhere in that route.
+
+## trmm in ormqr_blocked's WY update, and what it is worth
+
+`W2 = op(T) W1` with `T` upper triangular from `larft` is now a trmm. Both syev
+paths call `ormqr_blocked` with `Side::Left`, which is the side the tile kernel
+serves, and every block size syev uses is inside the `ib <= 64` window where it
+beats the GEMM. Guarded to CUDA float, because anything else takes
+`trmm_vendor_impl` -- which expands the triangle into scratch and then runs the
+very GEMM being replaced. `BATCHLAS_ORMQR_WY=gemm` pins the old spelling.
+
+Then measured rather than assumed, and the honest answer is **it barely moves
+syev** (float, batch as shown, eigenvectors, stddev 0.01-0.55 ms):
+
+| n | batch | nb | gemm | trmm | |
+|---|---|---|---|---|---|
+| 64 | 2048 | 16 | 3.657 | **3.528** | 1.036x |
+| 64 | 4096 | 16 | 7.292 | **7.092** | 1.028x |
+| 128 | 2048 | 16 | 14.07 | **13.78** | 1.021x |
+| 128 | 4096 | 16 | 27.72 | **27.36** | 1.013x |
+| 256 | 1024 | 16 | 33.90 | **33.50** | 1.012x |
+| 256 | 1024 | 32 | 37.41 | **36.98** | 1.012x |
+| 512 | 1024 | 16 | 366.6 | **365.2** | 1.004x |
+| 512 | 1024 | 32 | 367.2 | **366.0** | 1.003x |
+
+Consistent in direction across all eight cells and several times the stddev, so
+it is a real effect and not noise -- but it is 3.6% at best and 0.3% at n = 512.
+
+The trace says exactly why, and said so before the measurement: with the kernel
+wired, `trmm_cuda_custom.triangular_tiles` is **1.0%** of traced syev time at
+n = 512 (8.58 ms of 868, over 240 calls). A substitution that makes that op
+~10% faster cannot return more than 0.1% there, and that is what it returns.
+The earlier ~9% figure was `ormqr_blocked.larft`, which is a different kernel
+and not the one trmm replaces.
+
+At n = 512 with eigenvectors the time is `backtransform_q2` 46.4%, `sb2st_hh`
+25.5%, `stedc_eigvecs` 10.6%. Those three are 82% and none is a level-3
+triangular op.
 
 ## What is not done
 
-- **`trmm` is still not wired into `ormqr_blocked`/`ormbr`.** The shape is right
-  (`m = ib <= 64` is where the tile kernel wins, 1.04x-1.12x) and syev spends
-  ~9% there, so the bound on the whole substitution is about 1%. Worth doing,
-  not worth doing carelessly.
 - `trmm`'s tile kernel is `Side::Left` only. `ormqr`/`ormbr` use both sides;
-  the right-side branch still takes the expansion.
+  the right-side branch still takes the expansion. syev only uses Left, so this
+  costs syev nothing.
+- `ormbr` has the same WY update and is not wired; it feeds gesvd, not syev.
 - The two-stage path's `sy2sb` trailing update has no syr2k, and n >= 512 syev
   goes through it. That is a separate, larger piece of work than this one.
 - The tile kernel runs at ~70% of cuBLAS's per-flop rate. Closing that would

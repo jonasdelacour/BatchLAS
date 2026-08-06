@@ -20,6 +20,33 @@ namespace batchlas {
 
 namespace {
 
+// The WY block factor W2 = op(T) W1 has T upper triangular -- larft builds it
+// that way and zeroes the half below, which is why the GEMM spelling below is
+// correct in the first place. A trmm expresses it without multiplying through
+// those zeros.
+//
+// BATCHLAS_ORMQR_WY=gemm pins the old spelling so the substitution stays
+// measurable from one binary.
+inline bool use_trmm_for_wy() {
+    static const bool result = []() {
+        const char* v = std::getenv("BATCHLAS_ORMQR_WY");
+        return !(v && std::string(v) == "gemm");
+    }();
+    return result;
+}
+
+// Where the tile kernel is ahead of the GEMM it replaces. Float and CUDA
+// because that is the only combination with a batched triangular kernel --
+// everything else would take trmm_vendor_impl, which expands the triangle into
+// a scratch buffer and then runs the very GEMM being replaced, strictly worse.
+// ib <= 64 because above it the tile kernel measured 0.83x-0.97x against the
+// GEMM (see experiments/TRMM_SYRK_BATCHED_KERNELS.md); every block size syev
+// uses is inside that anyway.
+template <Backend B, typename T>
+inline bool wy_trmm_applicable(int ib) {
+    return B == Backend::CUDA && std::is_same_v<T, float> && ib <= 64 && use_trmm_for_wy();
+}
+
 // Returns true when BATCHLAS_ORMQR_IMPL=device, false otherwise (legacy is the default).
 // Evaluated once and cached for the lifetime of the process.
 inline bool use_device_ormqr() {
@@ -439,7 +466,19 @@ Event ormqr_blocked_impl(Queue& ctx,
             gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+            // W2 = op(T) W1. trmm overwrites C on the routes that have a
+            // batched kernel, matching this GEMM's beta = 0, so the two are
+            // interchangeable here.
+            if constexpr (B == Backend::CUDA && std::is_same_v<T, float>) {
+                if (wy_trmm_applicable<B, T>(ib)) {
+                    trmm<B, T>(q, Tblk, W1, W2, T(1),
+                               Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
+                } else {
+                    gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+                }
+            } else {
+                gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+            }
 
             gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
