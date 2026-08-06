@@ -41,23 +41,78 @@ The output JSON contains:
 
 ## Generating compile-time tuning constants
 
-BatchLAS now provides a generated header at build time:
+**The header the library actually compiles is `include/batchlas/tuning_params.hh`,
+not the one under `build/include/`.** Both files exist and declare the same
+symbols, and the compile line lists `-I<repo>/include` *before*
+`-I<repo>/build/include`, so the checked-in header always shadows the generated
+one. Verify with:
 
-- `build/include/batchlas/tuning_params.hh`
+```
+g++ -std=c++17 -fsyntax-only -I include -I build/include -x c++ - <<'EOF'
+#include <batchlas/tuning_params.hh>
+static_assert(batchlas::tuning::ORMQR_BLOCK_SIZE_MEDIUM == 16);
+EOF
+```
 
-By default, this header is generated with safe fallback values at CMake configure time.
+Consequences, both confirmed on this tree:
 
-To generate benchmark-derived constants from a profile:
+- `cmake --build build --target batchlas_tuning_header` writes
+  `build/include/batchlas/tuning_params.hh` and therefore **changes nothing**.
+  It is a no-op for the library.
+- CMake's `configure_file` rewrites that same path from hardcoded defaults on
+  every reconfigure, so even its contents are transient.
 
-- One-shot from an existing profile:
+To actually move the constants, regenerate and port the values into the
+checked-in header:
 
-  `python3 evaluation/tuning/generate_tuning_header.py --profile build/tuning/profile.json --out build/include/batchlas/tuning_params.hh`
+```
+python3 evaluation/tuning/generate_tuning_header.py \
+    --profile build/tuning/profile.json \
+    --out /tmp/tuning_params.hh
+diff include/batchlas/tuning_params.hh /tmp/tuning_params.hh
+```
 
-- Through CMake target (when `BATCHLAS_ENABLE_TUNING=ON`):
+Copy across only the `inline constexpr` values you intend to change. Do not
+overwrite the file wholesale: its comments are hand-maintained (see the
+`StedcMergeVariant` note), the generator's template does not carry them, and
+several shipped constants are outside the default space's grid — regenerating
+blindly would silently downgrade e.g. `STEDC_WG_MULTIPLIER_*` from 8 to 4
+because the space only sweeps `[1,2,4]`.
 
-  `cmake --build build --target batchlas_tuning_header`
+### Faster: A/B a candidate with no rebuild
 
-This target depends on `batchlas_tune`, so it will run the tuning harness first and then regenerate the header.
+Every accessor consults an environment variable first, so a candidate can be
+measured against the compiled default in the existing build:
+
+```
+BATCHLAS_TUNE_ORMQR_BLOCK_SIZE=48 ./build/benchmarks/gesvd_blocked_benchmark \
+    --backend=CUDA --type=float 512 256
+```
+
+The variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, SYTRD_BLOCK_SIZE,
+LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD, STEDC_MERGE_VARIANT,
+STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}`. Each overrides *all* size
+buckets at once, so test one `n` at a time. Do not change one mid-process: the
+same accessor feeds `*_buffer_size()` queries and the matching solve.
+
+## Validate a winner at the consumer before adopting it
+
+A per-kernel winner is not automatically an end-to-end win, and can be a loss.
+Measured 2026-08-06 on CUDA/float after fixing the grid-intersection bug:
+
+| block size | ormqr kernel, n=1024 | syev n=1024 | gesvd_blocked n=512 |
+|---|---|---|---|
+| 16 (shipped) | 536 µs | 899 µs | 940 µs |
+| 48/56 (tuned) | 238 µs (**2.16x faster**) | 905 µs (no change) | 1045 µs (**11% slower**) |
+
+So the 2.16x kernel win was not adopted. `ORMQR_BLOCK_SIZE_*` is read by
+`syev_blocked`, `syev_two_stage`, `syevx_direct_subset` *and* by
+`gesvd_blocked.cc`, where it also sets `gebrd_block_size` — a different kernel
+with a different optimum. `ormqr_blocked_benchmark` cannot see that coupling
+because it takes the block size as an explicit argument.
+
+Always A/B the consumer benchmarks with the env override before editing a
+constant.
 
 ## Current model (size-aware only)
 
@@ -105,23 +160,46 @@ At runtime, recursion thresholds are clamped to local subproblem size (`threshol
 
 ## Practical workflow
 
-1) Configure with benchmarks+tuning enabled:
+Do not use the `batchlas_tuning_header` CMake target -- see above, it writes a
+header nothing compiles. Drive the scripts directly.
 
-`cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON -DBATCHLAS_ENABLE_TUNING=ON`
+1) Build the five benchmarks the default space needs (they are ordinary
+   benchmark targets; `BATCHLAS_ENABLE_TUNING` is not required):
 
-2) Run tuning + regenerate header:
+```
+cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON
+cmake --build build -j --target stedc_benchmark steqr_benchmark \
+      sytrd_blocked_benchmark ormqr_blocked_benchmark syev_benchmark
+```
 
-`cmake --build build --target batchlas_tuning_header -j`
+2) Run the sweep. **~12 minutes** for the full default space on CUDA/float
+   (RTX 4090, measured 2026-08-06: 535 benchmark invocations):
 
-3) Inspect outputs:
+```
+python3 evaluation/tuning/tune.py \
+    --space evaluation/tuning/spaces/default.json \
+    --backend CUDA --type float \
+    --out build/tuning/profile.json --skip-missing
+```
 
-- Profile JSON: `build/tuning/profile.json`
-- Generated header: `build/include/batchlas/tuning_params.hh`
+   Prefer `--skip-missing` alone. Adding `--skip-failed` (which the CMake target
+   passes) converts a broken bench into a silent omission and still writes a
+   profile that looks successful.
 
-4) Verify the selected parameters:
+   To go faster, cut the space file rather than the iteration counts: drop the
+   large-`n` cases, which dominate. `sytrd_blocked` at n=1024 is ~7.4 s per
+   invocation against ~0.6 s for the small cases.
 
-- Check `results[].per_case_best` for per-`n` winners.
-- Check header constants and `*_for_n` selectors match your expected ranges.
+3) Inspect the profile at `build/tuning/profile.json`:
+
+- `results[].per_case_best` -- per-`n` winners, what the bucketed header reads.
+- `results[].best` -- the single parameter set best *averaged* across cases.
+  Only combos legal for every case appear here, so for a bench whose per-case
+  grids barely overlap this is a much smaller search than `per_case_best`.
+
+4) A/B any candidate with the env override (no rebuild), at the *consumer*
+   benchmark, then port the constant by hand into
+   `include/batchlas/tuning_params.hh` and rebuild.
 
 ## Notes
 
