@@ -4,6 +4,7 @@
 #include "gemm_variant.hh"
 #include "symm_cublasdx_fused.hh"
 #include "cublasdx_dispatch_common.hh"
+#include "triangular_expand.hh"
 
 #include "../util/kernel-trace.hh"
 
@@ -80,23 +81,6 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
     // Skewed shapes are excluded above because the expansion always costs a
     // full k x k pass, which stops paying for itself once k dwarfs m and n.
     return A.batch_size() >= kSymmExpandMinBatch || max_dim >= kSymmExpandMinDim;
-}
-
-// Leading dimension of the expanded copy of A. The caller's own ld is
-// irrelevant -- the expansion writes every element -- so pack the columns and
-// pad only to 16 bytes, which is the alignment the vendor and cuBLASDx GEMM
-// kernels want before they will use packet loads.
-int symm_expand_ld(int n) {
-    constexpr int floats_per_packet = 16 / sizeof(float);
-    return detail::ceil_div(n, floats_per_packet) * floats_per_packet;
-}
-
-std::size_t symm_expand_workspace_bytes(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A) {
-    auto sizer = BumpAllocator::measuring();
-    sizer.allocate<float>(ctx, static_cast<std::size_t>(symm_expand_ld(A.rows())) *
-                                   static_cast<std::size_t>(A.rows()) *
-                                   static_cast<std::size_t>(A.batch_size()));
-    return sizer.required_bytes();
 }
 
 // Materialise the full symmetric matrix that A's referenced triangle stands
@@ -207,14 +191,14 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
                                   Side side,
                                   Uplo uplo) {
     const int n = A.rows();
-    const int ld = symm_expand_ld(n);
+    const int ld = detail::expanded_ld<float>(n);
 
     // Scratch comes from the queue's arena rather than a local Matrix. A Matrix
     // is a fresh managed allocation whose pages are migrated to the device on
     // first touch, which at n=512 batch=512 costs an order of magnitude more
     // than the GEMM it feeds, and it would be freed on return while the kernels
     // reading it have only been enqueued.
-    auto ws = ctx.workspace(symm_expand_workspace_bytes(ctx, A));
+    auto ws = ctx.workspace(detail::expanded_workspace_bytes<float>(ctx, n, A.batch_size()));
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<float>(ctx, static_cast<std::size_t>(ld) *
                                                  static_cast<std::size_t>(n) *

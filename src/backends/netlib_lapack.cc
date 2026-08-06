@@ -553,44 +553,33 @@ namespace batchlas{
                 throw std::runtime_error("TRMM: incompatible matrix dimensions");
             }
 
+            // CBLAS ?trmm works in place, so the operand has to arrive in C.
+            // Going through cblas_?gemm instead would be a plain dense product
+            // against A's whole storage, which reads the triangle TRMM is
+            // forbidden to touch and ignores Diag::Unit outright.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if (side == Side::Left) {
-                    call_backend_nh<T, BackendLibrary::CBLAS>(
-                        cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
-                        Layout::ColMajor,
-                        transA,
-                        Transpose::NoTrans,
-                        m,
-                        n,
-                        A_i.cols(),
-                        alpha,
-                        A_i.data_ptr(),
-                        A_i.ld(),
-                        B_i.data_ptr(),
-                        B_i.ld(),
-                        T(0),
-                        C_i.data_ptr(),
-                        C_i.ld());
-                } else {
-                    call_backend_nh<T, BackendLibrary::CBLAS>(
-                        cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
-                        Layout::ColMajor,
-                        Transpose::NoTrans,
-                        transA,
-                        m,
-                        n,
-                        A_i.rows(),
-                        alpha,
-                        B_i.data_ptr(),
-                        B_i.ld(),
-                        A_i.data_ptr(),
-                        A_i.ld(),
-                        T(0),
-                        C_i.data_ptr(),
-                        C_i.ld());
+                for (int col = 0; col < n; ++col) {
+                    std::copy_n(B_i.data_ptr() + static_cast<std::size_t>(col) * B_i.ld(),
+                                m,
+                                C_i.data_ptr() + static_cast<std::size_t>(col) * C_i.ld());
                 }
+
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_strmm, cblas_dtrmm, cblas_ctrmm, cblas_ztrmm,
+                    Layout::ColMajor,
+                    side,
+                    uplo,
+                    transA,
+                    diag,
+                    m,
+                    n,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {

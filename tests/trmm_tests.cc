@@ -190,71 +190,85 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 // gemm against the clean A, so a correct trmm is unaffected while an
 // implementation that reads the poisoned entries is not.
 //
-// DISABLED because it currently fails, and it fails because the library is
-// wrong, not because the test is. Measured state as of writing:
-//
-//   CUDA   float                  PASSES -- real per-batch cublasStrmm
-//   CUDA   double, complex<*>     FAILS  -- cublas.cc:503 sends every
-//                                           non-float type to gemm_vendor_impl
-//                                           on the raw A, discarding uplo and
-//                                           diag entirely
-//   NETLIB all four types         FAILS  -- same decomposition on the host path
-//
-// This matters beyond correctness: the obvious performance fix for float trmm
-// (which is stuck on a per-batch cublasStrmm loop and is ~16x off an
-// equal-work gemm) is to delete the !is_same_v<T,float> guard and let float
-// take the same decomposition. That would be an 8x speedup and would also
-// make float silently wrong. Fixing this properly means materialising a
-// triangular copy -- zero the unreferenced half, force a unit diagonal --
-// before the gemm, which needs scratch memory, or abandoning the
-// decomposition and calling the per-batch vendor trmm for every type.
-//
-// Enable by removing the DISABLED_ prefix once one of those is done.
-TYPED_TEST(TrmmTest, DISABLED_IgnoresUnreferencedTriangleAndUnitDiagonal) {
+// A ragged dimension and a non-square B are in the shapes because the CUDA
+// backend materialises the triangle into packed scratch with a leading
+// dimension of its own. The sweep runs twice there: capping the scratch budget
+// at zero bytes sends it down the no-scratch route it otherwise only reaches
+// when the expansion will not fit on the device, which no test shape does.
+TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
 
-    const int n = 128;
-    const int batch = 2;
+    struct Shape {
+        int rows;
+        int cols;
+        int batch;
+    };
+    const Shape shapes[] = {{64, 48, 2}, {129, 96, 5}, {300, 32, 1}};
 
-    for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-        for (auto diag : {Diag::NonUnit, Diag::Unit}) {
-            auto A_clean = Matrix<T, MatrixFormat::Dense>::RandomTriangular(n, uplo, diag, batch);
-            auto B = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
-            auto A_poisoned = A_clean.clone();
-            this->ctx->wait();
+    auto sweep = [&](const char* route) {
+        for (const auto& shape : shapes) {
+            for (auto side : {Side::Left, Side::Right}) {
+                const int k = side == Side::Left ? shape.rows : shape.cols;
+                for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+                    for (auto diag : {Diag::NonUnit, Diag::Unit}) {
+                        for (auto trans : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                            auto A_clean = Matrix<T, MatrixFormat::Dense>::RandomTriangular(k, uplo, diag, shape.batch);
+                            auto B = Matrix<T, MatrixFormat::Dense>::Random(shape.rows, shape.cols, false, shape.batch);
+                            auto A_poisoned = A_clean.clone();
+                            this->ctx->wait();
 
-            // Use the element accessor, not raw data() arithmetic: the
-            // storage has its own leading dimension and batch stride, and
-            // assuming ld == n silently writes into the referenced triangle.
-            for (int b = 0; b < batch; ++b) {
-                for (int col = 0; col < n; ++col) {
-                    for (int row = 0; row < n; ++row) {
-                        const bool referenced =
-                            (uplo == Uplo::Lower) ? (row > col) : (row < col);
-                        if (referenced) continue;
-                        if (row == col && diag == Diag::NonUnit) continue;
-                        A_poisoned(row, col, b) = T(1000);
+                            // Use the element accessor, not raw data() arithmetic: the
+                            // storage has its own leading dimension and batch stride, and
+                            // assuming ld == n silently writes into the referenced triangle.
+                            for (int b = 0; b < shape.batch; ++b) {
+                                for (int col = 0; col < k; ++col) {
+                                    for (int row = 0; row < k; ++row) {
+                                        const bool referenced =
+                                            (uplo == Uplo::Lower) ? (row > col) : (row < col);
+                                        if (referenced) continue;
+                                        if (row == col && diag == Diag::NonUnit) continue;
+                                        A_poisoned(row, col, b) = T(1000);
+                                    }
+                                }
+                            }
+                            this->ctx->wait();
+
+                            auto C = Matrix<T, MatrixFormat::Dense>::Zeros(shape.rows, shape.cols, shape.batch);
+                            trmm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
+                                 {.side = side, .uplo = uplo, .trans = trans, .diag = diag})
+                                .wait();
+
+                            // Subtract the product against the clean A; the residual must vanish.
+                            if (side == Side::Left) {
+                                gemm(*(this->ctx), A_clean.view(), B.view(), C.view(),
+                                     {.beta = T(-1.0), .transA = trans}).wait();
+                            } else {
+                                gemm(*(this->ctx), B.view(), A_clean.view(), C.view(),
+                                     {.beta = T(-1.0), .transB = trans}).wait();
+                            }
+
+                            const real_t tol = test_utils::tolerance<T>() * real_t(k);
+                            for (auto residual : norm(*(this->ctx), C.view())) {
+                                EXPECT_LE(residual, tol)
+                                    << "trmm read storage it must not touch: " << route << " route, "
+                                    << shape.rows << "x" << shape.cols << " batch " << shape.batch
+                                    << " side=" << (side == Side::Left ? "Left" : "Right")
+                                    << " uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
+                                    << " trans=" << static_cast<int>(trans)
+                                    << " diag=" << (diag == Diag::Unit ? "Unit" : "NonUnit");
+                            }
+                        }
                     }
                 }
             }
-            this->ctx->wait();
-
-            auto C = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
-            trmm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
-                 {.side = Side::Left, .uplo = uplo, .trans = Transpose::NoTrans, .diag = diag})
-                .wait();
-
-            // Subtract the product against the clean A; the residual must vanish.
-            gemm(*(this->ctx), A_clean.view(), B.view(), C.view(), {.beta = T(-1.0)}).wait();
-
-            const real_t tol = test_utils::tolerance<T>() * real_t(n);
-            for (auto residual : norm(*(this->ctx), C.view())) {
-                EXPECT_LE(residual, tol)
-                    << "trmm read storage it must not touch: uplo="
-                    << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                    << " diag=" << (diag == Diag::Unit ? "Unit" : "NonUnit");
-            }
         }
+    };
+
+    sweep("default");
+
+    if constexpr (TestFixture::BackendType == Backend::CUDA) {
+        ScopedEnvVar no_scratch("BATCHLAS_EXPAND_MAX_BYTES", "0");
+        sweep("no-scratch");
     }
 }
