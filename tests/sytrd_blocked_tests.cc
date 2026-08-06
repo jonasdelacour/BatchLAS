@@ -156,6 +156,95 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
 #endif
 }
 
+// The blocked trailing update (A22 -= V W^H + W V^H) only runs when the trailing
+// block is wider than 128; below that sytrd_blocked takes update_vw_lower_small
+// instead. Every other case in this file is n <= 128, so none of them reach it --
+// which matters now that the trailing update defaults to syr2k rather than the
+// GEMM pair on CUDA/float.
+//
+// n = 320 with nb = 32 leaves n2 = 288 on the first panel and stays above 128 for
+// six of them. Both routes are run against each other as well as against the
+// reference, so a divergence points at the route rather than at sytrd generally.
+TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+
+    const int n = 320;
+    const int batch = 8;
+    const int nb = 32;
+    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
+
+    Matrix<Real, MatrixFormat::Dense> A0 =
+        Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
+
+    // Returns the tridiagonal (d, e) produced under the given trailing-update route.
+    auto run_route = [&](const char* route) {
+        ScopedEnvVar mode("BATCHLAS_SYTRD_TRAILING_UPDATE", route);
+
+        Matrix<Real, MatrixFormat::Dense> A = A0;
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        Vector<Real> tau(n - 1, batch);
+
+        const size_t ws_bytes =
+            sytrd_blocked_buffer_size<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+
+        sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+
+        Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
+        Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
+        return Tmat;
+    };
+
+    Matrix<Real, MatrixFormat::Dense> T_gemm = run_route("gemm");
+    Matrix<Real, MatrixFormat::Dense> T_syr2k = run_route("syr2k");
+
+#if BATCHLAS_HAS_HOST_BACKEND
+    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
+    const auto eig_gemm = netlib_ref_eigs_dense(T_gemm.view());
+    const auto eig_syr2k = netlib_ref_eigs_dense(T_syr2k.view());
+
+    // Both routes perform the same rank-2 update, but sum it in a different
+    // order, so they agree only to rounding. Judge them by how far each lands
+    // from the reference spectrum rather than from each other: the question is
+    // whether syr2k is as accurate as the GEMM pair, not whether it is
+    // bit-identical to it.
+    double worst_gemm = 0.0;
+    double worst_syr2k = 0.0;
+    double spectral_radius = 0.0;
+    for (int b = 0; b < batch; ++b) {
+        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
+        for (int i = 0; i < n; ++i) {
+            const std::size_t ix = base + static_cast<std::size_t>(i);
+            spectral_radius = std::max(spectral_radius, std::abs(eig_ref[ix]));
+            worst_gemm = std::max(worst_gemm, std::abs(eig_gemm[ix] - eig_ref[ix]));
+            worst_syr2k = std::max(worst_syr2k, std::abs(eig_syr2k[ix] - eig_ref[ix]));
+        }
+    }
+
+    // Backward error of a Householder tridiagonalisation is O(n * eps * ||A||).
+    const double eps = static_cast<double>(std::numeric_limits<Real>::epsilon());
+    const double backward_err_tol = 4.0 * static_cast<double>(n) * eps * spectral_radius;
+    const double err_tol = std::max(eig_tol * std::max(1.0, spectral_radius), backward_err_tol);
+
+    EXPECT_LT(worst_syr2k, err_tol)
+        << "syr2k trailing update lost accuracy: worst eigenvalue error " << worst_syr2k
+        << " (GEMM route: " << worst_gemm << ", spectral radius " << spectral_radius << ")";
+
+    // The substitution is only justified if it is no worse than what it
+    // replaced. This is the assertion with the teeth: the backward-error bound
+    // above is ~1000x looser than the error either route actually incurs
+    // (measured 2.6e-6 against a 3.2e-3 bound at n=320, float), so on its own it
+    // would pass almost anything. A factor of 4 plus a few ulps of the spectrum
+    // leaves room for the different summation order and nothing else.
+    const double route_tol = 4.0 * worst_gemm + 8.0 * eps * spectral_radius;
+    EXPECT_LT(worst_syr2k, route_tol)
+        << "syr2k route is materially less accurate than the GEMM pair: "
+        << worst_syr2k << " vs " << worst_gemm;
+#endif
+}
+
 TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;

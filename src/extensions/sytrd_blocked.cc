@@ -44,17 +44,24 @@ inline bool use_device_sytrd() {
 enum class SytrdTrailingUpdateMode {
     Gemm,
     Syr2k,
+    Default,
 };
 
+// Override for the trailing update; unset means the per-backend default below.
+// Kept in both directions so a regression can be bisected against either route
+// without a rebuild.
 inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     const char* v = std::getenv("BATCHLAS_SYTRD_TRAILING_UPDATE");
-    if (!v) return SytrdTrailingUpdateMode::Gemm;
+    if (!v) return SytrdTrailingUpdateMode::Default;
 
     const std::string s(v);
     if (s == "syr2k" || s == "SYR2K") {
         return SytrdTrailingUpdateMode::Syr2k;
     }
-    return SytrdTrailingUpdateMode::Gemm;
+    if (s == "gemm" || s == "GEMM") {
+        return SytrdTrailingUpdateMode::Gemm;
+    }
+    return SytrdTrailingUpdateMode::Default;
 }
 
 // Used by the device sytrd_blocked_impl to allow per-run WG hint overrides.
@@ -759,9 +766,25 @@ Event sytrd_blocked_impl(Queue& ctx,
         ? ((B == Backend::CUDA) && (n == 256))
         : tuning::sytrd_fuse_panel_update_for_n(n);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
-    constexpr bool allow_syr2k_experiment = (B == Backend::CUDA) && std::is_same_v<T, float>;
-    const bool use_syr2k_trailing_update = allow_syr2k_experiment &&
-                                           (sytrd_trailing_update_mode() == SytrdTrailingUpdateMode::Syr2k);
+    // A22 -= V W^H + W V^H is one syr2k, and syr2k touches only the triangle
+    // the panel loop goes on to read. Measured on RTX 4090 / sm_89, float,
+    // against the two full n2 x n2 GEMMs it replaces:
+    //
+    //   the update alone, over the shapes the panel loop produces, is 3.4-3.6x
+    //   faster;
+    //   end to end, n=512 batch=1024 went 264/253/248 ms -> 228/227/232 at
+    //   nb=16/24/32, and n=256 batch=2048 went 34.3/34.6/37.0 -> 27.0/30.6/34.0.
+    //
+    // CUDA and float only, and that is not conservatism: syrk/syr2k reach a
+    // batched kernel only through the custom float route. Everything else falls
+    // to syr2k_vendor_impl, which is a host loop issuing one cublasXsyr2k per
+    // batch member -- in double that measured 7.8x *slower* than the GEMM pair
+    // at n=256 batch=1024, i.e. the whole win inverts.
+    constexpr bool syr2k_trailing_update_supported =
+        (B == Backend::CUDA) && std::is_same_v<T, float>;
+    const bool use_syr2k_trailing_update =
+        syr2k_trailing_update_supported &&
+        (sytrd_trailing_update_mode() != SytrdTrailingUpdateMode::Gemm);
     const int32_t latrd_wg_hint = is_legacy
         ? tuning::latrd_lower_panel_wg_hint()
         : latrd_lower_panel_wg_hint_override(n, batch);
@@ -797,16 +820,29 @@ Event sytrd_blocked_impl(Queue& ctx,
                 else
                     (void)update_vw_lower_small_device<T>(ctx, V2, W2, A22);
             } else {
-                if constexpr (allow_syr2k_experiment) {
+                if constexpr (syr2k_trailing_update_supported) {
                     if (use_syr2k_trailing_update) {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
                             syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                         }
-                        if (!is_legacy) {
-                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k_symmetrize");
-                            A22.symmetrize(ctx, Uplo::Lower);
-                        }
+                        // No symmetrize: nothing downstream reads A's upper
+                        // triangle, so leaving it stale is not observable.
+                        // Checked across every reader, not assumed --
+                        //   latrd_lower_panel, all three variants: the symmetric
+                        //     matvec is the only place tempted to cross the
+                        //     diagonal, and all three split it at c == r, taking
+                        //     Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r. The
+                        //     device variant reaches it through
+                        //     device::hemv<Uplo::Lower>, which mirrors the same
+                        //     way. The fused trailing update guards with
+                        //     `if (r < c) continue` (legacy, grid) or
+                        //     device::her2k<Uplo::Lower>.
+                        //   restore_tridiag_lower: reads the diagonal, and only
+                        //     writes the superdiagonal.
+                        // The GEMM pair happened to leave a valid upper triangle
+                        // as a side effect; that was never a contract anything
+                        // depended on.
                     } else {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");

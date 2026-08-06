@@ -19,6 +19,7 @@ set(BENCHMARK_TARGETS
     gemm_128x32x32_family_benchmark
     gemm_128x64x32_family_benchmark
     gemm_transpose_benchmark
+    gemm_vs_level3_benchmark
     symm_benchmark
     hemm_benchmark
     herk_benchmark
