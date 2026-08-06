@@ -23,6 +23,20 @@ Notes:
 - Some benchmarks are only built/active for certain backends (e.g. `sytrd_blocked_benchmark` is CUDA-only today). Use `--skip-missing` to ignore unavailable executables.
 - You can change problem sizes and search ranges by editing the JSON space file.
 
+## The two space files
+
+- **`spaces/default.json`** — benches that feed a constant in
+  `include/batchlas/tuning_params.hh`. This is what you run to retune.
+- **`spaces/unwired.json`** — parameters that measurably matter but that no
+  constant can carry, so `generate_tuning_header.py` ignores them entirely.
+  Running it produces a profile for a human to read. See
+  "What is still untuned" below.
+
+A bench belongs in `default.json` only if the generator names it. Today that is
+`stedc`, `sytrd_blocked`, `ormqr_blocked`, `syev`, `gesvd`, `latrd_lower_panel`.
+Anything else is measured and then silently dropped — which is what `steqr` did
+for its whole life in `default.json`.
+
 ## Tuning space format
 
 Each bench entry contains:
@@ -30,8 +44,26 @@ Each bench entry contains:
 - `arg_spec`: positional benchmark arguments.
 - `cases`: problem sizes, each with `fixed` args and a case-local `tune` grid.
 - Optional `pre_tune`: one or more bench-level phases of the form `{ "params": { ... }, "cases": [ ... ] }`.
+- Optional `env`: `{param_name: ENV_VAR}`. Params listed here are passed to the
+  benchmark as environment variables instead of positional arguments, and must
+  *not* appear in `arg_spec`.
 
 `pre_tune` phases run before the main search. The selected values are then injected into every case as fixed parameters for the main sweep and are still recorded in the final profile's `best`, `top`, and `per_case_best` parameter sets.
+
+`env` exists because several knobs have no positional argument anywhere —
+gebrd's panel width, the LATRD wg hint, the sb2st back-transform tiling, the
+sy2sb ormqr hint. The overrides are merged onto the parent environment, never
+substituted for it, and they form part of the measurement cache key.
+
+Per-case grids are searched as a **union**, so each case sweeps exactly the grid
+it declares. Only combos legal for every case are scored into the cross-case
+`best`/`top`; per-case winners — which is what the bucketed header reads — are
+recorded regardless.
+
+**A grid must contain the value currently shipped in the header.** Otherwise a
+retune "wins" with the best of a grid that never contained the incumbent and
+silently downgrades it. `stedc`'s `wg_multiplier` swept `[1,2,4]` while
+`STEDC_WG_MULTIPLIER_*` shipped 8, for exactly this failure.
 
 ## Output format (high level)
 
@@ -262,7 +294,52 @@ python3 evaluation/tuning/tune.py \
    benchmark, then port the constant by hand into
    `include/batchlas/tuning_params.hh` and rebuild.
 
+## Dependencies between the benches
+
+Tuning order matters, because several benches inherit another's result:
+
+- **`syev` overrides `sytrd_blocked`.** Whenever a `syev` entry exists the
+  generator derives `SYTRD_BLOCK_SIZE_*` from syev's coupled `nb`, not from the
+  standalone bench. `sytrd_blocked` only fills sizes syev does not cover, so
+  syev's `nb` grid must be at least as wide as `sytrd_blocked`'s or the
+  standalone winner is unreachable.
+- **`syev` couples three knobs on purpose.** `nb`, the LATRD lower-panel `wg`
+  hint and the fused panel update trade against each other inside the panel
+  loop, so they are searched as one tuple against end-to-end eigensolver time.
+- **`stedc`'s constants are global.** They are tuned standalone and then
+  inherited by syev's and gesvd's tridiagonal solve. Tune stedc first.
+- **`ormqr` and `gebrd` must stay separate.** They shared a constant until
+  2026-08-06; see the split note in `tuning_params.hh`.
+- **`latrd_lower_panel` is a fallback only**, for sizes syev's coupled `wg`
+  does not reach.
+
+## What is still untuned
+
+Measured shares on CUDA/float, RTX 4090, from `BATCHLAS_KERNEL_TRACE=1` and
+`BATCHLAS_GESVD_PROFILE=1`:
+
+| kernel | share | tuned by |
+|---|---|---|
+| `syev_two_stage.sb2st_hh` | **52.9%** of syev at n=1024 | nothing |
+| `gesvd.gebrd` | **79-95%** of gesvd | `gesvd` bench (new) |
+| `ormqr_blocked.larft` + `pack_v_panel` | ~20% of syev at n=1024 | `ormqr_blocked`, but shadowed on syev's hot path by the sy2sb gate |
+| two-stage band width `kd` | sets the whole stage-1/chase balance | nothing (hand table) |
+
+`sb2st_hh` is the single largest kernel in the library's eigensolver path and no
+bench in `default.json` touches it. Its knobs are env-only with no constants
+behind them, which is why it sits in `unwired.json`.
+
+Promoting anything out of `unwired.json` takes three steps, in order:
+
+1. add `<NAME>_{TINY..XLARGE}` constants and a `*_for_n` accessor to
+   `include/batchlas/tuning_params.hh` (with a `BATCHLAS_TUNE_*` env override,
+   so it can be A/B'd without a rebuild);
+2. teach `generate_tuning_header.py` to derive them from the bench;
+3. make the production call site read the accessor instead of its hardcoded
+   default — this is the step that is easy to forget and that makes the whole
+   exercise a no-op if skipped.
+
 ## Notes
 
-- `syev` now supports coupled tuning of SYTRD internals (`nb`, LATRD lower-panel `wg`, and fused panel update) so the selected tuple is optimized for end-to-end eigensolver time.
+- `syev` supports coupled tuning of SYTRD internals (`nb`, LATRD lower-panel `wg`, and fused panel update) so the selected tuple is optimized for end-to-end eigensolver time.
 - If your profile does not cover some size ranges, configured fallback bucket values are used for those missing ranges.
