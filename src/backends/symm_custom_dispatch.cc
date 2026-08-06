@@ -7,14 +7,29 @@
 
 #include "../util/kernel-trace.hh"
 
+#include <util/mempool.hh>
+
 #include <algorithm>
+#include <cstddef>
 #include <stdexcept>
 
 namespace batchlas::backend {
 
 namespace {
 
-constexpr int kSymmCublasDxTile = 32;
+// Tile edge of the expansion kernel below, and the number of columns a work
+// group covers per pass over it.
+constexpr int kSymmExpandTile = 32;
+constexpr int kSymmExpandGroupCols = 8;
+
+// Where the expansion route starts beating the vendor's per-batch cublasSsymm
+// loop. Measured on sm_89 in float over square shapes, n in 16..2048 and batch
+// in 1..512: the expansion wins by 1.2x to 72x everywhere except batch <= 2
+// with n <= 128, where the call is launch-bound and the two extra launches cost
+// more than the loop they replace -- there it loses by up to 1.9x. At n = 256
+// even batch 1 goes the other way (1.26x).
+constexpr int kSymmExpandMinBatch = 4;
+constexpr int kSymmExpandMinDim = 256;
 
 enum class SymmVariantRequest {
     Vendor,
@@ -58,15 +73,129 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
     const int min_dim = std::min({m, n, k});
     const bool squareish = min_dim * 2 >= max_dim;
     const int shared_dim = side == Side::Left ? B.rows() : B.cols();
-    if (!squareish || shared_dim != k || max_dim < 32) {
+    if (!squareish || shared_dim != k) {
         return false;
     }
 
-    const int output_tile_rows = detail::ceil_div(m, kSymmCublasDxTile);
-    const int output_tile_cols = detail::ceil_div(n, kSymmCublasDxTile);
-    const int reduction_tiles = detail::ceil_div(k, kSymmCublasDxTile);
-    const int tiled_work = A.batch_size() * output_tile_rows * output_tile_cols * reduction_tiles;
-    return tiled_work >= 8;
+    // Skewed shapes are excluded above because the expansion always costs a
+    // full k x k pass, which stops paying for itself once k dwarfs m and n.
+    return A.batch_size() >= kSymmExpandMinBatch || max_dim >= kSymmExpandMinDim;
+}
+
+// Leading dimension of the expanded copy of A. The caller's own ld is
+// irrelevant -- the expansion writes every element -- so pack the columns and
+// pad only to 16 bytes, which is the alignment the vendor and cuBLASDx GEMM
+// kernels want before they will use packet loads.
+int symm_expand_ld(int n) {
+    constexpr int floats_per_packet = 16 / sizeof(float);
+    return detail::ceil_div(n, floats_per_packet) * floats_per_packet;
+}
+
+std::size_t symm_expand_workspace_bytes(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A) {
+    auto sizer = BumpAllocator::measuring();
+    sizer.allocate<float>(ctx, static_cast<std::size_t>(symm_expand_ld(A.rows())) *
+                                   static_cast<std::size_t>(A.rows()) *
+                                   static_cast<std::size_t>(A.batch_size()));
+    return sizer.required_bytes();
+}
+
+// Materialise the full symmetric matrix that A's referenced triangle stands
+// for, so a plain batched GEMM can read it as an ordinary dense operand.
+//
+// One tile pair per work group, staged through local memory. The mirrored half
+// is the reason: the mirror of a coalesced column read is a row write, one
+// cache line per element, and at these sizes the expansion is pure bandwidth.
+// Going through a tile keeps the read and both writes coalesced and moves
+// 1.5 n^2 of traffic, against the 3 n^2 of a copy followed by an in-place
+// symmetrize.
+Event symm_expand_symmetric(Queue& ctx,
+                            const MatrixView<float, MatrixFormat::Dense>& out,
+                            const MatrixView<float, MatrixFormat::Dense>& A,
+                            Uplo uplo) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    const int tiles = detail::ceil_div(n, kSymmExpandTile);
+    const bool lower = uplo == Uplo::Lower;
+
+    const float* src = A.data_ptr();
+    float* dst = out.data_ptr();
+    const int lda = A.ld();
+    const int ldo = out.ld();
+    const std::size_t stride_a = static_cast<std::size_t>(A.stride());
+    const std::size_t stride_o = static_cast<std::size_t>(out.stride());
+
+    // The tile grid covers both triangles and the groups on the unreferenced
+    // side exit before their first barrier. Half the groups retire empty, which
+    // is cheaper than putting the integer square root of an unranked triangular
+    // index in front of every work item.
+    const sycl::range<3> global(static_cast<std::size_t>(batch),
+                                static_cast<std::size_t>(tiles) * kSymmExpandGroupCols,
+                                static_cast<std::size_t>(tiles) * kSymmExpandTile);
+    const sycl::range<3> local(1, kSymmExpandGroupCols, kSymmExpandTile);
+
+    ctx->submit([&](sycl::handler& cgh) {
+        // Padded by one column so the transposed read strides across all banks.
+        auto tile = sycl::local_accessor<float, 1>(
+            sycl::range<1>(kSymmExpandTile * (kSymmExpandTile + 1)), cgh);
+
+        cgh.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+            const int ti = static_cast<int>(item.get_group(1));
+            const int tj = static_cast<int>(item.get_group(2));
+            if (ti < tj) {
+                return;
+            }
+
+            const int b = static_cast<int>(item.get_group(0));
+            const int r = static_cast<int>(item.get_local_id(2));
+            const int c0 = static_cast<int>(item.get_local_id(1));
+
+            // Row/column origin of the tile inside the referenced triangle.
+            const int src_row0 = (lower ? ti : tj) * kSymmExpandTile;
+            const int src_col0 = (lower ? tj : ti) * kSymmExpandTile;
+
+            const float* src_batch = src + static_cast<std::size_t>(b) * stride_a;
+            float* dst_batch = dst + static_cast<std::size_t>(b) * stride_o;
+
+            for (int c = c0; c < kSymmExpandTile; c += kSymmExpandGroupCols) {
+                const int i = src_row0 + r;
+                const int j = src_col0 + c;
+                tile[c * (kSymmExpandTile + 1) + r] =
+                    (i < n && j < n) ? src_batch[static_cast<std::size_t>(j) * lda + i] : 0.0f;
+            }
+
+            sycl::group_barrier(item.get_group());
+
+            if (ti == tj) {
+                // The two writes below would collide on a diagonal tile, so pick
+                // the referenced member of each mirrored pair instead.
+                for (int c = c0; c < kSymmExpandTile; c += kSymmExpandGroupCols) {
+                    const int i = src_row0 + r;
+                    const int j = src_col0 + c;
+                    if (i >= n || j >= n) {
+                        continue;
+                    }
+                    const bool referenced = lower ? (r >= c) : (r <= c);
+                    dst_batch[static_cast<std::size_t>(j) * ldo + i] =
+                        referenced ? tile[c * (kSymmExpandTile + 1) + r]
+                                   : tile[r * (kSymmExpandTile + 1) + c];
+                }
+                return;
+            }
+
+            for (int c = c0; c < kSymmExpandTile; c += kSymmExpandGroupCols) {
+                if (src_row0 + r < n && src_col0 + c < n) {
+                    dst_batch[static_cast<std::size_t>(src_col0 + c) * ldo + (src_row0 + r)] =
+                        tile[c * (kSymmExpandTile + 1) + r];
+                }
+                if (src_col0 + r < n && src_row0 + c < n) {
+                    dst_batch[static_cast<std::size_t>(src_row0 + c) * ldo + (src_col0 + r)] =
+                        tile[r * (kSymmExpandTile + 1) + c];
+                }
+            }
+        });
+    });
+
+    return ctx.get_event();
 }
 
 Event symm_cublasdx_fallback_gemm(Queue& ctx,
@@ -77,16 +206,39 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
                                   float beta,
                                   Side side,
                                   Uplo uplo) {
-    Matrix<float, MatrixFormat::Dense> symmetric_a(A.rows(), A.cols(), A.batch_size(), A.ld(), A.stride());
-    auto symmetric_a_view = symmetric_a.view();
+    const int n = A.rows();
+    const int ld = symm_expand_ld(n);
 
-    BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.expand");
-    MatrixView<float, MatrixFormat::Dense>::copy(ctx, symmetric_a_view, A).wait();
-    symmetric_a_view.symmetrize(ctx, uplo).wait();
+    // Scratch comes from the queue's arena rather than a local Matrix. A Matrix
+    // is a fresh managed allocation whose pages are migrated to the device on
+    // first touch, which at n=512 batch=512 costs an order of magnitude more
+    // than the GEMM it feeds, and it would be freed on return while the kernels
+    // reading it have only been enqueued.
+    auto ws = ctx.workspace(symm_expand_workspace_bytes(ctx, A));
+    BumpAllocator pool(ws.span());
+    auto storage = pool.allocate<float>(ctx, static_cast<std::size_t>(ld) *
+                                                 static_cast<std::size_t>(n) *
+                                                 static_cast<std::size_t>(A.batch_size()));
+
+    MatrixView<float, MatrixFormat::Dense> expanded(storage.data(), n, n, ld, ld * n, A.batch_size());
+
+    Event expansion;
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.expand");
+        expansion = symm_expand_symmetric(ctx, expanded, A, uplo);
+    }
+
+    // The GEMM runs on the queue's native stream, which an in-order queue shares
+    // with the expansion kernel. An out-of-order queue orders nothing across the
+    // SYCL/native boundary and offers no event to hang the vendor launch off, so
+    // there the dependency has to be waited out.
+    if (!ctx.in_order()) {
+        expansion.wait();
+    }
 
     if (side == Side::Left) {
         return gemm_cublasdx(ctx,
-                             symmetric_a_view,
+                             expanded,
                              B,
                              C,
                              alpha,
@@ -98,7 +250,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
 
     return gemm_cublasdx(ctx,
                          B,
-                         symmetric_a_view,
+                         expanded,
                          C,
                          alpha,
                          beta,
