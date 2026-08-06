@@ -42,6 +42,9 @@ enum class KernelVariant {
     Tiled128x64RegisterK32LargeU2,
     Tiled128x64RegisterK32LargeTT4x8,
     Tiled128x64RegisterK32LargeTT4x8U2,
+    // Shallow K, wide M and N: the only variant with a 64-accumulator thread
+    // tile, and the only one whose shared fragment loads vectorize.
+    Tiled128x128RegisterK8,
     Tiled32x128RegisterK16,
     Tiled32x128RegisterK16TN,
     Tiled32x128RegisterK16TT,

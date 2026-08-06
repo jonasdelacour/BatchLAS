@@ -294,28 +294,40 @@ protected:
 
 TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 
-TEST(GemmDispatchPolicyTest, SelectsAlignedS2U1ForSmallSquareFloatNN) {
+// Every float NN shape with a full 128x128 output tile and a usable operand
+// layout now goes to the 64-accumulator kernel. It measured 69-97% faster than
+// the 128x32/128x64 kernels these cases used to select, at 88-102% of cuBLAS.
+TEST(GemmDispatchPolicyTest, Selects128x128K8ForSmallSquareFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(128, 128, 128, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Aligned);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
-TEST(GemmDispatchPolicyTest, SelectsAlignedS2U1ForMediumSquareFloatNN) {
+TEST(GemmDispatchPolicyTest, Selects128x128K8ForMediumSquareFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Aligned);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
-TEST(GemmDispatchPolicyTest, SelectsK32LargeForLargeSquareFloatNN) {
+TEST(GemmDispatchPolicyTest, Selects128x128K8ForLargeSquareFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(512, 512, 512, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x64RegisterK32Large);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
-TEST(GemmDispatchPolicyTest, SelectsK32LargeForLargeNearSquareFloatNN) {
+TEST(GemmDispatchPolicyTest, Selects128x128K8ForLargeNearSquareFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(512, 256, 512, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x64RegisterK32LargeU2);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
-TEST(GemmDispatchPolicyTest, SelectsGenericS2U1ForMisalignedSquareFloatNN) {
+// A padded leading dimension is not an obstacle for this kernel: it needs the
+// operands 16-byte aligned, not contiguous, and ld=272 is a multiple of 4.
+TEST(GemmDispatchPolicyTest, Selects128x128K8ForPaddedLeadingDimensionFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 272),
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
+}
+
+// An ld that breaks 16-byte alignment must still fall back, since the
+// unpredicated path's 128-bit accesses would be misaligned.
+TEST(GemmDispatchPolicyTest, SelectsGenericS2U1ForUnalignedLeadingDimensionFloatNN) {
+    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 258),
               batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Generic);
 }
 
@@ -1942,6 +1954,82 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeTT4x8U2Kernel) {
 
     auto tol = test_utils::tolerance<ScalarType>() * 100;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+// The 128x128x8 kernel has two quite different code paths: an unpredicated one
+// for shapes that are exact multiples of the tile with 16-byte-aligned
+// operands, and a predicated one that zero-fills the shared tile at the edges.
+// Both need covering, and the ragged case is the one that can go wrong
+// silently.
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelAligned) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only: a 64-accumulator "
+                        "thread tile spills for wider scalar types";
+    }
+
+    constexpr int size = 256;  // exact multiple of both 128 and 8
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), A.view(), B.view(), C.view(),
+             {.alpha = ScalarType(1), .beta = ScalarType(1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
+             {.alpha = ScalarType(1), .beta = ScalarType(1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelRagged) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only: a 64-accumulator "
+                        "thread tile spills for wider scalar types";
+    }
+
+    // Deliberately ragged in all three dimensions: m and n are not multiples
+    // of 128 and k is not a multiple of 8, so every tile edge is predicated
+    // and the k loop has a partial final step.
+    constexpr int m = 200;
+    constexpr int n = 130;
+    constexpr int k = 70;
+    constexpr int batch_size = 3;
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), A.view(), B.view(), C.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {

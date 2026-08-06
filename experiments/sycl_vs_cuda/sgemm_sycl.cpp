@@ -37,6 +37,7 @@ static double gflop_count(const Shape& s) {
 int main(int argc, char** argv) {
     Shape shape{512, 512, 512, 512};
     int iters = 30, warmup = 10;
+    float beta_arg = 0.0f;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto val = [&]() { return std::atoi(argv[++i]); };
@@ -46,6 +47,7 @@ int main(int argc, char** argv) {
         else if (a == "--batch") shape.batch = val();
         else if (a == "--iters") iters = val();
         else if (a == "--warmup") warmup = val();
+        else if (a == "--beta") beta_arg = (float)std::atof(argv[++i]);
     }
     if (shape.m % SG_BM || shape.n % SG_BN || shape.k % SG_BK) {
         std::fprintf(stderr,
@@ -78,7 +80,7 @@ int main(int argc, char** argv) {
     const long long strideA = (long long)shape.m * shape.k;
     const long long strideB = (long long)shape.k * shape.n;
     const long long strideC = (long long)shape.m * shape.n;
-    const float alpha = 1.0f, beta = 0.0f;
+    const float alpha = 1.0f, beta = beta_arg;
 
     const int M = shape.m, N = shape.n, K = shape.k;
     const sycl::range<3> local(1, 16, 16);

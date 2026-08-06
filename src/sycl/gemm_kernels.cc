@@ -2,6 +2,7 @@
 
 #include "gemm/accessors.hh"
 #include "gemm/persistent.hh"
+#include "gemm/register_128x128.hh"
 #include "gemm/register_launchers.hh"
 #include "gemm/split_k.hh"
 #include "gemm/tiled_general.hh"
@@ -159,6 +160,8 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_128x64_k32_large_tt4x8";
     case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
         return "gemm_sycl_register_128x64_k32_large_tt4x8_u2";
+    case KernelVariant::Tiled128x128RegisterK8:
+        return "gemm_sycl_register_128x128_k8";
     case KernelVariant::Tiled32x128RegisterK16:
         return "gemm_sycl_register_32x128_k16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -251,6 +254,8 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
     case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
         return name == "register128x64k32largett4x8u2" || name == "reg128x64k32largett4x8u2" ||
             name == "128x64x32large_tt4x8_u2";
+    case KernelVariant::Tiled128x128RegisterK8:
+        return name == "register128x128k8" || name == "reg128x128k8" || name == "128x128x8";
     case KernelVariant::Tiled32x128RegisterK16:
         return name == "register32x128k16" || name == "reg32x128k16" || name == "32x128x16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -306,6 +311,7 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled128x64RegisterK32LargeU2,
                                   KernelVariant::Tiled128x64RegisterK32LargeTT4x8,
                                   KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2,
+                                  KernelVariant::Tiled128x128RegisterK8,
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
                                   KernelVariant::Tiled32x128RegisterK16TT}) {
@@ -459,6 +465,19 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
     if constexpr (std::is_same_v<T, float>) {
+        // Anything with a full 128x128 output tile, a deep enough k, and
+        // operands the unpredicated path can use goes to the 64-accumulator
+        // kernel. It beats the whole 128x32/128x64 family by 69-97% on every
+        // shape in this bucket and lands at 88-102% of cuBLAS; see
+        // experiments/sycl_vs_cuda/FINDINGS.md.
+        //
+        // Deliberately gated on the fast path rather than on shape alone: the
+        // kernel's predicated path is correct for ragged shapes but has not
+        // been benchmarked against the generic route below, so misaligned
+        // work keeps its existing kernel until that measurement exists.
+        if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
+            return KernelVariant::Tiled128x128RegisterK8;
+        }
         if (m >= 128 && n >= 128 && k >= 128 && is_squareish_shape(m, n, k)) {
             if (can_use_aligned_nn_fast_path<T, 128, 32, 32, 4, 4>(A, B, C)) {
                 if (is_large_square_bucket(m, n, k)) {
@@ -598,6 +617,24 @@ Event gemm_custom(Queue& ctx,
         return launch_register_128x64_k32_large_tt4x8(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
         return launch_register_128x64_k32_large_tt4x8_u2(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    case KernelVariant::Tiled128x128RegisterK8:
+        // float only, and NN only. A 64-accumulator thread tile is 64
+        // registers for float but 128 for double and 256 for complex<double>,
+        // which spills; and the kernel reads A as m x k and B as k x n
+        // directly, so it cannot serve a transposed operand. The selector
+        // never picks it outside those bounds, but it can also be forced by
+        // name, so fall back rather than spill or compute the wrong thing.
+        if constexpr (std::is_same_v<T, float>) {
+            if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
+                if (can_use_128x128_fast_path<T>(A, B, C)) {
+                    return launch_register_128x128_k8<T, true>(
+                        ctx, A, B, C, alpha, beta, kernel_trace_name);
+                }
+                return launch_register_128x128_k8<T, false>(
+                    ctx, A, B, C, alpha, beta, kernel_trace_name);
+            }
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled32x128RegisterK16:
         return launch_register_32x128_k16(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled32x128RegisterK16TN:
