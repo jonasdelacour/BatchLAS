@@ -132,7 +132,40 @@ static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
+// BatchLAS one-sided Jacobi (gesvdj_cta) -- same algorithm class as
+// gesvdjBatched, so this is the like-for-like row.
+template <typename T, Backend B>
+static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
+    const size_t n = state.range(0);
+    const size_t batch = state.range(1);
+    const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
+    const SvdVectors jobvh = parse_job(static_cast<int>(state.range(3)));
+
+    auto q = std::make_shared<Queue>(Device("gpu"), B, true);
+
+    auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch);
+    Matrix<T> U(n, n, batch);
+    Matrix<T> Vh(n, n, batch);
+    UnifiedVector<typename base_type<T>::type> s(n * batch);
+
+    state.SetKernel(q,
+                    bench::pristine(A),
+                    std::move(s),
+                    std::move(U),
+                    std::move(Vh),
+                    jobu,
+                    jobvh,
+                    [](Queue& q, auto&& A_, auto&& s_, auto&& U_, auto&& Vh_,
+                       auto&& jobu_, auto&& jobvh_) {
+                        gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_);
+                    });
+
+    state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);
+    state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
+}
+
 BATCHLAS_BENCH_CUDA(BM_GESVD_CUSOLVER_JACOBI, GesvdVendorBenchSizes)
 BATCHLAS_BENCH_CUDA(BM_GESVD_BATCHLAS_CTA, GesvdVendorBenchSizes)
+BATCHLAS_BENCH_CUDA(BM_GESVD_BATCHLAS_JACOBI, GesvdVendorBenchSizes)
 
 MINI_BENCHMARK_MAIN();

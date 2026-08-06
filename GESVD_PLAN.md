@@ -9,7 +9,69 @@ already-built binaries in `build/benchmarks/`.
 
 ---
 
-## STATUS UPDATE — Tiers 0 and the accuracy harness are DONE and measured
+## STATUS UPDATE — Tier 0, the accuracy harness, and Tier 1 are DONE and measured
+
+**`gesvdj_cta` (Tier 1) has landed and beats `gesvdjBatched` on both axes.**
+One-sided Hestenes Jacobi, one fused kernel, `src/extensions/gesvdj_cta.cc`.
+
+Time, full U and V^H, uncontended (`CUDA_VISIBLE_DEVICES=1`), ms:
+
+| type | n | batch | cuSOLVER | gesvd_cta (old) | **gesvdj_cta** | vs cuSOLVER |
+|---|---|---|---|---|---|---|
+| float | 8 | 16384 | 5.594 | 1.095 | **0.104** | **53.7x** |
+| float | 16 | 16384 | 7.596 | 1.540 | **0.891** | **8.5x** |
+| float | 32 | 4096 | 3.226 | 2.126 | **2.082** | **1.55x** |
+| float | 32 | 16384 | 12.581 | 7.643 | **7.804** | **1.61x** |
+| double | 8 | 16384 | 42.248 | 5.470 | **1.029** | **41.1x** |
+| double | 16 | 16384 | 103.520 | 18.703 | **6.926** | **15.0x** |
+| double | 32 | 16384 | 364.539 | 83.075 | **49.516** | **7.4x** |
+
+Relative error in the singular values, n=32 float, against the *known* spectrum:
+
+| log10 kappa | gesvd_cta (old) | cuSOLVER | **gesvdj_cta** |
+|---|---|---|---|
+| 1 | 7.8e-3 | 4.09e-6 | 4.78e-6 |
+| 3 | 1.06e-2 | 1.03e-5 | 1.25e-5 |
+| 4 | 0.299 | 8.35e-5 | **6.44e-5** |
+| 5 | 1.06 | 7.40e-4 | **5.67e-4** |
+| 6 | 2.13 | 9.27e-3 | **5.33e-3** |
+
+Orthogonality is flat at ~1.3e-5 across all six decades (cuSOLVER ~8e-6; the old
+path collapses to 2.43). At kappa >= 1e4 the new kernel is *more* accurate than
+cuSOLVER. In double it holds to kappa = 1e14 (6.2e-4 relative, 1.4e-14
+orthogonality). **Defect A is closed.**
+
+Also closed: complex GENERAL SVD on GPU, which previously fell through to Vendor
+and threw. `gesvdj_cta` supports it natively and is reachable automatically for
+complex, or by `BATCHLAS_GESVD_PROVIDER=jacobi`. It sits *after* `BatchLAS_CTA`
+in the default order on purpose — promoting it ahead is a separate, gated commit
+(see GESVD_IMPL_SPEC.md D.3), since the old path is still faster values-only.
+
+Three defects were found in the reviewed design during implementation, all of
+which produced silently wrong or crashing output and none of which the pre-existing
+gesvd tolerances could have caught:
+
+1. **Completion acceptance threshold.** "Accept when the residual norm exceeds
+   1/2" cannot fill the last columns of a tall matrix: with d dimensions left of
+   RR, a canonical basis vector's residual norm^2 is only ~d/RR, so at d=1, RR=32
+   every trial measures ~0.03 and is rejected. The column stays zero and U is not
+   orthogonal. Fixed by running the trial cursor *across* columns and accepting
+   above 1/(2*RR), which is provably sufficient.
+2. **m < n must solve A^H, not A^T.** A^T gives A = conj(V') S U'^T, whose
+   conjugations differ from the m >= n case. Invisible in real arithmetic; wrong
+   for complex.
+3. **The norm recurrence must clamp both sides at zero.** Clamping only the
+   cancelling p side lets the q side go negative, sqrt gives NaN, every rank
+   comparison against NaN is false, two columns collide on one rank, and the
+   unwritten permutation slot is read as a garbage column index — an
+   out-of-bounds LDS access. Observed as CUDA_ERROR_ILLEGAL_ADDRESS at
+   kappa >= 1e4.
+
+Tests: `tests/gesvdj_cta_tests.cc`, 32 cases over {float, double, complex<float>,
+complex<double>} x {square, tall, wide, rank-deficient, all-zeros, graded, job
+combinations, public-API dispatch}. All pass; `gesvd_tests` is unchanged at 26.
+
+### Earlier status — Tier 0 and the harness
 
 Both prerequisites in §8 have landed. The comparison the plan could not previously
 make is now made, and it splits cleanly in two.

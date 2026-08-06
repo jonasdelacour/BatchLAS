@@ -231,6 +231,26 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
     return true;
 }
 
+// gesvdj_cta supports complex GENERAL input natively, unlike the two predicates
+// below, which both return false for non-real T outside the Hermitian branch.
+// That is the Tier 4 coverage gap: complex general SVD on GPU currently falls
+// through to Vendor and throws. Do NOT copy the RealScalar gate here.
+template <typename T>
+inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
+                                  const MatrixView<T, MatrixFormat::Dense>& A,
+                                  SvdVectors jobu,
+                                  SvdVectors jobvh,
+                                  std::optional<Uplo> hermitian_uplo = std::nullopt) {
+    if (hermitian_uplo.has_value()) return false;   // no Hermitian shortcut
+    if (!caps.is_gpu) return false;
+    if (caps.max_sub_group < 32) return false;
+    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
+    if (std::max(A.rows(), A.cols()) > 32) return false;
+    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
+    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    return true;
+}
+
 template <typename T>
 inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    const MatrixView<T, MatrixFormat::Dense>& A,
@@ -262,6 +282,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
                                       std::optional<Uplo> hermitian_uplo = std::nullopt) {
     Provider chosen = normalize_gesvd_vendor_like(policy.forced);
     if (chosen != Provider::Auto) {
+        if (chosen == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
+            return chosen;
+        }
         if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return chosen;
         }
@@ -274,6 +297,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
 
     for (Provider p : policy.order) {
         p = normalize_gesvd_vendor_like(p);
+        if (p == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
+            return p;
+        }
         if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return p;
         }
@@ -309,6 +335,8 @@ inline Event gesvd_dispatch(Queue& ctx,
     size_t need_ws = 0;
     if (chosen == Provider::Vendor) {
         need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    } else if (chosen == Provider::BatchLAS_Jacobi) {
+        need_ws = gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else if (chosen == Provider::BatchLAS_CTA) {
         need_ws = hermitian_uplo.has_value()
             ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
@@ -342,6 +370,14 @@ inline Event gesvd_dispatch(Queue& ctx,
         return backend::gesvd_vendor<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
+    // The explicit branch is not optional: the tail of this function is an
+    // unguarded `return gesvd_blocked(...)`, so a provider without its own
+    // branch silently executes the blocked normal-equation path -- the exact
+    // defect this kernel exists to remove -- while every label says otherwise.
+    if (chosen == Provider::BatchLAS_Jacobi) {
+        return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+    }
+
     if (chosen == Provider::BatchLAS_CTA) {
         return hermitian_uplo.has_value()
             ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
@@ -372,6 +408,10 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
 
     if (chosen == Provider::Vendor) {
         return backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    }
+
+    if (chosen == Provider::BatchLAS_Jacobi) {
+        return gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
     if (chosen == Provider::BatchLAS_CTA) {

@@ -137,7 +137,7 @@ SvdErrors svd_errors_host(int n,
     return e;
 }
 
-enum class RelAccImpl { BatchlasCta, CusolverJacobi };
+enum class RelAccImpl { BatchlasCta, CusolverJacobi, BatchlasJacobi };
 
 template <typename Real, Backend B, RelAccImpl Impl>
 void run_gesvd_relacc(miniacc::State& state) {
@@ -151,7 +151,9 @@ void run_gesvd_relacc(miniacc::State& state) {
     // in-order: the native CTA provider requires it.
     auto q = std::make_shared<Queue>(Device("gpu"), B, true);
 
-    state.SetTag("impl", Impl == RelAccImpl::BatchlasCta ? "gesvd_cta" : "cusolver_gesvdj");
+    state.SetTag("impl", Impl == RelAccImpl::BatchlasCta      ? "gesvd_cta"
+                       : Impl == RelAccImpl::CusolverJacobi   ? "cusolver_gesvdj"
+                                                              : "gesvdj_cta");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Real>());
 
@@ -182,13 +184,16 @@ void run_gesvd_relacc(miniacc::State& state) {
                 UnifiedVector<std::byte> ws(ws_bytes);
                 gesvd_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                    SvdVectors::All, SvdVectors::All, ws.to_span());
-            } else {
+            } else if constexpr (Impl == RelAccImpl::CusolverJacobi) {
                 const size_t ws_bytes = backend::gesvd_vendor_buffer_size<B, Real>(
                     *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
                 backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                                SvdVectors::All, SvdVectors::All, ws.to_span());
+            } else {
+                gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                                    SvdVectors::All, SvdVectors::All);
             }
             q->wait_and_throw();
         } catch (const std::exception& ex) {
@@ -253,7 +258,13 @@ void ACC_GESVD_RELACC_CUSOLVER(miniacc::State& state) {
     run_gesvd_relacc<Real, B, RelAccImpl::CusolverJacobi>(state);
 }
 
+template <typename Real, Backend B>
+void ACC_GESVD_RELACC_JACOBI(miniacc::State& state) {
+    run_gesvd_relacc<Real, B, RelAccImpl::BatchlasJacobi>(state);
+}
+
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_BATCHLAS, GesvdRelAccSizes)
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_CUSOLVER, GesvdRelAccSizes)
+BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_JACOBI, GesvdRelAccSizes)
 
 MINI_ACC_MAIN()

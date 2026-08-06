@@ -2050,6 +2050,72 @@ namespace batchlas {
                                  Uplo hermitian_uplo);
 
     /**
+     * @brief Parameters for the one-sided Jacobi SVD (`gesvdj_cta`).
+     *
+     * Deliberately NOT a reuse of JacobiParams: that struct's `sort_order`
+     * defaults to Ascending, while gesvd's contract admits exactly one order
+     * (descending), so reusing it invites a silent reversal. The shared field
+     * names carry the same meaning; see the JacobiParams comment above for the
+     * rationale behind the relative threshold.
+     */
+    template <typename T>
+    struct GesvdjParams {
+        using Real = typename base_type<T>::type;
+
+        // A rotation is applied to pivot pair (p,q) only when
+        //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
+        // where a_** are the 2x2 Gram entries of the current columns. This
+        // relative form is what yields the high relative accuracy.
+        Real tol_multiplier = Real(1);
+
+        // Cap on cyclic sweeps. Convergence normally occurs in well under 10.
+        size_t max_sweeps = 30;
+
+        // Multiplies the baseline problems-per-work-group. Baseline is
+        // 32 / P problems, clamped by local memory and max work-group size.
+        size_t cta_wg_size_multiplier = 1;
+
+        // sigma_j <= zero_sigma_multiplier * eps * sigma_max means U_j is not
+        // determined by A and is filled from the orthogonal complement.
+        Real zero_sigma_multiplier = Real(1);
+    };
+
+    /**
+     * @brief One-sided (Hestenes) Jacobi SVD for batches of small matrices.
+     *
+     * Computes A = U * diag(s) * Vh with high RELATIVE accuracy: the error in
+     * the singular values is governed by the condition number of the
+     * column-equilibrated matrix rather than of A itself, so graded and badly
+     * scaled inputs keep their small singular values. This is the property the
+     * gebrd -> normal-equation-tridiagonal -> steqr path in `gesvd_cta` and
+     * `gesvd_blocked` does not have.
+     *
+     * Supports max(m, n) <= 32, real and complex, rectangular in both
+     * orientations. A is DESTROYED. Singular values are returned descending.
+     * Requires no workspace -- everything is local-memory resident.
+     */
+    template <Backend B, typename T>
+    Event gesvdj_cta(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& a_in,
+                     Span<typename base_type<T>::type> singular_values,
+                     const MatrixView<T, MatrixFormat::Dense>& u_out,
+                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                     SvdVectors jobu,
+                     SvdVectors jobvh,
+                     const Span<std::byte>& ws = Span<std::byte>(),
+                     GesvdjParams<T> params = GesvdjParams<T>());
+
+    template <Backend B, typename T>
+    size_t gesvdj_cta_buffer_size(Queue& ctx,
+                                  const MatrixView<T, MatrixFormat::Dense>& a,
+                                  Span<typename base_type<T>::type> singular_values,
+                                  const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                  const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                  SvdVectors jobu,
+                                  SvdVectors jobvh,
+                                  GesvdjParams<T> params = GesvdjParams<T>());
+
+    /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
      *
      * This applies the implicit orthogonal/unitary matrix Q represented by Householder
@@ -2360,6 +2426,8 @@ BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ormqx_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(stedc)
 BATCHLAS_DISPATCH_ON_QUEUE(stedc_workspace_size)
