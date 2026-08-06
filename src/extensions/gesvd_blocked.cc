@@ -33,6 +33,32 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
     return mode == GesvdNativeMode::Blocked && n >= 128;
 }
 
+// Which bidiagonal solver the Blocked path uses.
+//
+// bdsqr is the ACCURATE choice and normal equations is the FAST one, and the gap
+// in both directions is large enough that this cannot be decided silently.
+// Measured at batch=512, float, full vectors (benchmarks/gesvd_blocked_benchmark):
+//
+//   n     normal-eq     bdsqr        accuracy at kappa=1e4 (n=32 A/B)
+//   64    201 ms        643 ms       relerr 0.258 -> 6.7e-5, ortho 1.48 -> 1.9e-6
+//   128   7.97 ms       3255 ms
+//   256   65.5 ms       24388 ms
+//
+// bdsqr runs one THREAD per matrix with the whole Golub-Kahan sweep serial
+// inside it, so the cost is not a tuning problem: values-only bdsqr at n=128
+// (59 ms) is already 7x the entire normal-equation pipeline including its
+// back-transforms. Parallelising the rotation accumulation would help the 55x
+// gap between values-only and vectors, but cannot close the base gap.
+//
+// Default therefore stays on normal equations so nothing regresses 400x, with
+// bdsqr one env var away for accuracy-critical use. The real fix for n > 32 is a
+// bidiagonal divide-and-conquer (bdsdc) reusing the existing stedc merge
+// machinery -- see GESVD_PLAN.md Tier 3.
+inline bool gesvd_use_bdsqr() {
+    const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
+    return v != nullptr && (std::string(v) == "bdsqr");
+}
+
 inline bool gesvd_stage_profile_enabled() {
     return env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
 }
@@ -444,6 +470,29 @@ void build_hermitian_vectors(Queue& ctx,
     });
 }
 
+// Seed a square matrix with the identity. bdsqr accumulates its Givens
+// rotations into whatever it is handed (u <- u*Q, vh <- P^T*vh), so starting
+// from I is what makes it return Q and P^T themselves.
+template <typename T>
+void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
+    auto& mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(m_out);
+    const int32_t rows = static_cast<int32_t>(m_out.rows());
+    const int32_t cols = static_cast<int32_t>(m_out.cols());
+    const int32_t batch = static_cast<int32_t>(m_out.batch_size());
+    ctx->submit([&](sycl::handler& h) {
+        auto M = mut.kernel_view();
+        h.parallel_for(sycl::range<2>(static_cast<size_t>(batch),
+                                      static_cast<size_t>(rows) * static_cast<size_t>(cols)),
+                       [=](sycl::id<2> id) {
+            const int32_t b = static_cast<int32_t>(id[0]);
+            const int32_t lin = static_cast<int32_t>(id[1]);
+            const int32_t c = lin / rows;
+            const int32_t r = lin - c * rows;
+            M(r, c, b) = (r == c) ? T(1) : T(0);
+        });
+    });
+}
+
 template <typename T>
 void build_bidiag_vectors(Queue& ctx,
                           const VectorView<T>& bidiag_d,
@@ -776,18 +825,29 @@ Event gesvd_native_impl(Queue& ctx,
         VectorView<T> sign_right(sign_span, k, batch, 1, max_order);
 
         MatrixView<T, MatrixFormat::Dense> vecs_view;
-        if (tridiag_returns_vectors) {
+        // Not needed on the Blocked (bdsqr) path: bdsqr writes its rotations
+        // straight into u_out / vh_out, so there is no intermediate k x k
+        // eigenvector matrix to hold.
+        if (tridiag_returns_vectors && !(mode == GesvdNativeMode::Blocked && gesvd_use_bdsqr())) {
             auto vecs_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(k) * static_cast<size_t>(batch));
             vecs_view = MatrixView<T, MatrixFormat::Dense>(vecs_span.data(), k, k, k, static_cast<int64_t>(k) * static_cast<int64_t>(k), batch);
         }
 
         const JobType tridiag_job = tridiag_returns_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
-        size_t solver_ws_bytes = gesvd_solver_workspace_size<B, T>(ctx, k, batch, tridiag_job, mode);
-        if (want_u) {
-            solver_ws_bytes = std::max(solver_ws_bytes,
-                                       gesvd_solver_workspace_size<B, T>(ctx, m, batch, JobType::EigenVectors, mode));
+        // The Blocked path goes through bdsqr and touches neither the tridiagonal
+        // eigensolver nor its eigenvector buffer, so it does not allocate them.
+        // At n=512 the stedc workspace is the single largest allocation here;
+        // skipping it is a real saving, not just tidiness. The sizing function is
+        // an upper bound that still covers both shapes.
+        Span<std::byte> solver_ws;
+        if (!(mode == GesvdNativeMode::Blocked && gesvd_use_bdsqr())) {
+            size_t solver_ws_bytes = gesvd_solver_workspace_size<B, T>(ctx, k, batch, tridiag_job, mode);
+            if (want_u) {
+                solver_ws_bytes = std::max(solver_ws_bytes,
+                                           gesvd_solver_workspace_size<B, T>(ctx, m, batch, JobType::EigenVectors, mode));
+            }
+            solver_ws = pool.allocate<std::byte>(ctx, solver_ws_bytes);
         }
-        auto solver_ws = pool.allocate<std::byte>(ctx, solver_ws_bytes);
         Span<std::byte> gebrd_ws;
         if (use_blocked_gebrd) {
             const size_t gebrd_ws_bytes = gebrd_blocked_buffer_size<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view, gebrd_block_size);
@@ -805,6 +865,56 @@ Event gesvd_native_impl(Queue& ctx,
                 gebrd_unblocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
             }
         });
+
+        // ---- Bidiagonal SVD ----
+        // Blocked path: solve the bidiagonal problem DIRECTLY with bdsqr.
+        //
+        // The branch below (kept for CTA mode) forms the tridiagonal of B^T B
+        // explicitly and takes sigma = sqrt(lambda), which squares the condition
+        // number -- measured relative error 0.299 at kappa=1e4 and 2.13 at 1e6
+        // for n=32 float, with U/V no longer orthogonal at all (GESVD_PLAN.md
+        // section 2.1). bdsqr works on B itself, so the error stays proportional
+        // to eps*kappa.
+        //
+        // bdsqr accumulates u <- u*Q and vh <- P^T*vh, so seeding both with the
+        // identity returns Q and P^T. With A = Q_B B P_B^H and B = Q S P^T,
+        //     A = (Q_B Q) S (P^T P_B^H)
+        // which is exactly what the two existing back-transforms below apply
+        // (ormbr 'Q' on the left, ormbr 'P' on the right) -- unchanged.
+        if (mode == GesvdNativeMode::Blocked && gesvd_use_bdsqr()) {
+            const size_t bdsqr_ws_bytes = bdsqr_buffer_size<T>(ctx, d_view, e_view, singular_values);
+            auto bdsqr_ws = pool.allocate<std::byte>(ctx, bdsqr_ws_bytes);
+
+            if (!need_vecs) {
+                profiler.run("gesvd.bdsqr", [&] {
+                    bdsqr<B, T>(ctx, d_view, e_view, singular_values, bdsqr_ws, /*sort_desc=*/true);
+                });
+                return ctx.get_event();
+            }
+
+            // U's trailing columns k..m-1 are seeded to the identity and left
+            // untouched by bdsqr, which only rotates the leading k. The
+            // back-transform then carries them to an orthonormal basis of the
+            // complement -- which is what the old path needed a whole second
+            // tridiagonal eigensolve plus patch_zero_left_vectors to produce.
+            if (want_u) {
+                profiler.run("gesvd.bdsqr.seed_u", [&] { set_identity<T>(ctx, u_out); });
+            }
+            if (want_vh) {
+                profiler.run("gesvd.bdsqr.seed_vh", [&] { set_identity<T>(ctx, vh_out); });
+            }
+
+            const MatrixView<T, MatrixFormat::Dense> u_sub =
+                want_u ? MatrixView<T, MatrixFormat::Dense>(u_out.data_ptr(), m, k, u_out.ld(), u_out.stride(), batch)
+                       : MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, batch);
+            const MatrixView<T, MatrixFormat::Dense> vh_sub =
+                want_vh ? MatrixView<T, MatrixFormat::Dense>(vh_out.data_ptr(), k, n, vh_out.ld(), vh_out.stride(), batch)
+                        : MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, batch);
+
+            profiler.run("gesvd.bdsqr", [&] {
+                bdsqr<B, T>(ctx, d_view, e_view, singular_values, bdsqr_ws, u_sub, vh_sub, /*sort_desc=*/true);
+            });
+        } else {
 
         profiler.run("gesvd.form_right_tridiag", [&] {
             form_right_tridiagonal(ctx, d_view, e_view, tri_d_right, tri_e_right);
@@ -860,6 +970,8 @@ Event gesvd_native_impl(Queue& ctx,
             profiler.run("gesvd.patch_zero_left_vectors", [&] {
                 patch_zero_left_vectors(ctx, singular_values, k, left_vecs, u_out);
             });
+        }
+
         }
 
         if (want_u) {

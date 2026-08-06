@@ -138,7 +138,7 @@ SvdErrors svd_errors_host(int n,
     return e;
 }
 
-enum class RelAccImpl { BatchlasCta, CusolverJacobi, BatchlasJacobi, QrPrecond };
+enum class RelAccImpl { BatchlasCta, CusolverJacobi, BatchlasJacobi, QrPrecond, BatchlasBlocked };
 
 template <typename Real, Backend B, RelAccImpl Impl>
 void run_gesvd_relacc(miniacc::State& state) {
@@ -155,6 +155,7 @@ void run_gesvd_relacc(miniacc::State& state) {
     state.SetTag("impl", Impl == RelAccImpl::BatchlasCta      ? "gesvd_cta"
                        : Impl == RelAccImpl::CusolverJacobi   ? "cusolver_gesvdj"
                        : Impl == RelAccImpl::BatchlasJacobi    ? "gesvdj_cta"
+                       : Impl == RelAccImpl::BatchlasBlocked   ? "gesvd_blocked"
                                                               : "gesvdj_cta_qr");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Real>());
@@ -167,9 +168,43 @@ void run_gesvd_relacc(miniacc::State& state) {
             std::min<size_t>(static_cast<size_t>(chunk_batch), state.samples() - produced));
         const unsigned seed = state.seed() + static_cast<unsigned>(produced);
 
-        auto A = random_with_log10_cond_metric<B, Real>(
-            *q, n, static_cast<Real>(target_log10), NormType::Spectral, cur_batch, seed);
-        q->wait();
+        // random_with_log10_cond_metric occasionally returns an entirely NON-FINITE
+        // matrix -- observed as 1 batch item in 32 at n=64, and it is the source
+        // of the ~0.8% Fail% that shows up identically across every
+        // implementation here. gebrd then propagates the NaN and any bidiagonal
+        // solver refuses to converge on it, which reads as a solver failure and
+        // is not one. Reject and re-draw so the instrument measures the solver.
+        Matrix<Real> A(n, n, cur_batch);
+        bool generator_failed = true;
+        for (int attempt = 0; attempt < 8 && generator_failed; ++attempt) {
+            A = random_with_log10_cond_metric<B, Real>(
+                *q, n, static_cast<Real>(target_log10), NormType::Spectral, cur_batch,
+                seed + static_cast<unsigned>(attempt) * 7919u);
+            q->wait();
+            generator_failed = false;
+            const Real* ap = A.view().data_ptr();
+            const int64_t ast = A.view().stride();
+            const int64_t ald = A.view().ld();
+            for (int b = 0; b < cur_batch && !generator_failed; ++b) {
+                for (int c = 0; c < n && !generator_failed; ++c) {
+                    for (int r = 0; r < n; ++r) {
+                        if (!std::isfinite(static_cast<double>(
+                                ap[b * ast + static_cast<int64_t>(c) * ald + r]))) {
+                            generator_failed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (generator_failed) {
+            for (int b = 0; b < cur_batch; ++b) {
+                state.RecordSample({{"log10_cond", target_log10}}, false,
+                                   "generator produced a non-finite matrix");
+            }
+            produced += static_cast<size_t>(cur_batch);
+            continue;
+        }
 
         auto A_work = A.clone();
         Matrix<Real> U(n, n, cur_batch);
@@ -194,6 +229,13 @@ void run_gesvd_relacc(miniacc::State& state) {
                 UnifiedVector<std::byte> ws(ws_bytes);
                 backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                                SvdVectors::All, SvdVectors::All, ws.to_span());
+            } else if constexpr (Impl == RelAccImpl::BatchlasBlocked) {
+                const size_t ws_bytes = gesvd_blocked_buffer_size<B, Real>(
+                    *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                    SvdVectors::All, SvdVectors::All);
+                UnifiedVector<std::byte> ws(ws_bytes);
+                gesvd_blocked<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                                       SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::QrPrecond) {
                 // Tier 2 hypothesis test, deliberately OUT of kernel.
                 //
@@ -322,6 +364,12 @@ void ACC_GESVD_RELACC_QR(miniacc::State& state) {
 }
 
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_JACOBI, GesvdRelAccSizes)
+template <typename Real, Backend B>
+void ACC_GESVD_RELACC_BLOCKED(miniacc::State& state) {
+    run_gesvd_relacc<Real, B, RelAccImpl::BatchlasBlocked>(state);
+}
+
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_QR, GesvdRelAccSizes)
+BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_BLOCKED, GesvdRelAccSizes)
 
 MINI_ACC_MAIN()

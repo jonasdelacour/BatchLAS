@@ -11,6 +11,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <limits>
 
 namespace batchlas {
 
@@ -159,6 +160,73 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         eb[l] = Real(0);
                         l = m + 1;
                         continue;
+                    }
+
+                    // ---- Zero-diagonal deflation (LAPACK DBDSQR's zero-shift branch).
+                    //
+                    // Without this the sweep below STAGNATES. If db[l] is zero
+                    // then f = -mu and g = db[l]*eb[l] = 0, so lartg returns the
+                    // identity rotation, every subsequent rotation in the chase
+                    // is also trivial, and nothing is annihilated -- the loop
+                    // spins to maxit and bdsqr reports "did not converge".
+                    //
+                    // A zero on the diagonal means the block has an exact zero
+                    // singular value. The fix is a sequence of LEFT rotations
+                    // that chases the offending superdiagonal entry along row i
+                    // and off the end of the block, leaving a zero row to
+                    // deflate. This is a zero-SHIFT step, so it is also the
+                    // numerically safe way to handle it.
+                    {
+                        int32_t zrow = -1;
+                        for (int32_t i = l; i <= m; ++i) {
+                            const Real dthresh = sycl::fmax(abs_thresh,
+                                                            std::numeric_limits<Real>::min());
+                            if (safe_abs(db[i]) <= dthresh) { zrow = i; break; }
+                        }
+                        if (zrow >= 0) {
+                            db[zrow] = Real(0);
+                            if (zrow < m) {
+                                // Zero strictly inside the block: chase e[zrow]
+                                // RIGHTWARDS with LEFT rotations, which empties
+                                // row zrow.
+                                Real f2 = eb[zrow];
+                                eb[zrow] = Real(0);
+                                for (int32_t j = zrow + 1; j <= m; ++j) {
+                                    const auto rz = internal::lartg<Real>(db[j], f2);
+                                    db[j] = rz.r;
+                                    if (accumulate_u) {
+                                        apply_rotation_to_cols(U, b, j, zrow, rz.c, rz.s);
+                                    }
+                                    if (j < m) {
+                                        f2 = -rz.s * eb[j];
+                                        eb[j] = rz.c * eb[j];
+                                    }
+                                }
+                            } else if (m > l) {
+                                // Zero at the BOTTOM of the block. The rightward
+                                // chase has nothing to do here, so handling only
+                                // that case leaves eb[l..m-1] untouched while
+                                // still advancing past the block -- the sweep
+                                // then never converges. Chase LEFTWARDS with
+                                // RIGHT rotations instead, emptying column m.
+                                Real f2 = eb[m - 1];
+                                eb[m - 1] = Real(0);
+                                for (int32_t j = m - 1; j >= l; --j) {
+                                    const auto rz = internal::lartg<Real>(db[j], f2);
+                                    db[j] = rz.r;
+                                    if (accumulate_vh) {
+                                        apply_rotation_to_rows(Vh, b, j, m, rz.c, rz.s);
+                                    }
+                                    if (j > l) {
+                                        f2 = -rz.s * eb[j - 1];
+                                        eb[j - 1] = rz.c * eb[j - 1];
+                                    }
+                                }
+                            }
+                            iters += (m - l + 1);
+                            l = m + 1;
+                            continue;
+                        }
                     }
 
                     const int32_t p = m - 1;

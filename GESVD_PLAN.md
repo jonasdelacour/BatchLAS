@@ -585,28 +585,88 @@ late, mostly-converged sweeps), not algorithmic.
 
 ## Tier 3
 
-### Repair the blocked path for `n > 32`
+### Blocked bidiagonalization for n > 32 — bdsqr FIXED and wired, but not the default
 
-Here there is no batched vendor competitor, so the bar is our own current
-accuracy — which Defect A says is poor.
+`bdsqr` is now correct and the accuracy win is exactly what the plan predicted.
+It is **not** fast enough to be the default, and the reason is structural rather
+than a tuning problem.
 
-**Option 1 (preferred): wire in `bdsqr`.** It already exists, at 420 lines, fully
-unused. `gebrd -> bdsqr -> ormbr` is the textbook accurate pipeline and replaces
-the normal-equation tridiagonal entirely. Before committing: verify `bdsqr` is
-correct and actually converges, since **nothing has ever called it** — dead code
-carries no evidence of working.
+**bdsqr had a real bug, and 420 lines of it had never executed.** It has no
+handling for a negligible diagonal entry. When `db[l]` is zero the shift gives
+`f = -mu`, `g = db[l]*eb[l] = 0`, so `lartg` returns the identity rotation,
+every rotation in the chase is trivial, nothing is annihilated, and the sweep
+spins to `maxit` and reports "did not converge" — immune to the iteration cap,
+which is how it was identified (20x `maxit` changed nothing). LAPACK DBDSQR
+handles this with a zero-SHIFT chase; that branch was missing entirely. Added in
+both directions:
 
-**Option 2: divide-and-conquer on the bidiagonal (`bdsdc`)**, reusing the
-existing `stedc` merge machinery. Faster than `bdsqr` at large `n` but a
-substantially larger build.
+* zero strictly inside the block -> chase rightwards with LEFT rotations,
+  emptying that row;
+* zero at the BOTTOM of the block -> chase leftwards with RIGHT rotations,
+  emptying that column. **Handling only the first case is itself a bug**: it
+  leaves `eb[l..m-1]` untouched while still advancing past the block, so the
+  sweep never converges. That was caught by the tests below, not by inspection.
 
-**Option 3: one-sided Jacobi on blocks** for the accuracy-critical case,
-extending Tier 2.
+`tests/bdsqr_tests.cc` is new — bdsqr previously had no test because it had no
+caller. Note the first version of it passed while the bug was still present: it
+generated only positive `d, e` in [0.3, 1.7], a far easier class than anything
+gebrd emits. The test that matters is the one with mixed signs, exact zeros and
+six decades of range.
 
-Recommendation: Option 1 first — it is the smallest change that removes the
-squaring, and it makes the existing `bdsqr` earn its place or be deleted.
+**Accuracy: the defect is closed for the blocked path.** A/B on identical data,
+float, `gesvd_blocked` normal-equation vs bdsqr:
 
----
+| n | kappa | normal-eq relerr | bdsqr relerr | normal-eq ortho | bdsqr ortho |
+|---|---|---|---|---|---|
+| 32 | 1e3 | 2.90e-3 | 8.2e-6 | 6.0e-3 | 2.0e-6 |
+| 32 | 1e4 | 0.258 | 6.7e-5 | 1.48 | 1.9e-6 |
+| 32 | 1e6 | 2.019 | 0.168 | 2.60 | 1.4e-6 |
+| 64 | 1e4 | 0.288 | 7.7e-5 | 0.631 | 3.3e-6 |
+
+Orthogonality goes flat at ~2e-6 across six decades instead of collapsing.
+Verified working at n = 64, 128 and 256.
+
+**Performance: 3-400x slower, and parallelising the obvious part will not fix
+it.** batch=512, float, full vectors:
+
+| n | normal-eq | bdsqr | |
+|---|---|---|---|
+| 64 | 201 ms | 643 ms | 3.2x |
+| 128 | 7.97 ms | 3255 ms | 408x |
+| 256 | 65.5 ms | 24388 ms | 372x |
+
+`bdsqr` runs **one thread per matrix** with the whole Golub-Kahan sweep serial
+inside it (`parallel_for(range<1>(nb))`) — the batch-only-parallelism pattern.
+The tempting fix is to parallelise the rotation accumulation, since vectors cost
+55x values-only at n=128 (3238 ms vs 59 ms) and each lane could own a row of U or
+a column of Vh with no cross-lane hazard. **That is not sufficient**: values-only
+bdsqr at n=128 is 59 ms against 7.97 ms for the *entire* normal-equation pipeline
+including both back-transforms, so the serial recurrence alone is already 7x over
+budget.
+
+**Call: default stays on normal equations; bdsqr is opt-in via
+`BATCHLAS_GESVD_BIDIAG=bdsqr`.** Shipping a 400x regression silently is worse
+than the accuracy defect it fixes, and the accuracy defect is now at least
+reachable and documented rather than unavoidable.
+
+**Next step is Option 2, not more work on bdsqr:** a bidiagonal
+divide-and-conquer (`bdsdc`) reusing the existing `stedc` merge machinery. The
+measurement above is what selects it — sequential QR per matrix is the wrong
+shape for this hardware at n >= 128 no matter how its inner loops are arranged,
+which is exactly why LAPACK switches to D&C at large n.
+
+### A generator bug that was corrupting the instrument
+
+`random_with_log10_cond_metric` intermittently returns an **entirely non-finite
+matrix** — observed as 1 batch item in 32 at n=64, float, kappa=10. gebrd
+propagates the NaN and any bidiagonal solver then refuses to converge on it,
+which reads as a solver failure and is not one. This is what produced the
+~0.8% Fail% that appeared *identically across every implementation* in earlier
+runs, and it sent the first diagnosis of the n=64 failure down the wrong path
+entirely. `benchmarks/gesvd_relacc.cc` now validates the generated matrix and
+re-draws up to 8 times before attributing anything to the solver. **The
+generator itself is still buggy and worth fixing separately** — it is likely the
+Chol2 orthogonalisation inside it.
 
 ## Tier 4
 
