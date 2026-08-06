@@ -829,6 +829,116 @@ namespace batchlas{
         return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
     }
 
+    // Moved verbatim from include/blas/functions/gesvd.hh, which used to *define*
+    // the primary template (and therefore made a cuSOLVER definition a
+    // redefinition error). Semantics are unchanged, including the synchronous
+    // ctx.wait() -- LAPACKE ?gesvd needs A on the host and this path is the
+    // reference implementation, not a fast one.
+    template <Backend B, typename T>
+    Event gesvd_vendor(Queue& ctx,
+                       const MatrixView<T, MatrixFormat::Dense>& A,
+                       Span<typename base_type<T>::type> singular_values,
+                       const MatrixView<T, MatrixFormat::Dense>& U,
+                       const MatrixView<T, MatrixFormat::Dense>& Vh,
+                       SvdVectors jobu,
+                       SvdVectors jobvh,
+                       Span<std::byte> workspace) {
+        static_cast<void>(workspace);
+
+        if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
+            throw std::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
+        }
+
+        const int m = static_cast<int>(A.rows());
+        const int n = static_cast<int>(A.cols());
+        const int k = std::min(m, n);
+        const int batch = static_cast<int>(A.batch_size());
+        const std::size_t need_s = static_cast<std::size_t>(k) * static_cast<std::size_t>(batch);
+        if (singular_values.size() < need_s) {
+            throw std::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
+        }
+
+        const char lapack_jobu = (jobu == SvdVectors::All) ? 'A' : 'N';
+        const char lapack_jobvt = (jobvh == SvdVectors::All) ? 'A' : 'N';
+
+        if (jobu == SvdVectors::All) {
+            if (U.rows() != m || U.cols() != m || U.batch_size() != batch) {
+                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x m) with matching batch");
+            }
+        }
+        if (jobvh == SvdVectors::All) {
+            if (Vh.rows() != n || Vh.cols() != n || Vh.batch_size() != batch) {
+                throw std::invalid_argument("gesvd_vendor (NETLIB): Vh must be (n x n) with matching batch");
+            }
+        }
+
+        ctx.wait();
+
+        std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
+        auto& A_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(A);
+        for (int b = 0; b < batch; ++b) {
+            auto Ab = A_mut.batch_item(b);
+            auto Ub = U.batch_item(b);
+            auto Vhb = Vh.batch_item(b);
+            typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
+
+            lapack_int info = 0;
+            if constexpr (std::is_same_v<T, float>) {
+                info = LAPACKE_sgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
+                                      Ab.data_ptr(), Ab.ld(), sb,
+                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
+                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
+                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
+                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      superb.data());
+            } else if constexpr (std::is_same_v<T, double>) {
+                info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
+                                      Ab.data_ptr(), Ab.ld(), sb,
+                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
+                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
+                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
+                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      superb.data());
+            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+                info = LAPACKE_cgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
+                                      reinterpret_cast<lapack_complex_float*>(Ab.data_ptr()), Ab.ld(), sb,
+                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Ub.data_ptr()) : nullptr,
+                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
+                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Vhb.data_ptr()) : nullptr,
+                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      superb.data());
+            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+                info = LAPACKE_zgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
+                                      reinterpret_cast<lapack_complex_double*>(Ab.data_ptr()), Ab.ld(), sb,
+                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Ub.data_ptr()) : nullptr,
+                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
+                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Vhb.data_ptr()) : nullptr,
+                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      superb.data());
+            } else {
+                throw std::runtime_error("gesvd_vendor (NETLIB): unsupported scalar type");
+            }
+
+            if (info != 0) {
+                throw std::runtime_error("gesvd_vendor (NETLIB): LAPACKE gesvd failed");
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
+    template <Backend B, typename T>
+    size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*A*/,
+                                    Span<typename base_type<T>::type> /*singular_values*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*U*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
+                                    SvdVectors /*jobu*/,
+                                    SvdVectors /*jobvh*/) {
+        // LAPACKE path uses no user-provided workspace.
+        return op_external("lapacke.gesvd_buffer_size", [&] { return static_cast<size_t>(0); });
+    }
+
     } // namespace backend
 
     template <Backend Back, typename T>
@@ -1150,6 +1260,8 @@ namespace batchlas{
     #define SYEV_BUFFER_SIZE_INSTANTIATE(fp)    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
     #define SYEV_VENDOR_INSTANTIATE(fp)         BATCHLAS_INSTANTIATE(sig::syev_vendor<fp>, backend::syev_vendor, B_, fp)
     #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::syev_vendor_buffer_size<fp>, backend::syev_vendor_buffer_size, B_, fp)
+    #define GESVD_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::gesvd_vendor<fp>, backend::gesvd_vendor, B_, fp)
+    #define GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::gesvd_vendor_buffer_size<fp>, backend::gesvd_vendor_buffer_size, B_, fp)
 
     #define BLAS_LEVEL3_INSTANTIATE(fp) \
         SPMM_INSTANTIATE(fp, MatrixFormat::CSR) \
@@ -1176,7 +1288,9 @@ namespace batchlas{
         SYEV_INSTANTIATE(fp) \
         SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
-        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)
+        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+        GESVD_VENDOR_INSTANTIATE(fp) \
+        GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)
 
     // Instantiate for the floating-point types of interest.
     BLAS_LEVEL3_INSTANTIATE(float)
@@ -1232,6 +1346,8 @@ namespace batchlas{
     #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
+    #undef GESVD_VENDOR_INSTANTIATE
+    #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef BLAS_LEVEL3_INSTANTIATE
     #undef B_
 }

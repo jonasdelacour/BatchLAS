@@ -345,7 +345,40 @@ namespace batchlas {
         });
     }
 
+    // gesvd has no rocSOLVER binding yet. This stub exists because
+    // include/blas/functions/gesvd.hh is now declaration-only (it used to define a
+    // generic throwing template, which is what blocked a cuSOLVER implementation).
+    // Without a definition here a ROCM build fails to link rather than failing at
+    // the call, so the throw is preserved deliberately.
+    template <Backend B, typename T>
+    Event gesvd_vendor(Queue& /*ctx*/,
+                       const MatrixView<T, MatrixFormat::Dense>& /*A*/,
+                       Span<typename base_type<T>::type> /*singular_values*/,
+                       const MatrixView<T, MatrixFormat::Dense>& /*U*/,
+                       const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
+                       SvdVectors /*jobu*/,
+                       SvdVectors /*jobvh*/,
+                       Span<std::byte> /*workspace*/) {
+        throw std::runtime_error("gesvd_vendor (ROCSOLVER): not implemented");
+    }
+
+    template <Backend B, typename T>
+    size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*A*/,
+                                    Span<typename base_type<T>::type> /*singular_values*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*U*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
+                                    SvdVectors /*jobu*/,
+                                    SvdVectors /*jobvh*/) {
+        throw std::runtime_error("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
+    }
+
     } // namespace backend
+
+    #define GESVD_VENDOR_INSTANTIATE(fp) \
+    template Event backend::gesvd_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, SvdVectors, SvdVectors, Span<std::byte>);
+    #define GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+    template size_t backend::gesvd_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, SvdVectors, SvdVectors);
 
     #define POTRF_INSTANTIATE(fp) \
     template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>);
@@ -395,6 +428,8 @@ namespace batchlas {
         SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
         SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
+        GESVD_VENDOR_INSTANTIATE(fp) \
+        GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GEQRF_INSTANTIATE(fp) \
         GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRF_INSTANTIATE(fp) \
@@ -421,6 +456,8 @@ namespace batchlas {
     #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
+    #undef GESVD_VENDOR_INSTANTIATE
+    #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_INSTANTIATE

@@ -9,6 +9,66 @@ already-built binaries in `build/benchmarks/`.
 
 ---
 
+## STATUS UPDATE — Tiers 0 and the accuracy harness are DONE and measured
+
+Both prerequisites in §8 have landed. The comparison the plan could not previously
+make is now made, and it splits cleanly in two.
+
+**Speed: BatchLAS already wins.** n=32, float, `gesvd_vendor_benchmark`, pinned to
+an idle GPU (`CUDA_VISIBLE_DEVICES=1`; std dev <= 0.5% of mean):
+
+| batch | jobu/jobvh | cuSOLVER `gesvdjBatched` | BatchLAS `gesvd_cta` | speedup |
+|---|---|---|---|---|
+| 4096 | None/None | 3.372 ms | 0.911 ms | **3.70x** |
+| 4096 | All/All | 3.250 ms | 2.131 ms | **1.53x** |
+| 16384 | None/None | 12.159 ms | 3.248 ms | **3.74x** |
+| 16384 | All/All | 12.664 ms | 7.827 ms | **1.62x** |
+
+In double at n=32/batch=16384/All-All: cuSOLVER 365.2 ms vs BatchLAS 80.9 ms — **4.5x**.
+Note `gesvdjBatched`'s time barely moves with `jobz` (3.37 vs 3.25), so it appears to
+compute vectors regardless. Full sweep: `benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`.
+
+**Accuracy: cuSOLVER wins by 2-3 orders of magnitude, exactly as §2.1 predicted.**
+`gesvd_relacc --samples=128 --log10-cond=1..6 --type=float 32`, relative error in the
+singular values against the *known* constructed spectrum:
+
+| log10 kappa | BatchLAS `max_relerr` | cuSOLVER `max_relerr` | BatchLAS orthogonality | cuSOLVER orthogonality |
+|---|---|---|---|---|
+| 1 | 7.8e-3 | 4.1e-6 | 2.9e-6 | 7.7e-6 |
+| 2 | 7.9e-3 | 4.1e-6 | 1.0e-4 | 7.5e-6 |
+| 3 | 1.1e-2 | 1.0e-5 | 5.8e-3 | 7.6e-6 |
+| 4 | **0.299** | 8.4e-5 | **1.11** | 8.2e-6 |
+| 5 | **1.06** | 7.4e-4 | **1.50** | 8.1e-6 |
+| 6 | **2.13** | 9.3e-3 | **2.43** | 8.0e-6 |
+
+cuSOLVER tracks `eps * kappa` — the Demmel-Veselic bound — and its orthogonality is
+flat at ~8e-6 across six decades. The BatchLAS normal-equations path has lost all
+relative accuracy by kappa = 1e4 and its U/V are no longer orthogonal at all. Note
+it is already at 7.8e-3 at kappa = 10, i.e. ~1e5 x eps: the damage starts immediately,
+not just at high conditioning.
+
+**What this means for the plan.** The strategic picture inverts relative to §7 risk 1.
+We do not need to find speed; we need to *keep* it while fixing accuracy. Tier 1's bar
+is therefore not "beat 4.09 ms" but "reach cuSOLVER-class relative accuracy while
+staying under cuSOLVER's 3.25 ms at n=32/batch=4096" — 1.5x of headroom over the
+current path, against a target `syev_jacobi_cta` already meets at 2.11 ms for a
+comparable amount of work. Tiers 1 and 2 are still the right work; the payoff is
+now quantified rather than assumed.
+
+**Tier 1 design decision (settled).** A three-candidate design panel judged by three
+independent lenses (performance, numerical accuracy, implementability) returned a
+unanimous 3/3 verdict for **lane = row, one warp per problem, round-batched
+reduce-scatter Gram**. The Gram-resident variant was rejected — its own author
+concluded it is wrong at m=n=32 (per-round LDS cost 10n vs 5n+2m). The accuracy judge
+found a real defect in the winning design that must be repaired before implementation:
+its reduce-scatter `half = (16 >> step) / 2` yields 8,4,2,1,**0**, so the fifth step is
+a no-op and every dot product is silently halved; the fix is a plain all-reduce
+special-cased outside the formula.
+
+---
+
+---
+
 ## Table of contents
 
 1. [Current status — what actually exists](#1-current-status)
