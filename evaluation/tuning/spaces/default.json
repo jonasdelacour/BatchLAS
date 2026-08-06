@@ -1,4 +1,28 @@
 {
+  "_comment": [
+    "Every bench here feeds a constant in include/batchlas/tuning_params.hh.",
+    "The generator reads exactly these bench names: stedc, sytrd_blocked,",
+    "ormqr_blocked, syev, gesvd, latrd_lower_panel. A bench whose winner has",
+    "nowhere to go belongs in unwired.json, not here.",
+    "",
+    "Dependencies, in the order they matter:",
+    " - syev overrides the sytrd_blocked buckets. sytrd_blocked is only the",
+    "   fallback for sizes syev does not cover, so syev's nb grid must be at",
+    "   least as wide as sytrd_blocked's.",
+    " - syev couples nb, the LATRD lower-panel wg hint and the fused panel",
+    "   update in one tuple, because they trade against each other inside the",
+    "   panel loop and the end-to-end eigensolver time is the objective.",
+    " - stedc's constants are global, so they are tuned standalone and then",
+    "   inherited by syev's and gesvd's tridiagonal solve. Tune stedc first if",
+    "   you tune by hand.",
+    " - ormqr and gebrd had one shared constant until 2026-08-06. They are",
+    "   separate now; see the split note in tuning_params.hh. Do not merge the",
+    "   grids again.",
+    "",
+    "Grids must contain the value currently shipped in tuning_params.hh, or a",
+    "retune silently downgrades that constant to the best of a grid that never",
+    "contained it."
+  ],
   "spaces": [
     {
       "bench": "stedc",
@@ -6,179 +30,127 @@
       "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "recursion_threshold", "flat", "threads_per_root", "wg_multiplier"],
+      "_comment": "wg_multiplier includes 8 because STEDC_WG_MULTIPLIER_* ships 8; the old grid stopped at 4 and would have downgraded it. flat is the merge variant: 1=Fused, 2=FusedCta.",
       "pre_tune": [
-        {
-          "params": {
-            "recursion_threshold": [8, 16, 32, 64]
-          },
-          "cases": [0]
-        }
+        { "params": { "recursion_threshold": [8, 16, 32, 64] }, "cases": [0] }
       ],
       "cases": [
-        {
-          "fixed": {"n": 64, "batch": 8192},
-          "tune": {
-            "flat": [0, 1, 2],
-            "threads_per_root": [4, 8, 16, 32],
-            "wg_multiplier": [1, 2, 4]
-          }
-        },
-        {
-          "fixed": {"n": 128, "batch": 4096},
-          "tune": {
-            "flat": [0, 1, 2],
-            "threads_per_root": [4, 8, 16, 32],
-            "wg_multiplier": [1, 2, 4]
-          }
-        },
-        {
-          "fixed": {"n": 256, "batch": 2048},
-          "tune": {
-            "flat": [0, 1, 2],
-            "threads_per_root": [4, 8, 16, 32],
-            "wg_multiplier": [1, 2, 4]
-          }
-        },
-        {
-          "fixed": {"n": 512, "batch": 1024},
-          "tune": {
-            "flat": [0, 1, 2],
-            "threads_per_root": [4, 8, 16, 32],
-            "wg_multiplier": [1, 2, 4]
-          }
-        },
-        {
-          "fixed": {"n": 1024, "batch": 512},
-          "tune": {
-            "flat": [0, 1, 2],
-            "threads_per_root": [4, 8, 16, 32],
-            "wg_multiplier": [1, 2, 4]
-          }
-        }
+        { "fixed": { "n": 64,   "batch": 8192 }, "tune": { "flat": [0, 1, 2], "threads_per_root": [4, 8, 16, 32], "wg_multiplier": [1, 2, 4, 8] } },
+        { "fixed": { "n": 128,  "batch": 4096 }, "tune": { "flat": [0, 1, 2], "threads_per_root": [4, 8, 16, 32], "wg_multiplier": [1, 2, 4, 8] } },
+        { "fixed": { "n": 256,  "batch": 2048 }, "tune": { "flat": [0, 1, 2], "threads_per_root": [4, 8, 16, 32], "wg_multiplier": [1, 2, 4, 8] } },
+        { "fixed": { "n": 512,  "batch": 1024 }, "tune": { "flat": [0, 1, 2], "threads_per_root": [4, 8, 16, 32], "wg_multiplier": [1, 2, 4, 8] } },
+        { "fixed": { "n": 1024, "batch": 512  }, "tune": { "flat": [0, 1, 2], "threads_per_root": [4, 8, 16, 32], "wg_multiplier": [1, 2, 4, 8] } }
       ]
     },
-    {
-      "bench": "steqr",
-      "exe": "steqr_benchmark",
-      "metric": "T(µs)/matrix",
-      "direction": "min",
-      "arg_spec": ["n", "batch", "n_sweeps", "wg_multiplier", "shift_kind"],
-      "cases": [
-        {
-          "fixed": {"n": 16, "batch": 4096, "n_sweeps": 10},
-          "tune": {"wg_multiplier": [1, 2, 4], "shift_kind": [0, 1, 2]}
-        },
-        {
-          "fixed": {"n": 32, "batch": 4096, "n_sweeps": 10},
-          "tune": {"wg_multiplier": [1, 2, 4], "shift_kind": [0, 1, 2]}
-        }
-      ]
-    },
+
     {
       "bench": "sytrd_blocked",
       "exe": "sytrd_blocked_benchmark",
       "metric": "T(µs)/matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "nb", "uplo"],
+      "_comment": "Fallback only: syev's coupled nb overrides these buckets whenever a syev entry is present.",
       "cases": [
-        {
-          "fixed": {"n": 64, "batch": 8192, "uplo": 0},
-          "tune": {"nb": [8, 12, 16]}
-        },
-        {
-          "fixed": {"n": 128, "batch": 4096, "uplo": 0},
-          "tune": {"nb": [8, 12, 16, 24, 32]}
-        },
-        {
-          "fixed": {"n": 256, "batch": 2048, "uplo": 0},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
-        },
-        {
-          "fixed": {"n": 512, "batch": 1024, "uplo": 0},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
-        },
-        {
-          "fixed": {"n": 1024, "batch": 512, "uplo": 0},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64]}
-        }
+        { "fixed": { "n": 64,   "batch": 8192, "uplo": 0 }, "tune": { "nb": [8, 12, 16, 24] } },
+        { "fixed": { "n": 128,  "batch": 4096, "uplo": 0 }, "tune": { "nb": [8, 12, 16, 24, 32] } },
+        { "fixed": { "n": 256,  "batch": 2048, "uplo": 0 }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64] } },
+        { "fixed": { "n": 512,  "batch": 1024, "uplo": 0 }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64] } },
+        { "fixed": { "n": 1024, "batch": 512,  "uplo": 0 }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64] } }
       ]
     },
+
     {
       "bench": "ormqr_blocked",
       "exe": "ormqr_blocked_benchmark",
       "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "side", "trans", "block_size"],
+      "_comment": [
+        "Both sides at every n: they disagree at n=64 (side 0 wants 16, side 1 wants 8) and the bucket has to serve both.",
+        "This bench takes block_size as an explicit argument, so it is blind to",
+        "the two ways the constant reaches production wrongly: the sy2sb shape",
+        "gate shadows it at n>=1024, and gesvd used to alias it onto gebrd.",
+        "Always re-check a new winner with BATCHLAS_TUNE_ORMQR_BLOCK_SIZE against",
+        "syev_blocked and gesvd_blocked before editing the header."
+      ],
       "cases": [
-        {
-          "fixed": {"n": 64, "batch": 8192, "side": 0, "trans": 0},
-          "tune": {"block_size": [4, 8, 12, 16]}
-        },
-        {
-          "fixed": {"n": 64, "batch": 8192, "side": 1, "trans": 0},
-          "tune": {"block_size": [4, 8, 12, 16]}
-        },
-        {
-          "fixed": {"n": 128, "batch": 4096, "side": 0, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 128, "batch": 4096, "side": 1, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 256, "batch": 2048, "side": 0, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 256, "batch": 2048, "side": 1, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 512, "batch": 1024, "side": 0, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 512, "batch": 1024, "side": 1, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 1024, "batch": 512, "side": 0, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        },
-        {
-          "fixed": {"n": 1024, "batch": 512, "side": 1, "trans": 0},
-          "tune": {"block_size": [16, 24, 32, 40, 48, 56, 64]}
-        }
+        { "fixed": { "n": 64,   "batch": 8192, "side": 0, "trans": 0 }, "tune": { "block_size": [4, 8, 12, 16, 24, 32] } },
+        { "fixed": { "n": 64,   "batch": 8192, "side": 1, "trans": 0 }, "tune": { "block_size": [4, 8, 12, 16, 24, 32] } },
+        { "fixed": { "n": 128,  "batch": 4096, "side": 0, "trans": 0 }, "tune": { "block_size": [8, 16, 24, 32, 40, 48, 64] } },
+        { "fixed": { "n": 128,  "batch": 4096, "side": 1, "trans": 0 }, "tune": { "block_size": [8, 16, 24, 32, 40, 48, 64] } },
+        { "fixed": { "n": 256,  "batch": 2048, "side": 0, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } },
+        { "fixed": { "n": 256,  "batch": 2048, "side": 1, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } },
+        { "fixed": { "n": 512,  "batch": 1024, "side": 0, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } },
+        { "fixed": { "n": 512,  "batch": 1024, "side": 1, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } },
+        { "fixed": { "n": 1024, "batch": 512,  "side": 0, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } },
+        { "fixed": { "n": 1024, "batch": 512,  "side": 1, "trans": 0 }, "tune": { "block_size": [16, 24, 32, 40, 48, 56, 64] } }
       ]
     },
+
+    {
+      "bench": "gesvd",
+      "exe": "gesvd_blocked_benchmark",
+      "metric": "Time (µs) / matrix",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "jobu", "jobvh"],
+      "env": { "gebrd_nb": "BATCHLAS_TUNE_GEBRD_BLOCK_SIZE" },
+      "_comment": [
+        "Feeds GEBRD_BLOCK_SIZE_*. gebrd has no positional argument anywhere, so",
+        "it is reached through the tuning accessor's environment override.",
+        "jobu/jobvh are 0 (no vectors) on purpose: that makes gesvd.gebrd ~95% of",
+        "the call, so the measurement is about the parameter being tuned rather",
+        "than about the ormqr backtransforms, which have their own constant.",
+        "Measured optimum at n=512 is 16 with a flat +-2% curve -- if a retune",
+        "moves this far, be suspicious before believing it."
+      ],
+      "cases": [
+        { "fixed": { "n": 128,  "batch": 1024, "jobu": 0, "jobvh": 0 }, "tune": { "gebrd_nb": [8, 12, 16, 24, 32] } },
+        { "fixed": { "n": 256,  "batch": 512,  "jobu": 0, "jobvh": 0 }, "tune": { "gebrd_nb": [8, 12, 16, 24, 32] } },
+        { "fixed": { "n": 512,  "batch": 256,  "jobu": 0, "jobvh": 0 }, "tune": { "gebrd_nb": [8, 12, 16, 24, 32, 48] } },
+        { "fixed": { "n": 1024, "batch": 128,  "jobu": 0, "jobvh": 0 }, "tune": { "gebrd_nb": [8, 12, 16, 24, 32, 48] } }
+      ]
+    },
+
+    {
+      "bench": "latrd_lower_panel",
+      "exe": "latrd_lower_panel_benchmark",
+      "metric": "Time (µs) / matrix",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "ib", "j0", "fuse"],
+      "env": { "wg": "BATCHLAS_TUNE_LATRD_WG_HINT" },
+      "_comment": [
+        "Supplies the LATRD wg-hint fallback the generator looks for. syev's",
+        "coupled 'wg' still wins wherever syev covers the size; this only fills",
+        "the gaps. wg=0 means 'let the kernel choose', which is what ships.",
+        "The benchmark exposes ib/j0/fuse positionally but not wg, so the hint",
+        "goes through the env override."
+      ],
+      "cases": [
+        { "fixed": { "n": 128, "batch": 1024, "ib": 32, "j0": 0, "fuse": 0 }, "tune": { "wg": [64, 128, 256] } },
+        { "fixed": { "n": 256, "batch": 1024, "ib": 32, "j0": 0, "fuse": 0 }, "tune": { "wg": [64, 128, 256] } },
+        { "fixed": { "n": 512, "batch": 1024, "ib": 32, "j0": 0, "fuse": 0 }, "tune": { "wg": [64, 128, 256] } }
+      ]
+    },
+
     {
       "bench": "syev",
       "exe": "syev_benchmark",
       "metric": "Time (µs) / matrix",
       "direction": "min",
       "arg_spec": ["n", "batch", "nb", "wg", "fuse"],
+      "_comment": [
+        "The authority for SYTRD_BLOCK_SIZE_*, LATRD_LOWER_PANEL_WG_HINT_* and",
+        "SYTRD_FUSE_PANEL_UPDATE_*: it optimises the tuple against end-to-end",
+        "eigensolver time rather than against the panel kernel alone.",
+        "Note n>=512 takes the two-stage route, where sb2st_hh is ~53% of the",
+        "time and is tuned by nothing here -- see unwired.json."
+      ],
       "cases": [
-        {
-          "fixed": {"n": 64, "batch": 4096},
-          "tune": {"nb": [8, 12, 16, 24], "wg": [0, 64, 128, 256], "fuse": [0, 1]}
-        },
-        {
-          "fixed": {"n": 128, "batch": 2048},
-          "tune": {"nb": [8, 12, 16, 24, 32], "wg": [0, 64, 128, 256], "fuse": [0, 1]}
-        },
-        {
-          "fixed": {"n": 256, "batch": 1024},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64], "wg": [0, 64, 128, 256], "fuse": [0, 1]}
-        },
-        {
-          "fixed": {"n": 512, "batch": 512},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64], "wg": [0, 64, 128, 256], "fuse": [0, 1]}
-        },
-        {
-          "fixed": {"n": 1024, "batch": 256},
-          "tune": {"nb": [8, 12, 16, 24, 32, 48, 64], "wg": [0, 64, 128, 256], "fuse": [0, 1]}
-        }
+        { "fixed": { "n": 64,   "batch": 4096 }, "tune": { "nb": [8, 12, 16, 24],                 "wg": [0, 64, 128, 256], "fuse": [0, 1] } },
+        { "fixed": { "n": 128,  "batch": 2048 }, "tune": { "nb": [8, 12, 16, 24, 32],             "wg": [0, 64, 128, 256], "fuse": [0, 1] } },
+        { "fixed": { "n": 256,  "batch": 1024 }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64],     "wg": [0, 64, 128, 256], "fuse": [0, 1] } },
+        { "fixed": { "n": 512,  "batch": 512  }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64],     "wg": [0, 64, 128, 256], "fuse": [0, 1] } },
+        { "fixed": { "n": 1024, "batch": 256  }, "tune": { "nb": [8, 12, 16, 24, 32, 48, 64],     "wg": [0, 64, 128, 256], "fuse": [0, 1] } }
       ]
     }
   ]

@@ -133,6 +133,7 @@ def _emit_header(out_path: Path,
                  ormqr_medium: int,
                  ormqr_large: int,
                  ormqr_xlarge: int,
+                 gebrd: Dict[str, int],
                  sytrd_tiny: int,
                  sytrd_small: int,
                  sytrd_medium: int,
@@ -190,6 +191,15 @@ inline constexpr int32_t ORMQR_BLOCK_SIZE_MEDIUM = {ormqr_medium};
 inline constexpr int32_t ORMQR_BLOCK_SIZE_LARGE = {ormqr_large};
 inline constexpr int32_t ORMQR_BLOCK_SIZE_XLARGE = {ormqr_xlarge};
 
+// gebrd's panel width. Deliberately NOT the ormqr constant: gesvd used to size
+// its bidiagonal reduction from ORMQR_BLOCK_SIZE_*, and the two have opposite
+// gradients, so one knob pinned the steep parameter at the flat one's optimum.
+inline constexpr int32_t GEBRD_BLOCK_SIZE_TINY = {gebrd["tiny"]};
+inline constexpr int32_t GEBRD_BLOCK_SIZE_SMALL = {gebrd["small"]};
+inline constexpr int32_t GEBRD_BLOCK_SIZE_MEDIUM = {gebrd["medium"]};
+inline constexpr int32_t GEBRD_BLOCK_SIZE_LARGE = {gebrd["large"]};
+inline constexpr int32_t GEBRD_BLOCK_SIZE_XLARGE = {gebrd["xlarge"]};
+
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = {sytrd_tiny};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = {sytrd_small};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = {sytrd_medium};
@@ -242,6 +252,14 @@ inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {{
     if (n <= 256) return ORMQR_BLOCK_SIZE_MEDIUM;
     if (n <= 512) return ORMQR_BLOCK_SIZE_LARGE;
     return ORMQR_BLOCK_SIZE_XLARGE;
+}}
+
+inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {{
+    if (n <= 64) return GEBRD_BLOCK_SIZE_TINY;
+    if (n <= 128) return GEBRD_BLOCK_SIZE_SMALL;
+    if (n <= 256) return GEBRD_BLOCK_SIZE_MEDIUM;
+    if (n <= 512) return GEBRD_BLOCK_SIZE_LARGE;
+    return GEBRD_BLOCK_SIZE_XLARGE;
 }}
 
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {{
@@ -302,6 +320,11 @@ inline int32_t ormqr_block_size_for_n(int32_t n) {{
                                        ormqr_block_size_default_for_n(n));
 }}
 
+inline int32_t gebrd_block_size_for_n(int32_t n) {{
+    return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
+                                       gebrd_block_size_default_for_n(n));
+}}
+
 inline int32_t sytrd_block_size_for_n(int32_t n) {{
     return detail::tuning_env_override("BATCHLAS_TUNE_SYTRD_BLOCK_SIZE",
                                        sytrd_block_size_default_for_n(n));
@@ -360,6 +383,11 @@ def main() -> int:
     parser.add_argument("--fallback-ormqr-block-size-medium", type=int, default=-1)
     parser.add_argument("--fallback-ormqr-block-size-large", type=int, default=-1)
     parser.add_argument("--fallback-ormqr-block-size-xlarge", type=int, default=-1)
+    parser.add_argument("--fallback-gebrd-block-size-tiny", type=int, default=-1)
+    parser.add_argument("--fallback-gebrd-block-size-small", type=int, default=-1)
+    parser.add_argument("--fallback-gebrd-block-size-medium", type=int, default=-1)
+    parser.add_argument("--fallback-gebrd-block-size-large", type=int, default=-1)
+    parser.add_argument("--fallback-gebrd-block-size-xlarge", type=int, default=-1)
     parser.add_argument("--fallback-sytrd-block-size-tiny", type=int, default=-1)
     parser.add_argument("--fallback-sytrd-block-size-small", type=int, default=-1)
     parser.add_argument("--fallback-sytrd-block-size-medium", type=int, default=-1)
@@ -430,6 +458,22 @@ def main() -> int:
                                               sytrd_buckets["xlarge"],
                                               direction="min")
 
+    # gebrd is tuned through gesvd, whose gebrd stage is 79-95% of the call.
+    # Falls back to 16 -- the value gesvd shipped while gebrd and ormqr shared a
+    # constant -- so a profile without a gesvd bench leaves behaviour unchanged.
+    gesvd_entry = _find_bench_entry(profile, "gesvd")
+    gesvd_params = _find_best_params(profile, "gesvd")
+    gebrd_default = int(gesvd_params.get("gebrd_nb", 16))
+
+    def _gebrd_fallback(bucket: str) -> int:
+        v = getattr(args, f"fallback_gebrd_block_size_{bucket}")
+        return v if v > 0 else gebrd_default
+
+    gebrd_buckets = _derive_param_buckets(
+        gesvd_entry, "gebrd_nb",
+        *[_gebrd_fallback(b) for b in ["tiny", "small", "medium", "large", "xlarge"]],
+        direction="min")
+
     latrd_wg_fallback = int(latrd_params.get("wg", args.fallback_latrd_lower_panel_wg_hint))
     latrd_wg_buckets = _derive_param_buckets(syev_entry,
                                              "wg",
@@ -486,6 +530,7 @@ def main() -> int:
                  ormqr_buckets["medium"],
                  ormqr_buckets["large"],
                  ormqr_buckets["xlarge"],
+                 gebrd_buckets,
                  sytrd_buckets["tiny"],
                  sytrd_buckets["small"],
                  sytrd_buckets["medium"],

@@ -26,6 +26,12 @@ class BenchSpace:
     arg_spec: List[str]
     cases: List[Dict[str, Any]]  # each has {"fixed": {..}, "tune": {..}}
     pre_tune: List[Dict[str, Any]]  # optional bench-level phases: {"params": {..}, "cases": [..]}
+    # {param_name: ENV_VAR}. Params listed here are passed to the benchmark as
+    # environment variables instead of positional arguments, which is the only
+    # way to reach knobs no benchmark exposes in its arg list (gebrd's panel
+    # width, the sy2sb ormqr hint, the sb2st block size...). They must NOT
+    # appear in arg_spec.
+    env: Dict[str, str]
 
 
 def _repo_root() -> Path:
@@ -54,6 +60,23 @@ def _iter_grid(tune: Dict[str, List[int]]) -> Iterable[Dict[str, int]]:
     value_lists = [tune[k] for k in keys]
     for combo in itertools.product(*value_lists):
         yield {k: int(v) for k, v in zip(keys, combo)}
+
+
+def _env_from_spec(env_spec: Dict[str, str],
+                   fixed: Dict[str, int],
+                   params: Dict[str, int]) -> Dict[str, str]:
+    """Environment overrides for this combo, as {ENV_VAR: "value"}.
+
+    A param with no value in either params or fixed is simply left unset, which
+    means the benchmark keeps its compiled default.
+    """
+    out: Dict[str, str] = {}
+    for name, env_var in env_spec.items():
+        if name in params:
+            out[str(env_var)] = str(int(params[name]))
+        elif name in fixed:
+            out[str(env_var)] = str(int(fixed[name]))
+    return out
 
 
 def _args_from_spec(arg_spec: List[str], fixed: Dict[str, int], params: Dict[str, int]) -> List[int]:
@@ -172,10 +195,11 @@ def _tune_pre_phases(
                 case = space.cases[case_idx]
                 fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
                 case_defaults = _representative_case_params(case, exclude=effective_params.keys())
+                phase_params = {**case_defaults, **effective_params}
                 args = _args_from_spec(
                     space.arg_spec,
                     fixed=fixed,
-                    params={**case_defaults, **effective_params},
+                    params=phase_params,
                 )
                 values.append(
                     _run_one_case(
@@ -188,6 +212,7 @@ def _tune_pre_phases(
                         min_iters=min_iters,
                         max_iters=max_iters,
                         args=args,
+                        env_overrides=_env_from_spec(space.env, fixed=fixed, params=phase_params),
                     )
                 )
 
@@ -226,7 +251,13 @@ def _run_one_case(
     min_iters: int,
     max_iters: int,
     args: List[int],
+    env_overrides: Optional[Dict[str, str]] = None,
 ) -> float:
+    # Merge, never replace: run_minibench_csv hands this straight to
+    # subprocess.run, and a bare dict would drop PATH / LD_LIBRARY_PATH and the
+    # CUDA and SYCL runtime variables the benchmark needs to start at all.
+    env = {**os.environ, **env_overrides} if env_overrides else None
+
     rows = run_minibench_csv(
         exe,
         backend=backend,
@@ -238,6 +269,7 @@ def _run_one_case(
         max_iters=max_iters,
         args=args,
         prefix="batchlas-tune-",
+        env=env,
     )
     if not rows:
         raise RuntimeError(
@@ -266,6 +298,7 @@ def _load_spaces(path: Path) -> List[BenchSpace]:
                 arg_spec=list(s["arg_spec"]),
                 cases=list(s["cases"]),
                 pre_tune=list(s.get("pre_tune") or []),
+                env={str(k): str(v) for k, v in (s.get("env") or {}).items()},
             )
         )
     return spaces
@@ -306,7 +339,7 @@ def _tune_one_bench(
     # Widening the grid to a union means different combos can collapse to the
     # same argument vector for a case that does not tune every key. Measure each
     # distinct vector once.
-    measured: Dict[Tuple[int, ...], float] = {}
+    measured: Dict[Tuple[Any, ...], float] = {}
 
     for params in _iter_grid(tune_keys):
         effective_params = {**resolved_pre_tune, **params}
@@ -321,7 +354,12 @@ def _tune_one_bench(
 
             fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
             args = _args_from_spec(space.arg_spec, fixed=fixed, params=effective_params)
-            key = tuple(args)
+            env_overrides = _env_from_spec(space.env, fixed=fixed, params=effective_params)
+            # The env vars are part of the measured configuration, so they must
+            # be part of the cache key -- otherwise every env-tuned combo would
+            # collide on an identical argument vector and return the first
+            # measurement for all of them.
+            key = (tuple(args), tuple(sorted(env_overrides.items())))
             if key in measured:
                 v = measured[key]
             else:
@@ -335,10 +373,14 @@ def _tune_one_bench(
                     min_iters=min_iters,
                     max_iters=max_iters,
                     args=args,
+                    env_overrides=env_overrides,
                 )
                 measured[key] = v
             values.append(v)
-            per_case.append({"fixed": fixed, "args": args, "value": v})
+            entry_case: Dict[str, Any] = {"fixed": fixed, "args": args, "value": v}
+            if env_overrides:
+                entry_case["env"] = env_overrides
+            per_case.append(entry_case)
 
             current = per_case_best[case_idx]
             better = False

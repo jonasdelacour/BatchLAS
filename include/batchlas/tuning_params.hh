@@ -48,6 +48,23 @@ inline constexpr int32_t ORMQR_BLOCK_SIZE_MEDIUM = 16;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_LARGE = 16;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_XLARGE = 16;
 
+// gebrd's panel width. Split out of ORMQR_BLOCK_SIZE_* on 2026-08-06: gesvd
+// used the ormqr constant to size its bidiagonal reduction, an unrelated kernel,
+// and the two have opposite gradients. Measured on gesvd_blocked n=512
+// batch=256 via the gesvd.gebrd stage timer, nb across:
+//
+//     8: 234.9   12: 232.1   16: 230.7   24: 235.5   32: 240.9   48: 256.6 ms
+//
+// gebrd's optimum is 16 and its curve is flat (+-2%); ormqr's is steep (2.16x
+// between 16 and 56). Sharing one knob therefore pinned the steep parameter at
+// the flat one's optimum. These values preserve the behaviour that was shipped
+// while the constants were shared, so the split is a no-op until retuned.
+inline constexpr int32_t GEBRD_BLOCK_SIZE_TINY = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_SMALL = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_MEDIUM = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_LARGE = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_XLARGE = 16;
+
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = 16;
@@ -124,6 +141,14 @@ inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {
     return ORMQR_BLOCK_SIZE_XLARGE;
 }
 
+inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {
+    if (n <= 64) return GEBRD_BLOCK_SIZE_TINY;
+    if (n <= 128) return GEBRD_BLOCK_SIZE_SMALL;
+    if (n <= 256) return GEBRD_BLOCK_SIZE_MEDIUM;
+    if (n <= 512) return GEBRD_BLOCK_SIZE_LARGE;
+    return GEBRD_BLOCK_SIZE_XLARGE;
+}
+
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {
     if (n <= 64) return SYTRD_BLOCK_SIZE_TINY;
     if (n <= 128) return SYTRD_BLOCK_SIZE_SMALL;
@@ -180,6 +205,11 @@ inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
 inline int32_t ormqr_block_size_for_n(int32_t n) {
     return detail::tuning_env_override("BATCHLAS_TUNE_ORMQR_BLOCK_SIZE",
                                        ormqr_block_size_default_for_n(n));
+}
+
+inline int32_t gebrd_block_size_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
+                                       gebrd_block_size_default_for_n(n));
 }
 
 inline int32_t sytrd_block_size_for_n(int32_t n) {
