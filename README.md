@@ -83,12 +83,29 @@ PYTHONPATH=../../build/python python3 run_all.py     # execute and check all twe
 
 See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.
 
+## C++ Examples
+
+Twelve self-checking C++ programs in `examples/cpp/` cover the same ground as the Python notebooks, from `01_getting_started.cc` through the dense BLAS, factorizations, the SVD and eigensolver families, the tridiagonal reduction stages, sparse and iterative solvers, and a measurement example for picking a variant. Each verifies its results against an independent host-side reference and exits non-zero if a check fails.
+
+```bash
+cmake -B build -S . -DBATCHLAS_BUILD_EXAMPLES=ON
+cmake --build build -j"$(nproc)"
+
+./build/examples/cpp/01_getting_started        # prints [ok  ]/[FAIL] per check
+./build/examples/cpp/06_symmetric_eigensolvers cpu    # force the host backend
+```
+
+With `BATCHLAS_BUILD_TESTS=ON` as well, each example is registered with CTest as `example_<name>`. `examples/cpp/CMakeLists.txt` also builds standalone against an installed BatchLAS, so it doubles as a template for consuming the exported `BatchLAS::batchlas` target.
+
+See `examples/cpp/README.md` for the index, the C++ conventions the Python facade hides (compile-time backend selection, column-major storage, the `*_buffer_size` workspace contract), and the current known issues.
+
 ## Repository Layout
 
 - `include/`: public C++ headers
 - `src/`: library implementation and backend/component targets
 - `tests/`: GoogleTest-based unit tests and smoke-test subset
 - `benchmarks/`: performance and accuracy benchmark executables
+- `examples/cpp/`: self-checking C++ examples (`BATCHLAS_BUILD_EXAMPLES=ON`)
 - `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
 - `scripts/`: benchmark campaign helpers and result-processing scripts
 - `playground/`: notebooks and exploratory scripts for algorithm work
