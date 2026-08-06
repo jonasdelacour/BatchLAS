@@ -69,6 +69,27 @@ struct HemmOptions {
     Uplo uplo = Uplo::Lower;
 };
 
+// herk's alpha and beta are real even though its operands are complex: a
+// complex alpha would make alpha * A * A^H non-Hermitian. See
+// blas/functions/herk.hh.
+template <typename T>
+struct HerkOptions {
+    float_t<T> alpha = float_t<T>(1);
+    float_t<T> beta = float_t<T>(0);
+    Uplo uplo = Uplo::Lower;
+    Transpose trans = Transpose::NoTrans;
+};
+
+// her2k pairs alpha * A * B^H with its own conjugate transpose, which is
+// Hermitian for any alpha -- so alpha is complex here and only beta is real.
+template <typename T>
+struct Her2kOptions {
+    T alpha = T(1);
+    float_t<T> beta = float_t<T>(0);
+    Uplo uplo = Uplo::Lower;
+    Transpose trans = Transpose::NoTrans;
+};
+
 template <typename T>
 struct SyrkOptions {
     T alpha = T(1);
@@ -239,6 +260,38 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
     requires ComplexScalar<T>
 inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmOptions<T>& opts) {
     return with_backend(ctx, [&](auto Back) { return hemm<Back.value>(ctx, A, B, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return herk<Back, T>(ctx, V(A), V(C), opts.alpha, opts.beta, opts.uplo, opts.trans);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return herk<Back.value>(ctx, A, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
+                   const Her2kOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return her2k<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.beta, opts.uplo, opts.trans);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
+                   const Her2kOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return her2k<Back.value>(ctx, A, B, C, opts); });
 }
 
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,

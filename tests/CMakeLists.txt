@@ -45,6 +45,8 @@ set(TEST_TARGETS
     iluk_tests
     symm_tests
     hemm_tests
+    herk_tests
+    her2k_tests
     syrk_tests
     syr2k_tests
     syev_tests
@@ -122,7 +124,8 @@ set(BATCHLAS_TEST_LABELS_util
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests syrk_tests syr2k_tests
+    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
+    syrk_tests syr2k_tests
     trmm_tests trsm_tests transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
