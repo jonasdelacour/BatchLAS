@@ -9,7 +9,8 @@
 //   dense, vectors, n <  SUBSET_N             -> Direct
 //   dense, vectors, n >= SUBSET_N, small batch-> Direct
 //   dense, vectors, n >= SUBSET_N, big batch  -> DirectSubset
-//   sparse                                    -> LOBPCG
+//   sparse                                    -> LOBPCG (Auto), or Filtered if
+//                                                explicitly requested
 //
 // DirectSubset requires a real scalar type and dense input; where it is not
 // available the choice degrades to Direct (or LOBPCG below the iterative
@@ -395,8 +396,28 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
         }
     }
 
-    // Sparse input has no dense fallback: LOBPCG is the only implemented option.
-    if (!dense) return SyevxAlgorithm::LOBPCG;
+    // Sparse input has no DENSE fallback -- Direct and DirectSubset both
+    // tridiagonalize a dense A and are not defined on CSR at all, so they
+    // degrade here rather than being honoured. But `Filtered` is not a dense
+    // path: syevx_filtered is instantiated for every MatrixFormat
+    // (BATCHLAS_FOR_EACH_MATRIX_FORMAT_2 in syevx_filtered.cc) and carries real
+    // CSR branches that go through spmm, because a Chebyshev iteration needs
+    // nothing from A but the ability to multiply by it.
+    //
+    // This used to `return LOBPCG` unconditionally, which silently discarded an
+    // explicit `params.method = Filtered` on sparse input. Silent substitution is
+    // the one thing the rest of this function is careful never to do -- the
+    // non-extremal branch above THROWS rather than answer a different question --
+    // and here it was hiding a whole implemented algorithm behind a dispatcher
+    // that would not call it. It also meant every "run the suite forced onto
+    // Filtered" sweep passed on CSR inputs without once running Filtered.
+    //
+    // LOBPCG remains the sparse default: `Auto` still lands there, and so does
+    // any explicit dense-only request.
+    if (!dense) {
+        return (want == SyevxAlgorithm::Filtered) ? SyevxAlgorithm::Filtered
+                                                  : SyevxAlgorithm::LOBPCG;
+    }
 
     if (want != SyevxAlgorithm::Auto) {
         switch (want) {
