@@ -35,16 +35,54 @@ inline bool use_trmm_for_wy() {
     return result;
 }
 
-// Where the tile kernel is ahead of the GEMM it replaces. Float and CUDA
-// because that is the only combination with a batched triangular kernel --
-// everything else would take trmm_vendor_impl, which expands the triangle into
-// a scratch buffer and then runs the very GEMM being replaced, strictly worse.
-// ib <= 64 because above it the tile kernel measured 0.83x-0.97x against the
-// GEMM (see experiments/TRMM_SYRK_BATCHED_KERNELS.md); every block size syev
-// uses is inside that anyway.
+// Where the tile kernel is ahead of the GEMM it replaces.
+//
+// This gate was written as `CUDA && float` on the argument that CUDA float was
+// the only combination reaching a batched triangular kernel at all. That
+// argument has expired -- the tile kernel is plain SYCL and type-generic, and
+// the CUDA router now sends double and complex to it too -- so the gate was
+// lifted outright and then measured, ormqr_blocked_benchmark, Side::Left,
+// ABBA-ordered against BATCHLAS_ORMQR_WY=gemm on a dedicated 4090, n in
+// {256,512,1024}, batch 128-256, nb in {16,32,64}. Ratios are gemm/trmm, so
+// above 1.00 is trmm ahead:
+//
+//   float            1.006x - 1.046x   every cell
+//   double           1.004x - 1.016x   every cell
+//   complex<float>   0.944x - 0.995x   every cell, ~3-5% behind
+//   complex<double>  0.958x - 1.010x   behind at ib 16, level above it
+//   netlib float     0.336x - 1.199x   0.34x at n 128, ib 16
+//   netlib double    0.379x - 1.064x   0.38x at n 128, ib 16
+//
+// So the dtype half was stale only for double, and the answer is per-type
+// rather than per-precision. m here is ib, in the tens, which is the one regime
+// where the tile kernel cannot use its structure: at ib <= 32 it runs a single
+// 32-row tile, R = 1, and (R+1)/2R = 1 means it skips no arithmetic whatsoever
+// and wins or loses purely on being one kernel instead of a cuBLAS call. In
+// float and double that trade is positive; a complex multiply is four real ones
+// and the same trade goes negative. It closes towards parity by ib = 64, where
+// R = 2 finally saves something (0.99x). Confirmed by trace that complex takes
+// trmm_cuda_custom.triangular_tiles and not the expansion fallback, so this is
+// the kernel's own shape response, not a mis-route.
+//
+// netlib is excluded for a different reason. Its trmm and its gemm are both
+// per-batch cblas loops, so the batching is not the difference: OpenBLAS's
+// ?trmm is simply weak on a 16x16 triangle against 128 right-hand sides, and
+// the route also copies B into C first because cblas_?trmm works in place.
+// ROCm is excluded because rocblas_?trmm is a per-batch vendor loop against a
+// strided-batched GEMM -- wire the tile kernel into rocblas.cc's trmm and this
+// predicate is where to re-measure.
+//
+// ib <= 64 predates all of the above and stays: past it the tile kernel
+// measured 0.83x-0.97x in float (see experiments/TRMM_SYRK_BATCHED_KERNELS.md),
+// and every block size syev uses is inside that anyway.
 template <Backend B, typename T>
 inline bool wy_trmm_applicable(int ib) {
-    return B == Backend::CUDA && std::is_same_v<T, float> && ib <= 64 && use_trmm_for_wy();
+    // The routes whose trmm reaches the batched triangular tile kernel. Not a
+    // statement about CUDA the vendor -- it is where the kernel is wired.
+    constexpr bool route_has_tile_kernel = (B == Backend::CUDA);
+    constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
+    return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64 &&
+           use_trmm_for_wy();
 }
 
 // Returns true when BATCHLAS_ORMQR_IMPL=device, false otherwise (legacy is the default).
@@ -466,16 +504,17 @@ Event ormqr_blocked_impl(Queue& ctx,
             gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            // W2 = op(T) W1. trmm overwrites C on the routes that have a
-            // batched kernel, matching this GEMM's beta = 0, so the two are
-            // interchangeable here.
-            if constexpr (B == Backend::CUDA && std::is_same_v<T, float>) {
-                if (wy_trmm_applicable<B, T>(ib)) {
-                    trmm<B, T>(q, Tblk, W1, W2, T(1),
-                               Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
-                } else {
-                    gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
-                }
+            // W2 = op(T) W1. Every trmm ormqr is instantiated for writes C
+            // rather than accumulating into it -- the tile kernel and the
+            // expand-plus-GEMM fallback both pass beta = 0, rocBLAS uses the
+            // out-of-place 14-argument form, and the netlib route copies B into
+            // C and calls the in-place cblas_?trmm on it -- which matches this
+            // GEMM's beta = 0, so the two are interchangeable here. (The
+            // accumulating trmm in extensions/trmm.cc is MKL-only and ormqr is
+            // not instantiated for MKL.)
+            if (wy_trmm_applicable<B, T>(ib)) {
+                trmm<B, T>(q, Tblk, W1, W2, T(1),
+                           Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
             } else {
                 gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
             }

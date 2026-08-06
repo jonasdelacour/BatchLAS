@@ -21,12 +21,21 @@ struct OrmqrBlockedConfig {
     static constexpr Backend BackendVal = B;
 };
 
-// CUDA-only: this repo setup expects CUDA to be the working backend here.
+// The GPU backend is the one this repo setup expects to be working, but the
+// host backend runs the same blocked algorithm over different BLAS routes --
+// the WY update's trmm among them -- so it is covered too wherever it is built
+// rather than only when no GPU backend is.
 #if BATCHLAS_HAS_CUDA_BACKEND
 using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend::CUDA>,
                                               OrmqrBlockedConfig<double, Backend::CUDA>,
                                               OrmqrBlockedConfig<std::complex<float>, Backend::CUDA>,
-                                              OrmqrBlockedConfig<std::complex<double>, Backend::CUDA>>;
+                                              OrmqrBlockedConfig<std::complex<double>, Backend::CUDA>
+#if BATCHLAS_HAS_HOST_BACKEND
+                                              ,
+                                              OrmqrBlockedConfig<float, Backend::NETLIB>,
+                                              OrmqrBlockedConfig<double, Backend::NETLIB>
+#endif
+                                              >;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 using OrmqrBlockedTestTypes = ::testing::Types<OrmqrBlockedConfig<float, Backend::ROCM>,
                                               OrmqrBlockedConfig<double, Backend::ROCM>,
