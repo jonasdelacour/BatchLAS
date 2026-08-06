@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <blas/linalg.hh>
+#include <blas/device.hh>
 #include <util/sycl-local-accessor-helpers.hh>
 
 #include "../src/queue.hh"

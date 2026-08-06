@@ -4,6 +4,7 @@ include(cmake/BatchLASCompilerBootstrap.cmake)
 
 project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
 
+include(cmake/BatchLASCcache.cmake)
 include(cmake/BatchLASOptions.cmake)
 include(cmake/BatchLASDetectSYCL.cmake)
 include(cmake/BatchLASDependencies.cmake)

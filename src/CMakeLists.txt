@@ -13,17 +13,19 @@ endif()
 if(BATCHLAS_HAS_ROCM_BACKEND)
     add_library(batchlas_backends_rocm_obj OBJECT)
 endif()
-add_library(batchlas_blas_obj OBJECT)
 add_library(batchlas_extensions_eigen_obj OBJECT)
 add_library(batchlas_extensions_factorization_obj OBJECT)
 add_library(batchlas_extensions_symmetric_obj OBJECT)
 add_library(batchlas_extensions_tridiag_obj OBJECT)
+add_library(batchlas_extensions_sytrd_obj OBJECT)
+add_library(batchlas_extensions_latrd_obj OBJECT)
+add_library(batchlas_extensions_stedc_obj OBJECT)
 add_library(batchlas_extensions_cta_obj OBJECT)
 add_library(batchlas_util_obj OBJECT)
 add_library(batchlas_extra_obj OBJECT)
-set(_BATCHLAS_SYCL_OBJ_DUMMY "${CMAKE_CURRENT_BINARY_DIR}/batchlas_sycl_obj_dummy.cc")
-file(WRITE "${_BATCHLAS_SYCL_OBJ_DUMMY}" "// Dummy source for SYCL object library\n")
-add_library(batchlas_sycl_obj OBJECT "${_BATCHLAS_SYCL_OBJ_DUMMY}")
+# src/sycl/CMakeLists.txt target_sources()s gemm_kernels.cc into this, so the
+# generated dummy TU it used to carry was a second object compiled for nothing.
+add_library(batchlas_sycl_obj OBJECT)
 
 set(BATCHLAS_OBJECT_LIBS
     batchlas_core_obj
@@ -32,11 +34,13 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_extensions_factorization_obj
     batchlas_extensions_symmetric_obj
     batchlas_extensions_tridiag_obj
+    batchlas_extensions_sytrd_obj
+    batchlas_extensions_latrd_obj
+    batchlas_extensions_stedc_obj
     batchlas_extensions_cta_obj
     batchlas_util_obj
     batchlas_extra_obj
     batchlas_sycl_obj
-    batchlas_blas_obj
 )
 
 if(TARGET batchlas_backends_cuda_obj)
@@ -62,7 +66,6 @@ endforeach()
 
 # Add source files from subdirectories
 add_subdirectory(backends)
-add_subdirectory(blas)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)
@@ -98,10 +101,12 @@ add_library(batchlas_backends SHARED
 )
 batchlas_configure_component(batchlas_backends)
 
-add_library(batchlas_blas SHARED
-    $<TARGET_OBJECTS:batchlas_blas_obj>
-)
-batchlas_configure_component(batchlas_blas)
+# INTERFACE, not SHARED: src/blas/ was never populated, so this used to compile
+# a generated dummy TU and run a full SYCL device link to produce an 18 KB
+# library exporting nothing but weak runtime shims that every other component
+# also defines. INTERFACE keeps BatchLAS::batchlas_blas resolvable for anyone
+# who already links it by name.
+add_library(batchlas_blas INTERFACE)
 
 add_library(batchlas_extensions_eigen SHARED
     $<TARGET_OBJECTS:batchlas_extensions_eigen_obj>
@@ -122,6 +127,21 @@ add_library(batchlas_extensions_tridiag SHARED
     $<TARGET_OBJECTS:batchlas_extensions_tridiag_obj>
 )
 batchlas_configure_component(batchlas_extensions_tridiag)
+
+add_library(batchlas_extensions_sytrd SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_sytrd_obj>
+)
+batchlas_configure_component(batchlas_extensions_sytrd)
+
+add_library(batchlas_extensions_latrd SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_latrd_obj>
+)
+batchlas_configure_component(batchlas_extensions_latrd)
+
+add_library(batchlas_extensions_stedc SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_stedc_obj>
+)
+batchlas_configure_component(batchlas_extensions_stedc)
 
 add_library(batchlas_extensions_cta SHARED
     $<TARGET_OBJECTS:batchlas_extensions_cta_obj>
@@ -151,6 +171,9 @@ set(BATCHLAS_COMPONENT_TARGETS
     batchlas_extensions_factorization
     batchlas_extensions_symmetric
     batchlas_extensions_tridiag
+    batchlas_extensions_sytrd
+    batchlas_extensions_latrd
+    batchlas_extensions_stedc
     batchlas_extensions_cta
     batchlas_util
     batchlas_extra

@@ -3,7 +3,6 @@
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
-#include <sycl/sycl.hpp>
 #include <iostream>
 #include <vector>
 #include <cmath>

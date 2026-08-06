@@ -62,9 +62,20 @@ set(BENCHMARK_TARGETS
     htev_compare_benchmark
 )
 
+# Benchmarks are kept out of the default ALL target: they are 61 heavy
+# translation units (~710 s of compile) that no dev loop and no test run needs,
+# and there is a hard ~12 s floor per TU regardless of how trivial the benchmark
+# is. Build them with `--target batchlas_benchmarks`, by name, or via the
+# `benchmarks` build preset, which names the aggregate explicitly.
+function(batchlas_register_benchmark target_name)
+    set_target_properties(${target_name} PROPERTIES EXCLUDE_FROM_ALL ON)
+    set_property(GLOBAL APPEND PROPERTY BATCHLAS_ALL_BENCHMARK_TARGETS ${target_name})
+endfunction()
+
 function(batchlas_add_benchmark_target target_name)
     add_executable(${target_name} ${target_name}.cc)
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 foreach(test ${BENCHMARK_TARGETS})
@@ -74,12 +85,14 @@ endforeach()
 function(batchlas_add_device_blas_variant_target target_name source)
     add_executable(${target_name} ${source})
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_vector_target target_name mode policy)
     add_executable(${target_name} device_blas_level2_benchmark.cc)
     target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_VECTOR_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_trmv_variant_target target_name policy uplo trans diag)
@@ -92,12 +105,14 @@ function(batchlas_add_device_blas_trmv_variant_target target_name policy uplo tr
         DEVICE_BLAS_TRMV_TRANS=${trans}
         DEVICE_BLAS_TRMV_DIAG=${diag})
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_matrix_target target_name mode policy)
     add_executable(${target_name} device_blas_level3_benchmark.cc)
     target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_MATRIX_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_complex_matrix_target target_name mode policy)
@@ -108,6 +123,7 @@ function(batchlas_add_device_blas_complex_matrix_target target_name mode policy)
         DEVICE_BLAS_MATRIX_COMPLEX=1
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_rank2k_target target_name policy trans)
@@ -118,6 +134,7 @@ function(batchlas_add_device_blas_rank2k_target target_name policy trans)
         DEVICE_BLAS_MATRIX_TRANS=${trans}
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_her2k_target target_name policy trans)
@@ -130,6 +147,7 @@ function(batchlas_add_device_blas_her2k_target target_name policy trans)
         DEVICE_BLAS_MATRIX_HERMITIAN=1
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
+    batchlas_register_benchmark(${target_name})
 endfunction()
 
 if(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS)
@@ -168,3 +186,9 @@ if(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS)
     batchlas_add_device_blas_her2k_target(device_blas_her2k_conjtrans_auto_benchmark 0 2)
     batchlas_add_device_blas_her2k_target(device_blas_her2k_conjtrans_generic_benchmark 1 2)
 endif()
+
+# Collected via a global property rather than ${BENCHMARK_TARGETS} so the
+# device_blas_* targets above, which are created after the main foreach and only
+# under BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS, are reachable too.
+get_property(_batchlas_all_benchmarks GLOBAL PROPERTY BATCHLAS_ALL_BENCHMARK_TARGETS)
+add_custom_target(batchlas_benchmarks DEPENDS ${_batchlas_all_benchmarks})

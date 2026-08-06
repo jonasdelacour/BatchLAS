@@ -5,7 +5,6 @@
 #include <blas/matrix.hh>
 #include <util/sycl-span.hh>
 #include <complex>
-#include <sycl/sycl.hpp>
 
 // Include all function headers
 #include <blas/functions/gemm.hh>
