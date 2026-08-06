@@ -33,7 +33,7 @@ Notes:
   "What is still untuned" below.
 
 A bench belongs in `default.json` only if the generator names it. Today that is
-`stedc`, `sytrd_blocked`, `ormqr_blocked`, `syev`, `gesvd`, `latrd_lower_panel`.
+`stedc`, `sytrd_blocked`, `ormqr_blocked`, `syev`, `gesvd`, `sb2st`, `sy2sb`.
 Anything else is measured and then silently dropped — which is what `steqr` did
 for its whole life in `default.json`.
 
@@ -47,6 +47,9 @@ Each bench entry contains:
 - Optional `env`: `{param_name: ENV_VAR}`. Params listed here are passed to the
   benchmark as environment variables instead of positional arguments, and must
   *not* appear in `arg_spec`.
+- Optional `row`: substring selecting which benchmark row to read when the
+  executable registers more than one. **Required** in that case — the harness
+  now refuses to guess.
 
 `pre_tune` phases run before the main search. The selected values are then injected into every case as fixed parameters for the main sweep and are still recorded in the final profile's `best`, `top`, and `per_case_best` parameter sets.
 
@@ -65,6 +68,47 @@ retune "wins" with the best of a grid that never contained the incumbent and
 silently downgrades it. `stedc`'s `wg_multiplier` swept `[1,2,4]` while
 `STEDC_WG_MULTIPLIER_*` shipped 8, for exactly this failure.
 
+**One executable can register several benchmarks.** `sb2st_hh_benchmark` emits
+`BM_SB2ST_HH_CHASE` and `BM_SB2ST_HH_BACK`; `syev_two_stage_benchmark` emits
+`BM_SYEV_BLOCKED_BASELINE` and `BM_SYEV_TWO_STAGE`. Reading the first row
+measured a kernel the tuned parameters cannot affect and reported the resulting
+noise (1.4% spread) as a winner, where the intended kernel spans 3.6x. Set
+`row`; `tune.py` errors out rather than picking one for you, and `--validate`
+catches it in seconds.
+
+## Pruning the space: `sensitivity.py`
+
+Grid search costs the product of every grid, so an axis that changes nothing
+multiplies the cost of every other axis for free.
+
+```
+python3 evaluation/tuning/sensitivity.py build/tuning/profile.json
+```
+
+For each `(bench, parameter)` it sweeps that parameter with everything else held
+fixed and reports how far the metric moves. Prefer the **profile** over a log:
+env-only params never appear in the benchmark's CSV columns, so a log cannot
+see them at all.
+
+The 2026-08-07 pass removed the `latrd_lower_panel` bench outright — its only
+tuned parameter moved the metric by at most 0.38%, so it was sampling, not
+tuning — and trimmed values that never won. Net: **609 → 265 invocations while
+adding sb2st and sy2sb coverage.**
+
+## The consumer can overrule the bench
+
+Not just for aliased constants — it happens to ordinary ones too. The `stedc`
+bench picked `wg_multiplier` 2–4 and `threads_per_root` 4–8. Adopting that cost
+**syev 2.7% at n=256**. Measured through syev with everything else pinned, 8/8
+wins nearly everywhere (7.6% at n=64; noise at n≥512), so both ship as 8.
+
+The stedc benchmark measures the merge in isolation; syev pays for the whole
+tridiagonal solve. Those are different objectives and they disagree. A
+parameter whose owning bench is not its dominant consumer must be confirmed at
+the consumer before adoption — the sensitivity number from the isolated bench
+(0.56% median for `wg_multiplier`) understated its real cost by an order of
+magnitude.
+
 ## Output format (high level)
 
 The output JSON contains:
@@ -82,7 +126,7 @@ one. Verify with:
 ```
 g++ -std=c++17 -fsyntax-only -I include -I build/include -x c++ - <<'EOF'
 #include <batchlas/tuning_params.hh>
-static_assert(batchlas::tuning::ORMQR_BLOCK_SIZE_MEDIUM == 16);
+static_assert(batchlas::tuning::ORMQR_BLOCK_SIZE_MEDIUM == 24);
 EOF
 ```
 
@@ -320,14 +364,16 @@ Measured shares on CUDA/float, RTX 4090, from `BATCHLAS_KERNEL_TRACE=1` and
 
 | kernel | share | tuned by |
 |---|---|---|
-| `syev_two_stage.sb2st_hh` | **52.9%** of syev at n=1024 | nothing |
-| `gesvd.gebrd` | **79-95%** of gesvd | `gesvd` bench (new) |
-| `ormqr_blocked.larft` + `pack_v_panel` | ~20% of syev at n=1024 | `ormqr_blocked`, but shadowed on syev's hot path by the sy2sb gate |
-| two-stage band width `kd` | sets the whole stage-1/chase balance | nothing (hand table) |
+| `syev_two_stage.sb2st_hh` | **52.9%** of syev at n=1024 | `sb2st` bench — but its heuristic already wins, so the constants stay 0 |
+| `gesvd.gebrd` | **79-95%** of gesvd | `gesvd` bench |
+| `ormqr_blocked.larft` + `pack_v_panel` | ~20% of syev at n=1024 | `ormqr_blocked`, plus `sy2sb` for the width that shadows it |
+| two-stage band width `kd` | sets the whole stage-1/chase balance | nothing (hand table) — still in `unwired.json` |
+| chase blocking factor | hardcoded 32 | nothing — still in `unwired.json` |
+| steqr CTA knobs | leaf of every stedc merge | nothing — still in `unwired.json` |
 
-`sb2st_hh` is the single largest kernel in the library's eigensolver path and no
-bench in `default.json` touches it. Its knobs are env-only with no constants
-behind them, which is why it sits in `unwired.json`.
+`sb2st_hh` is the single largest kernel in the eigensolver path. It is now
+tuned, and the answer was that the shipped heuristic is already right — worth
+knowing, and only knowable by measuring.
 
 Promoting anything out of `unwired.json` takes three steps, in order:
 
