@@ -324,6 +324,101 @@ TYPED_TEST(HerkTest, OptionStructMatchesPositional) {
     }
 }
 
+// The two tests above check the *shape* of the answer -- that the untouched
+// triangle stays untouched, and that the two uplo runs agree. Neither can catch
+// conjugating the wrong operand, which is the one thing a shared syrk/herk
+// kernel is most likely to get wrong: conjugating the row index instead of the
+// column returns conj(C) rather than C, which is still Hermitian and still
+// consistent across both triangles. Only a value comparison sees it.
+//
+// n is swept because the narrow kernel picks a different tile width -- and, for
+// complex, a different thread tile -- at 32, 64 and 128, and k is deliberately
+// not a multiple of the k chunk.
+TYPED_TEST(HerkTest, MatchesGemmReference) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend Ba = TestFixture::BackendType;
+
+    const int k = 200;
+    const int batch = 3;
+    const real_t alpha = real_t(0.9);
+    const real_t beta = real_t(-0.35);
+    const real_t tol = test_utils::tolerance<T>() * real_t(12 * k);
+
+    auto sweep = [&](const char* route) {
+    for (int n : {24, 32, 48, 64, 96, 128}) {
+        for (auto transA : {Transpose::NoTrans, Transpose::ConjTrans}) {
+            for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+                const int a_rows = transA == Transpose::NoTrans ? n : k;
+                const int a_cols = transA == Transpose::NoTrans ? k : n;
+
+                Matrix<T, MatrixFormat::Dense> A =
+                    Matrix<T, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch);
+                Matrix<T, MatrixFormat::Dense> C0 =
+                    Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
+                Matrix<T, MatrixFormat::Dense> C(n, n, batch);
+                Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
+
+                // BLAS does not reference the imaginary part of a Hermitian C's
+                // diagonal, so herk drops it and a plain GEMM scales it by beta.
+                // Starting from a real diagonal is what makes the two
+                // comparable; without it the test fails on element (0,0) for a
+                // reason that has nothing to do with the kernel.
+                for (int b = 0; b < batch; ++b) {
+                    for (int d = 0; d < n; ++d) {
+                        C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
+                    }
+                }
+                this->ctx->wait();
+
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
+
+                herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, uplo, transA).wait();
+
+                gemm(*(this->ctx), A.view(), A.view(), C_ref.view(),
+                     {.alpha = T(alpha), .beta = T(beta), .transA = transA,
+                      .transB = transA == Transpose::NoTrans ? Transpose::ConjTrans
+                                                             : Transpose::NoTrans}).wait();
+
+                // Mirror both, so the half herk was not asked for is compared
+                // against the reference too rather than against its own input.
+                C.view().symmetrize(*(this->ctx), uplo).wait();
+                C_ref.view().symmetrize(*(this->ctx), uplo).wait();
+
+                for (int b = 0; b < batch; ++b) {
+                    for (int j = 0; j < n; ++j) {
+                        for (int i = 0; i < n; ++i) {
+                            const T got = C(i, j, b);
+                            const T want = C_ref(i, j, b);
+                            ASSERT_NEAR(got.real(), want.real(), tol)
+                                << "real route=" << route << " n=" << n
+                                << " trans=" << static_cast<int>(transA)
+                                << " uplo=" << static_cast<int>(uplo)
+                                << " b=" << b << " row=" << i << " col=" << j;
+                            ASSERT_NEAR(got.imag(), want.imag(), tol)
+                                << "imag route=" << route << " n=" << n
+                                << " trans=" << static_cast<int>(transA)
+                                << " uplo=" << static_cast<int>(uplo)
+                                << " b=" << b << " row=" << i << " col=" << j;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    };
+
+    sweep("default");
+    if constexpr (Ba == Backend::CUDA) {
+        // The Gram kernel is not on herk's automatic path -- it loses to the
+        // GEMM-plus-fold in complex -- so without pinning it the conjugation
+        // this test exists to check would never run.
+        ScopedEnvVar pin("BATCHLAS_SYRK_VARIANT", "gram");
+        sweep("gram");
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

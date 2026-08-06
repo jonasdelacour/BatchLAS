@@ -3,6 +3,7 @@
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "syrk_cublasdx_fused.hh"
+#include "syrk_gram_tiles.hh"
 #include "syrk_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 
@@ -20,9 +21,10 @@ namespace {
 
 constexpr int kSyrkCublasDxTile = 32;
 
-// BATCHLAS_SYRK_VARIANT selects a route. The two custom routes are named
+// BATCHLAS_SYRK_VARIANT selects a route. The custom routes are named
 // separately so each stays independently measurable and testable: `triangular`
-// is the tile-masked kernel that computes only the requested half of C,
+// is the tile-masked kernel that computes only the requested half of a wide C,
+// `gram` the single-tile kernel for a narrow C over a long reduction,
 // `cublasdx` the fused kernel, and `gemm` the full n x n batched GEMM the
 // triangular route replaces.
 //
@@ -35,6 +37,7 @@ enum class SyrkRoute {
     Vendor,
     Fused,
     Triangular,
+    Gram,
     Gemm,
 };
 
@@ -57,6 +60,9 @@ SyrkRoute syrk_route_request() {
     }
     if (value == "triangular" || value == "tiles") {
         return SyrkRoute::Triangular;
+    }
+    if (value == "gram" || value == "narrow") {
+        return SyrkRoute::Gram;
     }
     if (value == "gemm") {
         return SyrkRoute::Gemm;
@@ -123,6 +129,15 @@ bool syrk_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& 
     return static_cast<long long>(A.batch_size()) * detail::triangular_tile_count(n) >= 160;
 }
 
+// The single-tile kernel's whole premise is that the tile is sized to n, so it
+// serves exactly the range the triangular grid cannot: n no wider than one
+// tile. Inside that range it is not a close call and there is no threshold to
+// tune -- the alternative is a host loop over cublasSsyrk, which at large batch
+// is one to two orders of magnitude off anything batched.
+bool syrk_prefer_gram_tiles(const MatrixView<float, MatrixFormat::Dense>& C) {
+    return C.rows() <= detail::kGramMaxTile;
+}
+
 bool syrk_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Dense>& A,
                                        const MatrixView<float, MatrixFormat::Dense>& C,
                                        Transpose transA) {
@@ -153,6 +168,14 @@ Event syrk_cublasdx_fallback_gemm(Queue& ctx,
 
 } // namespace
 
+bool syrk_route_prefers_vendor() {
+    return syrk_route_request() == SyrkRoute::Vendor;
+}
+
+bool syrk_route_requests_gram() {
+    return syrk_route_request() == SyrkRoute::Gram;
+}
+
 bool syrk_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& A,
                           const MatrixView<float, MatrixFormat::Dense>& C,
@@ -166,14 +189,17 @@ bool syrk_use_cuda_custom(const Queue& ctx,
         !syrk_problem_supported(A, C, transA) || !syrk_triangular_supported(A, C)) {
         return false;
     }
-    // The tile-masked kernel is the only custom route that respects the
-    // triangle, so it is the only one the automatic choice may leave the vendor
-    // for. Its own threshold says where it beats the full n x n GEMM; below
-    // that the question is instead whether it beats a host loop over
-    // cublasSsyrk, which the cuBLASDx heuristic already answers -- one launch
-    // per batch member costs about 9 us, so anything with a batch at all is
-    // better off here even where the tile grid is half diagonal.
-    return syrk_prefer_triangular_tiles(A, C, transA) ||
+    // The two tile-masked kernels are the only custom routes that respect the
+    // triangle, so they are the only ones the automatic choice may leave the
+    // vendor for. Between them they cover the range: `gram` below one tile,
+    // `triangular` from three tiles a side up. Its own threshold says where it
+    // beats the full n x n GEMM; below that the question is instead whether it
+    // beats a host loop over cublasSsyrk, which the cuBLASDx heuristic already
+    // answers -- one launch per batch member costs about 9 us, so anything with
+    // a batch at all is better off here even where the tile grid is half
+    // diagonal.
+    return syrk_prefer_gram_tiles(C) ||
+        syrk_prefer_triangular_tiles(A, C, transA) ||
         syrk_prefer_cuda_custom_heuristic(A, C, transA);
 }
 
@@ -192,9 +218,18 @@ Event syrk_cuda_custom(Queue& ctx,
     if (route == SyrkRoute::Gemm) {
         return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
     }
-    const bool triangular = route == SyrkRoute::Triangular || route == SyrkRoute::Auto;
-    if (triangular && syrk_triangular_supported(A, C)) {
-        return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
+    if (syrk_triangular_supported(A, C)) {
+        // A narrow C is one tile wide, so the triangular grid has nothing to
+        // skip and would charge a full 128-wide tile for it. Auto splits the
+        // range at that point; either kernel can still be pinned by name.
+        const bool gram = route == SyrkRoute::Gram ||
+            (route == SyrkRoute::Auto && syrk_prefer_gram_tiles(C));
+        if (gram) {
+            return detail::syrk_gram_tiles(ctx, A, C, alpha, beta, uplo, transA);
+        }
+        if (route == SyrkRoute::Triangular || route == SyrkRoute::Auto) {
+            return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
+        }
     }
     if (route == SyrkRoute::Auto) {
         return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
