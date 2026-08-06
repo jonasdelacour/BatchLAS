@@ -169,4 +169,163 @@ TEST(SyrkCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
         }
     }
 }
+
+namespace {
+
+// syrk names one triangle of C, and BLAS forbids the other one from being
+// written. Building C symmetric and comparing against gemm cannot see that:
+// both halves then hold the same numbers, so a route that computes and stores
+// the whole n x n passes anyway. Poisoning the unreferenced half with values
+// nothing in the problem could produce makes the difference observable, and
+// the values are distinct per element so that writing the transposed position
+// is caught too, not merely writing something.
+float syrk_poison_value(int row, int col, int batch, int n) {
+    return -static_cast<float>(1 + row + n * col + n * n * batch);
+}
+
+void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo uplo) {
+    const int n = C.rows();
+    for (int b = 0; b < C.batch_size(); ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                if (!referenced) {
+                    C(i, j, b) = syrk_poison_value(i, j, b, n);
+                }
+            }
+        }
+    }
+}
+
+void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& C,
+                               Matrix<float, MatrixFormat::Dense>& C_ref,
+                               Uplo uplo,
+                               Transpose transA,
+                               float tol) {
+    const int n = C.rows();
+    for (int b = 0; b < C.batch_size(); ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                if (referenced) {
+                    ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
+                        << "n=" << n
+                        << ", trans=" << static_cast<int>(transA)
+                        << ", uplo=" << static_cast<int>(uplo)
+                        << ", batch=" << b << ", row=" << i << ", col=" << j;
+                } else {
+                    ASSERT_EQ(C(i, j, b), syrk_poison_value(i, j, b, n))
+                        << "wrote outside the requested triangle: n=" << n
+                        << ", trans=" << static_cast<int>(transA)
+                        << ", uplo=" << static_cast<int>(uplo)
+                        << ", batch=" << b << ", row=" << i << ", col=" << j;
+                }
+            }
+        }
+    }
+}
+
+} // namespace
+
+TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
+    }
+
+    struct Shape {
+        int n;
+        int k;
+        int batch;
+    };
+
+    // 256x64 is whole 128 tiles with a k the 8-deep staging fills exactly, so
+    // it takes the unpredicated path; 200x53 breaks both and takes the
+    // predicated one, with a partial tile on the diagonal. 384x8 is the
+    // shallowest k that runs, and wide enough to have a tile that is neither on
+    // the diagonal nor next to it.
+    const Shape shapes[] = {{256, 64, 8}, {200, 53, 5}, {384, 8, 3}};
+    const float alpha = 0.9f;
+    const float beta = -0.35f;
+
+    for (const auto& shape : shapes) {
+        const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
+        for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
+            const int a_rows = transA == Transpose::NoTrans ? shape.n : shape.k;
+            const int a_cols = transA == Transpose::NoTrans ? shape.k : shape.n;
+            Matrix<float, MatrixFormat::Dense> A =
+                Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 17);
+
+            for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+                Matrix<float, MatrixFormat::Dense> C_custom =
+                    Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 23);
+                Matrix<float, MatrixFormat::Dense> C_vendor =
+                    Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 23);
+                poison_unreferenced_triangle(C_custom, uplo);
+                poison_unreferenced_triangle(C_vendor, uplo);
+
+                {
+                    ScopedEnvVar force_variant("BATCHLAS_SYRK_VARIANT", "triangular");
+                    syrk(ctx,
+                         A.view(),
+                         C_custom.view(),
+                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+                }
+                {
+                    ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
+                    syrk(ctx,
+                         A.view(),
+                         C_vendor.view(),
+                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+                }
+
+                expect_triangle_respected(C_custom, C_vendor, uplo, transA, tol);
+            }
+        }
+    }
+}
+
+TEST(SyrkCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
+    }
+
+    // Big enough that the automatic route reaches the triangular kernel: what
+    // this test guards is the routing, not the kernel, which the forced test
+    // above covers on its own.
+    const int n = 512;
+    const int k = 64;
+    const int batch = 32;
+    const float alpha = 1.25f;
+    const float beta = 0.5f;
+    const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(k);
+
+    Matrix<float, MatrixFormat::Dense> A =
+        Matrix<float, MatrixFormat::Dense>::Random(n, k, false, batch, 41);
+
+    for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+        Matrix<float, MatrixFormat::Dense> C_auto =
+            Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
+        Matrix<float, MatrixFormat::Dense> C_vendor =
+            Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
+        poison_unreferenced_triangle(C_auto, uplo);
+        poison_unreferenced_triangle(C_vendor, uplo);
+
+        syrk(ctx,
+             A.view(),
+             C_auto.view(),
+             {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
+
+        {
+            ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
+            syrk(ctx,
+                 A.view(),
+                 C_vendor.view(),
+                 {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
+        }
+
+        expect_triangle_respected(C_auto, C_vendor, uplo, Transpose::NoTrans, tol);
+    }
+}
 #endif

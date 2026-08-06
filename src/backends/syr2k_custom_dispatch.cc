@@ -77,7 +77,15 @@ Event syr2k_cublasdx_fallback(Queue& ctx,
                               Transpose transA) {
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     BATCHLAS_KERNEL_TRACE_SCOPE("syr2k_cuda_custom.gemm_fallback");
-    gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default).wait();
+
+    // The second product accumulates into the C the first one wrote, so the two
+    // have to be ordered. An in-order queue already orders them: both run on
+    // its native stream. An out-of-order queue orders nothing across the
+    // SYCL/native boundary, so there the first has to be waited out.
+    Event first = gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
+    if (!ctx.in_order()) {
+        first.wait();
+    }
     return gemm_cublasdx(ctx, B, A, C, alpha, 1.0f, transA, transB, ComputePrecision::Default);
 }
 
