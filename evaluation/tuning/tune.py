@@ -219,9 +219,9 @@ def _run_one_case(
             "This usually means the benchmark wasn't registered for that backend/type (compiled out)"
         )
 
-        # Usually there is exactly one row after backend/type filtering.
-        # If multiple appear, choose the first.
-        return float(rows[0]["value"])
+    # Usually there is exactly one row after backend/type filtering.
+    # If multiple appear, choose the first.
+    return float(rows[0]["value"])
 
 
 def _load_spaces(path: Path) -> List[BenchSpace]:
@@ -373,7 +373,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = _repo_root()
-    build_dir = args.build_dir or _default_build_dir(repo_root)
+    build_dir = args.build_dir or default_build_dir(repo_root)
     space_path = args.space or _default_space_path(repo_root)
     out_path = args.out or _default_output_path(build_dir)
 
@@ -381,7 +381,7 @@ def main() -> int:
 
     results: List[Dict[str, Any]] = []
     for space in spaces:
-        exe = _default_benchmark_path(build_dir, space.exe)
+        exe = default_benchmark_path(build_dir, space.exe)
         if not exe.exists() or not os.access(exe, os.X_OK):
             msg = f"Missing benchmark executable: {exe}"
             if args.skip_missing:

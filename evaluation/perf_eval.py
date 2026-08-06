@@ -528,18 +528,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         p.error("Must specify --record or --check")
 
     repo_root = _repo_root()
-    build_dir = Path(args.build_dir) if args.build_dir else _default_build_dir(repo_root)
+    build_dir = Path(args.build_dir) if args.build_dir else default_build_dir(repo_root)
     cases_path = Path(args.cases) if args.cases else (repo_root / "evaluation" / "perf_cases.json")
     baseline_path = (repo_root / args.baseline).resolve() if not Path(args.baseline).is_absolute() else Path(args.baseline)
 
     cases = _load_cases(cases_path)
 
-    stedc_exe = _default_benchmark_path(build_dir, "stedc_benchmark")
-    steqr_exe = _default_benchmark_path(build_dir, "steqr_benchmark")
-    sytrd_cta_exe = _default_benchmark_path(build_dir, "sytrd_cta_benchmark")
+    stedc_exe = default_benchmark_path(build_dir, "stedc_benchmark")
+    steqr_exe = default_benchmark_path(build_dir, "steqr_benchmark")
+    sytrd_cta_exe = default_benchmark_path(build_dir, "sytrd_cta_benchmark")
     # Historical naming: the executable is ormqr_cta_benchmark, but the kernel under test is ormqx_cta.
-    ormx_cta_exe = _default_benchmark_path(build_dir, "ormqr_cta_benchmark")
-    syev_cta_exe = _default_benchmark_path(build_dir, "syev_cta_benchmark")
+    ormx_cta_exe = default_benchmark_path(build_dir, "ormqr_cta_benchmark")
+    syev_cta_exe = default_benchmark_path(build_dir, "syev_cta_benchmark")
 
     measurements: List[Measurement] = []
     trace_events: Optional[List[Dict[str, Any]]] = [] if args.trace else None
