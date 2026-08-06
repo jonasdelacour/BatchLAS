@@ -64,42 +64,6 @@ namespace batchlas::backend::detail {
 // kernel can serve.
 inline constexpr int kGramMaxTile = 128;
 
-// Conjugation is a no-op on a real scalar, which is what lets one kernel serve
-// both syrk and herk rather than two near-copies.
-template <typename T>
-inline T conj_if(const T& value) {
-    if constexpr (sycl::detail::is_complex<T>::value) {
-        return std::conj(value);
-    } else {
-        return value;
-    }
-}
-
-// accum += a * b, written out rather than delegated to std::complex.
-//
-// `std::complex<float>::operator*` lowers to the __mulsc3 libcall, which
-// implements C99 Annex G -- a branch on Inf and NaN around every single
-// multiply. In the innermost loop of a GEMM that is ruinous and it is invisible
-// in the source: the first complex build of this kernel ran at 1.2 TFLOP/s
-// against float's 13.8, and at n = 128 took 38 ms where a cuBLAS GEMM took 1.5.
-// Four real multiplies and two adds is the whole operation; there is no
-// exceptional case here worth a branch, because a NaN in the input is already
-// a NaN in the answer.
-template <typename T>
-inline void accumulate(T& accum, const T& a, const T& b) {
-    if constexpr (sycl::detail::is_complex<T>::value) {
-        using Real = typename T::value_type;
-        const Real ar = a.real();
-        const Real ai = a.imag();
-        const Real br = b.real();
-        const Real bi = b.imag();
-        accum = T(accum.real() + ar * br - ai * bi,
-                  accum.imag() + ar * bi + ai * br);
-    } else {
-        accum += a * b;
-    }
-}
-
 // Drops the imaginary part BLAS guarantees is zero on a HERK diagonal. It is
 // zero only up to rounding, and leaving the residue there would make a matrix
 // that is not quite Hermitian, which the eigensolvers downstream do notice.
@@ -267,10 +231,8 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                                 // nothing writes it.
                                 const int qa = swizzle(tr * Bands + b, p);
                                 const int qb = swizzle(tc * Bands + b, p);
-                                T va[4];
-                                T vb[4];
-                                tile_load4(row + qa * 4, va);
-                                tile_load4(row + qb * 4, vb);
+                                const TileVec4<T> va = tile_load4(row + qa * 4);
+                                const TileVec4<T> vb = tile_load4(row + qb * 4);
 #pragma unroll
                                 for (int e = 0; e < 4; ++e) {
                                     // HERK conjugates whichever operand carries
@@ -280,11 +242,11 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                                     // Hermitian matrix, so this cannot be
                                     // caught by inspecting the result's shape.
                                     if constexpr (Conjugate) {
-                                        af[b * 4 + e] = TransOperand ? conj_if(va[e]) : va[e];
-                                        bf[b * 4 + e] = TransOperand ? vb[e] : conj_if(vb[e]);
+                                        af[b * 4 + e] = TransOperand ? conj_if(va.v[e]) : va.v[e];
+                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : conj_if(vb.v[e]);
                                     } else {
-                                        af[b * 4 + e] = va[e];
-                                        bf[b * 4 + e] = vb[e];
+                                        af[b * 4 + e] = va.v[e];
+                                        bf[b * 4 + e] = vb.v[e];
                                     }
                                 }
                             }
@@ -292,7 +254,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             for (int i = 0; i < ThreadTile; ++i) {
 #pragma unroll
                                 for (int j = 0; j < ThreadTile; ++j) {
-                                    accumulate(accum[i][j], af[i], bf[j]);
+                                    accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
                                 }
                             }
                         }

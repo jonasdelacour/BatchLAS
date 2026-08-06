@@ -23,6 +23,7 @@
 #include "syrk_gram_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "trmm_custom_dispatch.hh"
+#include "trmm_triangular_tiles.hh"
 #include "triangular_expand.hh"
 #include "../sycl/gemm_kernels.hh"
 
@@ -1016,6 +1017,15 @@ namespace batchlas {
             if constexpr (std::is_same_v<T, float>) {
                 if (trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
                     return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
+                }
+            } else {
+                // The tile kernel is type-generic; only its routing was ever
+                // float. The alternative for double and complex is the same
+                // expansion-plus-GEMM as for float, which is strictly more work
+                // than the GEMM it wraps, so there is nothing to weigh here.
+                if (detail::is_gpu_queue(ctx) && !trmm_route_prefers_vendor() &&
+                    detail::trmm_tiles_supported(A, B, C, side)) {
+                    return detail::trmm_triangular_tiles(ctx, A, B, C, alpha, uplo, transA, diag);
                 }
             }
         }

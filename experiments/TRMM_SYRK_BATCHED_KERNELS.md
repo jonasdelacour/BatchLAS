@@ -86,17 +86,68 @@ GEMM), measured in the same session.
 | 512 | 1024 | 64 | 0.754 | 0.838 | **0.690** | 1.22x | 1.09x |
 | 1024 | 1024 | 32 | 1.514 | 1.662 | **1.146** | 1.45x | 1.32x |
 
-Faster than the route it replaces at 9 of 10 shapes. Against the *GEMM
-spelling* it wins at `m <= 64` and `m >= 512` and loses in between, and the
-reason is structural rather than a tuning miss:
+### Beating the GEMM in every dtype: what it took
 
-- `m <= 64` is one row tile, so there is no k-range to skip and the arithmetic
-  is a GEMM's. It wins anyway on fusion -- no `k x k x batch` expansion written
-  and read back.
-- `m >= 512` is four or more row tiles, so the k-range removes 1.6x-1.8x of the
-  arithmetic, enough to cover this kernel running at ~70% of cuBLAS's per-flop
-  rate.
-- Between, one or two row tiles buys at most 1.33x, and that same 70% eats it.
+The first version was float-only and lost to the GEMM at m = 128..256. Both
+facts had the same cause and one fix.
+
+**The tile width is the whole game, and the scalar type picks it.** R = m/TileM
+row tiles shrink the reduction to (R+1)/2R, so R = 1 saves *nothing* -- and the
+original rule used one tile for all m <= 128, which is exactly why it could
+never beat a GEMM there. Cutting m into more tiles also re-reads B, up to
+(R+1)/2 times. Which side wins is decided by precision, not shape: float is
+bandwidth bound at these sizes (intensity m/4 against a ridge near 40) so the
+re-read is expensive; double runs at 1/64 rate, putting the ridge near 1.4, so
+the arithmetic is everything and B's re-read is nearly free. Measured, float,
+m = 128 nC = 512 batch 1024 -- TileM 32/64/128 gives 0.663 / **0.658** / 0.699
+against a GEMM's 0.674. So 64 for float, 32-64 for the wide types, and 128 only
+for float past m = 512.
+
+**Three float-only assumptions had to go**, the same three the Gram SYRK kernel
+hit: the `alignas(4*sizeof(T))` packet (undefined for anything but float),
+`std::complex::operator*` (the `__mulsc3` libcall), and register pressure (an
+8x8 thread tile is 256 registers in `complex<double>`; forcing TileM = 128 there
+measured 15.06 ms against 2.18 -- pure spill).
+
+**And one that was not float-specific at all.** Factoring the inner loop into
+helpers, the accumulator update was first written as `void accumulate(T& acc,
+...)`. Taking the address of an element of the accumulator array is enough for
+the compiler to stop keeping it in registers; it went to local memory and cost
+**43%** on float at m = 512 (0.659 -> 0.944 ms) with no other change. Both
+helpers now return by value.
+
+### Where it lands, by dtype
+
+Ratios are trmm against the GEMM spelling of the same product; **bold** is a win.
+
+| m | nC | batch | float | double | complex&lt;float&gt; | complex&lt;double&gt; |
+|---|---|---|---|---|---|---|
+| 32 | 256 | 2048 | **1.13x** | **1.29x** | 0.88x | **1.05x** |
+| 64 | 256 | 2048 | **1.07x** | **1.45x** | 0.88x | **1.41x** |
+| 64 | 512 | 1024 | **1.04x** | **1.45x** | 0.84x | **1.41x** |
+| 128 | 512 | 1024 | **1.03x** | **1.48x** | 0.69x | **1.42x** |
+| 128 | 1024 | 512 | 1.00x | **1.48x** | 0.69x | **1.42x** |
+| 256 | 1024 | 256 | 0.91x | **1.77x** | 0.93x | **1.71x** |
+| 256 | 256 | 512 | 0.93x | **1.72x** | 0.89x | **1.66x** |
+| 512 | 512 | 128 | **1.15x** | **1.91x** | **1.10x** | **1.85x** |
+| 512 | 1024 | 64 | **1.16x** | **1.91x** | **1.10x** | **1.84x** |
+| 1024 | 1024 | 32 | **1.26x** | **2.02x** | **1.23x** | **1.95x** |
+
+**double and complex&lt;double&gt; win at every shape measured**, 1.05x to 2.02x --
+essentially the theoretical ceiling, because FP64 is compute bound at 1/64 rate
+so the halved arithmetic lands in full and grows with m.
+
+**float wins at 8 of 10**, the exceptions being m = 256, where cuBLAS's SGEMM is
+running at its 45 TFLOP/s peak and this kernel reaches ~57% of that; a 1.6x
+arithmetic saving does not cover a 1.75x rate deficit.
+
+**complex&lt;float&gt; is the one dtype that loses below m = 512**, and it is the
+worst case of the same story: cuBLAS's cgemm is at ~100% of the FP32 FMA peak
+on these shapes, while a complex accumulator costs twice the registers, so the
+thread tile that would give this kernel a competitive fragment-to-FMA ratio does
+not fit at a usable occupancy. Widening the column tile from 8 to 16 (halving
+the lane count) is what recovers m >= 512; going further to a 128-row tile
+spills. It is a register-file ceiling, not a tuning miss.
 
 ### A routing mistake worth recording
 

@@ -130,6 +130,10 @@ bool trmm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
 
 } // namespace
 
+bool trmm_route_prefers_vendor() {
+    return trmm_variant_request() == TrmmVariantRequest::Vendor && !trmm_triangular_requested();
+}
+
 bool trmm_cuda_custom_forced() {
     return trmm_variant_request() == TrmmVariantRequest::CuBLASDx;
 }

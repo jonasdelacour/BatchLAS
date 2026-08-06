@@ -23,9 +23,9 @@
 // How much that saves depends entirely on how many row tiles m covers, and it
 // is worth being precise because it is not the textbook 2x: with R row tiles
 // the reduction shrinks to (R+1)/2R of the square, so 1.0x at R = 1, 1.33x at
-// R = 2, and only 1.78x by R = 8. `trmm_prefer_triangular_tiles` carries the
-// measured consequence -- this kernel is ahead of the vendor at m <= 64 (on
-// fusion, not arithmetic) and at m >= 512, and behind it in between.
+// R = 2, and only 1.78x by R = 8. Getting R above 1 is the single thing that
+// decides whether this beats a GEMM -- see `trmm_row_tile`, which is where the
+// scalar type enters.
 //
 // Which end of the reduction is skipped comes from uplo and trans together:
 // transposing an upper triangle gives a lower one, so the kernel keys off
@@ -82,7 +82,22 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     constexpr int TileN = kTrmmTileN;
     constexpr int TileK = kTrmmTileK;
     constexpr int LocalRows = trmm_lanes(TileM);
-    constexpr int LocalCols = trmm_lanes(TileN);
+    // A complex scalar halves how many elements the shared path delivers per
+    // clock while leaving the FMA rate per element alone, so the fragment-to-
+    // FFMA ratio that is comfortable in float becomes the binding constraint:
+    // a 4x8 thread tile reads 12 complex and issues 32 complex MACs, which
+    // needs 2.67 MAC per load against a capability of 2. Widening the thread
+    // tile to 4x16 takes it to 3.2 and puts the kernel back on the FMA pipe.
+    // Halving the lane count is what pays for it, and the row tiling -- where
+    // the triangle saving lives -- is left untouched.
+    //
+    // Only at the 64-row tile, though. At the 32-row tile the block is already
+    // down to 64 threads and halving the lanes again costs more in outstanding
+    // loads than the ratio buys -- that end is bandwidth bound, not FMA bound,
+    // and measured 0.374 -> 0.424 ms at m = 32.
+    constexpr int LocalCols = (sycl::detail::is_complex<T>::value && TileM >= 64)
+                                  ? trmm_lanes(TileN) / 2
+                                  : trmm_lanes(TileN);
     constexpr int ThreadRows = TileM / LocalRows;
     constexpr int ThreadCols = TileN / LocalCols;
     constexpr int Threads = LocalRows * LocalCols;
@@ -113,6 +128,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     // everything the kernel needs from uplo and trans.
     const bool lower_eff = (uplo == Uplo::Lower) != transposed;
     const bool unit = diag == Diag::Unit;
+    const bool conjugated = transA == Transpose::ConjTrans;
 
     const sycl::range<3> local(1, 1, static_cast<size_t>(Threads));
     const sycl::range<3> global(static_cast<size_t>(batch),
@@ -197,12 +213,19 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                                 const int p = p0 + pp0 + e;
                                 T value = T(0);
                                 if (i < m && p < m) {
+                                    // ConjTrans means op(A) = A^H, so the
+                                    // element is conjugated on the way in. The
+                                    // unit diagonal is a literal 1 and has
+                                    // nothing to conjugate.
                                     if (i == p) {
                                         value = unit
                                             ? T(1)
-                                            : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
+                                            : conjugated
+                                                ? conj_if(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
+                                                : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
                                     } else if (lower_eff ? (p < i) : (p > i)) {
-                                        value = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
+                                        const T raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
+                                        value = conjugated ? conj_if(raw) : raw;
                                     }
                                 }
                                 sa[(pp0 + e) * SA + phys] = value;
@@ -236,7 +259,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                             }
                             packet.v[e] = value;
                         }
-                        tile_vec4(&sa[pp * SA + phys]) = packet;
+                        tile_store4(&sa[pp * SA + phys], packet);
                     }
                     }
 
@@ -268,7 +291,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
 #pragma unroll
                         for (int b = 0; b < BandsR; ++b) {
                             const TileVec4<T> v =
-                                tile_vec4(rowa + (swizzle_a(b * (BandSpanR / 4) + tr, p) << 2));
+                                tile_load4(rowa + (swizzle_a(b * (BandSpanR / 4) + tr, p) << 2));
 #pragma unroll
                             for (int e = 0; e < 4; ++e) {
                                 af[b * 4 + e] = v.v[e];
@@ -277,7 +300,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
 #pragma unroll
                         for (int b = 0; b < BandsC; ++b) {
                             const TileVec4<T> v =
-                                tile_vec4(rowb + (swizzle_b(b * (BandSpanC / 4) + tc, p) << 2));
+                                tile_load4(rowb + (swizzle_b(b * (BandSpanC / 4) + tc, p) << 2));
 #pragma unroll
                             for (int e = 0; e < 4; ++e) {
                                 bf[b * 4 + e] = v.v[e];
@@ -287,7 +310,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                         for (int i = 0; i < ThreadRows; ++i) {
 #pragma unroll
                             for (int j = 0; j < ThreadCols; ++j) {
-                                accum[i][j] += af[i] * bf[j];
+                                accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
                             }
                         }
                     }
@@ -316,9 +339,76 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     return ctx.get_event();
 }
 
-// The row tile is sized to m when m is small -- ormqr hands this ib in the tens
-// and a 128-row tile would quadruple its arithmetic -- and capped at 128, above
-// which the grid tiles m and the k-range restriction does the saving.
+// Everything the kernel needs from the problem, independent of scalar type and
+// of the queue. Left side only: the right-side product C = alpha * B * op(A)
+// puts the triangle on the column index, which is a different k-loop bound and
+// a different staging assignment, not a transpose of this one.
+template <typename T>
+bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<T, MatrixFormat::Dense>& B,
+                          const MatrixView<T, MatrixFormat::Dense>& C,
+                          Side side) {
+    if (side != Side::Left) {
+        return false;
+    }
+    if (A.rows() != A.cols() || A.rows() != C.rows()) {
+        return false;
+    }
+    if (A.batch_size() != B.batch_size() || B.batch_size() != C.batch_size()) {
+        return false;
+    }
+    if (B.rows() != C.rows() || B.cols() != C.cols()) {
+        return false;
+    }
+    if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
+        return false;
+    }
+    return C.rows() > 0 && C.cols() > 0;
+}
+
+// How wide a row tile to cut m into, which is the kernel's one real trade-off.
+//
+// R = m/TileM row tiles shrink the reduction to (R+1)/2R of the square, so a
+// smaller tile does strictly less arithmetic: 1.0x at R = 1, 0.75x at R = 2,
+// 0.5625x at R = 8. It also re-reads B, because each row tile stages its own
+// copy of the reduction range it needs -- (R+1)/2 times over in the worst case,
+// though in practice much of that is L2 hits.
+//
+// Which of the two dominates is decided by the scalar type, not by the shape:
+//
+//   float   is bandwidth bound at these sizes -- intensity is m/4 flop per byte
+//           against a ridge near 40 -- so paying B twice to save a quarter of
+//           the arithmetic is a bad trade, and the widest tile that fits wins.
+//   double  runs at 1/64 rate on this part, which puts the ridge near 1.4 flop
+//           per byte and the problem far on the compute side of it. There the
+//           arithmetic is the whole cost and B's re-read is close to free, so
+//           the narrowest tile wins. Complex is the same argument: a complex
+//           multiply is four real ones.
+//
+// This is why one threshold cannot serve both, and why the first version of
+// this kernel -- tuned on float alone, one tile for m <= 128 -- could not beat
+// a GEMM at m = 128 in any type: R = 1 saves nothing at all.
+template <typename T>
+inline int trmm_row_tile(int m) {
+    constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || sycl::detail::is_complex<T>::value;
+    if (m <= 32) {
+        return 32;
+    }
+    if constexpr (wide) {
+        // Never 128. Beyond the argument above, a 128x128 tile is an 8x8 thread
+        // tile, which in complex<double> is 256 registers of accumulator alone
+        // -- 256 threads x 256 is the entire 65536 a work-group gets, and the
+        // runtime rejects the launch rather than spilling.
+        return m <= 64 ? 32 : 64;
+    } else {
+        // Measured, float, against the GEMM (ms): at m = 128 nC = 512 batch
+        // 1024, TileM 32/64/128 gives 0.663 / 0.658 / 0.699 against a GEMM's
+        // 0.674 -- so 128 loses and 64 wins. 32 is worse than 64 everywhere,
+        // which is the B re-read showing up. Only at m = 1024 does 128 come
+        // back ahead (1.146 vs 1.180).
+        return m <= 512 ? 64 : 128;
+    }
+}
 template <typename T>
 Event trmm_triangular_tiles(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -329,10 +419,18 @@ Event trmm_triangular_tiles(Queue& ctx,
                             Transpose transA,
                             Diag diag) {
     const int m = static_cast<int>(C.rows());
-    if (m <= 32) {
+    // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off below can be
+    // swept from one binary.
+    const int forced = [] {
+        const char* raw = std::getenv("BATCHLAS_TRMM_TILE_M");
+        return raw ? std::atoi(raw) : 0;
+    }();
+
+    const int tile_m = forced ? forced : trmm_row_tile<T>(m);
+    if (tile_m <= 32) {
         return launch_trmm_triangular_tiles<T, 32>(ctx, A, B, C, alpha, uplo, transA, diag);
     }
-    if (m <= 64) {
+    if (tile_m <= 64) {
         return launch_trmm_triangular_tiles<T, 64>(ctx, A, B, C, alpha, uplo, transA, diag);
     }
     return launch_trmm_triangular_tiles<T, 128>(ctx, A, B, C, alpha, uplo, transA, diag);
