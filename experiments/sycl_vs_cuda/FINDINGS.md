@@ -110,13 +110,45 @@ understate SYCL throughput badly. This is worth auditing wherever in-tree
 numbers compare a SYCL path timed this way against a vendor path timed with
 CUDA events.
 
-## What this means for BatchLAS
+## What this meant for BatchLAS, and what was done about it
 
-BatchLAS's best in-tree SYCL GEMM reaches ~17-21 TFLOP/s at 512^3 batch 512
-(`output/gemm_steady_phase*.md`). The kernel here reaches 43.6 on the same
-shape, in the same language, on the same hardware, in about 200 lines.
+BatchLAS's best in-tree SYCL GEMM reached ~21 TFLOP/s at 512^3 batch 512. The
+kernel here reaches 43.6 on the same shape, in the same language, on the same
+hardware, in about 200 lines. The gap was in the kernel design, not in SYCL.
 
-The gap is therefore in the kernel design, not in SYCL. Reproduce with:
+The design has since been ported into the library as
+`src/sycl/gemm/register_128x128.hh` (`KernelVariant::Tiled128x128RegisterK8`),
+and float NN shapes with a full 128x128 output tile now route to it. Measured
+in-tree with `experiments/sycl_vs_cuda/sweep_intree.sh`, event-timed, `beta=1`:
+
+| Shape | vendor | 128x64x32large (was) | **128x128x8 (now)** | vs vendor |
+| --- | ---: | ---: | ---: | ---: |
+| 128^3, batch 4096 | 14480 | 7223 | **14254** | 98.4% |
+| 256^3, batch 1024 | 29187 | 14065 | **25596** | 87.7% |
+| 512^3, batch 512 | 40755 | 22672 | **41545** | 101.9% |
+| 512x256x512, batch 512 | 41066 | 21974 | **37044** | 90.2% |
+| 512x64x512, batch 512 | 20298 | 16208 | **17822** | 87.8% |
+| 1024^3, batch 64 | 45870 | 24038 | **44062** | 96.1% |
+
+(GFLOPS. Vendor varies a few percent run to run with clocks; 101.9% is parity
+within that noise, not a win over cuBLAS.)
+
+### The bug that a beta=0 microbenchmark would have hidden
+
+The first working in-tree version scored 26 TFLOP/s, not 41, even though its
+inner loop was identical to the standalone kernel's. The epilogue was at
+fault: it had the m index as the *slow*-varying thread index, so adjacent
+lanes differed in n and, for a column-major C, addressed memory `ldc` apart.
+With `beta == 0` that costs almost nothing, because the stores are
+fire-and-forget. With `beta != 0` the kernel must *read* C first, and that read
+became one scattered transaction per lane. Making m the fastest-varying index
+took it from 26.0 to 41.1.
+
+Worth remembering for the next kernel: the standalone harness here defaults to
+`beta = 0` and would never have caught this, while the in-tree steady benchmark
+uses `beta = 1` and caught it immediately.
+
+## Reproduce
 
 ```
 ./build.sh
