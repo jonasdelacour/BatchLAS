@@ -499,20 +499,87 @@ values-only work.
 
 ## Tier 2
 
-### QR preconditioning
+### QR preconditioning — TESTED AND REJECTED as a speed optimisation
 
-The main speed lever, and the difference between "a Jacobi SVD" and a
-competitive one. Drmac-Veselic: factor `A = QR` (with column pivoting), then run
-one-sided Jacobi on `R`. Convergence typically drops from ~8-10 sweeps to ~3-5,
-because `R` is already close to the form Jacobi is driving toward.
+The plan called this "the main speed lever". **It is not, for this workload.**
+The tier was gated on measurement and the measurement came back negative.
 
-For `n <= 32` this can be fused into the same CTA kernel (a 32x32 Householder QR
-is cheap in LDS). Gate it on measurement: it is a win only if the sweep saving
-exceeds the factorisation cost, which depends on the conditioning distribution of
-the input.
+`gesvdj_cta` now reports per-problem sweep counts (`GesvdjParams::sweep_counts`,
+the analogue of `cusolverDnXgesvdjGetSweeps`), which is what made this decidable.
+Baseline mean sweeps at n=32, float, 64 samples:
 
-This tier is also what makes the `n > 32` story work, since `R` is `n x n`
-regardless of `m`.
+| kappa | 1e1 | 1e3 | 1e4 | 1e5 | 1e6 |
+|---|---|---|---|---|---|
+| sweeps | 8.95 | 12.03 | 13.25 | 14.55 | 15.22 |
+
+Sweeps are the only term an algorithmic change can move (cost is
+`sweeps x n^2 x m`), and they nearly double from kappa 1e1 to 1e6, so the lever
+looked real. Two of the three preconditioning mechanisms were then tested:
+
+**1. de Rijk pre-ordering — no effect. Removed.**
+
+| kappa | 1e1 | 1e4 | 1e6 |
+|---|---|---|---|
+| with | 8.91 | 13.52 | 15.53 |
+| without | 8.95 | 13.25 | 15.22 |
+
+Neutral at low conditioning, slightly *worse* when graded. Worse, merely having
+the untaken branch in the kernel cost **13% of wall clock** (7.80 -> 8.88 ms at
+n=32/batch=16384) through register pressure. Removed outright rather than left
+behind a default-off flag; the code is gone and this table is the record.
+
+**2. QR preconditioning — no sweep reduction.** Tested out-of-kernel, which is
+the cheap way to falsify it: Q is orthogonal so `sigma(R) == sigma(A)` exactly,
+meaning the kernel can be run on `R` and scored against the *same* known
+spectrum without ever building Q. Mean sweeps:
+
+| kappa | 1e1 | 1e3 | 1e4 | 1e5 | 1e6 |
+|---|---|---|---|---|---|
+| on A | 8.95 | 12.03 | 13.25 | 14.55 | 15.22 |
+| on R | 8.97 | 12.02 | 13.23 | 14.50 | 15.22 |
+
+Identical to within 0.1 sweeps everywhere. A fused in-kernel QR would therefore
+pay for the factorisation and the back-application of Q and get **nothing** back
+on the sweep count — a guaranteed net loss, before writing a line of it.
+
+> **A false positive nearly got through here.** The first run of this experiment
+> showed sweeps dropping 15.2 -> 8.9, an apparent 1.7x. It was wrong: the R being
+> factored was not R. `MatrixView::triangularize` indexes `i*ld + j` while naming
+> `i` the row (`src/matrix.cc:796-805`), so on this library's COLUMN-major
+> storage its `uplo` is inverted — `triangularize(Uplo::Upper)` keeps the LOWER
+> triangle. The kernel was being handed geqrf's Householder reflectors, which
+> happen to be easier to diagonalise. The tell was that reconstruction was fine
+> (5e-7) while the singular values were off by 30x, i.e. it had correctly
+> factored the wrong matrix. **This is a live bug in `triangularize` and is worth
+> fixing separately**; it is not specific to gesvd.
+
+**3. Column-pivoted QR (geqp3) — not attempted.** There is no batched pivoted QR
+in the tree, so this is a large new implementation. The evidence argues against
+it: the two mechanisms that *were* testable are the same family (pivoting orders
+columns by decreasing residual norm; de Rijk orders them by decreasing norm once)
+and both moved the sweep count by nothing. It should not be built on the
+literature's claim alone.
+
+### What Tier 2 did produce
+
+* **A convergence diagnostic** — `GesvdjParams::sweep_counts`. Permanent value:
+  sweep count is the quantity every future tuning change has to be judged on, and
+  it is now visible in `gesvd_relacc` under the printable `iterations_done`
+  column.
+* **An accuracy result worth keeping.** QR preconditioning does not help speed
+  but it *does* improve relative accuracy, roughly 2x at high conditioning
+  (n=32 float: `max_relerr` 4.03e-5 vs 6.56e-5 at kappa=1e4; 2.58e-3 vs 5.11e-3
+  at 1e6). That is the Drmac-Veselic accuracy benefit showing up without the
+  convergence benefit. If an accuracy-critical mode is ever wanted, this is the
+  lever — as an *option*, not a default.
+* **A confirmed occupancy setting.** `cta_wg_size_multiplier` swept at
+  n=32/batch=16384/float: 1 -> 7.67 ms, 2 -> 8.85 ms, 4 -> 9.01 ms. The default
+  of 1 is correct; more problems per work-group trades local memory for warps and
+  the trade is not monotone.
+
+**Conclusion: do not build fused QR preconditioning.** The remaining speed work
+for `n <= 32` is micro-architectural (the Gram phase still runs in full during
+late, mostly-converged sweeps), not algorithmic.
 
 ---
 

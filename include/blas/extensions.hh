@@ -2078,6 +2078,23 @@ namespace batchlas {
         // sigma_j <= zero_sigma_multiplier * eps * sigma_max means U_j is not
         // determined by A and is filled from the orthogonal complement.
         Real zero_sigma_multiplier = Real(1);
+
+        // NOTE: de Rijk pre-ordering (columns sorted by decreasing norm before
+        // the first sweep) was implemented, measured, and removed -- there is
+        // deliberately no knob for it. Mean sweeps at n=32 float,
+        // kappa = 1e1 / 1e4 / 1e6 were 8.91 / 13.52 / 15.53 with it against
+        // 8.95 / 13.25 / 15.22 without: no reduction, slightly worse when graded.
+        // Keeping even the untaken branch cost 13% of wall clock through
+        // register pressure. Same for QR preconditioning: running the kernel on
+        // R from a (non-pivoted) geqrf changed the sweep count by less than 0.1
+        // at every conditioning tested. See GESVD_PLAN.md Tier 2.
+
+        // Optional per-problem convergence diagnostic, the analogue of
+        // cusolverDnXgesvdjGetSweeps. When non-empty (size >= batch_size) the
+        // kernel writes the number of sweeps each problem consumed. Sweeps are
+        // the dominant cost term, so this is what any preconditioning change has
+        // to be judged on.
+        Span<int32_t> sweep_counts = Span<int32_t>();
     };
 
     /**

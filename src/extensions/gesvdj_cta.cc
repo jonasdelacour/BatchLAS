@@ -256,6 +256,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
         const Real zero_mult = params.zero_sigma_multiplier;
 
         Real* S = s_ptr;
+        int32_t* SW = (params.sweep_counts.size() >= static_cast<size_t>(batch_size))
+                          ? params.sweep_counts.data()
+                          : nullptr;
 
         cgh.parallel_for<GesvdjCTAKernel<T, P, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
@@ -398,6 +401,17 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 }
                 const Real inv_beta = Real(1) / beta;
 
+                // ---- Global rescale ----
+                // de Rijk pre-ordering (sorting columns by decreasing norm before
+                // the first sweep) was implemented here and REMOVED. Measured mean
+                // sweeps at n=32 float, kappa = 1e1 / 1e4 / 1e6:
+                //     with    : 8.91 / 13.52 / 15.53
+                //     without : 8.95 / 13.25 / 15.22
+                // i.e. no reduction, and slightly worse at high conditioning.
+                // Merely having the untaken branch in the kernel cost 13% of wall
+                // clock (7.80 -> 8.88 ms at n=32/batch=16384) through register
+                // pressure, so it is not worth keeping behind a runtime flag
+                // either. See GESVD_PLAN.md Tier 2.
                 if (beta != Real(1)) {
                     for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                         A_local[base_a + lane + c * LD] = A_local[base_a + lane + c * LD] * T(beta);
@@ -419,7 +433,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // The verification sweep applies no rotations, so it costs only
                 // the Gram + threshold pass.
                 int32_t zero_sweeps = 0;
+                int32_t sweeps_used = 0;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
+                    sweeps_used = sweep + 1;
                     if (sweep > 0) {
                         exact_norms();
                         group_barrier(part);
@@ -644,6 +660,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // finalize_values_only produces it by index reversal
                 // (gesvd_blocked.cc:305), and both has_tiny_singular_values and
                 // patch_zero_left_vectors read sb[0] as sigma_max.
+                if (SW != nullptr && lane == 0) {
+                    SW[prob_id] = sweeps_used;
+                }
+
                 // Seed the permutation with the identity BEFORE the sort. The
                 // sort writes Inv_local[rank] for each column, which covers every
                 // slot only if the ranks are a bijection. That holds for any

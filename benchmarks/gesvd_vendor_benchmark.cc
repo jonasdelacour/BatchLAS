@@ -29,6 +29,7 @@
 #include "bench_utils.hh"
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 
@@ -157,7 +158,14 @@ static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
                     jobvh,
                     [](Queue& q, auto&& A_, auto&& s_, auto&& U_, auto&& Vh_,
                        auto&& jobu_, auto&& jobvh_) {
-                        gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_);
+                        GesvdjParams<T> jp;
+                        // Occupancy knob, exposed so it can be swept rather than
+                        // assumed: more problems per work-group trades local
+                        // memory for warps and the trade is not monotone.
+                        if (const char* e = std::getenv("BATCHLAS_GESVDJ_WGMUL")) {
+                            jp.cta_wg_size_multiplier = static_cast<size_t>(std::atoi(e));
+                        }
+                        gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, Span<std::byte>(), jp);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

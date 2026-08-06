@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <string>
@@ -137,7 +138,7 @@ SvdErrors svd_errors_host(int n,
     return e;
 }
 
-enum class RelAccImpl { BatchlasCta, CusolverJacobi, BatchlasJacobi };
+enum class RelAccImpl { BatchlasCta, CusolverJacobi, BatchlasJacobi, QrPrecond };
 
 template <typename Real, Backend B, RelAccImpl Impl>
 void run_gesvd_relacc(miniacc::State& state) {
@@ -153,7 +154,8 @@ void run_gesvd_relacc(miniacc::State& state) {
 
     state.SetTag("impl", Impl == RelAccImpl::BatchlasCta      ? "gesvd_cta"
                        : Impl == RelAccImpl::CusolverJacobi   ? "cusolver_gesvdj"
-                                                              : "gesvdj_cta");
+                       : Impl == RelAccImpl::BatchlasJacobi    ? "gesvdj_cta"
+                                                              : "gesvdj_cta_qr");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
     state.SetTag("dtype", miniacc_acc::dtype_name<Real>());
 
@@ -173,6 +175,7 @@ void run_gesvd_relacc(miniacc::State& state) {
         Matrix<Real> U(n, n, cur_batch);
         Matrix<Real> Vh(n, n, cur_batch);
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
+        UnifiedVector<int32_t> sweeps(static_cast<size_t>(cur_batch), 0);
 
         bool failed = false;
         std::string reason;
@@ -191,9 +194,54 @@ void run_gesvd_relacc(miniacc::State& state) {
                 UnifiedVector<std::byte> ws(ws_bytes);
                 backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                                SvdVectors::All, SvdVectors::All, ws.to_span());
-            } else {
+            } else if constexpr (Impl == RelAccImpl::QrPrecond) {
+                // Tier 2 hypothesis test, deliberately OUT of kernel.
+                //
+                // Q is orthogonal, so sigma(R) == sigma(A) exactly: running the
+                // Jacobi kernel on R and comparing against the SAME known
+                // spectrum is a valid measurement of both the sweep count and the
+                // accuracy, without needing to build Q or back-apply it. If the
+                // sweeps do not drop here, a fused in-kernel QR cannot help
+                // either, and it is a large piece of delicate code to write on
+                // spec.
+                UnifiedVector<Real> tau(static_cast<size_t>(n) * cur_batch);
+                const size_t qr_ws = geqrf_buffer_size<B, Real>(*q, A_work.view(), tau.to_span());
+                UnifiedVector<std::byte> qws(qr_ws);
+                geqrf<B, Real>(*q, A_work.view(), tau.to_span(), qws.to_span());
+                q->wait_and_throw();
+                // Zero the strict lower triangle by hand rather than calling
+                // MatrixView::triangularize. That helper indexes `i*ld + j` while
+                // naming i the row, so on this library's COLUMN-major storage its
+                // uplo is inverted: triangularize(Uplo::Upper) keeps the LOWER
+                // triangle (src/matrix.cc:796-805). Using it here silently fed
+                // the kernel geqrf's Householder reflectors instead of R -- the
+                // factorisation still succeeded, it just factored the wrong
+                // matrix, which showed up only as a singular-value mismatch
+                // against the known spectrum.
+                {
+                    Real* Rp = A_work.view().data_ptr();
+                    const int64_t rld = A_work.view().ld();
+                    const int64_t rst = A_work.view().stride();
+                    for (int b = 0; b < cur_batch; ++b) {
+                        for (int col = 0; col < n; ++col) {
+                            for (int row = col + 1; row < n; ++row) {
+                                Rp[b * rst + static_cast<int64_t>(col) * rld + row] = Real(0);
+                            }
+                        }
+                    }
+                }
+                // The host check now compares against R, not A.
+                MatrixView<Real, MatrixFormat::Dense>::copy(*q, A.view(), A_work.view()).wait();
+
+                GesvdjParams<Real> jp;
+                jp.sweep_counts = sweeps.to_span();
                 gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
-                                    SvdVectors::All, SvdVectors::All);
+                                    SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
+            } else {
+                GesvdjParams<Real> jp;
+                jp.sweep_counts = sweeps.to_span();
+                gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                                    SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
             }
             q->wait_and_throw();
         } catch (const std::exception& ex) {
@@ -234,9 +282,12 @@ void run_gesvd_relacc(miniacc::State& state) {
                 s_ref);
 
             const bool ok = std::isfinite(e.max_relerr) && std::isfinite(e.recon) && std::isfinite(e.ortho);
+            // "iterations_done" is on miniacc's printable whitelist
+            // (miniacc.hh:425); an arbitrary name would reach only --csv.
             state.RecordSample({{"max_relerr", e.max_relerr},
                                 {"R", e.recon},
                                 {"O", e.ortho},
+                                {"iterations_done", static_cast<double>(sweeps[static_cast<size_t>(b)])},
                                 {"log10_cond", target_log10}},
                                ok,
                                ok ? "" : "non_finite_error");
@@ -265,6 +316,12 @@ void ACC_GESVD_RELACC_JACOBI(miniacc::State& state) {
 
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_BATCHLAS, GesvdRelAccSizes)
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_CUSOLVER, GesvdRelAccSizes)
+template <typename Real, Backend B>
+void ACC_GESVD_RELACC_QR(miniacc::State& state) {
+    run_gesvd_relacc<Real, B, RelAccImpl::QrPrecond>(state);
+}
+
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_JACOBI, GesvdRelAccSizes)
+BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_QR, GesvdRelAccSizes)
 
 MINI_ACC_MAIN()
