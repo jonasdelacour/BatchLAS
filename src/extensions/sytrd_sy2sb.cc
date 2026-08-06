@@ -6,6 +6,7 @@
 #include <sycl/sycl.hpp>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -80,6 +81,10 @@ inline int32_t sy2sb_ormqr_block_size_hint(int n, int batch, int kd) {
         return std::min<int32_t>(forced, std::max(1, kd));
     }
     if (kd <= 0) return 0;
+    // Tuned constant next: 0 means "no opinion, use the shape gate below".
+    // Clamped to kd because a WY block wider than the panel is meaningless.
+    const int32_t tuned = tuning::sy2sb_ormqr_nb_for_n(n);
+    if (tuned > 0) return std::min<int32_t>(tuned, std::max(1, kd));
     // Shape gate: only where the win was measured.
     if (n >= 1024 && batch >= 32) return kd;
     return 0;

@@ -443,6 +443,16 @@ def _tune_one_bench(
         "best": best,
         "top": leaderboard,
         "per_case_best": [x for x in per_case_best if x is not None],
+        # Every distinct configuration measured, so sensitivity.py can ask which
+        # parameters actually moved the metric. `top` is truncated and
+        # `per_case_best` keeps only winners, so neither can answer that. Env
+        # params are invisible in the benchmark's own CSV output, which makes
+        # this the only complete record of them.
+        "env_spec": dict(space.env),
+        "measurements": [
+            {"args": list(args_key), "env": dict(env_key), "value": value}
+            for (args_key, env_key), value in measured.items()
+        ],
     }
 
 

@@ -10,11 +10,15 @@
     "invocations a run for a result nothing could ever consume, which looked",
     "exactly like tuning.",
     "",
-    "To promote one of these into default.json you must first: add",
+    "sb2st and sy2sb graduated to default.json on 2026-08-07, once",
+    "SB2ST_BACK_TILE_*, SB2ST_BACK_SUBS_* and SY2SB_ORMQR_NB_* existed and the",
+    "call sites read them.",
+    "",
+    "To promote one of these you must do all three, in order: add",
     "<NAME>_{TINY..XLARGE} constants and a *_for_n accessor to",
     "include/batchlas/tuning_params.hh, teach generate_tuning_header.py to",
     "derive them, and make the production call site read the accessor instead",
-    "of its hardcoded default.",
+    "of its hardcoded default. Skipping the third makes the whole thing a no-op.",
     "",
     "Run with:",
     "  python3 evaluation/tuning/tune.py --space evaluation/tuning/spaces/unwired.json \\",
@@ -32,11 +36,10 @@
         "cta_shift_strategy (=Lapack) are plain C++ member initialisers in",
         "include/blas/extensions.hh, and stedc's leaf solve takes them as they",
         "come. Nothing reads a tuning constant.",
-        "A previous run picked wg_multiplier=2 over the shipped 1, so there is",
-        "probably something here.",
-        "shift_kind is 1=Wilkinson, anything else=Lapack. The old grid swept",
-        "[0,1,2], where 0 and 2 are the same run -- it wasted a third of its",
-        "invocations measuring Lapack twice."
+        "Worth doing: measured spreads are 12.2% for shift_kind and 3.1% for",
+        "wg_multiplier, and a sweep picked wg_multiplier=2 over the shipped 1.",
+        "shift_kind is 1=Wilkinson, anything else=Lapack, so the grid is [0,1].",
+        "The old grid swept [0,1,2] and measured Lapack twice."
       ],
       "cases": [
         { "fixed": { "n": 16, "batch": 4096, "n_sweeps": 10 }, "tune": { "wg_multiplier": [1, 2, 4], "shift_kind": [0, 1] } },
@@ -54,8 +57,9 @@
         "Blocked on: the band width is chosen by choose_two_stage_kd() in",
         "src/extensions/two_stage_common.hh, a hand-written table justified by a",
         "comment block, overridable only via BATCHLAS_SYEV_TWO_STAGE_KD.",
-        "It is worth measuring: that comment records 425.8 vs 500.1 ms between",
-        "kd=32 and kd=16 at n=1024, i.e. ~18%.",
+        "Worth measuring: that comment records 425.8 vs 500.1 ms between kd=32",
+        "and kd=16 at n=1024, i.e. ~18%. Note kd also sets the ceiling for",
+        "sy2sb's clamped WY width, so retuning kd invalidates SY2SB_ORMQR_NB_*.",
         "kd is positional here, so no env override is needed."
       ],
       "cases": [
@@ -67,51 +71,20 @@
     },
 
     {
-      "bench": "sb2st",
-      "exe": "sb2st_hh_benchmark",
+      "bench": "sb2st_block",
+      "exe": "syev_two_stage_benchmark",
       "metric": "Time (ms)",
       "direction": "min",
       "arg_spec": ["n", "batch", "kd"],
-      "env": {
-        "back_tile": "BATCHLAS_SB2ST_BACK_TILE",
-        "back_wave": "BATCHLAS_SB2ST_BACK_WAVE"
-      },
+      "env": { "sb2st_block": "BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK" },
       "_comment": [
-        "The biggest single lever in the whole library that nothing tunes:",
-        "syev_two_stage.sb2st_hh is 52.9% of syev at n=1024 batch=256, measured",
-        "by BATCHLAS_KERNEL_TRACE. Its knobs are env-only",
-        "(BATCHLAS_SB2ST_BACK_TILE, BATCHLAS_SB2ST_BACK_WAVE,",
-        "BATCHLAS_SB2ST_SUBGROUP) with no constants behind them.",
-        "Grids are a first probe, not a considered range -- widen once you see",
-        "which direction helps."
+        "Blocked on: choose_two_stage_sb2st_block_size() returns a hardcoded 32.",
+        "This is the chase blocking factor, distinct from the back-transform",
+        "geometry now tuned by the sb2st bench in default.json."
       ],
       "cases": [
-        { "fixed": { "n": 512,  "batch": 512, "kd": 32 }, "tune": { "back_tile": [16, 32, 64], "back_wave": [1, 2, 4] } },
-        { "fixed": { "n": 1024, "batch": 256, "kd": 32 }, "tune": { "back_tile": [16, 32, 64], "back_wave": [1, 2, 4] } }
-      ]
-    },
-
-    {
-      "bench": "sy2sb_ormqr_nb",
-      "exe": "syev_benchmark",
-      "metric": "Time (µs) / matrix",
-      "direction": "min",
-      "arg_spec": ["n", "batch", "nb", "wg", "fuse"],
-      "env": { "sy2sb_nb": "BATCHLAS_SY2SB_ORMQR_NB" },
-      "_comment": [
-        "Blocked on: sy2sb_ormqr_block_size_hint() in sytrd_sy2sb.cc is a",
-        "hand-written shape gate (return kd when n>=1024 && batch>=32, else 0)",
-        "rather than a tuned table. It shadows ORMQR_BLOCK_SIZE_* on syev's hot",
-        "path -- with the gate on, changing the ormqr constant leaves the kernel",
-        "trace bit-identical.",
-        "Measured: with the gate off, nb=56 is 1.21x faster than nb=16 at n=1024",
-        "batch=256, and the gate's own kd=32 is worth about the same. So the",
-        "gate is currently doing the right thing; the question a sweep answers is",
-        "whether its n/batch boundaries are right."
-      ],
-      "cases": [
-        { "fixed": { "n": 512,  "batch": 512, "nb": 8, "wg": 0, "fuse": 0 }, "tune": { "sy2sb_nb": [16, 32, 48, 56] } },
-        { "fixed": { "n": 1024, "batch": 256, "nb": 8, "wg": 0, "fuse": 0 }, "tune": { "sy2sb_nb": [16, 32, 48, 56] } }
+        { "fixed": { "n": 512,  "batch": 512, "kd": 32 }, "tune": { "sb2st_block": [16, 32, 64] } },
+        { "fixed": { "n": 1024, "batch": 128, "kd": 32 }, "tune": { "sb2st_block": [16, 32, 64] } }
       ]
     }
   ]

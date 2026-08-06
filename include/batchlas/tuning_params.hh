@@ -65,6 +65,37 @@ inline constexpr int32_t GEBRD_BLOCK_SIZE_MEDIUM = 16;
 inline constexpr int32_t GEBRD_BLOCK_SIZE_LARGE = 16;
 inline constexpr int32_t GEBRD_BLOCK_SIZE_XLARGE = 16;
 
+// sb2st back-transform geometry, for the wave-parallel path that is ~53% of
+// syev at n=1024. 0 means "keep the shape-adaptive heuristic in
+// sytrd_sb2st_hh.cc", which is what ships, so these are inert until tuned.
+//
+// Only the instantiated (tile, subs) combinations exist: tile in {1,2,4,8} and
+// subs in {4,8,16}. Any other pair silently falls through to the slower tiled
+// kernel, so a tuning grid must not leave that set.
+inline constexpr int32_t SB2ST_BACK_TILE_TINY = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_SMALL = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_MEDIUM = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_LARGE = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_XLARGE = 0;
+
+inline constexpr int32_t SB2ST_BACK_SUBS_TINY = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_SMALL = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_MEDIUM = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_LARGE = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_XLARGE = 0;
+
+// WY block width for the sy2sb panel back-transform. 0 means "keep the shape
+// gate in sytrd_sy2sb.cc" (return kd when n >= 1024 and batch >= 32), which is
+// what ships. A positive value is clamped to kd at the call site.
+//
+// This is the knob that shadows ORMQR_BLOCK_SIZE_* on syev's hot path: with the
+// gate active, changing the ormqr constant leaves the kernel trace identical.
+inline constexpr int32_t SY2SB_ORMQR_NB_TINY = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_SMALL = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_MEDIUM = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_LARGE = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_XLARGE = 0;
+
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = 16;
@@ -149,6 +180,30 @@ inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {
     return GEBRD_BLOCK_SIZE_XLARGE;
 }
 
+inline constexpr int32_t sb2st_back_tile_default_for_n(int32_t n) {
+    if (n <= 64) return SB2ST_BACK_TILE_TINY;
+    if (n <= 128) return SB2ST_BACK_TILE_SMALL;
+    if (n <= 256) return SB2ST_BACK_TILE_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_TILE_LARGE;
+    return SB2ST_BACK_TILE_XLARGE;
+}
+
+inline constexpr int32_t sb2st_back_subs_default_for_n(int32_t n) {
+    if (n <= 64) return SB2ST_BACK_SUBS_TINY;
+    if (n <= 128) return SB2ST_BACK_SUBS_SMALL;
+    if (n <= 256) return SB2ST_BACK_SUBS_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_SUBS_LARGE;
+    return SB2ST_BACK_SUBS_XLARGE;
+}
+
+inline constexpr int32_t sy2sb_ormqr_nb_default_for_n(int32_t n) {
+    if (n <= 64) return SY2SB_ORMQR_NB_TINY;
+    if (n <= 128) return SY2SB_ORMQR_NB_SMALL;
+    if (n <= 256) return SY2SB_ORMQR_NB_MEDIUM;
+    if (n <= 512) return SY2SB_ORMQR_NB_LARGE;
+    return SY2SB_ORMQR_NB_XLARGE;
+}
+
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {
     if (n <= 64) return SYTRD_BLOCK_SIZE_TINY;
     if (n <= 128) return SYTRD_BLOCK_SIZE_SMALL;
@@ -210,6 +265,25 @@ inline int32_t ormqr_block_size_for_n(int32_t n) {
 inline int32_t gebrd_block_size_for_n(int32_t n) {
     return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
                                        gebrd_block_size_default_for_n(n));
+}
+
+// These three return 0 to mean "no opinion, keep the call site's heuristic".
+// tuning_env_override treats a non-positive *environment* value as unset, so 0
+// is reachable only from the compiled constant -- which is what we want: the
+// env vars exist to force a specific geometry, not to force auto.
+inline int32_t sb2st_back_tile_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_TILE",
+                                       sb2st_back_tile_default_for_n(n));
+}
+
+inline int32_t sb2st_back_subs_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_SUBS",
+                                       sb2st_back_subs_default_for_n(n));
+}
+
+inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SY2SB_ORMQR_NB",
+                                       sy2sb_ormqr_nb_default_for_n(n));
 }
 
 inline int32_t sytrd_block_size_for_n(int32_t n) {

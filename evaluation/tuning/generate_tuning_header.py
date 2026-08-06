@@ -134,6 +134,9 @@ def _emit_header(out_path: Path,
                  ormqr_large: int,
                  ormqr_xlarge: int,
                  gebrd: Dict[str, int],
+                 sb2st_tile: Dict[str, int],
+                 sb2st_subs: Dict[str, int],
+                 sy2sb_nb: Dict[str, int],
                  sytrd_tiny: int,
                  sytrd_small: int,
                  sytrd_medium: int,
@@ -200,6 +203,28 @@ inline constexpr int32_t GEBRD_BLOCK_SIZE_MEDIUM = {gebrd["medium"]};
 inline constexpr int32_t GEBRD_BLOCK_SIZE_LARGE = {gebrd["large"]};
 inline constexpr int32_t GEBRD_BLOCK_SIZE_XLARGE = {gebrd["xlarge"]};
 
+// sb2st back-transform geometry for the wave path. 0 = keep the shape-adaptive
+// heuristic in sytrd_sb2st_hh.cc. Only tile in {1,2,4,8} x subs in {4,8,16} are
+// instantiated; anything else falls through to a slower kernel.
+inline constexpr int32_t SB2ST_BACK_TILE_TINY = {sb2st_tile["tiny"]};
+inline constexpr int32_t SB2ST_BACK_TILE_SMALL = {sb2st_tile["small"]};
+inline constexpr int32_t SB2ST_BACK_TILE_MEDIUM = {sb2st_tile["medium"]};
+inline constexpr int32_t SB2ST_BACK_TILE_LARGE = {sb2st_tile["large"]};
+inline constexpr int32_t SB2ST_BACK_TILE_XLARGE = {sb2st_tile["xlarge"]};
+
+inline constexpr int32_t SB2ST_BACK_SUBS_TINY = {sb2st_subs["tiny"]};
+inline constexpr int32_t SB2ST_BACK_SUBS_SMALL = {sb2st_subs["small"]};
+inline constexpr int32_t SB2ST_BACK_SUBS_MEDIUM = {sb2st_subs["medium"]};
+inline constexpr int32_t SB2ST_BACK_SUBS_LARGE = {sb2st_subs["large"]};
+inline constexpr int32_t SB2ST_BACK_SUBS_XLARGE = {sb2st_subs["xlarge"]};
+
+// WY block width for the sy2sb panel back-transform. 0 = keep the shape gate.
+inline constexpr int32_t SY2SB_ORMQR_NB_TINY = {sy2sb_nb["tiny"]};
+inline constexpr int32_t SY2SB_ORMQR_NB_SMALL = {sy2sb_nb["small"]};
+inline constexpr int32_t SY2SB_ORMQR_NB_MEDIUM = {sy2sb_nb["medium"]};
+inline constexpr int32_t SY2SB_ORMQR_NB_LARGE = {sy2sb_nb["large"]};
+inline constexpr int32_t SY2SB_ORMQR_NB_XLARGE = {sy2sb_nb["xlarge"]};
+
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = {sytrd_tiny};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = {sytrd_small};
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = {sytrd_medium};
@@ -260,6 +285,30 @@ inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {{
     if (n <= 256) return GEBRD_BLOCK_SIZE_MEDIUM;
     if (n <= 512) return GEBRD_BLOCK_SIZE_LARGE;
     return GEBRD_BLOCK_SIZE_XLARGE;
+}}
+
+inline constexpr int32_t sb2st_back_tile_default_for_n(int32_t n) {{
+    if (n <= 64) return SB2ST_BACK_TILE_TINY;
+    if (n <= 128) return SB2ST_BACK_TILE_SMALL;
+    if (n <= 256) return SB2ST_BACK_TILE_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_TILE_LARGE;
+    return SB2ST_BACK_TILE_XLARGE;
+}}
+
+inline constexpr int32_t sb2st_back_subs_default_for_n(int32_t n) {{
+    if (n <= 64) return SB2ST_BACK_SUBS_TINY;
+    if (n <= 128) return SB2ST_BACK_SUBS_SMALL;
+    if (n <= 256) return SB2ST_BACK_SUBS_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_SUBS_LARGE;
+    return SB2ST_BACK_SUBS_XLARGE;
+}}
+
+inline constexpr int32_t sy2sb_ormqr_nb_default_for_n(int32_t n) {{
+    if (n <= 64) return SY2SB_ORMQR_NB_TINY;
+    if (n <= 128) return SY2SB_ORMQR_NB_SMALL;
+    if (n <= 256) return SY2SB_ORMQR_NB_MEDIUM;
+    if (n <= 512) return SY2SB_ORMQR_NB_LARGE;
+    return SY2SB_ORMQR_NB_XLARGE;
 }}
 
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {{
@@ -323,6 +372,21 @@ inline int32_t ormqr_block_size_for_n(int32_t n) {{
 inline int32_t gebrd_block_size_for_n(int32_t n) {{
     return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
                                        gebrd_block_size_default_for_n(n));
+}}
+
+inline int32_t sb2st_back_tile_for_n(int32_t n) {{
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_TILE",
+                                       sb2st_back_tile_default_for_n(n));
+}}
+
+inline int32_t sb2st_back_subs_for_n(int32_t n) {{
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_SUBS",
+                                       sb2st_back_subs_default_for_n(n));
+}}
+
+inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {{
+    return detail::tuning_env_override("BATCHLAS_TUNE_SY2SB_ORMQR_NB",
+                                       sy2sb_ormqr_nb_default_for_n(n));
 }}
 
 inline int32_t sytrd_block_size_for_n(int32_t n) {{
@@ -474,6 +538,19 @@ def main() -> int:
         *[_gebrd_fallback(b) for b in ["tiny", "small", "medium", "large", "xlarge"]],
         direction="min")
 
+    # sb2st and sy2sb: 0 means "no opinion, keep the call site's heuristic",
+    # which is what ships. A profile without these benches therefore leaves
+    # behaviour unchanged rather than inventing a geometry.
+    sb2st_entry = _find_bench_entry(profile, "sb2st")
+    sy2sb_entry = _find_bench_entry(profile, "sy2sb")
+
+    sb2st_tile_buckets = _derive_param_buckets(
+        sb2st_entry, "back_tile", 0, 0, 0, 0, 0, direction="min")
+    sb2st_subs_buckets = _derive_param_buckets(
+        sb2st_entry, "back_subs", 0, 0, 0, 0, 0, direction="min")
+    sy2sb_nb_buckets = _derive_param_buckets(
+        sy2sb_entry, "sy2sb_nb", 0, 0, 0, 0, 0, direction="min")
+
     latrd_wg_fallback = int(latrd_params.get("wg", args.fallback_latrd_lower_panel_wg_hint))
     latrd_wg_buckets = _derive_param_buckets(syev_entry,
                                              "wg",
@@ -531,6 +608,9 @@ def main() -> int:
                  ormqr_buckets["large"],
                  ormqr_buckets["xlarge"],
                  gebrd_buckets,
+                 sb2st_tile_buckets,
+                 sb2st_subs_buckets,
+                 sy2sb_nb_buckets,
                  sytrd_buckets["tiny"],
                  sytrd_buckets["small"],
                  sytrd_buckets["medium"],
