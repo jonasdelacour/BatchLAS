@@ -20,6 +20,8 @@
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
 #include "syrk_custom_dispatch.hh"
+#include "syrk_gram_tiles.hh"
+#include "cublasdx_dispatch_common.hh"
 #include "trmm_custom_dispatch.hh"
 #include "triangular_expand.hh"
 #include "../sycl/gemm_kernels.hh"
@@ -531,6 +533,19 @@ namespace batchlas {
             throw std::runtime_error("HERK: incompatible matrix dimensions");
         }
 
+        // The same single-tile Gram kernel as syrk, with the ^H conjugating
+        // whichever operand carries it. Opt-in only: see syrk_route_requests_gram
+        // for the measurement that keeps it off the automatic path -- a complex
+        // multiply is four real ones, so this shape is compute bound for herk
+        // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
+        // wins on every Gram shape measured.
+        if constexpr (Back == Backend::CUDA) {
+            if (detail::is_gpu_queue(ctx) && syrk_route_requests_gram() &&
+                detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true)) {
+                return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
+            }
+        }
+
         const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
         if (herk_gemm_preferred(n, batch) && detail::expansion_fits(ctx, n, batch, product_bytes)) {
             const int ld = detail::expanded_ld<T>(n);
@@ -759,6 +774,19 @@ namespace batchlas {
             if constexpr (std::is_same_v<T, float>) {
                 if (syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
                     return syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
+                }
+            } else {
+                // Everything that is not float reaches the single-tile Gram
+                // kernel only. It is the one route here whose staging and
+                // fragment loads are not written around a 128-bit packet, so it
+                // is the one that generalises; the 128x128 triangular kernel
+                // stays float. Below kGramMaxTile the alternative is
+                // syrk_vendor_impl's host loop over one cublasXsyrk per batch
+                // member, which at large batch is two orders of magnitude off
+                // anything batched, so there is no threshold to tune.
+                if (detail::is_gpu_queue(ctx) && !syrk_route_prefers_vendor() &&
+                    detail::syrk_gram_supported(A, C, transA, /*conjugated=*/false)) {
+                    return detail::syrk_gram_tiles<T, false>(ctx, A, C, alpha, beta, uplo, transA);
                 }
             }
         }

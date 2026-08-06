@@ -168,6 +168,14 @@ Event syrk_cublasdx_fallback_gemm(Queue& ctx,
 
 } // namespace
 
+bool syrk_route_prefers_vendor() {
+    return syrk_route_request() == SyrkRoute::Vendor;
+}
+
+bool syrk_route_requests_gram() {
+    return syrk_route_request() == SyrkRoute::Gram;
+}
+
 bool syrk_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& A,
                           const MatrixView<float, MatrixFormat::Dense>& C,

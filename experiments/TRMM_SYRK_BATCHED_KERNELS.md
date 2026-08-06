@@ -132,16 +132,129 @@ kernel's three tile widths. `SyrkTest.NarrowShapesMatchGemmReference` now sweeps
 n in {24, 32, 48, 64, 96, 128} x trans x uplo with k = 200 (deliberately not a
 multiple of the k chunk), so each tile width and each partial tile is exercised.
 
+## Double and complex
+
+The Gram kernel is templated, so extending it was mostly a matter of finding the
+three things that were secretly float-only:
+
+1. **The 128-bit packet.** `TileVec4<T>` is `alignas(4*sizeof(T))`, which for
+   double is 32 bytes and for `complex<double>` 64 -- an alignment
+   `sycl::local_accessor` never promises, since it aligns to `T`. The
+   reinterpret was undefined for every type but float. `tile_load4` now
+   vectorises only at `sizeof(T) == 4` and stays scalar above it.
+2. **Register pressure.** A 4-wide thread tile puts 544 threads on the 128-wide
+   case, which float wants. Complex doubles every accumulator: 205 registers per
+   work-item x 544 is past the 65536 a work-group gets, and the runtime rejects
+   the launch outright rather than spilling. Complex takes an 8-wide thread tile
+   and 160 threads instead.
+3. **`std::complex::operator*`.** It lowers to the `__mulsc3` libcall -- C99
+   Annex G, a branch on Inf and NaN around every multiply. In this inner loop it
+   cost **18x**: n = 128 took 38 ms where a cuBLAS GEMM took 1.5. Writing the
+   four real multiplies out by hand fixed it. Nothing in the source hints at it.
+
+Double, against the GEMM spelling and against the host loop it replaces:
+
+| m | n | batch | gemm | syrk before | syrk now | vs gemm | vs before |
+|---|---|---|---|---|---|---|---|
+| 256 | 32 | 2048 | 0.901 | 115.40 | **0.837** | 1.08x | 138x |
+| 512 | 64 | 1024 | 3.444 | 112.45 | **1.934** | 1.78x | 58x |
+| 1024 | 128 | 512 | 13.72 | 110.91 | **6.521** | 2.10x | 17x |
+
+The win *grows* with n in double and shrinks in float, and that is the FP64 rate:
+this part runs double at 1/64, so the Gram product is squarely compute bound and
+halving the arithmetic lands in full, where float at n = 128 is already against
+both roofs.
+
+**Complex is measured and rejected.** In complex float the tile kernel loses to
+the existing GEMM-plus-Hermitian-fold at every Gram shape (0.217 vs 0.206 ms at
+n=32/batch 2048; 2.08 vs 1.57 at n=128/batch 512): a complex multiply is four
+real ones, so herk is compute bound where real syrk is bandwidth bound, and
+cuBLAS's cgemm is better at compute than this kernel. `herk` keeps its route.
+The conjugating path stays reachable as `BATCHLAS_SYRK_VARIANT=gram` so it stays
+measurable and under test.
+
+### The herk test that could not have failed
+
+`HerkTest` checked that the unreferenced triangle stays untouched and that the
+two uplo runs agree. Neither can catch conjugating the wrong operand: doing so
+returns `conj(C)` instead of `C`, which is still Hermitian and still consistent
+across both triangles. `MatchesGemmReference` compares against a GEMM and was
+confirmed to fail when the conjugation is flipped.
+
+## Wired into ortho
+
+Both Cholesky Gram sites (`chol_alg`, `shift_chol_alg`) now call `syrk`. Only
+the lower triangle is produced, which is all anything downstream reads -- `potrf`
+and `trsm` both default to `Uplo::Lower` and the shift kernel touches only the
+diagonal. `svqb_alg` keeps its GEMM: it scales the whole `k x k` before handing
+it to `syev`, so a half-written C would leave it multiplying uninitialised
+workspace.
+
+End to end, m = 1024, batch 512 (`BATCHLAS_ORTHO_GRAM=gemm` pins the old
+spelling so this is one binary, not two builds):
+
+| k | algo | float gemm | float syrk | | double gemm | double syrk | |
+|---|---|---|---|---|---|---|---|
+| 32 | Chol2 | 1.450 | **0.895** | 1.62x | 6.689 | 6.580 | 1.02x |
+| 32 | ShiftChol3 | 1.998 | **1.298** | 1.54x | | | |
+| 64 | Chol2 | 4.061 | **3.614** | 1.12x | 17.98 | **14.95** | 1.20x |
+| 64 | ShiftChol3 | 6.078 | **5.404** | 1.12x | | | |
+| 128 | Chol2 | 8.813 | 9.156 | 0.96x | 57.39 | **42.94** | 1.34x |
+
+The float k = 128 loss is why the threshold is `k <= 64` for float and
+`k <= 128` for double rather than one number for both.
+
+## Impact on syev: none, and the trace says why
+
+Asked directly. The answer is that **neither new kernel is in syev's path**, and
+that is not an oversight in the wiring -- syev does not call `ortho` at all.
+Kernel tracing a run is what settles it, and it also shows syev taking two
+completely different routes:
+
+| n | route | level-3 triangular ops used |
+|---|---|---|
+| 256 | `sytrd_blocked` | `syr2k_cuda_custom.triangular_tiles` (PR #61) |
+| 512 | `syev_two_stage` | none at all |
+
+So the only level-3 kernel that touches syev is the syr2k PR #61 already landed,
+and it only touches the shapes that take the blocked route:
+
+| n | batch | nb | jobz | gemm | syr2k | |
+|---|---|---|---|---|---|---|
+| 256 | 1024 | 16 | evals | 25.37 | **21.93** | 1.16x |
+| 256 | 1024 | 32 | evals | 26.49 | **25.02** | 1.06x |
+| 256 | 1024 | 32 | vectors | 39.17 | **37.41** | 1.05x |
+| 512 | 1024 | 16 | evals | 162.7 | 162.8 | 1.00x |
+| 512 | 1024 | 32 | evals | 162.7 | 162.5 | 1.00x |
+
+n = 512 is exactly 1.00x because the two-stage path never calls syr2k.
+
+Where its time does go, from the same trace (n=512, batch 1024, nb=16):
+
+| kernel | share |
+|---|---|
+| `syev_two_stage.sb2st_hh` | 62.4% |
+| `ormqr_blocked.larft` | 9.2% |
+| `syev_two_stage.stebz_evals` | 7.1% |
+| `ormqr_blocked.pack_v_panel` | 4.0% |
+| `syev_two_stage.sy2sb` | 1.1% |
+
+**The conclusion for anyone chasing syev is that level-3 substitution is not the
+lever.** Nearly two thirds of it is one band-to-tridiagonal Householder kernel,
+and no triangular BLAS-3 op appears anywhere in that route. The ~9% in
+`ormqr_blocked.larft` is the one place trmm could be wired -- see below -- and
+even a perfect result there is bounded by that 9%.
+
 ## What is not done
 
-- **Neither op is wired into `ortho` yet, and that is deliberate.** `syrk` is
-  now 1.8x-4.3x faster than the GEMM spelling at ortho's Gram shapes in
-  **CUDA float**. In double and complex there is still no batched kernel --
-  those fall to the per-batch host loop -- so switching the call sites today
-  would trade a 2x float win for a ~100x double loss. The batched double/complex
-  route is the prerequisite.
+- **`trmm` is still not wired into `ormqr_blocked`/`ormbr`.** The shape is right
+  (`m = ib <= 64` is where the tile kernel wins, 1.04x-1.12x) and syev spends
+  ~9% there, so the bound on the whole substitution is about 1%. Worth doing,
+  not worth doing carelessly.
 - `trmm`'s tile kernel is `Side::Left` only. `ormqr`/`ormbr` use both sides;
   the right-side branch still takes the expansion.
+- The two-stage path's `sy2sb` trailing update has no syr2k, and n >= 512 syev
+  goes through it. That is a separate, larger piece of work than this one.
 - The tile kernel runs at ~70% of cuBLAS's per-flop rate. Closing that would
   turn the `m = 128..256` band from a loss into a ~1.2x win.
 - SYRK at n = 256 (0.89x, `syrk_triangular_tiles`) is a pre-existing loss and

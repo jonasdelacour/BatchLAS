@@ -7,6 +7,8 @@
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <numeric>
+#include <cstdlib>
+#include <string>
 #include <algorithm>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
@@ -118,6 +120,65 @@ namespace batchlas {
         auto potrf_workspace = wsl.potrf_ws;
         auto ATA_stride = k * k;
 
+        // C = A^H A is a Gram matrix, which is exactly what syrk spells, and it
+        // does half the arithmetic a GEMM does. PR #61 measured this
+        // substitution and rejected it -- correctly at the time, because syrk
+        // reached no batched kernel at these shapes and fell to a host loop over
+        // cublasXsyrk: 96x slower in float, and 115 ms against a 0.9 ms GEMM in
+        // double. `syrk_gram_tiles` is that missing kernel.
+        //
+        // Two conditions, both measured rather than assumed (RTX 4090 / sm_89,
+        // batches that saturate):
+        //
+        //   k          the single-tile Gram kernel lives at k <= 128, but the
+        //              useful limit differs by precision and the end-to-end
+        //              numbers say so (m = 1024, batch 512, Chol2):
+        //
+        //                k    float           double
+        //                32   1.62x           1.02x
+        //                64   1.12x           1.20x
+        //                128  0.96x  <- loss  1.34x
+        //
+        //              Float at k = 128 is a wash because the SGEMM it replaces
+        //              is already against both the compute and the bandwidth
+        //              roof, so there is nothing for the halved arithmetic to
+        //              buy. FP64 runs at 1/64 rate on this part, so double is
+        //              squarely compute bound and the halving lands in full --
+        //              and it grows with k, where float's shrinks. Hence 64 for
+        //              float and 128 for double, not one number for both.
+        //              Above those, double and complex are still on the host
+        //              loop, which at k = 256 loses to the GEMM by 2x.
+        //   real only  a complex multiply is four real ones, so herk is compute
+        //              bound where syrk is bandwidth bound, and the existing
+        //              GEMM-plus-Hermitian-fold beats the tile kernel at every
+        //              Gram shape. Complex keeps the GEMM.
+        //
+        // Only the lower triangle is produced. Everything downstream of these
+        // two call sites reads exactly that -- potrf and trsm both default to
+        // Uplo::Lower, and shift_chol_alg's shift kernel touches only the
+        // diagonal. svqb_alg is the exception and keeps its GEMM: it scales the
+        // whole k x k before handing it to syev, so a half-written C would leave
+        // it multiplying uninitialised workspace.
+        // BATCHLAS_ORTHO_GRAM=gemm pins the old spelling, so the substitution
+        // stays measurable from one binary rather than needing a build of the
+        // parent commit to compare against.
+        constexpr bool gram_is_real = !sycl::detail::is_complex<T>::value;
+        const bool gram_pinned_to_gemm = [] {
+            const char* raw = std::getenv("BATCHLAS_ORTHO_GRAM");
+            return raw != nullptr && std::string(raw) == "gemm";
+        }();
+        constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
+        const bool gram_via_syrk =
+            (B == Backend::CUDA) && gram_is_real && k <= gram_max_k && !gram_pinned_to_gemm;
+        auto gram_into_C = [&](const auto& in_mat) {
+            if constexpr (B == Backend::CUDA && gram_is_real) {
+                if (gram_via_syrk) {
+                    return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
+                }
+            }
+            return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
+        };
+
 
         auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
         auto square = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
@@ -126,7 +187,7 @@ namespace batchlas {
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
             //Compute StS = S^T * S or StS = S * S^T (depending on transA)
-            gemm<B>(ctx, A, A, C, {.transA = inv_trans, .transB = transA});
+            gram_into_C(A);
             //Compute the Cholesky Factorization of StS
             potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
             //Solve X * Chol(StS) = S
@@ -195,7 +256,7 @@ namespace batchlas {
         };
 
         auto shift_chol_alg = [&](){
-            gemm<B>(ctx, A, A, C, {.transA = inv_trans, .transB = transA});
+            gram_into_C(A);
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){

@@ -64,10 +64,58 @@ namespace batchlas::backend::detail {
 // kernel can serve.
 inline constexpr int kGramMaxTile = 128;
 
-template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand>
+// Conjugation is a no-op on a real scalar, which is what lets one kernel serve
+// both syrk and herk rather than two near-copies.
+template <typename T>
+inline T conj_if(const T& value) {
+    if constexpr (sycl::detail::is_complex<T>::value) {
+        return std::conj(value);
+    } else {
+        return value;
+    }
+}
+
+// accum += a * b, written out rather than delegated to std::complex.
+//
+// `std::complex<float>::operator*` lowers to the __mulsc3 libcall, which
+// implements C99 Annex G -- a branch on Inf and NaN around every single
+// multiply. In the innermost loop of a GEMM that is ruinous and it is invisible
+// in the source: the first complex build of this kernel ran at 1.2 TFLOP/s
+// against float's 13.8, and at n = 128 took 38 ms where a cuBLAS GEMM took 1.5.
+// Four real multiplies and two adds is the whole operation; there is no
+// exceptional case here worth a branch, because a NaN in the input is already
+// a NaN in the answer.
+template <typename T>
+inline void accumulate(T& accum, const T& a, const T& b) {
+    if constexpr (sycl::detail::is_complex<T>::value) {
+        using Real = typename T::value_type;
+        const Real ar = a.real();
+        const Real ai = a.imag();
+        const Real br = b.real();
+        const Real bi = b.imag();
+        accum = T(accum.real() + ar * br - ai * bi,
+                  accum.imag() + ar * bi + ai * br);
+    } else {
+        accum += a * b;
+    }
+}
+
+// Drops the imaginary part BLAS guarantees is zero on a HERK diagonal. It is
+// zero only up to rounding, and leaving the residue there would make a matrix
+// that is not quite Hermitian, which the eigensolvers downstream do notice.
+template <typename T>
+inline T real_part_of(const T& value) {
+    if constexpr (sycl::detail::is_complex<T>::value) {
+        return T(value.real(), typename T::value_type(0));
+    } else {
+        return value;
+    }
+}
+
+template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
 class SyrkGramTilesKernel;
 
-template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand>
+template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
 Event launch_syrk_gram_tiles(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& C,
@@ -114,7 +162,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
         const int stride_c = C.stride();
         const bool lower = uplo == Uplo::Lower;
 
-        h.parallel_for<SyrkGramTilesKernel<T, NTile, ThreadTile, KC, TransOperand>>(
+        h.parallel_for<SyrkGramTilesKernel<T, NTile, ThreadTile, KC, TransOperand, Conjugate>>(
             sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {
@@ -219,19 +267,32 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                                 // nothing writes it.
                                 const int qa = swizzle(tr * Bands + b, p);
                                 const int qb = swizzle(tc * Bands + b, p);
-                                const TileVec4<T> va = tile_vec4(row + qa * 4);
-                                const TileVec4<T> vb = tile_vec4(row + qb * 4);
+                                T va[4];
+                                T vb[4];
+                                tile_load4(row + qa * 4, va);
+                                tile_load4(row + qb * 4, vb);
 #pragma unroll
                                 for (int e = 0; e < 4; ++e) {
-                                    af[b * 4 + e] = va.v[e];
-                                    bf[b * 4 + e] = vb.v[e];
+                                    // HERK conjugates whichever operand carries
+                                    // the ^H. With transA = ConjTrans that is
+                                    // the row index, with NoTrans the column;
+                                    // conjugating the wrong one still yields a
+                                    // Hermitian matrix, so this cannot be
+                                    // caught by inspecting the result's shape.
+                                    if constexpr (Conjugate) {
+                                        af[b * 4 + e] = TransOperand ? conj_if(va[e]) : va[e];
+                                        bf[b * 4 + e] = TransOperand ? vb[e] : conj_if(vb[e]);
+                                    } else {
+                                        af[b * 4 + e] = va[e];
+                                        bf[b * 4 + e] = vb[e];
+                                    }
                                 }
                             }
 #pragma unroll
                             for (int i = 0; i < ThreadTile; ++i) {
 #pragma unroll
                                 for (int j = 0; j < ThreadTile; ++j) {
-                                    accum[i][j] += af[i] * bf[j];
+                                    accumulate(accum[i][j], af[i], bf[j]);
                                 }
                             }
                         }
@@ -264,7 +325,17 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             continue;
                         }
                         T* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
-                        *p = beta == T(0) ? alpha * accum[i][j] : alpha * accum[i][j] + beta * *p;
+                        T value = beta == T(0) ? alpha * accum[i][j]
+                                               : alpha * accum[i][j] + beta * *p;
+                        // HERK's diagonal is real by construction and BLAS says
+                        // so; rounding leaves a residue that would make C only
+                        // almost Hermitian.
+                        if constexpr (Conjugate) {
+                            if (row == col) {
+                                value = real_part_of(value);
+                            }
+                        }
+                        *p = value;
                     }
                 }
             });
@@ -273,10 +344,41 @@ Event launch_syrk_gram_tiles(Queue& ctx,
     return ctx.get_event();
 }
 
+// Everything the kernel needs from the problem, independent of scalar type and
+// of the queue. Only the tile-to-n range is served: above kGramMaxTile there is
+// no single tile to put C in, and for anything but float that is the end of the
+// road, since syrk_triangular_tiles' staging and fragment loads are written
+// around a 128-bit packet that only float has.
+template <typename T>
+bool syrk_gram_supported(const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         Transpose transA,
+                         bool conjugated) {
+    if (C.rows() != C.cols() || C.rows() <= 0 || C.rows() > kGramMaxTile) {
+        return false;
+    }
+    if (A.batch_size() != C.batch_size()) {
+        return false;
+    }
+    if (A.is_heterogeneous() || C.is_heterogeneous()) {
+        return false;
+    }
+    // SYRK spells A*A^T and must not be handed a ConjTrans; HERK spells A*A^H
+    // and must not be handed a plain Trans, which would be complex-symmetric.
+    if (conjugated ? (transA != Transpose::NoTrans && transA != Transpose::ConjTrans)
+                   : (transA == Transpose::ConjTrans)) {
+        return false;
+    }
+    const int n = C.rows();
+    const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
+    const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
+    return expected_n == n && k > 0;
+}
+
 // The tile has to cover n, and wants to be no wider than that: every column of
 // slack is arithmetic thrown away. ThreadTile then follows from keeping the
 // thread tile at the 4-wide band the vectorized fragment loads are built on.
-template <typename T>
+template <typename T, bool Conjugate = false>
 Event syrk_gram_tiles(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& C,
@@ -289,11 +391,21 @@ Event syrk_gram_tiles(Queue& ctx,
 
     auto dispatch = [&](auto tile_tag) {
         constexpr int NTile = decltype(tile_tag)::value;
-        constexpr int ThreadTile = 4;
+        // A 4-wide thread tile puts 528 tiles -- 544 threads -- on the 128-wide
+        // case, which is what float wants and measured fastest there. A complex
+        // scalar cannot afford the block: two components per accumulator took it
+        // to 205 registers per work-item, and 544 x 205 is past the 65536 a
+        // work-group gets, which the runtime rejects outright rather than
+        // spilling. Doubling the thread tile quarters the thread count to 160
+        // and the same accumulators fit.
+        constexpr int ThreadTile =
+            (NTile == 128 && sycl::detail::is_complex<T>::value) ? 8 : 4;
         constexpr int KC = 32;
         return trans
-            ? launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, true>(ctx, A, C, alpha, beta, uplo)
-            : launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, false>(ctx, A, C, alpha, beta, uplo);
+            ? launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, true, Conjugate>(
+                  ctx, A, C, alpha, beta, uplo)
+            : launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, false, Conjugate>(
+                  ctx, A, C, alpha, beta, uplo);
     };
 
     if (n <= 32) {

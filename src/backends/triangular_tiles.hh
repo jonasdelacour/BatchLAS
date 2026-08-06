@@ -29,6 +29,31 @@ inline TileVec4<T>& tile_vec4(T* p) {
     return *reinterpret_cast<TileVec4<T>*>(p);
 }
 
+// Four contiguous elements into registers.
+//
+// For float the 4-wide packet is exactly a 128-bit LDS and the reinterpret is
+// how we get one. For anything wider it is not: four doubles are 32 bytes and
+// four complex<double> are 64, which no load form covers, and -- worse -- the
+// reinterpret asserts an alignment `sycl::local_accessor` never promised, since
+// it aligns to T and not to 4*sizeof(T). So wider scalars stay scalar. This is
+// the only thing standing between these kernels and a misaligned access in
+// double, and it is silent when wrong.
+template <typename T>
+inline void tile_load4(const T* p, T (&out)[4]) {
+    if constexpr (sizeof(T) == sizeof(float)) {
+        const TileVec4<T>& v = tile_vec4(p);
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            out[i] = v.v[i];
+        }
+    } else {
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            out[i] = p[i];
+        }
+    }
+}
+
 inline constexpr int kTriangularTile = 128;
 inline constexpr int kTriangularTileK = 8;
 
