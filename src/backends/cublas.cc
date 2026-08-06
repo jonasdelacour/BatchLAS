@@ -271,6 +271,104 @@ namespace batchlas {
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
+    // There is no batched or strided-batched ?hemm in cuBLAS -- only the single
+    // cublasChemm/cublasZhemm -- so a batch of them is a host loop over kernel
+    // launches. Expanding the Hermitian triangle into scratch turns the whole
+    // batch into one strided-batched GEMM instead, which is the same trade TRMM
+    // makes above for the same reason.
+    template <Backend Back, ComplexScalar T>
+    Event hemm_vendor(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           T alpha,
+                           T beta,
+                           Side side,
+                           Uplo uplo) {
+        static LinalgHandle<Back> handle;
+        handle.setStream(ctx);
+
+        if (A.rows() != A.cols()) {
+            throw std::runtime_error("HEMM: A must be square");
+        }
+        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
+            throw std::runtime_error(
+                "HEMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
+                ", B=" + std::to_string(B.batch_size()) +
+                ", C=" + std::to_string(C.batch_size()) + ")");
+        }
+
+        const int m = C.rows();
+        const int n = C.cols();
+        // A multiplies from whichever side the caller asked for, so it is m x m
+        // on the left and n x n on the right.
+        const int k = side == Side::Left ? m : n;
+        if (A.rows() != k || B.rows() != m || B.cols() != n) {
+            throw std::runtime_error("HEMM: incompatible matrix dimensions");
+        }
+
+        const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
+        if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes)) {
+            const int ld = detail::expanded_ld<T>(k);
+
+            auto ws = ctx.workspace(expansion_bytes);
+            BumpAllocator pool(ws.span());
+            auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) *
+                                                     static_cast<std::size_t>(k) *
+                                                     static_cast<std::size_t>(A.batch_size()));
+
+            MatrixView<T, MatrixFormat::Dense> expanded(storage.data(), k, k, ld, ld * k, A.batch_size());
+
+            // The GEMM cannot be pointed at the caller's A. HEMM reads one
+            // triangle and takes the other to be its conjugate transpose, and
+            // takes the diagonal to be real, so neither the opposite triangle
+            // nor the diagonal's imaginary part is part of the operand -- that
+            // storage may hold anything at all.
+            Event expansion = detail::expand_mirrored<T, /*Conjugate=*/true>(ctx, expanded, A, uplo);
+
+            // The GEMM runs on the queue's native stream, which an in-order
+            // queue shares with the expansion kernel. An out-of-order queue
+            // orders nothing across the SYCL/native boundary and offers no event
+            // to hang the vendor launch off, so there the dependency has to be
+            // waited out.
+            if (!ctx.in_order()) {
+                expansion.wait();
+            }
+
+            if (side == Side::Left) {
+                return gemm_vendor<Back, T>(ctx, expanded, B, C, alpha, beta,
+                                            Transpose::NoTrans, Transpose::NoTrans,
+                                            ComputePrecision::Default);
+            }
+            return gemm_vendor<Back, T>(ctx, B, expanded, C, alpha, beta,
+                                        Transpose::NoTrans, Transpose::NoTrans,
+                                        ComputePrecision::Default);
+        }
+
+        // Slower, but it needs no scratch, so it is what an expansion too large
+        // for the device falls back to. The two real slots have no callee
+        // because BLAS has no real ?hemm; T is constrained to complex, so they
+        // are never selected.
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasChemm, cublasZhemm,
+                handle, side, uplo, m, n, &alpha,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
+        };
+
+        if (A.batch_size() <= 1) {
+            launch_single(A, B, C);
+        } else {
+            for (int batch = 0; batch < A.batch_size(); ++batch) {
+                launch_single(A[batch], B[batch], C[batch]);
+            }
+        }
+
+        return ctx.create_event_after_external_work();
+    }
+
     template <Backend Back, typename T>
     Event syrk_vendor_impl(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -1175,6 +1273,18 @@ namespace batchlas {
         return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
+    template <Backend Back, ComplexScalar T>
+    Event hemm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B,
+               const MatrixView<T, MatrixFormat::Dense>& C,
+               T alpha,
+               T beta,
+               Side side,
+               Uplo uplo) {
+        return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
+
     template <Backend Back, RealScalar T>
     Event syrk(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -1299,6 +1409,7 @@ namespace batchlas {
     #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
     #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
     #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
+    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
     #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
     #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
     #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
@@ -1346,6 +1457,8 @@ namespace batchlas {
     TRMM_INSTANTIATE(std::complex<double>)
     SYMM_INSTANTIATE(float)
     SYMM_INSTANTIATE(double)
+    HEMM_INSTANTIATE(std::complex<float>)
+    HEMM_INSTANTIATE(std::complex<double>)
     SYRK_INSTANTIATE(float)
     SYRK_INSTANTIATE(double)
     SYR2K_INSTANTIATE(float)
@@ -1354,6 +1467,7 @@ namespace batchlas {
     #undef GEMM_INSTANTIATE
     #undef GEMV_INSTANTIATE
     #undef SYMM_INSTANTIATE
+    #undef HEMM_INSTANTIATE
     #undef SYRK_INSTANTIATE
     #undef SYR2K_INSTANTIATE
     #undef TRSM_INSTANTIATE

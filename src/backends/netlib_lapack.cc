@@ -396,6 +396,61 @@ namespace batchlas{
         });
     }
 
+    template <Backend B, ComplexScalar T>
+    Event hemm(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& Bmat,
+               const MatrixView<T, MatrixFormat::Dense>& Cmat,
+               T alpha,
+               T beta,
+               Side side,
+               Uplo uplo) {
+        auto A_view = A;
+        auto B_view = Bmat;
+        auto C_view = Cmat;
+        return detail::submit_host_task(ctx, "netlib.hemm", [=] {
+            if (A_view.rows() != A_view.cols()) {
+                throw std::runtime_error("HEMM: A must be square");
+            }
+            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
+                throw std::runtime_error("HEMM: batch size mismatch");
+            }
+
+            const int m = C_view.rows();
+            const int n = C_view.cols();
+            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
+            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
+                throw std::runtime_error("HEMM: incompatible matrix dimensions");
+            }
+
+            // The two real slots have no callee because BLAS has no real ?hemm;
+            // T is constrained to complex, so they are never selected.
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    nullptr, nullptr, cblas_chemm, cblas_zhemm,
+                    Layout::ColMajor,
+                    side,
+                    uplo,
+                    m,
+                    n,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    B_i.data_ptr(),
+                    B_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
+            };
+
+            for (int batch = 0; batch < A_view.batch_size(); ++batch) {
+                launch_single(A_view[batch], B_view[batch], C_view[batch]);
+            }
+        });
+    }
+
     template <Backend B, RealScalar T>
     Event syrk(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -951,6 +1006,7 @@ namespace batchlas{
     #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
     #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
     #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
+    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
     #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
     #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
     #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
@@ -1013,6 +1069,8 @@ namespace batchlas{
     TRMM_INSTANTIATE(std::complex<double>)
     SYMM_INSTANTIATE(float)
     SYMM_INSTANTIATE(double)
+    HEMM_INSTANTIATE(std::complex<float>)
+    HEMM_INSTANTIATE(std::complex<double>)
     SYRK_INSTANTIATE(float)
     SYRK_INSTANTIATE(double)
     SYR2K_INSTANTIATE(float)
@@ -1023,6 +1081,7 @@ namespace batchlas{
     #undef GEMM_INSTANTIATE
     #undef GEMV_INSTANTIATE
     #undef SYMM_INSTANTIATE
+    #undef HEMM_INSTANTIATE
     #undef SYRK_INSTANTIATE
     #undef SYR2K_INSTANTIATE
     #undef TRSM_INSTANTIATE

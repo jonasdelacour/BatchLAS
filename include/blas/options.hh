@@ -60,6 +60,15 @@ struct SymmOptions {
     Uplo uplo = Uplo::Lower;
 };
 
+// hemm's A is Hermitian rather than symmetric; see blas/functions/hemm.hh.
+template <typename T>
+struct HemmOptions {
+    T alpha = T(1);
+    T beta = T(0);
+    Side side = Side::Left;
+    Uplo uplo = Uplo::Lower;
+};
+
 template <typename T>
 struct SyrkOptions {
     T alpha = T(1);
@@ -215,6 +224,21 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
 inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
     return with_backend(ctx, [&](auto Back) { return symm<Back.value>(ctx, A, B, C, opts); });
+}
+
+template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
+          detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmOptions<T>& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return hemm<Back, T>(ctx, V(A), V(B), V(C), opts.alpha, opts.beta, opts.side, opts.uplo);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+    requires ComplexScalar<T>
+inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmOptions<T>& opts) {
+    return with_backend(ctx, [&](auto Back) { return hemm<Back.value>(ctx, A, B, C, opts); });
 }
 
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,

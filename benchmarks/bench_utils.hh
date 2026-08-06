@@ -68,6 +68,30 @@
 #define BATCHLAS_BENCH_NETLIB_ALL_TYPES(name, sizes)
 #endif
 
+#if BATCHLAS_HAS_CUDA_BACKEND
+#define BATCHLAS_BENCH_CUDA_COMPLEX_TYPES(name, sizes) \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<float>, batchlas::Backend::CUDA>), sizes); \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<double>, batchlas::Backend::CUDA>), sizes);
+#else
+#define BATCHLAS_BENCH_CUDA_COMPLEX_TYPES(name, sizes)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+#define BATCHLAS_BENCH_ROCM_COMPLEX_TYPES(name, sizes) \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<float>, batchlas::Backend::ROCM>), sizes); \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<double>, batchlas::Backend::ROCM>), sizes);
+#else
+#define BATCHLAS_BENCH_ROCM_COMPLEX_TYPES(name, sizes)
+#endif
+
+#if BATCHLAS_HAS_HOST_BACKEND
+#define BATCHLAS_BENCH_NETLIB_COMPLEX_TYPES(name, sizes) \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<float>, batchlas::Backend::NETLIB>), sizes##Netlib); \
+    MINI_BENCHMARK_REGISTER_SIZES((name<std::complex<double>, batchlas::Backend::NETLIB>), sizes##Netlib);
+#else
+#define BATCHLAS_BENCH_NETLIB_COMPLEX_TYPES(name, sizes)
+#endif
+
 #define BATCHLAS_REGISTER_BENCHMARK(name, sizes) \
     BATCHLAS_BENCH_CUDA(name, sizes) \
     BATCHLAS_BENCH_ROCM(name, sizes) \
@@ -78,3 +102,9 @@
     BATCHLAS_BENCH_CUDA_ALL_TYPES(name, sizes) \
     BATCHLAS_BENCH_ROCM_ALL_TYPES(name, sizes) \
     BATCHLAS_BENCH_NETLIB_ALL_TYPES(name, sizes)
+
+// Use this for ops that exist only for complex types, such as hemm.
+#define BATCHLAS_REGISTER_BENCHMARK_COMPLEX_TYPES(name, sizes) \
+    BATCHLAS_BENCH_CUDA_COMPLEX_TYPES(name, sizes) \
+    BATCHLAS_BENCH_ROCM_COMPLEX_TYPES(name, sizes) \
+    BATCHLAS_BENCH_NETLIB_COMPLEX_TYPES(name, sizes)

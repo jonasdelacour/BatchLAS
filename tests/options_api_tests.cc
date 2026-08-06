@@ -7,6 +7,7 @@
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
 
+#include <complex>
 #include <vector>
 
 using namespace batchlas;
@@ -81,6 +82,27 @@ static_assert(requires(Queue& q, M A, M B, M C) {
 // is covered instead by the fact that this file compiles at all: before the
 // constraint was added to BATCHLAS_DISPATCH_ON_QUEUE, the calls above resolved
 // to the variadic overload and failed to compile.
+
+// hemm is the one level-3 entry point constrained to complex scalars: BLAS has
+// no real ?hemm, and for a real matrix "Hermitian" and "symmetric" are the same
+// statement. Here both directions *are* assertable, because a concept is a
+// template: inside one the call is a dependent expression, so a mismatch makes
+// the concept false instead of ending the translation unit.
+template <typename T>
+concept HemmTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, HemmOptions<T>{});
+};
+
+template <typename T>
+concept HemmTakesPositional = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, T(1), T(0), Side::Left, Uplo::Lower);
+};
+
+static_assert(HemmTakesOptions<std::complex<float>>, "hemm should accept an option struct");
+static_assert(HemmTakesPositional<std::complex<float>>,
+              "hemm's positional spelling should deduce its backend from the queue");
+static_assert(!HemmTakesOptions<float>, "hemm must not accept real operands");
+static_assert(!HemmTakesPositional<float>, "hemm must not accept real operands");
 
 }  // namespace resolution
 

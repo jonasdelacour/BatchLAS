@@ -15,7 +15,7 @@
 // Scratch expansions that turn a matrix whose meaning lives in one triangle
 // into an ordinary dense operand a batched GEMM can read.
 //
-// SYMM and TRMM both need this: BLAS forbids either from touching the
+// SYMM, HEMM and TRMM all need this: BLAS forbids any of them from touching the
 // unreferenced triangle, so pointing a GEMM at the caller's A is wrong even
 // when the caller happens to have zeroed it. The expansion is written into a
 // workspace lease rather than a fresh Matrix -- a Matrix is a managed
@@ -146,6 +146,132 @@ Event expand_triangular(Queue& ctx,
         }
 
         dst[static_cast<std::size_t>(b) * stride_o + static_cast<std::size_t>(j) * ldo + i] = value;
+    });
+
+    return ctx.get_event();
+}
+
+// Tile edge of the mirrored expansion below, and the number of columns a work
+// group covers per pass over it.
+constexpr int kMirrorTile = 32;
+constexpr int kMirrorGroupCols = 8;
+
+// The mirrored half of a Hermitian matrix is the conjugate of the referenced
+// one; of a symmetric matrix it is the element itself.
+template <bool Conjugate, typename T>
+inline T mirror_of(T value) {
+    if constexpr (Conjugate) {
+        return T(value.real(), -value.imag());
+    } else {
+        return value;
+    }
+}
+
+// Materialise the full symmetric (Conjugate = false) or Hermitian
+// (Conjugate = true) matrix that A's referenced triangle stands for, so a plain
+// batched GEMM can read it as an ordinary dense operand.
+//
+// One tile pair per work group, staged through local memory. The mirrored half
+// is the reason: the mirror of a coalesced column read is a row write, one
+// cache line per element, and at these sizes the expansion is pure bandwidth.
+// Going through a tile keeps the read and both writes coalesced and moves
+// 1.5 n^2 of traffic, against the 3 n^2 of a copy followed by an in-place
+// symmetrize.
+template <typename T, bool Conjugate>
+Event expand_mirrored(Queue& ctx,
+                      const MatrixView<T, MatrixFormat::Dense>& out,
+                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      Uplo uplo) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    const int tiles = ceil_div(n, kMirrorTile);
+    const bool lower = uplo == Uplo::Lower;
+
+    const T* src = A.data_ptr();
+    T* dst = out.data_ptr();
+    const int lda = A.ld();
+    const int ldo = out.ld();
+    const std::size_t stride_a = static_cast<std::size_t>(A.stride());
+    const std::size_t stride_o = static_cast<std::size_t>(out.stride());
+
+    // The tile grid covers both triangles and the groups on the unreferenced
+    // side exit before their first barrier. Half the groups retire empty, which
+    // is cheaper than putting the integer square root of an unranked triangular
+    // index in front of every work item.
+    const sycl::range<3> global(static_cast<std::size_t>(batch),
+                                static_cast<std::size_t>(tiles) * kMirrorGroupCols,
+                                static_cast<std::size_t>(tiles) * kMirrorTile);
+    const sycl::range<3> local(1, kMirrorGroupCols, kMirrorTile);
+
+    ctx->submit([&](sycl::handler& cgh) {
+        // Padded by one column so the transposed read strides across all banks.
+        auto tile = sycl::local_accessor<T, 1>(
+            sycl::range<1>(kMirrorTile * (kMirrorTile + 1)), cgh);
+
+        cgh.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+            const int ti = static_cast<int>(item.get_group(1));
+            const int tj = static_cast<int>(item.get_group(2));
+            if (ti < tj) {
+                return;
+            }
+
+            const int b = static_cast<int>(item.get_group(0));
+            const int r = static_cast<int>(item.get_local_id(2));
+            const int c0 = static_cast<int>(item.get_local_id(1));
+
+            // Row/column origin of the tile inside the referenced triangle.
+            const int src_row0 = (lower ? ti : tj) * kMirrorTile;
+            const int src_col0 = (lower ? tj : ti) * kMirrorTile;
+
+            const T* src_batch = src + static_cast<std::size_t>(b) * stride_a;
+            T* dst_batch = dst + static_cast<std::size_t>(b) * stride_o;
+
+            for (int c = c0; c < kMirrorTile; c += kMirrorGroupCols) {
+                const int i = src_row0 + r;
+                const int j = src_col0 + c;
+                tile[c * (kMirrorTile + 1) + r] =
+                    (i < n && j < n) ? src_batch[static_cast<std::size_t>(j) * lda + i] : T(0);
+            }
+
+            sycl::group_barrier(item.get_group());
+
+            if (ti == tj) {
+                // The two writes below would collide on a diagonal tile, so pick
+                // the referenced member of each mirrored pair instead. The
+                // diagonal itself is the one element a Hermitian matrix pins
+                // rather than mirrors: A = A^H forces its imaginary part to
+                // zero, so whatever the caller stored there is not part of the
+                // operand.
+                for (int c = c0; c < kMirrorTile; c += kMirrorGroupCols) {
+                    const int i = src_row0 + r;
+                    const int j = src_col0 + c;
+                    if (i >= n || j >= n) {
+                        continue;
+                    }
+                    const bool referenced = lower ? (r >= c) : (r <= c);
+                    T value = referenced ? tile[c * (kMirrorTile + 1) + r]
+                                         : mirror_of<Conjugate>(tile[r * (kMirrorTile + 1) + c]);
+                    if constexpr (Conjugate) {
+                        if (i == j) {
+                            value = T(value.real(), 0);
+                        }
+                    }
+                    dst_batch[static_cast<std::size_t>(j) * ldo + i] = value;
+                }
+                return;
+            }
+
+            for (int c = c0; c < kMirrorTile; c += kMirrorGroupCols) {
+                if (src_row0 + r < n && src_col0 + c < n) {
+                    dst_batch[static_cast<std::size_t>(src_col0 + c) * ldo + (src_row0 + r)] =
+                        tile[c * (kMirrorTile + 1) + r];
+                }
+                if (src_col0 + r < n && src_row0 + c < n) {
+                    dst_batch[static_cast<std::size_t>(src_row0 + c) * ldo + (src_col0 + r)] =
+                        mirror_of<Conjugate>(tile[r * (kMirrorTile + 1) + c]);
+                }
+            }
+        });
     });
 
     return ctx.get_event();
