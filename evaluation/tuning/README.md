@@ -95,24 +95,85 @@ STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}`. Each overrides *all* size
 buckets at once, so test one `n` at a time. Do not change one mid-process: the
 same accessor feeds `*_buffer_size()` queries and the matching solve.
 
-## Validate a winner at the consumer before adopting it
+## Why a kernel winner can be an end-to-end loss
 
-A per-kernel winner is not automatically an end-to-end win, and can be a loss.
-Measured 2026-08-06 on CUDA/float after fixing the grid-intersection bug:
+Measured 2026-08-06 on CUDA/float, after fixing the grid-intersection bug:
 
 | block size | ormqr kernel, n=1024 | syev n=1024 | gesvd_blocked n=512 |
 |---|---|---|---|
 | 16 (shipped) | 536 µs | 899 µs | 940 µs |
-| 48/56 (tuned) | 238 µs (**2.16x faster**) | 905 µs (no change) | 1045 µs (**11% slower**) |
+| 48/56 (tuned) | 238 µs (**2.16x faster**) | 905 µs (inert) | 1045 µs (**11% slower**) |
 
-So the 2.16x kernel win was not adopted. `ORMQR_BLOCK_SIZE_*` is read by
-`syev_blocked`, `syev_two_stage`, `syevx_direct_subset` *and* by
-`gesvd_blocked.cc`, where it also sets `gebrd_block_size` — a different kernel
-with a different optimum. `ormqr_blocked_benchmark` cannot see that coupling
-because it takes the block size as an explicit argument.
+The 2.16x kernel win was real and was still not adopted. Three separate
+mechanisms produce that, and none is visible from `ormqr_blocked_benchmark`.
 
-Always A/B the consumer benchmarks with the env override before editing a
-constant.
+### 1. Aliasing — one constant drives unrelated kernels
+
+`gesvd_blocked.cc` reads `ormqr_block_size_for_n` three times: twice for genuine
+ormbr backtransforms, and once at line 753 as `gebrd_block_size` — the
+bidiagonal reduction, a completely different kernel. With
+`BATCHLAS_GESVD_PROFILE=1` at n=512, batch=256, vectors on:
+
+| stage | nb=16 | nb=48 |
+|---|---|---|
+| `gesvd.gebrd` | 229.7 ms | 259.2 ms (**+12.8%**) |
+| `gesvd.apply_left_backtransform` | 18.35 ms | 14.87 ms (−19%) |
+| `gesvd.apply_right_backtransform` | 18.25 ms | 15.12 ms (−17%) |
+
+The two uses have **opposite gradients**, and gebrd is 6.3x the bigger term, so
+its loss (+29.5 ms) swamps the backtransform win (−6.6 ms). Worse, the two
+curves have very different shapes: sweeping the knob against the `gesvd.gebrd`
+stage alone gives 8:234.9  12:232.1  **16:230.7**  24:235.5  32:240.9  48:256.6 —
+gebrd's own optimum is 16, and its curve is flat (±2%), while ormqr's is steep
+(2.16x). Aliasing therefore pins the steep knob at the flat knob's optimum.
+
+(With vectors *off*, which is the default in `gesvd_blocked_benchmark`, the
+backtransforms do not run at all — 95% of that call is gebrd. So the original
+"11% slower" measurement was 100% gebrd, with ormqr never invoked.)
+
+### 2. Shadowing — the hot path never reads the constant
+
+syev looked insensitive, which is not the same as the parameter not mattering.
+`sytrd_sy2sb.cc`'s `sy2sb_ormqr_block_size_hint` returns `kd` outright when
+`n >= 1024 && batch >= 32`, passing ormqr an explicit hint that bypasses the
+tuning table. Flipping the tuning constant leaves the kernel trace
+*bit-identical* (124 `ormqr_blocked.larft` calls at both 16 and 56).
+
+Disable that local gate and the constant comes alive:
+
+| | nb=16 | nb=56 |
+|---|---|---|
+| `BATCHLAS_SY2SB_ORMQR_NB=off` | 1094.9 µs | 905.4 µs (**1.21x**) |
+| default (gate on) | 898.6 µs | 905.0 µs (inert) |
+
+So the win is genuine — a hand-written local override had simply already
+claimed it. **"No change" from a global knob is not evidence the parameter is
+unimportant; it can mean the knob is dead code on that path.**
+
+### 3. The bucket is keyed on the wrong dimension
+
+`ormqr_block_size_for_n` keys on `A.rows()`, but the WY block width is bounded
+by `k`, the reflector count. In sy2sb those differ by orders of magnitude
+(rows in the thousands, `k = kd = 32`). The long comment at `sytrd_sy2sb.cc:26`
+documents this, and mechanism 2 exists precisely to work around it.
+
+### What to do about it
+
+- **A/B at the consumer with the env override before editing any constant.**
+  Cheap, no rebuild. This is the one non-negotiable step.
+- **If flipping a knob changes nothing, check whether it is even read** —
+  `BATCHLAS_KERNEL_TRACE=1` and compare call counts. A bit-identical trace means
+  shadowing, not insignificance.
+- **Do not tune a shared constant through a benchmark that takes it as an
+  explicit argument.** `ormqr_blocked_benchmark` is structurally blind to all
+  three mechanisms above.
+- **Split aliased constants.** Giving gebrd its own `GEBRD_BLOCK_SIZE_*` would
+  let gebrd keep 16 while ormqr consumers take 48 — worth ~2.3% on
+  gesvd-with-vectors by the stage timings above, and it unblocks the 2.16x
+  everywhere else. This is the highest-value follow-up, and it is a code change,
+  not a tuning change.
+- **Note what is not tuned at all.** `gesvd.gebrd` is ~79% of gesvd-with-vectors
+  and ~95% without, and no bench in the default space tunes it.
 
 ## Current model (size-aware only)
 
