@@ -3,30 +3,62 @@
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
 #include "syr2k_cublasdx_fused.hh"
+#include "syr2k_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 
 #include "../util/kernel-trace.hh"
 
-#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
 
 namespace batchlas::backend {
 
 namespace {
 
-constexpr int kSyr2kCublasDxTile = 32;
-
-enum class Syr2kVariantRequest {
-    Vendor,
-    CuBLASDx,
+// BATCHLAS_SYR2K_VARIANT selects a route. The custom routes are named
+// separately so each stays independently measurable and testable: `triangular`
+// is the tile-masked kernel that computes only the requested half of C,
+// `cublasdx` the fused kernel, and `gemm` the pair of full n x n batched GEMMs
+// the triangular route replaces.
+//
+// `gemm` computes and stores both triangles, which is not what SYR2K means: the
+// half the caller did not name is the caller's storage. It exists to measure
+// what the triangular route saves, and the automatic choice never selects it --
+// reaching it takes naming it here.
+enum class Syr2kRoute {
     Auto,
+    Vendor,
+    Fused,
+    Triangular,
+    Gemm,
 };
 
-Syr2kVariantRequest syr2k_variant_request() {
-    return detail::parse_cublasdx_variant_request("BATCHLAS_SYR2K_VARIANT",
-                                                  Syr2kVariantRequest::Vendor,
-                                                  Syr2kVariantRequest::CuBLASDx,
-                                                  Syr2kVariantRequest::Auto);
+Syr2kRoute syr2k_route_request() {
+    const char* raw = std::getenv("BATCHLAS_SYR2K_VARIANT");
+    if (!raw) {
+        return Syr2kRoute::Auto;
+    }
+
+    std::string value(raw);
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+
+    if (value == "vendor") {
+        return Syr2kRoute::Vendor;
+    }
+    if (value == "cublasdx" || value == "dx" || value == "custom") {
+        return Syr2kRoute::Fused;
+    }
+    if (value == "triangular" || value == "tiles") {
+        return Syr2kRoute::Triangular;
+    }
+    if (value == "gemm") {
+        return Syr2kRoute::Gemm;
+    }
+    return Syr2kRoute::Auto;
 }
 
 bool syr2k_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -51,33 +83,54 @@ bool syr2k_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return a_n == n && b_n == n && a_k == b_k && n > 0 && a_k > 0;
 }
 
-bool syr2k_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Dense>& A,
-                                        const MatrixView<float, MatrixFormat::Dense>& C,
-                                        Transpose transA) {
-    const int n = C.rows();
-    const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-    const int max_dim = std::max(n, k);
-    const int min_dim = std::min(n, k);
-    if (n < kSyr2kCublasDxTile) {
-        return false;
-    }
-
-    const int output_tile_rows = detail::ceil_div(n, kSyr2kCublasDxTile);
-    const int reduction_tiles = detail::ceil_div(k, kSyr2kCublasDxTile);
-    const int tiled_work = A.batch_size() * output_tile_rows * output_tile_rows * reduction_tiles;
-    return min_dim * 2 >= max_dim && tiled_work >= 8;
+// The tile-masked kernel indexes every operand as base + batch * stride, so a
+// batch whose members differ in shape or live at unrelated pointers is out of
+// reach.
+bool syr2k_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
+                                const MatrixView<float, MatrixFormat::Dense>& B,
+                                const MatrixView<float, MatrixFormat::Dense>& C) {
+    return !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
 }
 
-Event syr2k_cublasdx_fallback(Queue& ctx,
-                              const MatrixView<float, MatrixFormat::Dense>& A,
-                              const MatrixView<float, MatrixFormat::Dense>& B,
-                              const MatrixView<float, MatrixFormat::Dense>& C,
-                              float alpha,
-                              float beta,
-                              Transpose transA) {
+// Where the fused kernel beats the vendor. The vendor route is a host loop over
+// cublasSsyr2k, one launch per batch member, against one launch for the whole
+// batch here, so the two are only ever close at a batch of one and the vendor
+// pays double from two members up.
+//
+// Measured on RTX 4090 / sm_89 in float over n in 8..3072 x k in 4..2048 x
+// batch in 1..1024. From batch 2 the kernel won every shape in the grid: 1.06x
+// at n = 3072, 1.12x at n = 1024, 1.3-1.4x through the middle, and up to 226x
+// where n is small enough that the whole cost is the launch. Neither n nor k
+// nor the tile count enters, because none of them changes which side of that
+// per-launch difference a shape falls on.
+//
+// A batch of one does not sort by anything: the vendor wins by 1.18-1.60x below
+// n = 1280 and again by 1.16x at n = 3072, the kernel wins by 1.02-1.71x
+// between, and by 4-10x the vendor wins on a deep k with a small n, where the
+// kernel has a single block and cuBLAS splits the reduction. There is no
+// threshold in n to be had, so the batch of one is left with the vendor.
+bool syr2k_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& A) {
+    return A.batch_size() >= 2;
+}
+
+Event syr2k_cublasdx_fallback_gemm(Queue& ctx,
+                                   const MatrixView<float, MatrixFormat::Dense>& A,
+                                   const MatrixView<float, MatrixFormat::Dense>& B,
+                                   const MatrixView<float, MatrixFormat::Dense>& C,
+                                   float alpha,
+                                   float beta,
+                                   Transpose transA) {
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     BATCHLAS_KERNEL_TRACE_SCOPE("syr2k_cuda_custom.gemm_fallback");
-    gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default).wait();
+
+    // The second product accumulates into the C the first one wrote, so the two
+    // have to be ordered. An in-order queue already orders them: both run on
+    // its native stream. An out-of-order queue orders nothing across the
+    // SYCL/native boundary, so there the first has to be waited out.
+    Event first = gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
+    if (!ctx.in_order()) {
+        first.wait();
+    }
     return gemm_cublasdx(ctx, B, A, C, alpha, 1.0f, transA, transB, ComputePrecision::Default);
 }
 
@@ -88,7 +141,7 @@ Event syr2k_cublasdx_fallback(Queue& ctx,
 } // namespace
 
 bool syr2k_cuda_custom_forced() {
-    return syr2k_variant_request() == Syr2kVariantRequest::CuBLASDx;
+    return syr2k_route_request() == Syr2kRoute::Fused;
 }
 
 bool syr2k_use_cuda_custom(const Queue& ctx,
@@ -97,14 +150,18 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
                            const MatrixView<float, MatrixFormat::Dense>& C,
                            Uplo,
                            Transpose transA) {
-    const auto request = syr2k_variant_request();
-    const bool problem_supported = syr2k_problem_supported(A, B, C, transA);
-    return detail::should_use_cublasdx(ctx,
-                                       request,
-                                       Syr2kVariantRequest::Vendor,
-                                       Syr2kVariantRequest::CuBLASDx,
-                                       problem_supported,
-                                       problem_supported && syr2k_prefer_cuda_custom_heuristic(A, C, transA));
+    const auto route = syr2k_route_request();
+    if (route != Syr2kRoute::Auto && route != Syr2kRoute::Vendor) {
+        return true;
+    }
+    if (route == Syr2kRoute::Vendor || !detail::is_gpu_queue(ctx) ||
+        !syr2k_problem_supported(A, B, C, transA) || !syr2k_triangular_supported(A, B, C)) {
+        return false;
+    }
+    // The tile-masked kernel is the only custom route that respects the
+    // triangle, so it is the only one the automatic choice may leave the vendor
+    // for, and its own threshold is the whole decision.
+    return syr2k_prefer_triangular_tiles(A);
 }
 
 Event syr2k_cuda_custom(Queue& ctx,
@@ -115,7 +172,8 @@ Event syr2k_cuda_custom(Queue& ctx,
                         float beta,
                         Uplo uplo,
                         Transpose transA) {
-    const bool forced = syr2k_cuda_custom_forced();
+    const auto route = syr2k_route_request();
+    const bool forced = route == Syr2kRoute::Fused;
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
@@ -129,13 +187,20 @@ Event syr2k_cuda_custom(Queue& ctx,
         return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
+    if (route == Syr2kRoute::Gemm) {
+        return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
+    }
+    if (route == Syr2kRoute::Triangular || route == Syr2kRoute::Auto) {
+        if (syr2k_triangular_supported(A, B, C)) {
+            return detail::syr2k_triangular_tiles(ctx, A, B, C, alpha, beta, uplo, transA);
+        }
+        return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
+
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     const auto variant = cublasdx_gemm_select_variant(A, B, C, transA, transB);
     if (detail::cublasdx_variant_needs_fallback(variant, syr2k_cublasdx::available())) {
-        if (forced) {
-            throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
-        }
-        return syr2k_cublasdx_fallback(ctx, A, B, C, alpha, beta, transA);
+        throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
     }
 
     syr2k_cublasdx::Syr2kLaunchDescriptor desc{};
@@ -161,10 +226,7 @@ Event syr2k_cuda_custom(Queue& ctx,
                                                             transA,
                                                             detail::cuda_stream_from_queue(ctx));
     if (status == cudaErrorNotSupported) {
-        if (forced) {
-            throw_forced_syr2k_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
-        }
-        return syr2k_cublasdx_fallback(ctx, A, B, C, alpha, beta, transA);
+        throw_forced_syr2k_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
     }
     if (status != cudaSuccess) {
         throw std::runtime_error(std::string("cuBLASDx fused SYR2K launch failed: ") + cudaGetErrorString(status));

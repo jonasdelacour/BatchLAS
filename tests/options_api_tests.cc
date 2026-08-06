@@ -7,6 +7,7 @@
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-vector.hh>
 
+#include <complex>
 #include <vector>
 
 using namespace batchlas;
@@ -81,6 +82,62 @@ static_assert(requires(Queue& q, M A, M B, M C) {
 // is covered instead by the fact that this file compiles at all: before the
 // constraint was added to BATCHLAS_DISPATCH_ON_QUEUE, the calls above resolved
 // to the variadic overload and failed to compile.
+
+// hemm is the one level-3 entry point constrained to complex scalars: BLAS has
+// no real ?hemm, and for a real matrix "Hermitian" and "symmetric" are the same
+// statement. Here both directions *are* assertable, because a concept is a
+// template: inside one the call is a dependent expression, so a mismatch makes
+// the concept false instead of ending the translation unit.
+template <typename T>
+concept HemmTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, HemmOptions<T>{});
+};
+
+template <typename T>
+concept HemmTakesPositional = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, T(1), T(0), Side::Left, Uplo::Lower);
+};
+
+static_assert(HemmTakesOptions<std::complex<float>>, "hemm should accept an option struct");
+static_assert(HemmTakesPositional<std::complex<float>>,
+              "hemm's positional spelling should deduce its backend from the queue");
+static_assert(!HemmTakesOptions<float>, "hemm must not accept real operands");
+static_assert(!HemmTakesPositional<float>, "hemm must not accept real operands");
+
+// herk and her2k are constrained the same way, and additionally take a real
+// alpha (herk) or a real beta (both) while their operands stay complex -- the
+// classic ?herk mistake is to give alpha type T, which compiles and computes
+// something that is not Hermitian.
+template <typename T>
+concept HerkTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    herk(q, A, A, HerkOptions<T>{});
+};
+
+template <typename T>
+concept HerkTakesRealScalars = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A,
+                                       typename base_type<T>::type r) {
+    herk(q, A, A, r, r, Uplo::Lower, Transpose::NoTrans);
+};
+
+template <typename T>
+concept Her2kTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
+    her2k(q, A, A, A, Her2kOptions<T>{});
+};
+
+template <typename T>
+concept Her2kTakesComplexAlphaRealBeta = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A,
+                                                  typename base_type<T>::type r) {
+    her2k(q, A, A, A, T(1), r, Uplo::Lower, Transpose::NoTrans);
+};
+
+static_assert(HerkTakesOptions<std::complex<float>>, "herk should accept an option struct");
+static_assert(HerkTakesRealScalars<std::complex<float>>,
+              "herk's alpha and beta are real, as in cublas?herk");
+static_assert(!HerkTakesOptions<float>, "herk must not accept real operands");
+static_assert(Her2kTakesOptions<std::complex<float>>, "her2k should accept an option struct");
+static_assert(Her2kTakesComplexAlphaRealBeta<std::complex<float>>,
+              "her2k's alpha is complex and its beta real, as in cublas?her2k");
+static_assert(!Her2kTakesOptions<float>, "her2k must not accept real operands");
 
 }  // namespace resolution
 

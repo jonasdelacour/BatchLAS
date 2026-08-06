@@ -4,17 +4,19 @@
 #include "gemm_variant.hh"
 #include "symm_cublasdx_fused.hh"
 #include "cublasdx_dispatch_common.hh"
+#include "triangular_expand.hh"
 
 #include "../util/kernel-trace.hh"
 
+#include <util/mempool.hh>
+
 #include <algorithm>
+#include <cstddef>
 #include <stdexcept>
 
 namespace batchlas::backend {
 
 namespace {
-
-constexpr int kSymmCublasDxTile = 32;
 
 enum class SymmVariantRequest {
     Vendor,
@@ -58,15 +60,13 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
     const int min_dim = std::min({m, n, k});
     const bool squareish = min_dim * 2 >= max_dim;
     const int shared_dim = side == Side::Left ? B.rows() : B.cols();
-    if (!squareish || shared_dim != k || max_dim < 32) {
+    if (!squareish || shared_dim != k) {
         return false;
     }
 
-    const int output_tile_rows = detail::ceil_div(m, kSymmCublasDxTile);
-    const int output_tile_cols = detail::ceil_div(n, kSymmCublasDxTile);
-    const int reduction_tiles = detail::ceil_div(k, kSymmCublasDxTile);
-    const int tiled_work = A.batch_size() * output_tile_rows * output_tile_cols * reduction_tiles;
-    return tiled_work >= 8;
+    // Skewed shapes are excluded above because the expansion always costs a
+    // full k x k pass, which stops paying for itself once k dwarfs m and n.
+    return detail::expansion_preferred(max_dim, A.batch_size());
 }
 
 Event symm_cublasdx_fallback_gemm(Queue& ctx,
@@ -77,16 +77,39 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
                                   float beta,
                                   Side side,
                                   Uplo uplo) {
-    Matrix<float, MatrixFormat::Dense> symmetric_a(A.rows(), A.cols(), A.batch_size(), A.ld(), A.stride());
-    auto symmetric_a_view = symmetric_a.view();
+    const int n = A.rows();
+    const int ld = detail::expanded_ld<float>(n);
 
-    BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.expand");
-    MatrixView<float, MatrixFormat::Dense>::copy(ctx, symmetric_a_view, A).wait();
-    symmetric_a_view.symmetrize(ctx, uplo).wait();
+    // Scratch comes from the queue's arena rather than a local Matrix. A Matrix
+    // is a fresh managed allocation whose pages are migrated to the device on
+    // first touch, which at n=512 batch=512 costs an order of magnitude more
+    // than the GEMM it feeds, and it would be freed on return while the kernels
+    // reading it have only been enqueued.
+    auto ws = ctx.workspace(detail::expanded_workspace_bytes<float>(ctx, n, A.batch_size()));
+    BumpAllocator pool(ws.span());
+    auto storage = pool.allocate<float>(ctx, static_cast<std::size_t>(ld) *
+                                                 static_cast<std::size_t>(n) *
+                                                 static_cast<std::size_t>(A.batch_size()));
+
+    MatrixView<float, MatrixFormat::Dense> expanded(storage.data(), n, n, ld, ld * n, A.batch_size());
+
+    Event expansion;
+    {
+        BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.expand");
+        expansion = detail::expand_mirrored<float, /*Conjugate=*/false>(ctx, expanded, A, uplo);
+    }
+
+    // The GEMM runs on the queue's native stream, which an in-order queue shares
+    // with the expansion kernel. An out-of-order queue orders nothing across the
+    // SYCL/native boundary and offers no event to hang the vendor launch off, so
+    // there the dependency has to be waited out.
+    if (!ctx.in_order()) {
+        expansion.wait();
+    }
 
     if (side == Side::Left) {
         return gemm_cublasdx(ctx,
-                             symmetric_a_view,
+                             expanded,
                              B,
                              C,
                              alpha,
@@ -98,7 +121,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
 
     return gemm_cublasdx(ctx,
                          B,
-                         symmetric_a_view,
+                         expanded,
                          C,
                          alpha,
                          beta,

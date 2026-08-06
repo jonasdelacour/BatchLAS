@@ -186,6 +186,32 @@ struct backend_types_filtered {
     using type = typename tuple_to_types<tuple_type>::type;
 };
 
+// Helper for entry points that exist only for complex scalars (hemm, and the
+// ?he* family generally -- BLAS has no real spelling of them).
+template <template <typename, batchlas::Backend> class Config>
+struct backend_types_complex {
+    using tuple_type = decltype(std::tuple_cat(
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+    std::tuple<Config<std::complex<float>, batchlas::Backend::NETLIB>,
+           Config<std::complex<double>, batchlas::Backend::NETLIB>>{},
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+        std::tuple<Config<std::complex<float>, batchlas::Backend::CUDA>,
+                   Config<std::complex<double>, batchlas::Backend::CUDA>>{},
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+        std::tuple<Config<std::complex<float>, batchlas::Backend::ROCM>,
+                   Config<std::complex<double>, batchlas::Backend::ROCM>>{},
+#endif
+#if BATCHLAS_HAS_MKL_BACKEND
+        std::tuple<Config<std::complex<float>, batchlas::Backend::MKL>,
+                   Config<std::complex<double>, batchlas::Backend::MKL>>{},
+#endif
+        std::tuple<>{}));
+
+    using type = typename tuple_to_types<tuple_type>::type;
+};
+
 // Choose one available GPU backend at compile time
 #if BATCHLAS_HAS_CUDA_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
