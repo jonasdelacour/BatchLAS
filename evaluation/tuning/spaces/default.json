@@ -139,6 +139,7 @@
       "metric": "Time (ms)",
       "direction": "min",
       "arg_spec": ["n", "batch", "kd"],
+      "row": "BM_SB2ST_HH_BACK",
       "env": {
         "back_tile": "BATCHLAS_TUNE_SB2ST_BACK_TILE",
         "back_subs": "BATCHLAS_TUNE_SB2ST_BACK_SUBS"
@@ -149,6 +150,10 @@
         "ONLY tile in {1,2,4,8} and subs in {4,8,16} are instantiated -- any",
         "other pair silently falls through to a slower tiled kernel, so these",
         "grids must not be widened past those sets.",
+        "The executable emits TWO rows, BM_SB2ST_HH_CHASE and BM_SB2ST_HH_BACK.",
+        "These knobs move only the back-transform, so 'row' selects it; reading",
+        "the chase instead showed a 1.4% spread (noise) and picked a winner at",
+        "random, where the back-transform actually spans 3.6x.",
         "The knobs are read nowhere else, so the standalone bench is a faithful",
         "objective; still A/B at syev before adopting, per the rule above."
       ],

@@ -53,7 +53,10 @@
       "metric": "Time (ms)",
       "direction": "min",
       "arg_spec": ["n", "batch", "kd"],
+      "row": "BM_SYEV_TWO_STAGE",
       "_comment": [
+        "The executable also emits BM_SYEV_BLOCKED_BASELINE, which kd does not",
+        "affect at all; 'row' selects the two-stage path.",
         "Blocked on: the band width is chosen by choose_two_stage_kd() in",
         "src/extensions/two_stage_common.hh, a hand-written table justified by a",
         "comment block, overridable only via BATCHLAS_SYEV_TWO_STAGE_KD.",
@@ -76,6 +79,7 @@
       "metric": "Time (ms)",
       "direction": "min",
       "arg_spec": ["n", "batch", "kd"],
+      "row": "BM_SYEV_TWO_STAGE",
       "env": { "sb2st_block": "BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK" },
       "_comment": [
         "Blocked on: choose_two_stage_sb2st_block_size() returns a hardcoded 32.",

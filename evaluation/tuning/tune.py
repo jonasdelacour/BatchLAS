@@ -32,6 +32,12 @@ class BenchSpace:
     # width, the sy2sb ormqr hint, the sb2st block size...). They must NOT
     # appear in arg_spec.
     env: Dict[str, str]
+    # Substring selecting which benchmark row to read when the executable
+    # registers more than one. sb2st_hh_benchmark emits BM_SB2ST_HH_CHASE and
+    # BM_SB2ST_HH_BACK from a single invocation; the back-transform knobs move
+    # only the latter, so reading the first row measured a kernel the tuned
+    # parameters cannot affect and reported the resulting noise as a winner.
+    row: str
 
 
 def _repo_root() -> Path:
@@ -213,6 +219,7 @@ def _tune_pre_phases(
                         max_iters=max_iters,
                         args=args,
                         env_overrides=_env_from_spec(space.env, fixed=fixed, params=phase_params),
+                        row=space.row,
                     )
                 )
 
@@ -252,6 +259,7 @@ def _run_one_case(
     max_iters: int,
     args: List[int],
     env_overrides: Optional[Dict[str, str]] = None,
+    row: str = "",
 ) -> float:
     # Merge, never replace: run_minibench_csv hands this straight to
     # subprocess.run, and a bare dict would drop PATH / LD_LIBRARY_PATH and the
@@ -277,8 +285,23 @@ def _run_one_case(
             "This usually means the benchmark wasn't registered for that backend/type (compiled out)"
         )
 
-    # Usually there is exactly one row after backend/type filtering.
-    # If multiple appear, choose the first.
+    if row:
+        matching = [r for r in rows if row in str(r.get("name", ""))]
+        if not matching:
+            names = ", ".join(sorted({str(r.get("name", "")) for r in rows}))
+            raise RuntimeError(f"No row of {exe.name} matches row filter {row!r}. Rows: {names}")
+        return float(matching[0]["value"])
+
+    # Never silently pick one of several kernels: an executable that registers
+    # more than one benchmark is measuring more than one thing, and the tuned
+    # parameters usually move only one of them. Make the space say which.
+    if len(rows) > 1:
+        names = ", ".join(sorted({str(r.get("name", "")) for r in rows}))
+        raise RuntimeError(
+            f"{exe.name} produced {len(rows)} rows for args={args}; set \"row\" in the "
+            f"tuning space to select one. Rows: {names}"
+        )
+
     return float(rows[0]["value"])
 
 
@@ -299,6 +322,7 @@ def _load_spaces(path: Path) -> List[BenchSpace]:
                 cases=list(s["cases"]),
                 pre_tune=list(s.get("pre_tune") or []),
                 env={str(k): str(v) for k, v in (s.get("env") or {}).items()},
+                row=str(s.get("row") or ""),
             )
         )
     return spaces
@@ -374,6 +398,7 @@ def _tune_one_bench(
                     max_iters=max_iters,
                     args=args,
                     env_overrides=env_overrides,
+                    row=space.row,
                 )
                 measured[key] = v
             values.append(v)
@@ -527,6 +552,7 @@ def main() -> int:
                     max_iters=1,
                     args=_args_from_spec(space.arg_spec, fixed=fixed, params=params),
                     env_overrides=_env_from_spec(space.env, fixed=fixed, params=params),
+                    row=space.row,
                 )
             except Exception as exc:  # noqa: BLE001 - report every bench, not just the first
                 problems.append(f"{space.bench}: {exc}")
