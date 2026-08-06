@@ -1240,6 +1240,113 @@ than aborting.
 Still unmeasured: §7.11 (the projected-`syev` provider sweep) and the §7.5
 soft-locking A/B under Chol2, both of which are now possible on this hardware.
 
+### MEASURED on CSR — and the sparse verdict is the opposite of the dense one
+
+Every sweep above is `MatrixFormat::Dense`. That was not a gap in coverage so much
+as a gap the dense benchmarks *could not* reach: `Filtered`'s only real rival on
+sparse input is LOBPCG, and no dense sweep compares those two on the operator type
+they both actually target. `BM_SYEVX_SparseShape` and `BM_SYEVX_SparseGap` in
+`benchmarks/syevx_benchmark.cc` close it.
+
+**A dispatcher bug had to be fixed before the sweep could measure anything.**
+`syevx_select_algorithm` short-circuited *all* sparse input to LOBPCG with
+`if (!dense) return SyevxAlgorithm::LOBPCG;`, and that line sat **above** the
+`if (want != Auto)` switch. So an explicit `params.method = Filtered` on a CSR
+matrix was silently discarded. `syevx_filtered` is instantiated for every
+`MatrixFormat` and has real `spmm` branches — the algorithm was fully built and
+simply unreachable through the dispatcher.
+
+The first run of this sweep is what exposed it: configs 0 and 1 returned *identical*
+times and identical eigenvalue errors to five significant figures, because both were
+running LOBPCG. This also **refutes the Tier 3 claim above** that "the whole suite
+also passes when forced onto each algorithm in turn, which is what exercises
+`Filtered` on the CSR and complex inputs." It never did. Those runs passed on CSR
+inputs having silently executed LOBPCG. Fixed, with
+`SyevxRangeRoutingTest.SparseHonoursExplicitFilteredRequest` as the regression
+guard; `Auto` still lands on LOBPCG for sparse, so routing is unchanged.
+
+**Measured** (RTX 4090, CUDA, float, eigenvectors, 16 nnz/row, `diagonal_boost`
+10, k ≈ 1 % of n, tolerance 1e-6). Ratios are LOBPCG ÷ Filtered, so **> 1 means
+Filtered wins**:
+
+| n | batch | largest end | smallest end | Filtered err | LOBPCG err |
+|---|---|---|---|---|---|
+| 1024 | 1  | **8.8** | **2.7**  | 7.5e-07 | 6.4e-06 |
+| 1024 | 8  | **3.8** | **3.1**  | 7.5e-07 | 6.4e-06 |
+| 1024 | 64 | **2.2** | **1.5**  | 7.5e-07 | 6.4e-06 |
+| 2048 | 1  | **10.9**| **4.6**  | 9.3e-07 | 7.4e-06 |
+| 2048 | 8  | **2.5** | **2.0**  | 9.3e-07 | 7.4e-06 |
+| 2048 | 64 | **1.4** | 0.73     | 1.4e-06 | 1.35e-05 |
+| 4096 | 1  | **2.6** | **2.3**  | 1.5e-06 | 8.8e-06 |
+| 4096 | 8  | **1.9** | **1.2**  | 1.5e-06 | 8.8e-06 |
+| 4096 | 64 | 0.88    | 0.51     | 2.1e-06 | 1.44e-05 |
+
+What this establishes:
+
+1. **On sparse, `Filtered` wins — by far more than its best dense margin.** Up to
+   10.9x, against a dense best of under 2x, and ahead in 15 of 18 shapes. The
+   §13 dense conclusion ("niche is real but narrow") does not transfer, and it was
+   never entitled to: on dense it is losing to cuSOLVER, on sparse it is competing
+   with another iterative method.
+2. **It is simultaneously the more accurate path, by 5-10x.** Both algorithms were
+   asked for 1e-6. `Filtered` returns 7e-07 to 2e-06; LOBPCG returns 6e-06 to
+   1.4e-05, i.e. it never reaches the requested tolerance, and its error *grows
+   with n* while `Filtered`'s stays near 1e-06. This is why the sweep reports
+   accuracy beside every timing: without that column the two look like an ordinary
+   speed tradeoff, and they are not — the faster path is also the better answer.
+3. **The batch-64 collapse from the dense sweep reproduces.** `Filtered` loses at
+   n = 2048 / batch 64 (smallest end) and at both ends of n = 4096 / batch 64. Same
+   decay in batch as on dense; it simply crosses over much later. Any future routing
+   rule for sparse needs a batch term, exactly as `DirectSubset`'s does.
+4. **ILU(k) never pays for itself on time** — 15-45 % slower than unpreconditioned
+   LOBPCG at every measured shape, formation included. It does buy accuracy
+   (5.5e-06 vs 8.9e-06 at n = 1024), so it is not useless; but where `Filtered`
+   wins at all it beats ILU-preconditioned LOBPCG on both axes at once.
+
+`Auto` is deliberately **not** rerouted on the strength of this. The win is large
+and consistent, but `Filtered` remains the only path with a convergence failure
+mode, the batch-64 crossover is real, and one operator family (random sparse
+Hermitian with an imposed dominant diagonal) is a thin basis for a routing rule.
+The honest next step is a second operator family — a mesh/stencil matrix, where the
+spectrum is clustered rather than boosted — before `Auto` changes on sparse.
+
+#### The gap sweep: one null result and one confirmation
+
+`BM_SYEVX_SparseGap` (n = 2048, batch 8, k = 20) varies `diagonal_boost` from 1.0
+to 30.0. Times in ms:
+
+| config | boost 1 | 2 | 5 | 10 | 30 | eig error range |
+|---|---|---|---|---|---|---|
+| Filtered, largest  | 231.3 | 226.5 | 230.8 | 226.9 | 225.8 | 8.6e-07 – 1.2e-06 |
+| LOBPCG, largest    | 553.4 | 553.3 | 554.4 | 560.3 | 554.0 | 5.9e-06 – 7.9e-06 |
+| Filtered, smallest | 283.7 | 285.1 | 287.0 | 283.1 | 283.0 | 1.4e-06 – 2.8e-06 |
+| LOBPCG, smallest   | 561.1 | 553.1 | 552.5 | 551.6 | 551.5 | 8.3e-06 – 1.35e-05 |
+| LOBPCG + ILU(k)    | 692.3 | 694.8 | 627.7 | 631.8 | 633.0 | 6.2e-06 – 9.7e-06 |
+
+**The null result, stated plainly: `diagonal_boost` is not a difficulty knob.**
+Every row is flat to within ±1.5 % across a 30x change in diagonal dominance, and
+the error columns barely move either. Scaling a *random* diagonal rescales the
+spectrum without closing the extremal gap, so the sweep did not vary the quantity
+it was built to vary. It does not confirm or refute §6.4 by way of separation, and
+should not be cited as if it did. A stencil operator, whose interior spectrum is
+genuinely clustered, is what that experiment needs.
+
+**The confirmation, which is the more valuable half.** That same flatness pins
+down what LOBPCG is doing. Its runtime is invariant not only to `diagonal_boost`
+but to *which end of the spectrum is requested* (553.4 vs 561.1 at boost 1), while
+it returns eigenvalue errors 6-14x above the 1e-6 it was asked for. A solver whose
+convergence test was firing would finish in a time that tracked problem difficulty.
+One whose time is constant to ±1.5 % across every axis, and which never reaches its
+tolerance, is running its full `iterations = 200` budget every time. That is §6.4's
+stagnation, observed directly on CSR rather than cited from the literature.
+
+`Filtered`'s times are flat too, and it sits at roughly its requested tolerance
+(8.6e-07 – 2.8e-06 against 1e-6), so part of its advantage here is cheaper
+iterations rather than fewer of them. Both readings support the same conclusion —
+in the same fixed budget, `Filtered` gets an answer 5-10x more accurate in 2.4x
+less time — but "converges faster" is not what was measured and should not be
+claimed.
+
 ### Superseded: the earlier "not yet measured" note
 
 The crossover thresholds in §2.4 and §8 remain **flop-count estimates**. The sweep

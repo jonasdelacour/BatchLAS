@@ -1,0 +1,26 @@
+name,arg0,arg1,arg2,arg3,arg4,iterations,avg_ms,stddev_ms,Max rel. eig error,Time (µs) / matrix
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,0,10,3,231.305,3.3666,1.22e-06,28913.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,1,10,3,553.372,0.213962,6.03902e-06,69171.5
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,2,10,3,283.727,3.18315,2.80733e-06,35465.9
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,3,10,3,561.117,6.78115,1.02594e-05,70139.7
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,4,10,3,692.285,0.280155,6.23361e-06,86535.6
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,0,20,3,226.502,3.29105,9.23598e-07,28312.7
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,1,20,3,553.307,0.232838,7.89808e-06,69163.3
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,2,20,3,285.15,3.74136,2.5409e-06,35643.7
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,3,20,3,553.107,0.916901,8.30823e-06,69138.3
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,4,20,3,694.807,3.96901,6.61371e-06,86850.8
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,0,50,3,230.801,3.33402,8.55034e-07,28850.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,1,50,3,554.449,0.314571,5.94095e-06,69306.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,2,50,3,286.964,2.813,2.00003e-06,35870.6
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,3,50,3,552.505,0.673759,9.29038e-06,69063.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,4,50,3,627.735,1.28882,6.37784e-06,78466.9
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,0,100,3,226.881,2.60606,9.34195e-07,28360.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,1,100,3,560.254,4.88785,7.37977e-06,70031.8
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,2,100,3,283.069,3.15143,1.35273e-06,35383.6
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,3,100,3,551.625,0.228272,1.35249e-05,68953.1
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,4,100,3,631.775,4.61762,8.67506e-06,78971.8
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,0,300,3,225.789,3.11797,9.30898e-07,28223.6
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,1,300,3,553.966,1.60212,5.97872e-06,69245.7
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,2,300,3,283.005,2.3377,1.4044e-06,35375.6
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,3,300,3,551.535,0.441117,1.0799e-05,68941.9
+"(BM_SYEVX_SparseGap<float, batchlas::Backend::CUDA>)",2048,8,20,4,300,3,632.956,3.74948,9.7426e-06,79119.6

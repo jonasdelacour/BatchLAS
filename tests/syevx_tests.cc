@@ -2870,11 +2870,11 @@ SyevxAlgorithm pick_range(MatrixFormat format, SyevxAlgorithm requested, SyevxSe
 
 } // namespace
 
-// Sparse has no dense fallback: LOBPCG is the only implemented sparse path, and it
-// converges to an EXTREME of the spectrum by construction. Returning those instead
-// of the requested interior block would be the worst available outcome, so this
-// throws regardless of what any environment override says -- there is nothing to
-// degrade to.
+// Sparse has no dense fallback, and BOTH implemented sparse paths -- LOBPCG and
+// Filtered -- converge to an EXTREME of the spectrum by construction. Returning
+// those instead of the requested interior block would be the worst available
+// outcome, so this throws regardless of what any environment override says: there
+// is nothing to degrade to.
 TEST(SyevxRangeRoutingTest, SparseRejectsEveryNonExtremalRange) {
     EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
               SyevxAlgorithm::LOBPCG);
@@ -2886,6 +2886,43 @@ TEST(SyevxRangeRoutingTest, SparseRejectsEveryNonExtremalRange) {
     ScopedSyevxAlgorithmEnv forced("lobpcg");
     EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Index),
                  std::invalid_argument);
+}
+
+// Sparse input must HONOUR an explicit Filtered request rather than silently
+// swapping in LOBPCG.
+//
+// `syevx_filtered` is instantiated for every MatrixFormat and multiplies by A
+// through spmm on the CSR branch, so nothing about it is dense-only -- but the
+// selector used to `return LOBPCG` for all sparse input before it ever looked at
+// `want`. The result was a whole implemented algorithm that the dispatcher would
+// not call, and, worse, silently: a caller asking for Filtered got LOBPCG's
+// answer with no diagnostic, and every "force the suite onto Filtered" sweep
+// reported passing on CSR inputs without once running Filtered.
+//
+// Verified to have teeth: reverting the selector to the unconditional
+// `if (!dense) return LOBPCG` fails the first two expectations here.
+TEST(SyevxRangeRoutingTest, SparseHonoursExplicitFilteredRequest) {
+    if (std::getenv("BATCHLAS_SYEVX_ALGORITHM")) GTEST_SKIP() << "algorithm forced via env";
+
+    EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Filtered, SyevxSelect::Extremal),
+              SyevxAlgorithm::Filtered);
+    {
+        ScopedSyevxAlgorithmEnv forced("filtered");
+        EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
+                  SyevxAlgorithm::Filtered);
+    }
+
+    // LOBPCG stays the sparse DEFAULT -- this widens what an explicit request can
+    // reach, it does not change where `Auto` lands.
+    EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
+              SyevxAlgorithm::LOBPCG);
+
+    // The dense-only paths still degrade, because they genuinely cannot run on
+    // CSR: both tridiagonalize a dense A.
+    EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Direct, SyevxSelect::Extremal),
+              SyevxAlgorithm::LOBPCG);
+    EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::DirectSubset, SyevxSelect::Extremal),
+              SyevxAlgorithm::LOBPCG);
 }
 
 // An explicitly requested LOBPCG/Filtered throws rather than degrading. Note the
