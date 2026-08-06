@@ -771,8 +771,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     // against the two full n2 x n2 GEMMs it replaces:
     //
     //   the update alone, over the shapes the panel loop produces, is 3.4-3.6x
-    //   faster, and still 1.25-1.66x after paying the symmetrize the non-legacy
-    //   latrd panel needs;
+    //   faster;
     //   end to end, n=512 batch=1024 went 264/253/248 ms -> 228/227/232 at
     //   nb=16/24/32, and n=256 batch=2048 went 34.3/34.6/37.0 -> 27.0/30.6/34.0.
     //
@@ -827,10 +826,23 @@ Event sytrd_blocked_impl(Queue& ctx,
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
                             syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                         }
-                        if (!is_legacy) {
-                            BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k_symmetrize");
-                            A22.symmetrize(ctx, Uplo::Lower);
-                        }
+                        // No symmetrize: nothing downstream reads A's upper
+                        // triangle, so leaving it stale is not observable.
+                        // Checked across every reader, not assumed --
+                        //   latrd_lower_panel, all three variants: the symmetric
+                        //     matvec is the only place tempted to cross the
+                        //     diagonal, and all three split it at c == r, taking
+                        //     Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r. The
+                        //     device variant reaches it through
+                        //     device::hemv<Uplo::Lower>, which mirrors the same
+                        //     way. The fused trailing update guards with
+                        //     `if (r < c) continue` (legacy, grid) or
+                        //     device::her2k<Uplo::Lower>.
+                        //   restore_tridiag_lower: reads the diagonal, and only
+                        //     writes the superdiagonal.
+                        // The GEMM pair happened to leave a valid upper triangle
+                        // as a side effect; that was never a contract anything
+                        // depended on.
                     } else {
                         {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");

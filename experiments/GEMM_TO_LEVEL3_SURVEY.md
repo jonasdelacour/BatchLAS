@@ -34,9 +34,11 @@ The update in isolation (float, `n2 x ib` operands into `n2 x n2`):
 | 1024 | 64 | 128 | 2.544 | 0.730 | 2.039 | **1.25x** |
 | 2048 | 64 | 32 | 2.504 | 0.692 | 1.682 | **1.49x** |
 
-The `syr2k` itself is 3.4-3.6x faster; the non-legacy `latrd` panel then needs
-the other triangle back, and that symmetrize is a bandwidth-bound `n^2` pass
-that eats over half the win. It still wins everywhere.
+The `syr2k` itself is 3.4-3.6x faster. The middle column is what it cost to hand
+the other triangle back afterwards -- a bandwidth-bound `n^2` pass that ate over
+half the win. **That symmetrize turned out to be unnecessary and is now gone**;
+see "Does anything read the upper triangle?" below. The 3.4-3.6x column is the
+one that applies.
 
 End to end through `sytrd_blocked_benchmark`, at the batch sizes its own grid
 pairs with each `n`:
@@ -75,13 +77,46 @@ It was checked for teeth rather than assumed to have them:
   The assertion that does the work is the relative one: syr2k must land within
   `4 * (GEMM route error) + 8 eps ||A||`.
 
-One loose end worth recording: **disabling the symmetrize did not fail the
-test.** That is either a genuinely unnecessary pass -- which would be worth a
-lot, since it is over half the cost of the syr2k route (3.4x becomes 1.25-1.66x
-once it is paid) -- or a gap in what this test reaches. It was left in place;
-establishing which it is means finding out whether the non-legacy
-`latrd_lower_panel` ever reads the upper triangle, and is a separate change from
-this one.
+## Does anything read the upper triangle?
+
+Disabling the symmetrize did not fail the test, which had two possible readings:
+the pass is unnecessary, or the test does not reach whatever needs it. Reading
+every consumer settles it -- **nothing in the `sytrd_blocked` pipeline reads A's
+upper triangle**, so the symmetrize is now removed.
+
+The symmetric matvec is the only place tempted to cross the diagonal, and all
+three `latrd_lower_panel` variants split it at `c == r`, taking `Ab(r,c)` for
+`c <= r` and `conj(Ab(c,r))` for `c > r`:
+
+| reader | how it stays below the diagonal |
+|---|---|
+| `latrd_lower_panel`, legacy | explicit split at `c == r`, documented in place |
+| `latrd_lower_panel`, grid | same split, same code shape |
+| `latrd_lower_panel`, device | `device::hemv<Uplo::Lower>`, which mirrors rather than reads across -- for `row < col` it loads `a(col,row)` and applies `symmetric_mirror`, in both the tiled and the generic path |
+| fused trailing update, legacy + grid | `if (r < c) continue` |
+| fused trailing update, device | `device::her2k<Uplo::Lower>` |
+| `restore_tridiag_lower` | reads the diagonal; the superdiagonal it touches is a *write* |
+
+The GEMM pair happened to leave a valid upper triangle behind as a side effect.
+Nothing depended on it, so that was never a contract -- which is exactly the kind
+of thing that is invisible until an op that respects the triangle replaces one
+that does not.
+
+Verified rather than argued: with the symmetrize removed, the suite passes on the
+legacy impl, on `BATCHLAS_SYTRD_IMPL=device`, and on the device impl with the
+grid variant forced (`BATCHLAS_LATRD_GRID_GROUPS=4`).
+
+The device impl was the only path that had been paying it, and it recovers the
+full win -- at n=512 batch=1024 it goes 243.8/239.5/239.8 ms -> 226.5/228.0/231.1
+at nb=16/24/32, landing on the legacy path's numbers to within noise (1.16x over
+the GEMM baseline, up from 1.08x).
+
+(One thing to know before forcing grid parameters while bisecting:
+`SytrdBlockedLatrdGridCudaTest.LargeNBatchOneMatchesNetlibReference` and
+`.GridMatchesLegacyTridiagonal` fail under an externally forced
+`BATCHLAS_LATRD_GRID_GROUPS`, at 4 and at 8, and they do so with the GEMM route
+and no syr2k anywhere. They pick their own grid parameters and an outer override
+collides with them. Unrelated to any of this, but it looks alarming.)
 
 ### Why it stays CUDA + float only
 
