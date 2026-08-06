@@ -25,12 +25,20 @@ namespace {
 // correct in the first place. A trmm expresses it without multiplying through
 // those zeros.
 //
-// BATCHLAS_ORMQR_WY=gemm pins the old spelling so the substitution stays
-// measurable from one binary.
-inline bool use_trmm_for_wy() {
-    static const bool result = []() {
+// BATCHLAS_ORMQR_WY pins the spelling so both stay measurable from one binary:
+// `gemm` is the old one, and `trmm` forces the substitution past the routing
+// below -- which is how a route the routing currently rejects gets measured at
+// all, rather than by editing the predicate and rebuilding.
+enum class WyPin { Measured, Gemm, Trmm };
+
+inline WyPin wy_pin() {
+    static const WyPin result = []() {
         const char* v = std::getenv("BATCHLAS_ORMQR_WY");
-        return !(v && std::string(v) == "gemm");
+        if (!v) return WyPin::Measured;
+        const std::string s(v);
+        if (s == "gemm") return WyPin::Gemm;
+        if (s == "trmm") return WyPin::Trmm;
+        return WyPin::Measured;
     }();
     return result;
 }
@@ -54,15 +62,30 @@ inline bool use_trmm_for_wy() {
 //   netlib double    0.379x - 1.064x   0.38x at n 128, ib 16
 //
 // So the dtype half was stale only for double, and the answer is per-type
-// rather than per-precision. m here is ib, in the tens, which is the one regime
-// where the tile kernel cannot use its structure: at ib <= 32 it runs a single
-// 32-row tile, R = 1, and (R+1)/2R = 1 means it skips no arithmetic whatsoever
-// and wins or loses purely on being one kernel instead of a cuBLAS call. In
-// float and double that trade is positive; a complex multiply is four real ones
-// and the same trade goes negative. It closes towards parity by ib = 64, where
-// R = 2 finally saves something (0.99x). Confirmed by trace that complex takes
+// rather than per-precision. m here is ib, in the tens, which was the one regime
+// the tile kernel could not use its structure in: the 32-row tile was its floor,
+// so ib <= 32 ran at R = 1, (R+1)/2R = 1 skipped no arithmetic whatsoever, and
+// ib = 16 additionally threw away half of what it computed at the epilogue.
+//
+// A 16-row tile was then added to see whether giving complex an R that pays
+// would close the gap (trmm_row_tile in trmm_triangular_tiles.hh, which is where
+// the tile-16-vs-tile-32 numbers live). It moves every type in the direction the
+// R argument predicts, but it does not change this gate. Against the GEMM, on
+// tile 16:
+//
+//   double           1.013x - 1.036x   was 1.004x - 1.016x on tile 32
+//   complex<double>  0.996x - 1.018x   was 0.958x - 1.010x; median exactly 1.000
+//   complex<float>   0.946x - 0.983x   was 0.944x - 0.995x; still behind
+//
+// complex<double>'s ib = 16 hole does close (0.958x -> 0.996x), but closing to
+// parity is not a reason to switch a call site, and complex<float> stays 2-5%
+// behind because the deficit there is not the R saving: a complex multiply is
+// four real ones, so the kernel is that much further from cuBLAS's per-flop rate
+// to begin with, and one 16x16 triangle's worth of saved arithmetic cannot pay
+// it back. Confirmed by trace that complex takes
 // trmm_cuda_custom.triangular_tiles and not the expansion fallback, so this is
-// the kernel's own shape response, not a mis-route.
+// the kernel's own shape response, not a mis-route. The type stays excluded; the
+// tile is kept because double wants it.
 //
 // netlib is excluded for a different reason. Its trmm and its gemm are both
 // per-batch cblas loops, so the batching is not the difference: OpenBLAS's
@@ -77,12 +100,15 @@ inline bool use_trmm_for_wy() {
 // and every block size syev uses is inside that anyway.
 template <Backend B, typename T>
 inline bool wy_trmm_applicable(int ib) {
+    const WyPin pin = wy_pin();
+    if (pin != WyPin::Measured) {
+        return pin == WyPin::Trmm;
+    }
     // The routes whose trmm reaches the batched triangular tile kernel. Not a
     // statement about CUDA the vendor -- it is where the kernel is wired.
     constexpr bool route_has_tile_kernel = (B == Backend::CUDA);
     constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
-    return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64 &&
-           use_trmm_for_wy();
+    return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64;
 }
 
 // Returns true when BATCHLAS_ORMQR_IMPL=device, false otherwise (legacy is the default).
