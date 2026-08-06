@@ -190,4 +190,104 @@ TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
         }
     }
 }
+
+// SYR2K names one triangle of C and the other one is the caller's storage.
+// Both tests above symmetrize C before comparing, so neither can see a route
+// that computes and stores the whole n x n -- and that is what the custom
+// route does: it decomposes into two batched GEMMs written straight into C.
+//
+// Poisoning the unreferenced half with per-element sentinels makes it
+// observable. The values are distinct per element so that writing the
+// transposed position is caught too, not merely writing something.
+//
+// Left DISABLED rather than red, because fixing it is a separate decision with
+// no cheap answer. The two routes that respect the triangle are a host loop
+// over cublasSsyr2k -- measured here at 16.6 ms for n=512 batch=512 against
+// the decomposition's 6.0 -- or a tile-masked kernel of the kind syrk now has,
+// which does not exist for SYR2K's two operands.
+//
+// Recording it because the same poisoning turned up a live SYRK bug, and SYRK
+// and SYR2K share the shape of the mistake.
+TEST(Syr2kCudaCustomTest, DISABLED_AutoRouteLeavesTheOtherHalfUntouched) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
+    }
+
+    const int n = 128;
+    const int k = 96;
+    const int batch = 64;
+    const float alpha = 0.95f;
+    const float beta = -0.1f;
+    const float tol = test_utils::tolerance<float>() * 4096.0f;
+
+    auto poison = [n](int row, int col, int b) {
+        return -static_cast<float>(1 + row + n * col + n * n * b);
+    };
+
+    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
+        const int a_rows = transA == Transpose::NoTrans ? n : k;
+        const int a_cols = transA == Transpose::NoTrans ? k : n;
+        Matrix<float, MatrixFormat::Dense> A =
+            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 13);
+        Matrix<float, MatrixFormat::Dense> B =
+            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 31);
+
+        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+            Matrix<float, MatrixFormat::Dense> C_auto =
+                Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
+            Matrix<float, MatrixFormat::Dense> C_vendor =
+                Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
+
+            // The element accessor, not raw data() arithmetic: the storage has
+            // its own leading dimension and batch stride.
+            for (int b = 0; b < batch; ++b) {
+                for (int j = 0; j < n; ++j) {
+                    for (int i = 0; i < n; ++i) {
+                        const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                        if (!referenced) {
+                            C_auto(i, j, b) = poison(i, j, b);
+                            C_vendor(i, j, b) = poison(i, j, b);
+                        }
+                    }
+                }
+            }
+
+            syr2k(ctx,
+                  A.view(),
+                  B.view(),
+                  C_auto.view(),
+                  {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+
+            {
+                ScopedEnvVar vendor_variant("BATCHLAS_SYR2K_VARIANT", "vendor");
+                syr2k(ctx,
+                      A.view(),
+                      B.view(),
+                      C_vendor.view(),
+                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+            }
+
+            for (int b = 0; b < batch; ++b) {
+                for (int j = 0; j < n; ++j) {
+                    for (int i = 0; i < n; ++i) {
+                        const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                        if (referenced) {
+                            ASSERT_NEAR(C_auto(i, j, b), C_vendor(i, j, b), tol)
+                                << "trans=" << static_cast<int>(transA)
+                                << ", uplo=" << static_cast<int>(uplo)
+                                << ", batch=" << b << ", row=" << i << ", col=" << j;
+                        } else {
+                            ASSERT_EQ(C_auto(i, j, b), poison(i, j, b))
+                                << "wrote outside the requested triangle: trans="
+                                << static_cast<int>(transA)
+                                << ", uplo=" << static_cast<int>(uplo)
+                                << ", batch=" << b << ", row=" << i << ", col=" << j;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 #endif

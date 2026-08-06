@@ -25,6 +25,11 @@ constexpr int kSyrkCublasDxTile = 32;
 // is the tile-masked kernel that computes only the requested half of C,
 // `cublasdx` the fused kernel, and `gemm` the full n x n batched GEMM the
 // triangular route replaces.
+//
+// `gemm` computes and stores both triangles, which is not what SYRK means: the
+// half the caller did not name is the caller's storage. It exists to measure
+// the arithmetic the triangular route saves, and the automatic choice never
+// selects it -- reaching it takes naming it here.
 enum class SyrkRoute {
     Auto,
     Vendor,
@@ -158,10 +163,17 @@ bool syrk_use_cuda_custom(const Queue& ctx,
         return true;
     }
     if (route == SyrkRoute::Vendor || !detail::is_gpu_queue(ctx) ||
-        !syrk_problem_supported(A, C, transA)) {
+        !syrk_problem_supported(A, C, transA) || !syrk_triangular_supported(A, C)) {
         return false;
     }
-    return (syrk_triangular_supported(A, C) && syrk_prefer_triangular_tiles(A, C, transA)) ||
+    // The tile-masked kernel is the only custom route that respects the
+    // triangle, so it is the only one the automatic choice may leave the vendor
+    // for. Its own threshold says where it beats the full n x n GEMM; below
+    // that the question is instead whether it beats a host loop over
+    // cublasSsyrk, which the cuBLASDx heuristic already answers -- one launch
+    // per batch member costs about 9 us, so anything with a batch at all is
+    // better off here even where the tile grid is half diagonal.
+    return syrk_prefer_triangular_tiles(A, C, transA) ||
         syrk_prefer_cuda_custom_heuristic(A, C, transA);
 }
 
@@ -180,10 +192,12 @@ Event syrk_cuda_custom(Queue& ctx,
     if (route == SyrkRoute::Gemm) {
         return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
     }
-    const bool triangular = route == SyrkRoute::Triangular ||
-        (route == SyrkRoute::Auto && syrk_prefer_triangular_tiles(A, C, transA));
+    const bool triangular = route == SyrkRoute::Triangular || route == SyrkRoute::Auto;
     if (triangular && syrk_triangular_supported(A, C)) {
         return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
+    }
+    if (route == SyrkRoute::Auto) {
+        return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
     }
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
