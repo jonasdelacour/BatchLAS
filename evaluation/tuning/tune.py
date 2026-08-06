@@ -98,6 +98,19 @@ def _normalize_case_indices(total_cases: int, selected: Optional[Sequence[Any]])
 
 
 def _collect_tune_keys(cases: Sequence[Dict[str, Any]], *, exclude: Optional[Sequence[str]] = None) -> Dict[str, List[int]]:
+    """Union of every case's grid for each tuned key.
+
+    Deliberately a union, not an intersection. The generated header is
+    bucket-first: it reads `per_case_best`, so each case must be free to search
+    its own declared grid. Intersecting first silently shrinks that search --
+    with the shipped default space, ormqr's per-case grids intersect to the
+    single value {16}, so every ORMQR_BLOCK_SIZE_* bucket was "tuned" without
+    ever comparing a second candidate.
+
+    Cross-case aggregation (`best`/`top`) is unaffected: `_case_allows` keeps a
+    case out of any combo its own grid excludes, and only combos that cover
+    every case are scored -- which is exactly the old intersection.
+    """
     tune_keys: Dict[str, List[int]] = {}
     excluded = set(exclude or [])
     for case in cases:
@@ -107,11 +120,24 @@ def _collect_tune_keys(cases: Sequence[Dict[str, Any]], *, exclude: Optional[Seq
             if k not in tune_keys:
                 tune_keys[k] = list(vs)
             else:
-                existing = set(tune_keys[k])
-                new = set(vs)
-                inter = existing.intersection(new)
-                tune_keys[k] = sorted(inter) if inter else sorted(existing.union(new))
+                tune_keys[k] = sorted(set(tune_keys[k]).union(vs))
     return tune_keys
+
+
+def _case_allows(case: Dict[str, Any], params: Dict[str, int]) -> bool:
+    """True when `params` lies inside this case's own declared grid.
+
+    A key the case does not declare is unconstrained -- it is resolved from
+    `fixed` (or a pre-tuned value) exactly as before.
+    """
+    case_tune = case.get("tune") or {}
+    for key, value in params.items():
+        allowed = case_tune.get(key)
+        if allowed is None:
+            continue
+        if int(value) not in {int(v) for v in allowed}:
+            return False
+    return True
 
 
 def _tune_pre_phases(
@@ -259,6 +285,7 @@ def _tune_one_bench(
     verbose: bool,
 ) -> Dict[str, Any]:
     best: Optional[Dict[str, Any]] = None
+    partial_best: Optional[Dict[str, Any]] = None
     leaderboard: List[Dict[str, Any]] = []
     per_case_best: List[Optional[Dict[str, Any]]] = [None for _ in space.cases]
 
@@ -276,25 +303,40 @@ def _tune_one_bench(
 
     tune_keys = _collect_tune_keys(space.cases, exclude=resolved_pre_tune.keys())
 
+    # Widening the grid to a union means different combos can collapse to the
+    # same argument vector for a case that does not tune every key. Measure each
+    # distinct vector once.
+    measured: Dict[Tuple[int, ...], float] = {}
+
     for params in _iter_grid(tune_keys):
         effective_params = {**resolved_pre_tune, **params}
         values: List[float] = []
         per_case: List[Dict[str, Any]] = []
+        covers_all_cases = True
 
         for case_idx, case in enumerate(space.cases):
+            if not _case_allows(case, effective_params):
+                covers_all_cases = False
+                continue
+
             fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
             args = _args_from_spec(space.arg_spec, fixed=fixed, params=effective_params)
-            v = _run_one_case(
-                exe=exe,
-                backend=backend,
-                dtype=dtype,
-                metric=space.metric,
-                warmup=warmup,
-                min_time_ms=min_time_ms,
-                min_iters=min_iters,
-                max_iters=max_iters,
-                args=args,
-            )
+            key = tuple(args)
+            if key in measured:
+                v = measured[key]
+            else:
+                v = _run_one_case(
+                    exe=exe,
+                    backend=backend,
+                    dtype=dtype,
+                    metric=space.metric,
+                    warmup=warmup,
+                    min_time_ms=min_time_ms,
+                    min_iters=min_iters,
+                    max_iters=max_iters,
+                    args=args,
+                )
+                measured[key] = v
             values.append(v)
             per_case.append({"fixed": fixed, "args": args, "value": v})
 
@@ -316,8 +358,21 @@ def _tune_one_bench(
                     "params": dict(effective_params),
                 }
 
+        if not values:
+            continue
+
         s = _score(values, space.direction)
         entry = {"params": effective_params, "score": s, "values": values, "cases": per_case}
+
+        # Only combos legal for every case are comparable across cases, so the
+        # cross-case leaderboard still ranks exactly the old intersected grid.
+        # Per-case winners above are already recorded either way. Partial-coverage
+        # combos are kept aside purely so a space with fully disjoint per-case
+        # grids still yields a profile instead of tripping the assert below.
+        if not covers_all_cases:
+            if partial_best is None or s < partial_best["score"]:
+                partial_best = entry
+            continue
 
         if verbose:
             # Print minimal progress; keep stdout readable.
@@ -333,6 +388,8 @@ def _tune_one_bench(
         if best is None or entry["score"] < best["score"]:
             best = entry
 
+    if best is None:
+        best = partial_best
     assert best is not None
     return {
         "bench": space.bench,

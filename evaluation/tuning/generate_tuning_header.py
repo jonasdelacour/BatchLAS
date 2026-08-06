@@ -174,10 +174,10 @@ namespace detail {{
 // inside one.
 inline int32_t tuning_env_override(const char* name, int32_t fallback) {{
     const char* v = std::getenv(name);
-    if (v == nullptr || *v == '\0') return fallback;
+    if (v == nullptr || *v == '\\0') return fallback;
     char* end = nullptr;
     const long parsed = std::strtol(v, &end, 10);
-    if (end == v || *end != '\0') return fallback;   // not a clean integer
+    if (end == v || *end != '\\0') return fallback;   // not a clean integer
     if (parsed <= 0 || parsed > 2147483647L) return fallback;  // non-positive / out of range
     return static_cast<int32_t>(parsed);
 }}
