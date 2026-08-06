@@ -28,12 +28,19 @@ class Syr2kTest : public test_utils::BatchLASTest<Config> {};
 
 class ScopedEnvVar {
 public:
+    // A null value unsets the variable for the duration, which is how a test
+    // asks for the automatic route regardless of what the environment already
+    // said.
     ScopedEnvVar(const char* name, const char* value) : name_(name) {
         if (const char* old = std::getenv(name_)) {
             old_value_ = old;
             had_old_value_ = true;
         }
-        setenv(name_, value, 1);
+        if (value) {
+            setenv(name_, value, 1);
+        } else {
+            unsetenv(name_);
+        }
     }
 
     ~ScopedEnvVar() {
@@ -191,73 +198,103 @@ TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
     }
 }
 
-// SYR2K names one triangle of C and the other one is the caller's storage.
-// Both tests above symmetrize C before comparing, so neither can see a route
-// that computes and stores the whole n x n -- and that is what the custom
-// route does: it decomposes into two batched GEMMs written straight into C.
-//
-// Poisoning the unreferenced half with per-element sentinels makes it
-// observable. The values are distinct per element so that writing the
-// transposed position is caught too, not merely writing something.
-//
-// Left DISABLED rather than red, because fixing it is a separate decision with
-// no cheap answer. The two routes that respect the triangle are a host loop
-// over cublasSsyr2k -- measured here at 16.6 ms for n=512 batch=512 against
-// the decomposition's 6.0 -- or a tile-masked kernel of the kind syrk now has,
-// which does not exist for SYR2K's two operands.
-//
-// Recording it because the same poisoning turned up a live SYRK bug, and SYRK
-// and SYR2K share the shape of the mistake.
-TEST(Syr2kCudaCustomTest, DISABLED_AutoRouteLeavesTheOtherHalfUntouched) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
-    }
+namespace {
 
-    const int n = 128;
-    const int k = 96;
-    const int batch = 64;
-    const float alpha = 0.95f;
-    const float beta = -0.1f;
-    const float tol = test_utils::tolerance<float>() * 4096.0f;
+struct Syr2kShape {
+    int n;
+    int k;
+    int batch;
+};
 
-    auto poison = [n](int row, int col, int b) {
-        return -static_cast<float>(1 + row + n * col + n * n * b);
-    };
+// SYR2K names one triangle of C, and BLAS forbids the other one from being
+// written. Comparing against a symmetrized reference cannot see that: both
+// halves then hold the same numbers, so a route that computes and stores the
+// whole n x n passes anyway. Poisoning the unreferenced half with values
+// nothing in the problem could produce makes the difference observable, and the
+// values are distinct per element so that writing the transposed position is
+// caught too, not merely writing something.
+float syr2k_poison_value(int row, int col, int batch, int n) {
+    return -static_cast<float>(1 + row + n * col + n * n * batch);
+}
 
-    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
-        const int a_rows = transA == Transpose::NoTrans ? n : k;
-        const int a_cols = transA == Transpose::NoTrans ? k : n;
-        Matrix<float, MatrixFormat::Dense> A =
-            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 13);
-        Matrix<float, MatrixFormat::Dense> B =
-            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 31);
-
-        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_auto =
-                Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
-            Matrix<float, MatrixFormat::Dense> C_vendor =
-                Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
-
-            // The element accessor, not raw data() arithmetic: the storage has
-            // its own leading dimension and batch stride.
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
-                        if (!referenced) {
-                            C_auto(i, j, b) = poison(i, j, b);
-                            C_vendor(i, j, b) = poison(i, j, b);
-                        }
-                    }
+void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo uplo) {
+    const int n = C.rows();
+    for (int b = 0; b < C.batch_size(); ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                if (!referenced) {
+                    C(i, j, b) = syr2k_poison_value(i, j, b, n);
                 }
             }
+        }
+    }
+}
 
-            syr2k(ctx,
-                  A.view(),
-                  B.view(),
-                  C_auto.view(),
-                  {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& C,
+                               Matrix<float, MatrixFormat::Dense>& C_ref,
+                               Uplo uplo,
+                               Transpose transA,
+                               int k,
+                               float tol) {
+    const int n = C.rows();
+    for (int b = 0; b < C.batch_size(); ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
+                if (referenced) {
+                    ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
+                        << "n=" << n << ", k=" << k
+                        << ", trans=" << static_cast<int>(transA)
+                        << ", uplo=" << static_cast<int>(uplo)
+                        << ", batch=" << b << ", row=" << i << ", col=" << j;
+                } else {
+                    ASSERT_EQ(C(i, j, b), syr2k_poison_value(i, j, b, n))
+                        << "wrote outside the requested triangle: n=" << n << ", k=" << k
+                        << ", trans=" << static_cast<int>(transA)
+                        << ", uplo=" << static_cast<int>(uplo)
+                        << ", batch=" << b << ", row=" << i << ", col=" << j;
+                }
+            }
+        }
+    }
+}
+
+// One shape under both the route being exercised and the vendor, comparing the
+// referenced triangle and requiring the poison back bit-exact from the other.
+// A null variant means the automatic route, with the environment variable
+// genuinely absent rather than spelled out.
+void expect_route_respects_triangle(Queue& ctx,
+                                    const char* variant,
+                                    const Syr2kShape& shape,
+                                    float alpha,
+                                    float beta) {
+    const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
+
+    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
+        const int a_rows = transA == Transpose::NoTrans ? shape.n : shape.k;
+        const int a_cols = transA == Transpose::NoTrans ? shape.k : shape.n;
+        Matrix<float, MatrixFormat::Dense> A =
+            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 13);
+        Matrix<float, MatrixFormat::Dense> B =
+            Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 31);
+
+        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+            Matrix<float, MatrixFormat::Dense> C_custom =
+                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
+            Matrix<float, MatrixFormat::Dense> C_vendor =
+                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
+            poison_unreferenced_triangle(C_custom, uplo);
+            poison_unreferenced_triangle(C_vendor, uplo);
+
+            {
+                ScopedEnvVar route_variant("BATCHLAS_SYR2K_VARIANT", variant);
+                syr2k(ctx,
+                      A.view(),
+                      B.view(),
+                      C_custom.view(),
+                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+            }
 
             {
                 ScopedEnvVar vendor_variant("BATCHLAS_SYR2K_VARIANT", "vendor");
@@ -268,26 +305,65 @@ TEST(Syr2kCudaCustomTest, DISABLED_AutoRouteLeavesTheOtherHalfUntouched) {
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
-                        if (referenced) {
-                            ASSERT_NEAR(C_auto(i, j, b), C_vendor(i, j, b), tol)
-                                << "trans=" << static_cast<int>(transA)
-                                << ", uplo=" << static_cast<int>(uplo)
-                                << ", batch=" << b << ", row=" << i << ", col=" << j;
-                        } else {
-                            ASSERT_EQ(C_auto(i, j, b), poison(i, j, b))
-                                << "wrote outside the requested triangle: trans="
-                                << static_cast<int>(transA)
-                                << ", uplo=" << static_cast<int>(uplo)
-                                << ", batch=" << b << ", row=" << i << ", col=" << j;
-                        }
-                    }
-                }
-            }
+            ASSERT_NO_FATAL_FAILURE(
+                expect_triangle_respected(C_custom, C_vendor, uplo, transA, shape.k, tol));
         }
+    }
+}
+
+} // namespace
+
+TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
+    }
+
+    // 256x64 is whole 128 tiles with a k the 8-deep staging fills exactly, so
+    // it takes the unpredicated path; 200x53 breaks both and takes the
+    // predicated one, with a partial tile on the diagonal. 384x8 is the
+    // shallowest k that runs, and wide enough to have a tile that is neither on
+    // the diagonal nor next to it.
+    const Syr2kShape shapes[] = {{256, 64, 8}, {200, 53, 5}, {384, 8, 3}};
+
+    for (const auto& shape : shapes) {
+        // beta = 0 takes the epilogue branch that never reads prior C, which is
+        // the one path where the mask is not what keeps the other half intact.
+        for (const auto beta : {-0.35f, 0.0f}) {
+            ASSERT_NO_FATAL_FAILURE(
+                expect_route_respects_triangle(ctx, "triangular", shape, 0.9f, beta));
+        }
+    }
+}
+
+TEST(Syr2kCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
+    }
+
+    // What this guards is the routing, not any one kernel: whichever route a
+    // shape picks, the unreferenced half of C belongs to the caller. The router
+    // turns on one thing, the batch, and these straddle it in both directions at
+    // three sizes, over kernel paths that differ in every other way.
+    //
+    //   512x64  b32   whole 128 tiles, wide enough to have tiles that are
+    //                 neither on nor next to the diagonal
+    //   424x53  b16   the same but ragged in n and off the staging's k step
+    //   256x4   b8    a k shallower than one staging step
+    //   200x53  b2    the smallest batch that leaves the vendor
+    //   200x53  b1    one under it, so the same shape goes to the vendor
+    //   128x128 b8    a tile grid that is nothing but diagonal
+    //   512x512 b1    a large shape that still goes to the vendor
+    //   24x24   b4    an n smaller than a single tile
+    //   24x24   b1    the same at the batch the vendor keeps
+    const Syr2kShape shapes[] = {{512, 64, 32}, {424, 53, 16},  {256, 4, 8},
+                                 {200, 53, 2},  {200, 53, 1},   {128, 128, 8},
+                                 {512, 512, 1}, {24, 24, 4},    {24, 24, 1}};
+
+    for (const auto& shape : shapes) {
+        ASSERT_NO_FATAL_FAILURE(
+            expect_route_respects_triangle(ctx, nullptr, shape, 1.25f, 0.5f));
     }
 }
 #endif

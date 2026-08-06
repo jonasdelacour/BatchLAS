@@ -117,10 +117,10 @@ bool syrk_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& 
                                   Transpose transA) {
     const int n = C.rows();
     const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-    if (detail::syrk_tiles_per_side(n) < 3 || k < detail::kSyrkTriangularTileK) {
+    if (detail::triangular_tiles_per_side(n) < 3 || k < detail::kTriangularTileK) {
         return false;
     }
-    return static_cast<long long>(A.batch_size()) * detail::syrk_triangular_tile_count(n) >= 160;
+    return static_cast<long long>(A.batch_size()) * detail::triangular_tile_count(n) >= 160;
 }
 
 bool syrk_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Dense>& A,

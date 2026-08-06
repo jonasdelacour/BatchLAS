@@ -12,11 +12,6 @@
 // in the unreferenced half -- BLAS forbids writing them, and with beta != 0 it
 // forbids reading them too.
 //
-// The tile decode packs row-major over the lower triangle: tile t maps to
-// (bi, bj) with bj <= bi via the inverse of bi*(bi+1)/2. sqrt is only a seed
-// here; the two correction loops make the result exact regardless of what the
-// device's sqrt rounds to. Uplo::Upper is the same set with the pair swapped.
-//
 // The inner loop and shared-memory layout are those of
 // src/sycl/gemm/register_128x128.hh, and for the same reasons: an aligned
 // shared stride so the fragment loads become LDS.128, both operands staged
@@ -31,6 +26,8 @@
 //            index and both tiles stage with one vector load per thread.
 //   Trans    A is k x n, so the contiguous direction is k and both tiles stage
 //            transposed, four consecutive k per thread scattered into shared.
+
+#include "triangular_tiles.hh"
 
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
@@ -48,34 +45,6 @@ namespace batchlas::backend::detail {
 template <typename T, bool TransOperand, bool AlignedFastPath>
 class SyrkTriangularTilesKernel;
 
-// A vector of four T with the alignment the 128-bit load/store forms need.
-template <typename T>
-struct alignas(4 * sizeof(T)) SyrkPacket4 {
-    T v[4];
-};
-
-template <typename T>
-inline const SyrkPacket4<T>& syrk_packet4(const T* p) {
-    return *reinterpret_cast<const SyrkPacket4<T>*>(p);
-}
-
-template <typename T>
-inline SyrkPacket4<T>& syrk_packet4(T* p) {
-    return *reinterpret_cast<SyrkPacket4<T>*>(p);
-}
-
-inline constexpr int kSyrkTriangularTile = 128;
-inline constexpr int kSyrkTriangularTileK = 8;
-
-inline int syrk_tiles_per_side(int n) {
-    return (n + kSyrkTriangularTile - 1) / kSyrkTriangularTile;
-}
-
-inline int syrk_triangular_tile_count(int n) {
-    const int t = syrk_tiles_per_side(n);
-    return t * (t + 1) / 2;
-}
-
 // Does this problem satisfy everything the unpredicated path assumes? A tile
 // that is not a whole 128x128 of C, or a k the 8-deep staging cannot fill
 // exactly, has to take the predicated path, as does any operand whose base or
@@ -85,7 +54,7 @@ bool syrk_triangular_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
                                const MatrixView<T, MatrixFormat::Dense>& C,
                                int n,
                                int k) {
-    if ((n % kSyrkTriangularTile) != 0 || (k % kSyrkTriangularTileK) != 0) {
+    if ((n % kTriangularTile) != 0 || (k % kTriangularTileK) != 0) {
         return false;
     }
     auto aligned = [](const T* p, int ld, int stride) {
@@ -105,9 +74,9 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                                    Uplo uplo) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.triangular_tiles");
 
-    constexpr int TileM = kSyrkTriangularTile;
-    constexpr int TileN = kSyrkTriangularTile;
-    constexpr int TileK = kSyrkTriangularTileK;
+    constexpr int TileM = kTriangularTile;
+    constexpr int TileN = kTriangularTile;
+    constexpr int TileK = kTriangularTileK;
     constexpr int ThreadTile = 8;                  // rows and cols per thread
     constexpr int Band = ThreadTile / 2;           // 4: the vectorized band width
     constexpr int LocalRows = TileM / ThreadTile;  // 16
@@ -120,7 +89,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
 
     const int n = static_cast<int>(C.rows());
     const int k = TransOperand ? static_cast<int>(A.rows()) : static_cast<int>(A.cols());
-    const int tile_count = syrk_triangular_tile_count(n);
+    const int tile_count = triangular_tile_count(n);
 
     const sycl::range<3> local(1, LocalRows, LocalCols);
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()),
@@ -152,15 +121,9 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                 const int tx = static_cast<int>(item.get_local_id(1));  // 0..15, n
                 const int tid = tx * LocalRows + ty;
 
-                const int tile = static_cast<int>(item.get_group(1));
-                int bi = static_cast<int>((sycl::sqrt(8.0 * tile + 1.0) - 1.0) * 0.5);
-                while (bi > 0 && bi * (bi + 1) / 2 > tile) {
-                    --bi;
-                }
-                while ((bi + 1) * (bi + 2) / 2 <= tile) {
-                    ++bi;
-                }
-                const int bj = tile - bi * (bi + 1) / 2;
+                int bi = 0;
+                int bj = 0;
+                triangular_tile_decode(static_cast<int>(item.get_group(1)), bi, bj);
                 const bool on_diagonal = bi == bj;
 
                 const int m0 = (lower ? bi : bj) * TileM;
@@ -191,24 +154,24 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                 for (int k0 = 0; k0 < k; k0 += TileK) {
                     if constexpr (AlignedFastPath) {
                         if constexpr (TransOperand) {
-                            const SyrkPacket4<T> va =
-                                syrk_packet4(Ab + (k0 + s_l) +
-                                             static_cast<std::ptrdiff_t>(m0 + s_row) * lda);
-                            const SyrkPacket4<T> vb =
-                                syrk_packet4(Ab + (k0 + s_l) +
-                                             static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
+                            const TileVec4<T> va =
+                                tile_vec4(Ab + (k0 + s_l) +
+                                          static_cast<std::ptrdiff_t>(m0 + s_row) * lda);
+                            const TileVec4<T> vb =
+                                tile_vec4(Ab + (k0 + s_l) +
+                                          static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
 #pragma unroll
                             for (int i = 0; i < 4; ++i) {
                                 sa[(s_l + i) * AStride + s_row] = va.v[i];
                                 sb[(s_l + i) * BStride + s_row] = vb.v[i];
                             }
                         } else {
-                            syrk_packet4(&sa[s_l * AStride + s_row]) =
-                                syrk_packet4(Ab + (m0 + s_row) +
-                                             static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
-                            syrk_packet4(&sb[s_l * BStride + s_row]) =
-                                syrk_packet4(Ab + (n0 + s_row) +
-                                             static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
+                            tile_vec4(&sa[s_l * AStride + s_row]) =
+                                tile_vec4(Ab + (m0 + s_row) +
+                                          static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
+                            tile_vec4(&sb[s_l * BStride + s_row]) =
+                                tile_vec4(Ab + (n0 + s_row) +
+                                          static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
                         }
                     } else {
                         // The shared tiles are always filled to their full
@@ -250,10 +213,10 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
 
 #pragma unroll
                     for (int kk = 0; kk < TileK; ++kk) {
-                        const SyrkPacket4<T> a0 = syrk_packet4(&sa[kk * AStride + ty * Band]);
-                        const SyrkPacket4<T> a1 = syrk_packet4(&sa[kk * AStride + 64 + ty * Band]);
-                        const SyrkPacket4<T> b0 = syrk_packet4(&sb[kk * BStride + tx * Band]);
-                        const SyrkPacket4<T> b1 = syrk_packet4(&sb[kk * BStride + 64 + tx * Band]);
+                        const TileVec4<T> a0 = tile_vec4(&sa[kk * AStride + ty * Band]);
+                        const TileVec4<T> a1 = tile_vec4(&sa[kk * AStride + 64 + ty * Band]);
+                        const TileVec4<T> b0 = tile_vec4(&sb[kk * BStride + tx * Band]);
+                        const TileVec4<T> b1 = tile_vec4(&sb[kk * BStride + 64 + tx * Band]);
                         const T af[ThreadTile] = {a0.v[0], a0.v[1], a0.v[2], a0.v[3],
                                                   a1.v[0], a1.v[1], a1.v[2], a1.v[3]};
                         const T bf[ThreadTile] = {b0.v[0], b0.v[1], b0.v[2], b0.v[3],
@@ -293,21 +256,21 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                         if constexpr (AlignedFastPath) {
                             if (!on_diagonal) {
                                 T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
-                                SyrkPacket4<T> out;
+                                TileVec4<T> out;
                                 if (beta == T(0)) {
 #pragma unroll
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j];
                                     }
                                 } else {
-                                    const SyrkPacket4<T> prior = syrk_packet4(const_cast<const T*>(p));
+                                    const TileVec4<T> prior = tile_vec4(const_cast<const T*>(p));
 #pragma unroll
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j] +
                                             beta * prior.v[i];
                                     }
                                 }
-                                syrk_packet4(p) = out;
+                                tile_vec4(p) = out;
                                 continue;
                             }
                         }
