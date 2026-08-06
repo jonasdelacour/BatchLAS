@@ -1,0 +1,539 @@
+# Batched GESVD: status, defect analysis, and implementation plan
+
+Goal: a batched SVD that is **measurably faster than cuSOLVER's `gesvdjBatched`** and
+**at least as accurate**, across the shapes and types users actually pass.
+
+Everything in §1 is measured or read off this tree at commit `5ade468`, not assumed.
+Every number below was taken on this box (2x RTX 4090, CUDA 13.3) with the
+already-built binaries in `build/benchmarks/`.
+
+---
+
+## Table of contents
+
+1. [Current status — what actually exists](#1-current-status)
+2. [The four defects that decide the outcome](#2-the-four-defects)
+3. [What we are racing: `gesvdjBatched`](#3-what-we-are-racing)
+4. [Design](#4-design)
+5. [Tier 0 — the cuSOLVER baseline (blocking prerequisite)](#tier-0)
+6. [Tier 1 — one-sided Jacobi CTA (`gesvdj_cta`)](#tier-1)
+7. [Tier 2 — QR preconditioning](#tier-2)
+8. [Tier 3 — repair the blocked path (n > 32)](#tier-3)
+9. [Tier 4 — tall-skinny and complex coverage](#tier-4)
+10. [Accuracy harness](#5-accuracy-harness)
+11. [Benchmark protocol](#6-benchmark-protocol)
+12. [Risks, ranked](#7-risks)
+13. [Sequencing and exit criteria](#8-sequencing)
+
+---
+
+## 1. Current status
+
+### 1.1 What is wired
+
+`gesvd` is a dispatching front-end (`include/blas/functions/gesvd.hh`) over three
+providers, chosen by `default_order_cta_blocked_vendor_netlib` =
+**CTA -> Blocked -> TwoStage -> Vendor -> Netlib**:
+
+| Provider | Source | Domain | Algorithm |
+|---|---|---|---|
+| `BatchLAS_CTA` | `src/extensions/gesvd_blocked.cc` (`gesvd_cta`) | GPU, `max(m,n) <= 32`, real (or Hermitian complex) | `gebrd_cta` -> normal-equation tridiagonal -> `steqr_cta` |
+| `BatchLAS_Blocked` | `src/extensions/gesvd_blocked.cc` (`gesvd_blocked`) | GPU, real, any size | `gebrd_{unblocked,blocked}` -> normal-equation tridiagonal -> `stedc` -> `ormbr` |
+| `Vendor` | `include/blas/functions/gesvd.hh` | **NETLIB only** | LAPACKE `?gesvd`, looped over the batch, `ctx.wait()` first |
+
+Both native paths live in one 1420-line file. There is a Hermitian shortcut that
+routes to `syev_{cta,blocked}` and takes absolute values of eigenvalues.
+
+### 1.2 Measured baseline
+
+`gesvd_cta`, n=32, batch=8192, square, uncontended:
+
+| type | jobu/jobvh | time | per matrix |
+|---|---|---|---|
+| float | All/All | 4.09 ms | 0.499 us |
+| float | All/None | 3.56 ms | 0.434 us |
+| float | None/All | 2.25 ms | 0.275 us |
+| float | None/None | 1.66 ms | 0.203 us |
+| double | All/All | 40.7 ms | 4.97 us |
+| double | None/None | 30.9 ms | 3.78 us |
+
+Reference points at the same shape (`syev_jacobi_cta_benchmark 32 8192`):
+
+| kernel | float | double |
+|---|---|---|
+| `syev_jacobi_cta` (two-sided Jacobi, with vectors) | 2.11 ms | 19.3 ms |
+| `syev_cta` tridiagonal reference | 0.988 ms | 31.7 ms |
+
+Two things to read off this:
+
+* **float:double is ~10x**, not 2x. RTX 4090 runs FP64 at 1/64 of FP32. Any
+  double-precision target is bounded by that, and cuSOLVER hits the same wall —
+  so the double comparison is a fair fight, just a slow one.
+* **In double, Jacobi already beats the tridiagonal path** for `syev`
+  (19.3 vs 31.7 ms). Jacobi is not only the accurate choice here, it is the fast
+  one in the type where the rotation arithmetic stops being free.
+
+### 1.3 What is missing
+
+* `gesvd_vendor` **throws** for every backend except NETLIB
+  (`"gesvd_vendor: backend implementation not available yet"`). There is no
+  cuSOLVER SVD binding of any kind — not `gesvdjBatched`, not
+  `gesvdaStridedBatched`, not `gesvdj`. `src/backends/cusolver.cc` (296 lines)
+  has `potrfBatched`, `XsyevBatched`, `syevjBatched`, and no SVD at all.
+* `src/extensions/bdsqr.cc` — 420 lines of bidiagonal QR — has **zero callers**.
+  Verified by grep: the only hits outside the file are the declaration and the
+  `BATCHLAS_DISPATCH_ON_QUEUE` macro. The accurate bidiagonal solver was written
+  and never wired in.
+* Complex **general** (non-Hermitian) SVD is unsupported on GPU:
+  `gesvd_supports_cta` and `gesvd_supports_blocked` both `return false` for
+  complex, dispatch falls through to `Vendor`, and `Vendor` throws. Only the
+  Hermitian overload works for complex.
+* `SvdVectors` has only `None` and `All` — no economy/thin mode, so a
+  tall-skinny `m x n` job must materialise a full `m x m` U.
+
+---
+
+## 2. The four defects
+
+### 2.1 Defect A — the native paths form the normal equations
+
+This is the one that decides the accuracy comparison, and it is not a subtlety.
+
+`form_right_tridiagonal` (`src/extensions/gesvd_blocked.cc:220`) takes the
+bidiagonal factors `d, e` from `gebrd` and builds
+
+```
+TD(i) = d_i^2 + e_{i-1}^2
+TE(i) = d_i * e_i
+```
+
+That is exactly the tridiagonal of **B^T B**, formed explicitly. The pipeline
+then runs a symmetric eigensolver on it and takes `sigma_i = sqrt(lambda_i)`.
+`form_left_tridiagonal` does the same for `B B^T`.
+
+The consequence is standard and severe. A symmetric eigensolver returns
+`lambda_i` with absolute error on the order of `eps * lambda_max = eps * sigma_max^2`.
+Propagating through the square root:
+
+```
+|d sigma_i| / sigma_i  ~  (eps / 2) * (sigma_max / sigma_i)^2
+```
+
+The relative error in a small singular value grows with the **square** of the
+condition number. In float (`eps ~ 6e-8`), a matrix with `kappa = 1e3` already
+has no correct digits left in `sigma_min`. This is precisely the failure mode
+that one-sided Jacobi — i.e. `gesvdjBatched` — is designed to avoid.
+
+The test suite is consistent with this. `tests/gesvd_tests.cc` uses, for float:
+
+```
+gesvd_sv_tol    = 5e-2
+gesvd_ortho_tol = 2e-1     // relative
+gesvd_recon_tol = 3e-1     // relative
+```
+
+A relative reconstruction tolerance of **0.3** and an orthogonality tolerance of
+**0.2** do not constitute a correctness test; they are wide enough to admit a
+result with essentially no accuracy. These are the tolerances a normal-equations
+SVD needs in order to pass.
+
+**Conclusion: on the accuracy axis we currently lose to `gesvdjBatched` by
+construction, and the tests are calibrated not to notice.** No amount of kernel
+tuning fixes this; the algorithm has to change.
+
+### 2.2 Defect B — there is no baseline to beat
+
+We cannot presently produce a single `gesvdjBatched` number. The comparison the
+task asks for is not measurable today. This makes Tier 0 a hard prerequisite,
+not a nice-to-have: every performance claim downstream is unfalsifiable without it.
+
+### 2.3 Defect C — the accuracy harness measures the wrong thing
+
+`benchmarks/gesvd_{cta,blocked}_acc.cc` report a single `Fail%` column against
+the loose tolerances above. A run of `gesvd_cta_acc --samples=32` returns
+`Fail% = 0.00000` for every type and size — which tells us nothing, because the
+bar is at 0.3 relative error.
+
+Worse, the `log10cond` column printed in the output is **blank**: the
+conditioning sweep that `miniacc` supports (`--log10-cond=`) is not wired into
+these benchmarks. So the harness cannot see the one effect that matters, which is
+error as a function of `kappa`.
+
+### 2.4 Defect D — the perf benchmarks stop at batch=64
+
+`GesvdCtaBenchSizes` / `GesvdBlockedBenchSizes` sweep `bs in {1,2,4,8,16,32,64}`.
+At n=32, batch=64 is nowhere near saturating a 4090 — the measurement is
+dominated by launch overhead, so ratios taken there are overhead ratios, not
+algorithm ratios. All tuning must be done at batch >= 4096.
+
+---
+
+## 3. What we are racing
+
+`cusolverDnXgesvdjBatched` (present in this toolkit's `cusolverDn.h`, lines
+3950-4085, all four types S/D/C/Z):
+
+* **One-sided Jacobi.** Its selling point is high *relative* accuracy — the
+  Demmel-Veselic bound `|d sigma_i|/sigma_i <= eps * kappa(A_c)` where `A_c` is
+  the column-equilibrated matrix — not raw speed.
+* **Documented shape limit: `m <= 32` and `n <= 32`.** (In the programming
+  guide, not the header — the header carries no doc comments. *Verify empirically
+  in Tier 0 rather than trusting this.*) It is not a coincidence that the
+  existing `gesvd_cta` caps at 32; the domains were meant to line up.
+* Tunables via `gesvdjInfo_t`: `XgesvdjSetTolerance`, `XgesvdjSetMaxSweeps`,
+  `XgesvdjSetSortEig`. A fair comparison must match tolerance and sort order, and
+  must report `XgesvdjGetSweeps` — sweep count is the dominant cost term and
+  cuSOLVER's default tolerance may differ from ours.
+* Above 32x32 there is **no batched vendor SVD** except
+  `gesvdaStridedBatched`, which is an *approximate* solver restricted to `m >= n`
+  and aimed at tall-skinny problems.
+
+Strategic read: **for `n > 32` we win by default** — there is no batched
+competitor, only a loop over `gesvdj`. The genuinely contested region is
+`n <= 32`, where `gesvdjBatched` is a purpose-built kernel. That is where the
+work should go, and it is exactly where BatchLAS already has the right machinery.
+
+---
+
+## 4. Design
+
+### 4.1 The core asset
+
+`src/extensions/syev_jacobi_cta.cc` (664 lines) is a mature, tuned, two-sided
+Jacobi CTA eigensolver, and nearly every part of it transfers to a one-sided
+Jacobi SVD:
+
+* **One lane per column**, `P in {4,8,16,32}` chosen at compile time from `n`.
+* **LDS tile with `LD = P+1`** — the padding comment explains that `LD == 32`
+  serialises a warp 32 ways on the row-update phase; this is a solved problem.
+* **Precomputed round-robin pivot table** in LDS, shared across all problems in
+  the work-group, packed two indices to an `int16_t`. The comment notes that
+  computing pairs inline cost three integer modulos per lane per phase and
+  dominated the inner loop — also solved.
+* **Multiple problems per work-group**, sized by a local-memory budget
+  computed against `device::local_mem_size`.
+* **Rotation coefficients packed as `vec<Real,2>`** so the update loop issues one
+  LDS load instead of two.
+* **The correct relative stopping criterion** already implemented:
+  `|a_pq| > tol * sqrt(|a_pp| * |a_qq|)`, with a comment stating explicitly that
+  the classical absolute test would forfeit the relative-accuracy advantage.
+* Complex support, denormal guard, `tau_big` overflow branch, sorting.
+
+`JacobiParams<T>` (`extensions.hh:1701`) already carries `tol_multiplier`,
+`max_sweeps`, `sort`, `sort_order`, `cta_wg_size_multiplier`.
+
+The rotation *schedule*, *storage layout*, *convergence test*, and *launch
+geometry* are all reusable. What changes is what a rotation is applied to.
+
+### 4.2 Why one-sided Jacobi, specifically
+
+Hestenes one-sided Jacobi on `A (m x n, m >= n)`: repeatedly pick a column pair
+`(p,q)`, form the 2x2 Gram from `a_pp = A_p.A_p`, `a_qq = A_q.A_q`,
+`a_pq = A_p.A_q`, and apply the Jacobi rotation to **columns p and q of A**. At
+convergence the columns of `A` are orthogonal, `sigma_i = ||A_i||`,
+`U_i = A_i / sigma_i`, and `V` is the accumulated product of rotations.
+
+The accuracy argument, stated precisely so it is not confused with Defect A:
+the 2x2 Gram entries are dot products, and a dot product does square magnitudes.
+But `sigma_i` is **never recovered as the square root of a difference of large
+numbers** — it is a column norm of the *rotated* `A`. The rotations are
+orthogonal and applied to `A` itself, so the condition number is never squared.
+That is the whole distinction from Defect A, where a full `B^T B` tridiagonal is
+built and `sigma = sqrt(lambda)`.
+
+Secondary benefits that matter here:
+
+* `U` and `V` come out of the iteration directly. There is **no back-transform**
+  — no `ormbr`, no `ormqr`. In the measured baseline, going from `None/None` to
+  `All/All` costs 1.66 -> 4.09 ms (2.5x); a large part of that is back-transform
+  work that one-sided Jacobi does not have.
+* The whole thing is **one kernel**. The current CTA path is
+  `gebrd_cta` -> tridiagonal build -> `steqr_cta` -> vector assembly ->
+  back-transform: five-plus launches with global round-trips between them.
+* It degrades gracefully: `max_sweeps` and `tol_multiplier` give a real
+  accuracy/speed dial, which is how we can offer a "fast" mode that still beats
+  the current path on accuracy.
+
+### 4.3 The one open micro-architecture question
+
+Per round, the `n/2` disjoint pairs each need three length-`m` dot products
+before their rotation can be computed. In `syev_jacobi_cta` the corresponding
+quantity is a single LDS read, because the matrix *is* the Gram. So one-sided
+Jacobi does strictly more work per rotation, and where that work lands decides
+the kernel.
+
+Two candidate mappings, to be prototyped and measured, not decided on paper:
+
+**(a) lane = column** (mirrors `syev_jacobi_cta` exactly). `A` is `m x n` in LDS.
+Phase 1: distribute the `1.5n` dot products across the `n` lanes — with two lanes
+per pair the critical path is ~`2m` FMAs. Phase 2: every lane owns one column and
+updates it, `m` FMAs. Keeps the entire proven structure; the risk is Phase 1 load
+imbalance.
+
+**(b) lane = row.** Lane `r` holds `A[r,p]` and `A[r,q]`; the three dot products
+become three sub-group reductions (`partition_reduce_sum_j` already exists in the
+file at line 97). Perfectly balanced, but three reductions per pair per round is
+a lot of shuffle traffic.
+
+(a) is the recommended starting point purely because it reuses a structure that
+is already tuned; (b) is the fallback if Phase 1 imbalance dominates.
+
+**A third option to hold in reserve, gated on measurement:** maintain
+`G = A^T A` in LDS alongside `A` and update it as `J^T G J`, making Phase 1 a free
+LDS read exactly as in `syev_jacobi_cta`. This is mathematically exact — errors
+in `G` perturb only the *choice* of rotation, not the output, since `sigma` is
+still read off `A`'s column norms. It is a genuine optimisation, but it drifts
+with rounding and it is the kind of shortcut that quietly reintroduces Defect A
+if `sigma` is ever taken from `G` instead of `A`. **Do not implement it until
+(a) or (b) is correct and measured, and gate it behind an A/B accuracy test.**
+
+### 4.4 Accuracy features that are not optional
+
+Carried over from LAPACK `xGESVJ` / Drmac-Veselic (LAWN 169):
+
+1. **Column equilibration** up front (scale each column to unit norm, record the
+   scaling). This is what makes `kappa(A_c)` — not `kappa(A)` — the governing
+   quantity, and it prevents over/underflow in the dot products.
+2. **Relative stopping test**, already implemented in `syev_jacobi_cta`.
+3. **Skip converged pairs**: a pair below threshold costs a test, not a rotation.
+   This is what makes late sweeps cheap and it is essential to the sweep count.
+4. **de Rijk ordering** (sort columns by descending norm) — reduces sweeps.
+
+---
+
+## Tier 0
+
+### The cuSOLVER baseline — do this first
+
+Nothing downstream is measurable without it.
+
+**Work:**
+
+1. Implement `gesvd_vendor` / `gesvd_vendor_buffer_size` for `Backend::CUDA` in
+   `src/backends/cusolver.cc`, following the existing `syevjBatched` block
+   (lines 154-163) verbatim in style: `LinalgHandle<B>`, `handle.setStream(ctx)`,
+   `call_backend<T, BackendLibrary::CUSOLVER, B>(S,D,C,Z, ...)`, workspace from
+   the `BumpAllocator` pool, `op_external(...)` wrapper,
+   `ctx.create_event_after_external_work()`.
+2. Route by shape:
+   * `m,n <= 32` -> `gesvdjBatched` (+ `CreateGesvdjInfo` / `SetTolerance` /
+     `SetMaxSweeps` / `SetSortEig` / `DestroyGesvdjInfo`).
+   * `m >= n`, larger -> `gesvdaStridedBatched`, clearly **labelled approximate**
+     in the benchmark output so it is never silently compared against an exact
+     result.
+   * otherwise -> loop `gesvdj`, labelled as a loop.
+3. **Empirically establish the 32x32 limit** rather than trusting the docs: call
+   `gesvdjBatched` at 33x33 and record the status code. This determines the
+   boundary of the contested region and must not be guessed.
+4. Add a `Provider::Vendor` escape so benchmarks can force it —
+   `BATCHLAS_GESVD_PROVIDER=vendor` already exists via `parse_provider_env`, but
+   note dispatch order is CTA -> Blocked -> ... -> Vendor, so **Vendor is
+   currently unreachable for real GPU input without forcing**. (This is the same
+   routing trap recorded for `syev`: an `Auto` order that never reaches cuSOLVER.)
+
+**Exit criterion:** a table of `gesvdjBatched` time and accuracy for
+`n in {8,16,24,32}`, `batch in {1024, 4096, 16384}`, `{float,double}`,
+jobz `{None, All}`, plus the observed sweep counts.
+
+---
+
+## Tier 1
+
+### `gesvdj_cta` — one-sided Jacobi, `max(m,n) <= 32`
+
+The head-to-head competitor. New file `src/extensions/gesvdj_cta.cc`, modelled
+structurally on `syev_jacobi_cta.cc`.
+
+**Scope:** real and complex, `m,n <= 32`, `jobu/jobvh in {None, All}`, both
+`m >= n` and `m < n` (the latter by the existing transpose-and-swap trick already
+used in `gesvd_blocked.cc`).
+
+**Steps:**
+
+1. Column-equilibrate `A` into the LDS tile; record scales.
+2. Sweep loop with the existing round-robin pair table and relative threshold:
+   per round, compute the pair Grams, build rotations, apply to `A` (and to `V`
+   if `jobvh != None`).
+3. On convergence: `sigma_i = ||A_i||` (undo scaling), `U_i = A_i / sigma_i`,
+   sort descending, permute `V` to match.
+4. Handle rank deficiency: `sigma_i` below the zero threshold means `U_i` is not
+   determined by `A` — fill from the orthogonal complement. The existing
+   `patch_zero_left_vectors` in `gesvd_blocked.cc` solves the same problem and
+   shows the intended semantics.
+5. Wire into `gesvd_supports_cta` / `choose_gesvd_provider` as a new
+   `Provider::BatchLAS_Jacobi`, ahead of the current CTA path for `n <= 32`.
+
+**Target:** given `syev_jacobi_cta` at 2.11 ms (float, n=32, batch=8192, with
+vectors) and the extra dot-product and `V`-accumulation cost, a landing zone of
+**3-5 ms** is realistic — i.e. roughly parity with today's `gesvd_cta` (4.09 ms)
+while fixing Defect A outright. Whether that beats `gesvdjBatched` is exactly
+what Tier 0 tells us, and it is not knowable before then.
+
+**Keep the old CTA path** behind a provider flag until Tier 1 is measured
+faster *and* more accurate. It may remain the right choice for well-conditioned
+values-only work.
+
+---
+
+## Tier 2
+
+### QR preconditioning
+
+The main speed lever, and the difference between "a Jacobi SVD" and a
+competitive one. Drmac-Veselic: factor `A = QR` (with column pivoting), then run
+one-sided Jacobi on `R`. Convergence typically drops from ~8-10 sweeps to ~3-5,
+because `R` is already close to the form Jacobi is driving toward.
+
+For `n <= 32` this can be fused into the same CTA kernel (a 32x32 Householder QR
+is cheap in LDS). Gate it on measurement: it is a win only if the sweep saving
+exceeds the factorisation cost, which depends on the conditioning distribution of
+the input.
+
+This tier is also what makes the `n > 32` story work, since `R` is `n x n`
+regardless of `m`.
+
+---
+
+## Tier 3
+
+### Repair the blocked path for `n > 32`
+
+Here there is no batched vendor competitor, so the bar is our own current
+accuracy — which Defect A says is poor.
+
+**Option 1 (preferred): wire in `bdsqr`.** It already exists, at 420 lines, fully
+unused. `gebrd -> bdsqr -> ormbr` is the textbook accurate pipeline and replaces
+the normal-equation tridiagonal entirely. Before committing: verify `bdsqr` is
+correct and actually converges, since **nothing has ever called it** — dead code
+carries no evidence of working.
+
+**Option 2: divide-and-conquer on the bidiagonal (`bdsdc`)**, reusing the
+existing `stedc` merge machinery. Faster than `bdsqr` at large `n` but a
+substantially larger build.
+
+**Option 3: one-sided Jacobi on blocks** for the accuracy-critical case,
+extending Tier 2.
+
+Recommendation: Option 1 first — it is the smallest change that removes the
+squaring, and it makes the existing `bdsqr` earn its place or be deleted.
+
+---
+
+## Tier 4
+
+### Coverage gaps
+
+* **Complex general SVD on GPU** — currently throws. Tier 1 closes this for
+  `n <= 32` if complex is implemented from the start (as `syev_jacobi_cta` did);
+  Tier 3 closes it above.
+* **Thin/economy vectors.** `SvdVectors` has only `None`/`All`. A tall-skinny
+  `10000 x 32` job must currently allocate a `10000 x 10000` U — unusable. Adding
+  `SvdVectors::Some` (LAPACK `'S'`) is a prerequisite for any serious tall-skinny
+  support, and one-sided Jacobi produces thin `U` *natively* (it is just the
+  rotated, normalised `A`) — full `U` is the extra work, not the thin one.
+* **Tall-skinny route:** `A = QR` then SVD of the `n x n` `R`, then `U = Q * U_R`.
+  This is the `gesvdaStridedBatched` domain and where the largest absolute wins
+  are, since cuSOLVER's offering there is *approximate*.
+
+---
+
+## 5. Accuracy harness
+
+Defect C has to be fixed before any accuracy claim is made, and it should be
+fixed *before* Tier 1 so the new kernel is judged on a working instrument.
+
+1. **Wire `--log10-cond` into `gesvd_*_acc`.** `miniacc` supports it; these
+   benchmarks ignore it (the `log10cond` column prints blank). Sweep
+   `kappa = 1e1 .. 1e7` for float, `1e1 .. 1e14` for double.
+2. **Report error magnitudes, not `Fail%`.** Emit, per case:
+   * `max_i |sigma_i - sigma_i_ref| / sigma_i` — **relative per singular value**,
+     which is the quantity Jacobi is supposed to win on. The current
+     `max_abs_singular_error` is absolute and cannot see the effect at all.
+   * `||A - U S V^H|| / ||A||`
+   * `||U^H U - I||`, `||V^H V - I||`
+   * sweep count (ours) and `XgesvdjGetSweeps` (theirs)
+3. **Reference in higher precision.** Compare float against a double LAPACK
+   solve, not against another float solve, or the reference is the error floor.
+4. **Include graded matrices**, not just random ones with a prescribed condition
+   number. Grading is where `kappa(A_c) << kappa(A)` and where Jacobi's advantage
+   is largest — and it is the case a normal-equations solver fails worst.
+5. **Then tighten `tests/gesvd_tests.cc`.** The float tolerances (`5e-2`,
+   `2e-1`, `3e-1`) must come down to something meaningful once Tier 1 lands.
+   Expect this to break the existing paths — that is the point, and it should be
+   done as a deliberate, separately-reviewed commit rather than folded into a
+   kernel change.
+
+---
+
+## 6. Benchmark protocol
+
+Following the measurement rules already established in this repo:
+
+* **Saturation only.** batch >= 4096 for `n <= 32`. The existing sweeps stop at
+  64 (Defect D); ratios there are launch-overhead ratios. Extend
+  `GesvdCtaBenchSizes` to `{1024, 4096, 16384, 65536}`.
+* **One GPU at a time.** This box has two 4090s and a concurrent run visibly
+  perturbs results — the first `gesvd_cta` measurement in this analysis read
+  4.37 ms under contention and 4.09 ms clean, a 7% error from that alone.
+* **Warm clocks**, and `--name` is a *substring* filter — `gesvd` also matches
+  `gesvdj`, so name new benchmarks so the filters stay unambiguous.
+* **Match the tunables.** Same tolerance, same `max_sweeps`, same sort order as
+  the `gesvdjInfo_t` settings, or the comparison is meaningless.
+* **Report both axes together.** Time alone is not a result for an SVD; a table
+  that gives time without the conditioning sweep next to it will mislead.
+
+---
+
+## 7. Risks
+
+Ranked by how likely they are to sink the effort:
+
+1. **`gesvdjBatched` may already be fast.** It is a purpose-built vendor kernel
+   in its designed domain. Parity plus better accuracy is a good outcome; a large
+   speed win at `n <= 32` is not guaranteed. **The `n > 32` and tall-skinny
+   regions are where a decisive win is nearly free**, and the plan should not be
+   judged solely on the contested 32x32 point.
+2. **Sweep count is data-dependent.** Jacobi's cost is `sweeps x n^2 x m`, and
+   sweeps vary with conditioning. A benchmark on random well-conditioned matrices
+   will flatter us; one on graded matrices may not. Report the distribution.
+3. **Double precision is 1/64 rate on this GPU.** Measured 10x float:double on
+   the Jacobi kernel. Neither side can escape it — but it means double results
+   should not be extrapolated to a datacenter card, where the ratio is 1/2.
+4. **Register/LDS pressure at `P=32` with `A`, `U`, and `V` resident.** The
+   existing kernel already budgets `A` + `Z`; a one-sided SVD wants `A` + `V`
+   (and `U` overwrites `A`). Complex doubles this again. Expect the
+   problems-per-work-group count to fall and occupancy with it. The
+   local-memory budget logic in `syev_jacobi_cta_impl` handles this correctly
+   already, but the resulting occupancy has to be checked, not assumed.
+5. **`bdsqr` has never run.** Tier 3 Option 1 assumes it works. Budget for the
+   possibility that it does not.
+6. **The `n < 32` cases waste lanes.** `P` is rounded up to `{4,8,16,32}`; at
+   n=17 more than half of a 32-lane partition idles. `gesvdjBatched` has the same
+   problem, so this is unlikely to lose the comparison, but it caps absolute
+   throughput.
+
+---
+
+## 8. Sequencing
+
+| Step | Deliverable | Gate |
+|---|---|---|
+| 0 | cuSOLVER `gesvd_vendor` (Tier 0) | `gesvdjBatched` numbers exist; 32x32 limit confirmed empirically |
+| 1 | Accuracy harness (§5.1-5.4) | relative-error vs `kappa` curves for the *current* paths, showing Defect A |
+| 2 | `gesvdj_cta` real, values-only | matches LAPACK to `eps * kappa(A_c)` |
+| 3 | `gesvdj_cta` + `U`,`V` | reconstruction and orthogonality at tightened tolerances |
+| 4 | Dispatch + benchmarks at saturation | head-to-head table vs `gesvdjBatched` |
+| 5 | Complex (Tier 1 scope completion) | closes the GPU complex-general gap |
+| 6 | QR preconditioning (Tier 2) | sweep count drops; net time win confirmed |
+| 7 | `bdsqr` wired for `n > 32` (Tier 3) | Defect A removed above 32 |
+| 8 | Tighten `tests/gesvd_tests.cc` | separate commit, deliberate |
+| 9 | Thin vectors + tall-skinny (Tier 4) | vs `gesvdaStridedBatched` |
+
+**Steps 0 and 1 are prerequisites, not preliminaries.** Until both are done, no
+claim about beating `gesvdjBatched` — in speed or accuracy — can be checked.
+
+### Smallest useful first commit
+
+Tier 0 alone. It is self-contained, follows an existing pattern in
+`cusolver.cc`, closes the "we cannot measure the competitor" gap, and its output
+determines how much of Tiers 1-2 is worth building.
