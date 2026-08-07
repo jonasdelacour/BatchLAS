@@ -1926,6 +1926,48 @@ namespace batchlas {
         return bdsqr_buffer_size(ctx, d, e, singular_values_out);
     }
 
+    /**
+     * @brief Bidiagonal divide-and-conquer SVD for a real upper bidiagonal matrix.
+     *
+     * Same problem as `bdsqr`, but parallel instead of a serial Golub-Kahan
+     * sweep: it reduces the bidiagonal SVD to the symmetric tridiagonal
+     * eigenproblem of the interleaved Golub-Kahan form (zero diagonal,
+     * off-diagonal `(d_0, e_0, d_1, e_1, ...)`, order `2n`) and hands that to
+     * `stedc`. Nothing is squared, so unlike the normal-equation path the error
+     * stays proportional to `kappa`, not `kappa^2`.
+     *
+     * Unlike `bdsqr`, which *accumulates* into whatever it is handed
+     * (`u <- u*Q`), `bdsdc` *writes* the leading `n x n` block of `u` and of
+     * `vh` directly and leaves the rest of those views untouched -- seed them
+     * with the identity if the trailing columns matter.
+     *
+     * Workspace is dominated by a `2n x 2n` eigenvector matrix per batch item.
+     */
+    template <Backend B, typename T>
+    Event bdsdc(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                bool sort_desc = true);
+
+    template <Backend B, typename T>
+    Event bdsdc(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                const MatrixView<T, MatrixFormat::Dense>& u,
+                const MatrixView<T, MatrixFormat::Dense>& vh,
+                bool sort_desc = true);
+
+    template <Backend B, typename T>
+    size_t bdsdc_buffer_size(Queue& ctx,
+                             const VectorView<T>& d,
+                             const VectorView<T>& e,
+                             Span<T> singular_values_out,
+                             bool want_vectors);
+
     
     /**
      * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
@@ -2437,6 +2479,8 @@ BATCHLAS_DISPATCH_ON_QUEUE(gebrd_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked)
 BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(bdsqr)
+BATCHLAS_DISPATCH_ON_QUEUE(bdsdc)
+BATCHLAS_DISPATCH_ON_QUEUE(bdsdc_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ormbr)
 BATCHLAS_DISPATCH_ON_QUEUE(ormbr_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked)

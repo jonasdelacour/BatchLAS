@@ -30,6 +30,7 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     gebrd.cc
     gebrd_blocked.cc
     bdsqr.cc
+    bdsdc.cc
     ormbr.cc
     gesvd_blocked.cc
     inv.cc

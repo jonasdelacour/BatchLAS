@@ -9,7 +9,17 @@ already-built binaries in `build/benchmarks/`.
 
 ---
 
-## STATUS UPDATE — Tier 0, the accuracy harness, and Tier 1 are DONE and measured
+## STATUS UPDATE — Tiers 0, 1 and 3 are DONE and measured; Tier 2 tested and rejected
+
+**Tier 3 has landed: `bdsdc` (`src/extensions/bdsdc.cc`) is now the default
+bidiagonal solver for the Blocked path**, closing the `n > 32` accuracy defect
+for 0-19% wall clock. It reduces the bidiagonal SVD to the order-`2n`
+Golub-Kahan tridiagonal eigenproblem and hands that to the existing `stedc`
+rather than porting LAPACK's `dlasd*`. At kappa=1e4, n=64, float: relative error
+4.1e-1 -> 9.4e-5 and orthogonality 6.8e-1 -> 1.9e-5. See Tier 3 below for the
+measurements, for the two null-space repair criteria that were implemented and
+found wrong, and for the `bdsqr` bug fixed on the way.
+
 
 **`gesvdj_cta` (Tier 1) has landed and beats `gesvdjBatched` on both axes.**
 One-sided Hestenes Jacobi, one fused kernel, `src/extensions/gesvdj_cta.cc`.
@@ -585,88 +595,162 @@ late, mostly-converged sweeps), not algorithmic.
 
 ## Tier 3
 
-### Blocked bidiagonalization for n > 32 — bdsqr FIXED and wired, but not the default
+### Blocked bidiagonalization for n > 32 — SOLVED by bdsdc, now the default
 
-`bdsqr` is now correct and the accuracy win is exactly what the plan predicted.
-It is **not** fast enough to be the default, and the reason is structural rather
-than a tuning problem.
+The n > 32 accuracy defect is closed, and the fix costs 0-19%.
 
-**bdsqr had a real bug, and 420 lines of it had never executed.** It has no
-handling for a negligible diagonal entry. When `db[l]` is zero the shift gives
-`f = -mu`, `g = db[l]*eb[l] = 0`, so `lartg` returns the identity rotation,
-every rotation in the chase is trivial, nothing is annihilated, and the sweep
-spins to `maxit` and reports "did not converge" — immune to the iteration cap,
-which is how it was identified (20x `maxit` changed nothing). LAPACK DBDSQR
-handles this with a zero-SHIFT chase; that branch was missing entirely. Added in
-both directions:
+The route is **not** a port of LAPACK's `dlasd0/2/3/4/8`. It is the
+Golub-Kahan-Jordan-Wielandt reduction: for `B` upper bidiagonal with diagonal `d`
+and superdiagonal `e`,
 
-* zero strictly inside the block -> chase rightwards with LEFT rotations,
-  emptying that row;
-* zero at the BOTTOM of the block -> chase leftwards with RIGHT rotations,
-  emptying that column. **Handling only the first case is itself a bug**: it
-  leaves `eb[l..m-1]` untouched while still advancing past the block, so the
-  sweep never converges. That was caught by the tests below, not by inspection.
+    T = [ 0   B^T ]      has eigenvalues +/- sigma_i,
+        [ B   0   ]
+
+and under the perfect-shuffle permutation `y = (v_0, u_0, v_1, u_1, ...)` that
+matrix is TRIDIAGONAL with a zero diagonal and off-diagonal
+`(d_0, e_0, d_1, e_1, ..., d_{n-1})`. So the bidiagonal SVD of order `n` is a
+symmetric tridiagonal eigenproblem of order `2n` — which `stedc` already solves,
+batched and tuned. `src/extensions/bdsdc.cc`.
+
+**Why this rather than a real `dlasd4`.** A native bidiagonal D&C needs its own
+secular equation (the factored `(d_j - sigma)(d_j + sigma)` form), its own
+two-kind deflation and its own Loewner vector recomputation: ~2000 lines of new
+device code with no reuse, to solve a problem of half the size. The measurement
+that selected the reduction instead — `stedc` at order `2n`, batch=512, float,
+eigenvectors — is:
+
+| gesvd n | stedc at 2n | bdsqr, same bidiagonal |
+|---|---|---|
+| 64 | 0.85 ms | 643 ms |
+| 128 | 3.19 ms | 3255 ms |
+| 256 | 11.1 ms | 24388 ms |
+
+Solving twice the size with the right algorithm beats solving the right size with
+a sequential one by ~1000x. Nothing is squared either way: `T`'s eigenvalues are
+`+/- sigma`, not `sigma^2`.
+
+**The extraction is exact, not a heuristic.** For `sigma != 0` the eigenvector of
+`T` for `+sigma` is exactly `(v; u)/sqrt(2)` interleaved — `T(av; bu) =
+(b sigma v; a sigma u)` forces `a = b`, so there is no freedom. Splitting the
+computed eigenvector into even and odd rows and normalising each half therefore
+recovers `v` and `u` exactly. It stays exact even when `+sigma` and `-sigma` are
+numerically mixed: a mixed vector is still of the form `(alpha v; beta u)`. The
+only residue is a possible sign flip on `u` past 45 degrees of mixing, worth at
+most `2*sigma` in the residual, and that angle is only reached when `sigma` is at
+`eps*||B||`.
+
+**Accuracy.** `benchmarks/gesvd_relacc`, float, 1024 samples, n=64:
+
+| kappa | normal-eq relerr | bdsdc relerr | normal-eq ortho | bdsdc ortho |
+|---|---|---|---|---|
+| 1e2 | 5.0e-5 | 1.8e-6 | 1.1e-4 | 1.1e-6 |
+| 1e3 | 9.4e-2 | 9.7e-6 | 3.8e-1 | 2.8e-6 |
+| 1e4 | 4.1e-1 | 9.4e-5 | 6.8e-1 | 1.9e-5 |
+| 1e6 | 8.5e-1 | 5.0e-1 | 1.6e+0 | 1.4e-4 |
+
+Confirmed at n=128 (kappa=1e4: relerr 0.433 -> 2.5e-4, ortho 0.475 -> 3.5e-5).
+The old default was not merely less accurate at kappa=1e4, it returned `U` and
+`V` that are not orthogonal at all.
+
+**Cost.** batch=512, float, full vectors:
+
+| n | batch | normal-eq | bdsdc | ratio | bdsqr |
+|---|---|---|---|---|---|
+| 64 | 512 | 202 ms | 201 ms | 1.00x | 643 ms |
+| 128 | 512 | 8.4 ms | 10.0 ms | 1.19x | 3255 ms |
+| 256 | 512 | 66.3 ms | 76.4 ms | 1.15x | 24388 ms |
+| 512 | 256 | 291 ms | 324 ms | 1.11x | — |
+
+**`bdsdc` is therefore the DEFAULT** for the Blocked path.
+`BATCHLAS_GESVD_BIDIAG=normal` restores the old normal-equation path and
+`=bdsqr` selects the sequential sweep. The price of the default is memory: a
+`2n x 2n` eigenvector matrix per batch item, ~4x what the tridiagonal path
+allocates.
+
+`bdsqr` is kept, and retains one genuine advantage: zero-shift QR keeps high
+RELATIVE accuracy for tiny singular values, where divide-and-conquer does not.
+Measured at kappa=1e6, n=64: bdsqr relerr 0.198 against bdsdc's 0.497. If that
+regime matters, `bdsqr` is the correct choice and the 3-400x is the price.
+
+### The null space, and two criteria that did not work
+
+The one real failure mode of the reduction is the null space. With `k` zero
+singular values the whole `2k`-dimensional space `span{(v_j;0), (0;u_j)}` is
+degenerate at once; its computed basis is `[N_v 0; 0 N_u] W` for an arbitrary
+orthogonal `W`, so the `k` columns selected carry halves whose columns need not
+be mutually orthogonal. Two plausible fixes were implemented and both are wrong:
+
+* **Repair from the partner (`-sigma`) column.** Wrong for well-separated
+  `sigma`: both partners have equal half-norms, so the tie-break flips `u`'s sign
+  and destroys the reconstruction — measured 1.18 relative error on a matrix with
+  no zero singular values at all. It also still fails once the null space reaches
+  dimension 3.
+* **Detect the damage by a vanishing half-norm.** Measured at n=16 with two zero
+  singular values: every column came back with norm exactly 1.000 and both halves
+  healthy, yet `U(14).U(15) = 1.0` — two identical columns, with `V` perfectly
+  orthogonal. Nothing vanished; orthogonality was lost BETWEEN the degenerate
+  columns, which only `sigma` sees coming.
+
+What ships: every column with `sigma <= 16*eps*sigma_max` is rebuilt by
+Gram-Schmidt against the columns already final. Those vectors are arbitrary
+anyway — any orthonormal completion satisfies `B = U S V^T` to within `2*sigma`.
+
+Two things about that repair are worth recording because both showed up as
+*performance* bugs rather than as wrong answers:
+
+* **The tolerance must not carry a factor of `n`.** `8*n*eps` is 2.4e-4 relative
+  at n=256 in float, which sweeps in singular values that carry real information
+  AND makes the repair fire on ordinary random matrices: 298 ms of a 354 ms solve.
+* **The candidate axis must be chosen, not searched.** Walking a cursor over
+  `e_0, e_1, ...` and keeping the first survivor is quadratic in the wrong place,
+  because the missing direction is usually localised — for an upper bidiagonal the
+  left null vector sits at the END of the index range. Measured at n=256: `V`
+  accepted on attempt 1, `U` on attempt 251, and that asymmetry alone was 93 ms of
+  a 162 ms solve. The residual of `e_c` against an orthonormal set `Q` is exactly
+  `1 - sum_t Q(c,t)^2`, so one pass ranks every axis and the best is taken
+  directly.
+
+`tests/bdsdc_tests.cc` covers values-only, vectors, graded spectra, the hostile
+gebrd-like generator (mixed signs, exact zeros, six decades), rank deficiency of
+multiplicity 1-5, and the all-zero matrix. It checks orthogonality explicitly:
+`bdsqr` got that for free by accumulating rotations from the identity, `bdsdc`
+does not — it writes vectors it computed, so `U^T U = I` is a claim about the
+method rather than a structural guarantee.
+
+### bdsqr — FIXED earlier in this tier, kept as the accurate fallback
+
+`bdsqr` had a real bug and 420 lines of it had never executed. It has no handling
+for a negligible diagonal entry: when `db[l]` is zero the shift gives `f = -mu`,
+`g = db[l]*eb[l] = 0`, so `lartg` returns the identity, nothing is annihilated,
+and the sweep spins to `maxit` — immune to the iteration cap, which is how it was
+identified (20x `maxit` changed nothing). LAPACK DBDSQR handles this with a
+zero-SHIFT chase; that branch was missing entirely. Added in both directions:
+
+* zero strictly inside the block -> chase rightwards with LEFT rotations;
+* zero at the BOTTOM of the block -> chase leftwards with RIGHT rotations.
+  **Handling only the first case is itself a bug**: it leaves `eb[l..m-1]`
+  untouched while still advancing past the block, so the sweep never converges.
+  That was caught by the tests, not by inspection.
 
 `tests/bdsqr_tests.cc` is new — bdsqr previously had no test because it had no
-caller. Note the first version of it passed while the bug was still present: it
-generated only positive `d, e` in [0.3, 1.7], a far easier class than anything
-gebrd emits. The test that matters is the one with mixed signs, exact zeros and
-six decades of range.
-
-**Accuracy: the defect is closed for the blocked path.** A/B on identical data,
-float, `gesvd_blocked` normal-equation vs bdsqr:
-
-| n | kappa | normal-eq relerr | bdsqr relerr | normal-eq ortho | bdsqr ortho |
-|---|---|---|---|---|---|
-| 32 | 1e3 | 2.90e-3 | 8.2e-6 | 6.0e-3 | 2.0e-6 |
-| 32 | 1e4 | 0.258 | 6.7e-5 | 1.48 | 1.9e-6 |
-| 32 | 1e6 | 2.019 | 0.168 | 2.60 | 1.4e-6 |
-| 64 | 1e4 | 0.288 | 7.7e-5 | 0.631 | 3.3e-6 |
-
-Orthogonality goes flat at ~2e-6 across six decades instead of collapsing.
-Verified working at n = 64, 128 and 256.
-
-**Performance: 3-400x slower, and parallelising the obvious part will not fix
-it.** batch=512, float, full vectors:
-
-| n | normal-eq | bdsqr | |
-|---|---|---|---|
-| 64 | 201 ms | 643 ms | 3.2x |
-| 128 | 7.97 ms | 3255 ms | 408x |
-| 256 | 65.5 ms | 24388 ms | 372x |
-
-`bdsqr` runs **one thread per matrix** with the whole Golub-Kahan sweep serial
-inside it (`parallel_for(range<1>(nb))`) — the batch-only-parallelism pattern.
-The tempting fix is to parallelise the rotation accumulation, since vectors cost
-55x values-only at n=128 (3238 ms vs 59 ms) and each lane could own a row of U or
-a column of Vh with no cross-lane hazard. **That is not sufficient**: values-only
-bdsqr at n=128 is 59 ms against 7.97 ms for the *entire* normal-equation pipeline
-including both back-transforms, so the serial recurrence alone is already 7x over
-budget.
-
-**Call: default stays on normal equations; bdsqr is opt-in via
-`BATCHLAS_GESVD_BIDIAG=bdsqr`.** Shipping a 400x regression silently is worse
-than the accuracy defect it fixes, and the accuracy defect is now at least
-reachable and documented rather than unavoidable.
-
-**Next step is Option 2, not more work on bdsqr:** a bidiagonal
-divide-and-conquer (`bdsdc`) reusing the existing `stedc` merge machinery. The
-measurement above is what selects it — sequential QR per matrix is the wrong
-shape for this hardware at n >= 128 no matter how its inner loops are arranged,
-which is exactly why LAPACK switches to D&C at large n.
+caller. Its first version passed while the bug was still present: it generated
+only positive `d, e` in [0.3, 1.7], a far easier class than anything gebrd emits.
+The test that matters is the one with mixed signs, exact zeros and six decades.
 
 ### A generator bug that was corrupting the instrument
 
 `random_with_log10_cond_metric` intermittently returns an **entirely non-finite
-matrix** — observed as 1 batch item in 32 at n=64, float, kappa=10. gebrd
-propagates the NaN and any bidiagonal solver then refuses to converge on it,
-which reads as a solver failure and is not one. This is what produced the
-~0.8% Fail% that appeared *identically across every implementation* in earlier
-runs, and it sent the first diagnosis of the n=64 failure down the wrong path
-entirely. `benchmarks/gesvd_relacc.cc` now validates the generated matrix and
-re-draws up to 8 times before attributing anything to the solver. **The
-generator itself is still buggy and worth fixing separately** — it is likely the
-Chol2 orthogonalisation inside it.
+matrix** — 1 batch item in 32 at n=64, and at n=128 it drives Fail% to 50% even
+with the harness re-drawing up to 8 times. gebrd propagates the NaN and any
+bidiagonal solver then refuses to converge on it, which reads as a solver failure
+and is not one. This is what produced the ~0.8% Fail% that appeared *identically
+across every implementation* in earlier runs, and it sent the first diagnosis of
+the n=64 bdsqr failure down the wrong path entirely.
+`benchmarks/gesvd_relacc.cc` now validates the generated matrix and re-draws
+before attributing anything to the solver, but **the generator itself is still
+buggy and worth fixing separately** — likely the Chol2 orthogonalisation inside
+it. It affects all variants equally, so A/B comparisons through the harness
+remain valid.
 
 ## Tier 4
 
