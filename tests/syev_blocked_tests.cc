@@ -415,6 +415,55 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 	check_orthonormal_columns(A.view(), W, ortho_tol);
 	check_eigen_residual(A0.view(), A.view(), W, resid_tol);
 }
+
+// The n <= 32 range, where Auto picks among the three CTA kernels rather than a
+// provider. Complex now takes a different branch there than it used to:
+// complex<float> uses syev_cta_fused for n <= 8 (it used syev_cta at every n),
+// and complex<double> hands n > 24 to the vendor. Neither branch was reachable
+// from Auto for complex before, so neither was covered.
+//
+// n = 6 and n = 28 sit one on each side of those two new boundaries. The sizes
+// are driven through the public `syev` so that syev_dispatch's buffer-size query
+// and its solve both run syev_choose_small_kernel -- that selector reads its env
+// override fresh on every call and is documented as having to agree between the
+// two, which is exactly the kind of disagreement a routing change can introduce.
+TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+
+	for (const int n : {6, 28}) {
+		const int batch = 1;
+
+		Matrix<Scalar, MatrixFormat::Dense> A0 =
+			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 24680 + n);
+		Matrix<Scalar, MatrixFormat::Dense> A = A0;
+		auto W = UnifiedVector<Real>(static_cast<std::size_t>(n));
+
+		{
+			auto ws = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
+																A.view(),
+																W.to_span(),
+																JobType::EigenVectors,
+																Uplo::Lower));
+			syev(*this->ctx, A.view(), W.to_span(), {}, ws.to_span()).wait();
+		}
+
+		for (int i = 0; i < n; ++i) {
+			ASSERT_TRUE(std::isfinite(W[i])) << "non-finite eigenvalue, n=" << n << " i=" << i;
+		}
+		for (int i = 1; i < n; ++i) {
+			EXPECT_LE(W[i - 1], W[i] + tol_eig_for<Real>())
+				<< "eigenvalues not ascending, n=" << n << " i=" << i;
+		}
+
+		const Real ortho_tol = std::max(tol_ortho_for<Real>(),
+										blocked_cuda_tolerance_floor_ortho<Scalar, TestFixture::BackendType>());
+		const Real resid_tol = std::max(tol_resid_for<Real>(),
+										blocked_cuda_tolerance_floor_resid<Scalar, TestFixture::BackendType>());
+		check_orthonormal_columns(A.view(), W, ortho_tol);
+		check_eigen_residual(A0.view(), A.view(), W, resid_tol);
+	}
+}
 #endif
 
 int main(int argc, char** argv) {

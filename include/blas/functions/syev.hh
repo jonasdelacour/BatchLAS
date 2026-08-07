@@ -317,8 +317,39 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
 //     routes elsewhere changes;
 //   * an explicitly forced Provider::BatchLAS_CTA still wins, since the forced
 //     branch returns before this is consulted.
+// The default is per type: see syev_cta_max_n_default_for<T> below. The env knob
+// overrides whatever that default is, for every type.
+template <typename T>
+inline constexpr int64_t syev_cta_max_n_default_for() {
+    using Real = typename base_type<T>::type;
+    constexpr bool kReal = std::is_same_v<T, Real>;
+    constexpr bool kDouble = std::is_same_v<Real, double>;
+    // complex<double> ONLY: the vendor takes over at n = 25, not 33. MEASURED
+    // 2026-08-07, RTX 4090 device 1, eigenvectors, us/matrix, median of 3:
+    //
+    //     n   batch      cta  cta_fused    vendor   winner
+    //    18  14564    2.5293     2.9254    2.7744   cta
+    //    20  13107    3.0015     3.4597    3.1085   cta
+    //    22  11916    3.5318     4.0359    3.4564   tie (vendor 1.02x)
+    //    24  10923    4.0806     4.6301    3.8184   tie (vendor 1.07x)
+    //    26  10082    5.4993     5.3048    4.4835   vendor 1.23x
+    //    28   9362    6.2862     5.9845    4.9477   vendor 1.27x
+    //    30   8738    7.1533     6.6465    5.4089   vendor 1.32x
+    //    32   8192    8.0253     7.4929    5.6531   vendor 1.42x
+    //
+    // This is an FP64-rate artifact and therefore the most machine-specific
+    // number here: the card runs FP64 at 1/64 rate, which throttles our CTA
+    // kernel far harder than it throttles cuSOLVER's. complex<float> does NOT
+    // cross over -- CTA still beats the vendor 1.23x at n=32 and 1.38x at n=28 --
+    // so this deliberately does not generalise to "complex".
+    if constexpr (!kReal && kDouble) return 24;
+    return 32;
+}
+
+template <typename T>
 inline int64_t syev_cta_max_n_for_vectors() {
-    // Default 32 == OFF: CTA keeps the whole n <= 32 range, as it always has.
+    // Default 32 == OFF for every type but complex<double>: CTA keeps the whole
+    // n <= 32 range, as it always has.
     //
     // Lowering this IS a measured speedup for the projected Rayleigh-Ritz solve
     // inside LOBPCG. Measured, LOBPCG EigenVectors, n=256, us/matrix:
@@ -340,7 +371,7 @@ inline int64_t syev_cta_max_n_for_vectors() {
     // Resolving it means deciding whether that assertion should tolerate a tie on an
     // already-converged case, or whether the vendor projected solve genuinely hurts
     // LOBPCG convergence. Until then, a 1.1x win does not justify shipping a red test.
-    constexpr int64_t kDefault = 32;
+    constexpr int64_t kDefault = syev_cta_max_n_default_for<T>();
     const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
     if (!v || !*v) return kDefault;
     char* end = nullptr;
@@ -406,12 +437,48 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     const SyevSmallKernel env = syev_small_kernel_env(forced);
     if (forced) return env;
 
-    // Complex was never measured -- keep the historical kernel. `internal::is_complex` lives
-    // in src/math-helpers.hh and is not visible from this public header, so detect complex
-    // via the public base_type trait: for a real T, base_type<T>::type IS T.
+    // `internal::is_complex` lives in src/math-helpers.hh and is not visible from this public
+    // header, so detect complex via the public base_type trait: for a real T,
+    // base_type<T>::type IS T.
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     if constexpr (!kReal) {
-        return SyevSmallKernel::Cta;
+        // COMPLEX WAS MEASURED 2026-08-07 (it previously said "never measured --
+        // keep the historical kernel", and the historical kernel is mostly right).
+        // RTX 4090 device 1, complex<float>, eigenvectors, us/matrix, median of 3
+        // at each cell's saturating batch:
+        //
+        //     n   batch        cta   cta_fused     jacobi     vendor   winner
+        //     4  65536   0.0035387   0.0014881  0.0013689   0.052079  jacobi/fused
+        //     5  52429   0.0067438   0.0055953  0.0056986   0.078717  fused 1.21x
+        //     6  43691   0.0102170   0.0073592  0.0078113   0.031830  fused 1.39x
+        //     7  37449   0.0105900   0.0084175  0.0119040   0.037963  fused 1.26x
+        //     8  32768   0.0132190   0.0105830  0.0143920   0.044342  fused 1.25x
+        //     9  29127   0.0213110   0.0281870  0.0544510   0.079653  cta
+        //    12  21845   0.0384370   0.0422290  0.0967020   0.103430  cta
+        //    16  16384   0.0670010   0.0655850  0.1857200   0.133530  tie
+        //    20  13107   0.1685500   0.2894300  0.9536300   0.286910  cta
+        //    24  10923   0.2204500   0.3810900  1.3444000   0.339650  cta
+        //    32   8192   0.3825800   0.5948600  2.4824000   0.470900  cta
+        //
+        // So the historical Cta IS the right kernel for complex from n >= 9, and
+        // the float rule (fused from 16 up, jacobi below 8) would have been WRONG
+        // here -- jacobi is 4x-6x off the pace at n >= 20 in complex, where in
+        // float it wins below 8. The only real gap is n <= 8, worth 1.21x - 1.39x,
+        // and 2.38x at n = 4.
+        //
+        // n = 4 is the one cell where jacobi edges fused (0.0013689 vs 0.0014881,
+        // 1.09x). That is inside the 1.10x neutral band, so it does not buy a
+        // second boundary -- one threshold at 8 takes essentially all of it.
+        //
+        // complex<double> is NOT split: fused is ahead of cta there by only
+        // 1.03x - 1.08x from n=4..16, all neutral. Its real small-n fix is the
+        // vendor crossover at n=25, which lives in syev_cta_max_n_default_for.
+        constexpr bool is_double_c = std::is_same_v<typename base_type<T>::type, double>;
+        if constexpr (is_double_c) {
+            return SyevSmallKernel::Cta;
+        } else {
+            return A.rows() <= 8 ? SyevSmallKernel::CtaFused : SyevSmallKernel::Cta;
+        }
     } else {
         constexpr bool is_double = std::is_same_v<typename base_type<T>::type, double>;
         if constexpr (is_double) {
@@ -430,7 +497,7 @@ inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
     if (!caps.is_gpu) return false;
     if (jobtype != JobType::EigenVectors) return false;
     if (!syev_supports_cta(caps, A)) return false;
-    return A.rows() > syev_cta_max_n_for_vectors();
+    return A.rows() > syev_cta_max_n_for_vectors<T>();
 }
 
 // Eigenvalues-only: is the two-stage solver the best choice for this shape?
