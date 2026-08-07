@@ -8,6 +8,16 @@
 
 namespace batchlas::tuning {
 
+// WARNING: this template is DEAD CODE and has drifted from the real header.
+//
+// It is configured into build/include/batchlas/tuning_params.hh, but the
+// compile line lists -I<repo>/include before -I<repo>/build/include, so
+// include/batchlas/tuning_params.hh always shadows it. Nothing compiles what
+// this file generates. It is already missing accessors the sources call
+// (sytrd_fuse_panel_update_for_n, the bucketed LATRD hint, gebrd_block_size_for_n),
+// so making it live again requires porting those first, not just fixing -I order.
+//
+// See evaluation/tuning/README.md, "Generating compile-time tuning constants".
 inline constexpr int32_t ORMQR_BLOCK_SIZE_TINY = @BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_TINY@;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_SMALL = @BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_SMALL@;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_MEDIUM = @BATCHLAS_TUNE_DEFAULT_ORMQR_BLOCK_SIZE_MEDIUM@;

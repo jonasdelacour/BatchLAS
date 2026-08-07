@@ -26,6 +26,18 @@ class BenchSpace:
     arg_spec: List[str]
     cases: List[Dict[str, Any]]  # each has {"fixed": {..}, "tune": {..}}
     pre_tune: List[Dict[str, Any]]  # optional bench-level phases: {"params": {..}, "cases": [..]}
+    # {param_name: ENV_VAR}. Params listed here are passed to the benchmark as
+    # environment variables instead of positional arguments, which is the only
+    # way to reach knobs no benchmark exposes in its arg list (gebrd's panel
+    # width, the sy2sb ormqr hint, the sb2st block size...). They must NOT
+    # appear in arg_spec.
+    env: Dict[str, str]
+    # Substring selecting which benchmark row to read when the executable
+    # registers more than one. sb2st_hh_benchmark emits BM_SB2ST_HH_CHASE and
+    # BM_SB2ST_HH_BACK from a single invocation; the back-transform knobs move
+    # only the latter, so reading the first row measured a kernel the tuned
+    # parameters cannot affect and reported the resulting noise as a winner.
+    row: str
 
 
 def _repo_root() -> Path:
@@ -54,6 +66,23 @@ def _iter_grid(tune: Dict[str, List[int]]) -> Iterable[Dict[str, int]]:
     value_lists = [tune[k] for k in keys]
     for combo in itertools.product(*value_lists):
         yield {k: int(v) for k, v in zip(keys, combo)}
+
+
+def _env_from_spec(env_spec: Dict[str, str],
+                   fixed: Dict[str, int],
+                   params: Dict[str, int]) -> Dict[str, str]:
+    """Environment overrides for this combo, as {ENV_VAR: "value"}.
+
+    A param with no value in either params or fixed is simply left unset, which
+    means the benchmark keeps its compiled default.
+    """
+    out: Dict[str, str] = {}
+    for name, env_var in env_spec.items():
+        if name in params:
+            out[str(env_var)] = str(int(params[name]))
+        elif name in fixed:
+            out[str(env_var)] = str(int(fixed[name]))
+    return out
 
 
 def _args_from_spec(arg_spec: List[str], fixed: Dict[str, int], params: Dict[str, int]) -> List[int]:
@@ -98,6 +127,19 @@ def _normalize_case_indices(total_cases: int, selected: Optional[Sequence[Any]])
 
 
 def _collect_tune_keys(cases: Sequence[Dict[str, Any]], *, exclude: Optional[Sequence[str]] = None) -> Dict[str, List[int]]:
+    """Union of every case's grid for each tuned key.
+
+    Deliberately a union, not an intersection. The generated header is
+    bucket-first: it reads `per_case_best`, so each case must be free to search
+    its own declared grid. Intersecting first silently shrinks that search --
+    with the shipped default space, ormqr's per-case grids intersect to the
+    single value {16}, so every ORMQR_BLOCK_SIZE_* bucket was "tuned" without
+    ever comparing a second candidate.
+
+    Cross-case aggregation (`best`/`top`) is unaffected: `_case_allows` keeps a
+    case out of any combo its own grid excludes, and only combos that cover
+    every case are scored -- which is exactly the old intersection.
+    """
     tune_keys: Dict[str, List[int]] = {}
     excluded = set(exclude or [])
     for case in cases:
@@ -107,11 +149,24 @@ def _collect_tune_keys(cases: Sequence[Dict[str, Any]], *, exclude: Optional[Seq
             if k not in tune_keys:
                 tune_keys[k] = list(vs)
             else:
-                existing = set(tune_keys[k])
-                new = set(vs)
-                inter = existing.intersection(new)
-                tune_keys[k] = sorted(inter) if inter else sorted(existing.union(new))
+                tune_keys[k] = sorted(set(tune_keys[k]).union(vs))
     return tune_keys
+
+
+def _case_allows(case: Dict[str, Any], params: Dict[str, int]) -> bool:
+    """True when `params` lies inside this case's own declared grid.
+
+    A key the case does not declare is unconstrained -- it is resolved from
+    `fixed` (or a pre-tuned value) exactly as before.
+    """
+    case_tune = case.get("tune") or {}
+    for key, value in params.items():
+        allowed = case_tune.get(key)
+        if allowed is None:
+            continue
+        if int(value) not in {int(v) for v in allowed}:
+            return False
+    return True
 
 
 def _tune_pre_phases(
@@ -146,10 +201,11 @@ def _tune_pre_phases(
                 case = space.cases[case_idx]
                 fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
                 case_defaults = _representative_case_params(case, exclude=effective_params.keys())
+                phase_params = {**case_defaults, **effective_params}
                 args = _args_from_spec(
                     space.arg_spec,
                     fixed=fixed,
-                    params={**case_defaults, **effective_params},
+                    params=phase_params,
                 )
                 values.append(
                     _run_one_case(
@@ -162,6 +218,8 @@ def _tune_pre_phases(
                         min_iters=min_iters,
                         max_iters=max_iters,
                         args=args,
+                        env_overrides=_env_from_spec(space.env, fixed=fixed, params=phase_params),
+                        row=space.row,
                     )
                 )
 
@@ -200,7 +258,14 @@ def _run_one_case(
     min_iters: int,
     max_iters: int,
     args: List[int],
+    env_overrides: Optional[Dict[str, str]] = None,
+    row: str = "",
 ) -> float:
+    # Merge, never replace: run_minibench_csv hands this straight to
+    # subprocess.run, and a bare dict would drop PATH / LD_LIBRARY_PATH and the
+    # CUDA and SYCL runtime variables the benchmark needs to start at all.
+    env = {**os.environ, **env_overrides} if env_overrides else None
+
     rows = run_minibench_csv(
         exe,
         backend=backend,
@@ -212,6 +277,7 @@ def _run_one_case(
         max_iters=max_iters,
         args=args,
         prefix="batchlas-tune-",
+        env=env,
     )
     if not rows:
         raise RuntimeError(
@@ -219,9 +285,24 @@ def _run_one_case(
             "This usually means the benchmark wasn't registered for that backend/type (compiled out)"
         )
 
-        # Usually there is exactly one row after backend/type filtering.
-        # If multiple appear, choose the first.
-        return float(rows[0]["value"])
+    if row:
+        matching = [r for r in rows if row in str(r.get("name", ""))]
+        if not matching:
+            names = ", ".join(sorted({str(r.get("name", "")) for r in rows}))
+            raise RuntimeError(f"No row of {exe.name} matches row filter {row!r}. Rows: {names}")
+        return float(matching[0]["value"])
+
+    # Never silently pick one of several kernels: an executable that registers
+    # more than one benchmark is measuring more than one thing, and the tuned
+    # parameters usually move only one of them. Make the space say which.
+    if len(rows) > 1:
+        names = ", ".join(sorted({str(r.get("name", "")) for r in rows}))
+        raise RuntimeError(
+            f"{exe.name} produced {len(rows)} rows for args={args}; set \"row\" in the "
+            f"tuning space to select one. Rows: {names}"
+        )
+
+    return float(rows[0]["value"])
 
 
 def _load_spaces(path: Path) -> List[BenchSpace]:
@@ -240,6 +321,8 @@ def _load_spaces(path: Path) -> List[BenchSpace]:
                 arg_spec=list(s["arg_spec"]),
                 cases=list(s["cases"]),
                 pre_tune=list(s.get("pre_tune") or []),
+                env={str(k): str(v) for k, v in (s.get("env") or {}).items()},
+                row=str(s.get("row") or ""),
             )
         )
     return spaces
@@ -259,6 +342,7 @@ def _tune_one_bench(
     verbose: bool,
 ) -> Dict[str, Any]:
     best: Optional[Dict[str, Any]] = None
+    partial_best: Optional[Dict[str, Any]] = None
     leaderboard: List[Dict[str, Any]] = []
     per_case_best: List[Optional[Dict[str, Any]]] = [None for _ in space.cases]
 
@@ -276,27 +360,52 @@ def _tune_one_bench(
 
     tune_keys = _collect_tune_keys(space.cases, exclude=resolved_pre_tune.keys())
 
+    # Widening the grid to a union means different combos can collapse to the
+    # same argument vector for a case that does not tune every key. Measure each
+    # distinct vector once.
+    measured: Dict[Tuple[Any, ...], float] = {}
+
     for params in _iter_grid(tune_keys):
         effective_params = {**resolved_pre_tune, **params}
         values: List[float] = []
         per_case: List[Dict[str, Any]] = []
+        covers_all_cases = True
 
         for case_idx, case in enumerate(space.cases):
+            if not _case_allows(case, effective_params):
+                covers_all_cases = False
+                continue
+
             fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
             args = _args_from_spec(space.arg_spec, fixed=fixed, params=effective_params)
-            v = _run_one_case(
-                exe=exe,
-                backend=backend,
-                dtype=dtype,
-                metric=space.metric,
-                warmup=warmup,
-                min_time_ms=min_time_ms,
-                min_iters=min_iters,
-                max_iters=max_iters,
-                args=args,
-            )
+            env_overrides = _env_from_spec(space.env, fixed=fixed, params=effective_params)
+            # The env vars are part of the measured configuration, so they must
+            # be part of the cache key -- otherwise every env-tuned combo would
+            # collide on an identical argument vector and return the first
+            # measurement for all of them.
+            key = (tuple(args), tuple(sorted(env_overrides.items())))
+            if key in measured:
+                v = measured[key]
+            else:
+                v = _run_one_case(
+                    exe=exe,
+                    backend=backend,
+                    dtype=dtype,
+                    metric=space.metric,
+                    warmup=warmup,
+                    min_time_ms=min_time_ms,
+                    min_iters=min_iters,
+                    max_iters=max_iters,
+                    args=args,
+                    env_overrides=env_overrides,
+                    row=space.row,
+                )
+                measured[key] = v
             values.append(v)
-            per_case.append({"fixed": fixed, "args": args, "value": v})
+            entry_case: Dict[str, Any] = {"fixed": fixed, "args": args, "value": v}
+            if env_overrides:
+                entry_case["env"] = env_overrides
+            per_case.append(entry_case)
 
             current = per_case_best[case_idx]
             better = False
@@ -316,8 +425,21 @@ def _tune_one_bench(
                     "params": dict(effective_params),
                 }
 
+        if not values:
+            continue
+
         s = _score(values, space.direction)
         entry = {"params": effective_params, "score": s, "values": values, "cases": per_case}
+
+        # Only combos legal for every case are comparable across cases, so the
+        # cross-case leaderboard still ranks exactly the old intersected grid.
+        # Per-case winners above are already recorded either way. Partial-coverage
+        # combos are kept aside purely so a space with fully disjoint per-case
+        # grids still yields a profile instead of tripping the assert below.
+        if not covers_all_cases:
+            if partial_best is None or s < partial_best["score"]:
+                partial_best = entry
+            continue
 
         if verbose:
             # Print minimal progress; keep stdout readable.
@@ -333,6 +455,8 @@ def _tune_one_bench(
         if best is None or entry["score"] < best["score"]:
             best = entry
 
+    if best is None:
+        best = partial_best
     assert best is not None
     return {
         "bench": space.bench,
@@ -344,6 +468,16 @@ def _tune_one_bench(
         "best": best,
         "top": leaderboard,
         "per_case_best": [x for x in per_case_best if x is not None],
+        # Every distinct configuration measured, so sensitivity.py can ask which
+        # parameters actually moved the metric. `top` is truncated and
+        # `per_case_best` keeps only winners, so neither can answer that. Env
+        # params are invisible in the benchmark's own CSV output, which makes
+        # this the only complete record of them.
+        "env_spec": dict(space.env),
+        "measurements": [
+            {"args": list(args_key), "env": dict(env_key), "value": value}
+            for (args_key, env_key), value in measured.items()
+        ],
     }
 
 
@@ -369,19 +503,70 @@ def main() -> int:
     parser.add_argument("--skip-missing", action="store_true", help="Skip benches whose executables are missing")
     parser.add_argument("--skip-failed", action="store_true", help="Skip benches that fail to run (e.g., unsupported backend)")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Run one cheap invocation per bench to check the executable exists and the "
+            "metric column parses, then exit without tuning. Do this before a real "
+            "sweep: benches run sequentially, so a wrong metric name in the last one "
+            "otherwise surfaces after every earlier bench has already been measured."
+        ),
+    )
 
     args = parser.parse_args()
 
     repo_root = _repo_root()
-    build_dir = args.build_dir or _default_build_dir(repo_root)
+    build_dir = args.build_dir or default_build_dir(repo_root)
     space_path = args.space or _default_space_path(repo_root)
     out_path = args.out or _default_output_path(build_dir)
 
     spaces = _load_spaces(space_path)
 
+    if args.validate:
+        problems: List[str] = []
+        for space in spaces:
+            exe = default_benchmark_path(build_dir, space.exe)
+            if not exe.exists() or not os.access(exe, os.X_OK):
+                problems.append(f"{space.bench}: missing executable {exe}")
+                continue
+            case = space.cases[0]
+            fixed = {k: int(v) for k, v in (case.get("fixed") or {}).items()}
+            # pre_tune params are resolved before the main sweep and so are
+            # absent from any case's `tune` grid; take their first candidate.
+            pre: Dict[str, int] = {}
+            for phase in space.pre_tune:
+                for key, values in (phase.get("params") or {}).items():
+                    if isinstance(values, list) and values:
+                        pre[str(key)] = int(values[0])
+            params = {**pre, **_representative_case_params(case)}
+            try:
+                _run_one_case(
+                    exe=exe,
+                    backend=args.backend,
+                    dtype=args.dtype,
+                    metric=space.metric,
+                    warmup=0,
+                    min_time_ms=0.0,
+                    min_iters=1,
+                    max_iters=1,
+                    args=_args_from_spec(space.arg_spec, fixed=fixed, params=params),
+                    env_overrides=_env_from_spec(space.env, fixed=fixed, params=params),
+                    row=space.row,
+                )
+            except Exception as exc:  # noqa: BLE001 - report every bench, not just the first
+                problems.append(f"{space.bench}: {exc}")
+            else:
+                print(f"[ok] {space.bench} via {exe.name} (metric {space.metric!r})")
+
+        for problem in problems:
+            print(f"[FAIL] {problem}")
+        print(f"\n{len(spaces) - len(problems)}/{len(spaces)} benches OK")
+        return 1 if problems else 0
+
     results: List[Dict[str, Any]] = []
     for space in spaces:
-        exe = _default_benchmark_path(build_dir, space.exe)
+        exe = default_benchmark_path(build_dir, space.exe)
         if not exe.exists() or not os.access(exe, os.X_OK):
             msg = f"Missing benchmark executable: {exe}"
             if args.skip_missing:

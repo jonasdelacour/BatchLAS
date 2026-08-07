@@ -44,20 +44,84 @@ inline int32_t tuning_env_override(const char* name, int32_t fallback) {
 
 inline constexpr int32_t ORMQR_BLOCK_SIZE_TINY = 16;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_SMALL = 16;
-inline constexpr int32_t ORMQR_BLOCK_SIZE_MEDIUM = 16;
-inline constexpr int32_t ORMQR_BLOCK_SIZE_LARGE = 16;
-inline constexpr int32_t ORMQR_BLOCK_SIZE_XLARGE = 16;
+inline constexpr int32_t ORMQR_BLOCK_SIZE_MEDIUM = 24;
+inline constexpr int32_t ORMQR_BLOCK_SIZE_LARGE = 48;
+inline constexpr int32_t ORMQR_BLOCK_SIZE_XLARGE = 56;
+
+// gebrd's panel width. Split out of ORMQR_BLOCK_SIZE_* on 2026-08-06: gesvd
+// used the ormqr constant to size its bidiagonal reduction, an unrelated kernel,
+// and the two have opposite gradients. Measured on gesvd_blocked n=512
+// batch=256 via the gesvd.gebrd stage timer, nb across:
+//
+//     8: 234.9   12: 232.1   16: 230.7   24: 235.5   32: 240.9   48: 256.6 ms
+//
+// gebrd's optimum is 16 at n=512 and its curve is flat there (+-2%); ormqr's is
+// steep (2.16x between 16 and 56). Sharing one knob pinned the steep parameter
+// at the flat one's optimum.
+//
+// Retuned 2026-08-07 with the knobs separate: the small sizes want 8, not 16.
+// Per-case winners at jobu=jobvh=0, where gesvd.gebrd is ~95% of the call --
+// n=128: 8, n=256: 8, n=512: 16, n=1024: 16. The axis is worth 3.5-48%
+// depending on n, so it is not a flat parameter everywhere.
+inline constexpr int32_t GEBRD_BLOCK_SIZE_TINY = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_SMALL = 8;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_MEDIUM = 8;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_LARGE = 16;
+inline constexpr int32_t GEBRD_BLOCK_SIZE_XLARGE = 16;
+
+// sb2st back-transform geometry, for the wave-parallel path that is ~53% of
+// syev at n=1024. 0 means "keep the shape-adaptive heuristic in
+// sytrd_sb2st_hh.cc", which is what ships, so these are inert until tuned.
+//
+// Only the instantiated (tile, subs) combinations exist: tile in {1,2,4,8} and
+// subs in {4,8,16}. Any other pair silently falls through to the slower tiled
+// kernel, so a tuning grid must not leave that set.
+//
+// DELIBERATELY LEFT AT 0 after the 2026-08-07 sweep. The geometry matters a lot
+// -- 3.6x across the grid at n=1024 -- but the heuristic already picks the
+// winner, so freezing it into buckets buys nothing and costs adaptivity on
+// shapes nobody measured:
+//
+//   n=256 b=1024   heuristic 0.012428   tuned (8,4)  0.012415   1.001x
+//   n=512 b=512    heuristic 0.050644   tuned (8,8)  0.050706   0.999x
+//   n=1024 b=256   heuristic 0.20701    tuned (8,16) 0.20575    1.006x
+//
+// The sb2st bench stays in the default space as a tripwire: if a kernel change
+// ever makes the heuristic wrong, the sweep will show a gap here.
+inline constexpr int32_t SB2ST_BACK_TILE_TINY = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_SMALL = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_MEDIUM = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_LARGE = 0;
+inline constexpr int32_t SB2ST_BACK_TILE_XLARGE = 0;
+
+inline constexpr int32_t SB2ST_BACK_SUBS_TINY = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_SMALL = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_MEDIUM = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_LARGE = 0;
+inline constexpr int32_t SB2ST_BACK_SUBS_XLARGE = 0;
+
+// WY block width for the sy2sb panel back-transform. 0 means "keep the shape
+// gate in sytrd_sy2sb.cc" (return kd when n >= 1024 and batch >= 32), which is
+// what ships. A positive value is clamped to kd at the call site.
+//
+// This is the knob that shadows ORMQR_BLOCK_SIZE_* on syev's hot path: with the
+// gate active, changing the ormqr constant leaves the kernel trace identical.
+inline constexpr int32_t SY2SB_ORMQR_NB_TINY = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_SMALL = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_MEDIUM = 0;
+inline constexpr int32_t SY2SB_ORMQR_NB_LARGE = 32;
+inline constexpr int32_t SY2SB_ORMQR_NB_XLARGE = 0;
 
 inline constexpr int32_t SYTRD_BLOCK_SIZE_TINY = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_SMALL = 8;
 inline constexpr int32_t SYTRD_BLOCK_SIZE_MEDIUM = 16;
-inline constexpr int32_t SYTRD_BLOCK_SIZE_LARGE = 24;
-inline constexpr int32_t SYTRD_BLOCK_SIZE_XLARGE = 32;
+inline constexpr int32_t SYTRD_BLOCK_SIZE_LARGE = 8;
+inline constexpr int32_t SYTRD_BLOCK_SIZE_XLARGE = 48;
 
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_TINY = 0;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_SMALL = 0;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_MEDIUM = 0;
-inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_LARGE = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_LARGE = 128;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_XLARGE = 0;
 
 inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_TINY = 0;
@@ -66,7 +130,7 @@ inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_MEDIUM = 0;
 inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_LARGE = 0;
 inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_XLARGE = 0;
 
-inline constexpr int32_t STEDC_RECURSION_THRESHOLD_TINY = 16;
+inline constexpr int32_t STEDC_RECURSION_THRESHOLD_TINY = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_SMALL = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_MEDIUM = 32;
 inline constexpr int32_t STEDC_RECURSION_THRESHOLD_LARGE = 32;
@@ -100,10 +164,26 @@ inline constexpr int32_t STEDC_MERGE_VARIANT_MEDIUM = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_LARGE = 2;
 inline constexpr int32_t STEDC_MERGE_VARIANT_XLARGE = 2;
 
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 4;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 4;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 4;
-inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 4;
+// threads_per_root and wg_multiplier are set from syev, NOT from the stedc
+// bench, which disagrees with its own consumer. The 2026-08-07 sweep picked
+// wg_multiplier 2-4 and threads_per_root 4-8 on stedc alone; measured through
+// syev with everything else fixed, 8/8 wins nearly everywhere:
+//
+//   syev n     wgm=2    wgm=4    wgm=8   |   tpr=4    tpr=8   tpr=16
+//     64      0.9987   0.9225   0.9227   |  0.9937   0.9229   0.9422
+//    128       4.626    4.535    4.514   |   4.518    4.469    4.534
+//    256      23.067   22.110   21.383   |  21.557   21.332   21.330
+//    512      151.54   151.46   151.84   |  151.63   151.62   151.67
+//   1024      903.40   900.12   903.01   |  902.35   904.74   903.35
+//
+// Adopting stedc's own winners cost syev 2.7% at n=256. The stedc benchmark
+// measures the merge in isolation; syev pays for the whole tridiagonal solve,
+// and the two objectives do not agree. Below n=512 the difference is real
+// (up to 7.6% at n=64); at n>=512 every value is within noise.
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_TINY = 8;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_SMALL = 8;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_MEDIUM = 8;
+inline constexpr int32_t STEDC_THREADS_PER_ROOT_LARGE = 8;
 inline constexpr int32_t STEDC_THREADS_PER_ROOT_XLARGE = 8;
 
 inline constexpr int32_t STEDC_WG_MULTIPLIER_TINY = 8;
@@ -122,6 +202,38 @@ inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {
     if (n <= 256) return ORMQR_BLOCK_SIZE_MEDIUM;
     if (n <= 512) return ORMQR_BLOCK_SIZE_LARGE;
     return ORMQR_BLOCK_SIZE_XLARGE;
+}
+
+inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {
+    if (n <= 64) return GEBRD_BLOCK_SIZE_TINY;
+    if (n <= 128) return GEBRD_BLOCK_SIZE_SMALL;
+    if (n <= 256) return GEBRD_BLOCK_SIZE_MEDIUM;
+    if (n <= 512) return GEBRD_BLOCK_SIZE_LARGE;
+    return GEBRD_BLOCK_SIZE_XLARGE;
+}
+
+inline constexpr int32_t sb2st_back_tile_default_for_n(int32_t n) {
+    if (n <= 64) return SB2ST_BACK_TILE_TINY;
+    if (n <= 128) return SB2ST_BACK_TILE_SMALL;
+    if (n <= 256) return SB2ST_BACK_TILE_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_TILE_LARGE;
+    return SB2ST_BACK_TILE_XLARGE;
+}
+
+inline constexpr int32_t sb2st_back_subs_default_for_n(int32_t n) {
+    if (n <= 64) return SB2ST_BACK_SUBS_TINY;
+    if (n <= 128) return SB2ST_BACK_SUBS_SMALL;
+    if (n <= 256) return SB2ST_BACK_SUBS_MEDIUM;
+    if (n <= 512) return SB2ST_BACK_SUBS_LARGE;
+    return SB2ST_BACK_SUBS_XLARGE;
+}
+
+inline constexpr int32_t sy2sb_ormqr_nb_default_for_n(int32_t n) {
+    if (n <= 64) return SY2SB_ORMQR_NB_TINY;
+    if (n <= 128) return SY2SB_ORMQR_NB_SMALL;
+    if (n <= 256) return SY2SB_ORMQR_NB_MEDIUM;
+    if (n <= 512) return SY2SB_ORMQR_NB_LARGE;
+    return SY2SB_ORMQR_NB_XLARGE;
 }
 
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {
@@ -180,6 +292,30 @@ inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
 inline int32_t ormqr_block_size_for_n(int32_t n) {
     return detail::tuning_env_override("BATCHLAS_TUNE_ORMQR_BLOCK_SIZE",
                                        ormqr_block_size_default_for_n(n));
+}
+
+inline int32_t gebrd_block_size_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
+                                       gebrd_block_size_default_for_n(n));
+}
+
+// These three return 0 to mean "no opinion, keep the call site's heuristic".
+// tuning_env_override treats a non-positive *environment* value as unset, so 0
+// is reachable only from the compiled constant -- which is what we want: the
+// env vars exist to force a specific geometry, not to force auto.
+inline int32_t sb2st_back_tile_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_TILE",
+                                       sb2st_back_tile_default_for_n(n));
+}
+
+inline int32_t sb2st_back_subs_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_SUBS",
+                                       sb2st_back_subs_default_for_n(n));
+}
+
+inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {
+    return detail::tuning_env_override("BATCHLAS_TUNE_SY2SB_ORMQR_NB",
+                                       sy2sb_ormqr_nb_default_for_n(n));
 }
 
 inline int32_t sytrd_block_size_for_n(int32_t n) {
