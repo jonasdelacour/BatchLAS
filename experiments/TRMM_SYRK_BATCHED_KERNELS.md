@@ -331,8 +331,102 @@ At n = 512 with eigenvectors the time is `backtransform_q2` 46.4%, `sb2st_hh`
 25.5%, `stedc_eigvecs` 10.6%. Those three are 82% and none is a level-3
 triangular op.
 
+## Lifting the CUDA-and-float gate on that trmm
+
+The gate above was justified by CUDA float being the only route with a batched
+triangular kernel. That stopped being true once the tile kernel was made
+type-generic and the CUDA router started sending double and complex to it, so
+the gate was removed outright and the result measured rather than assumed.
+
+`ormqr_blocked_benchmark`, `Side::Left`, `ConjTrans`, ABBA-ordered against
+`BATCHLAS_ORMQR_WY=gemm` on a dedicated 4090 via `gpu_guard.sh`, batch 256 (128
+for `complex<double>`), nb in {16,32,64}. Ratios are gemm/trmm, so above 1.00 is
+trmm ahead. Each figure is the mean of two runs per setting; the sweep was run
+twice at different measurement windows and both passes agree:
+
+| type | range over all cells | verdict |
+|---|---|---|
+| `float` | 1.006x - 1.046x | wins everywhere (already shipped) |
+| `double` | 1.004x - 1.016x | **wins everywhere -- newly enabled** |
+| `complex<float>` | 0.944x - 0.995x | loses everywhere |
+| `complex<double>` | 0.958x - 1.010x | loses at ib = 16, level above |
+| `netlib float` | 0.336x - 1.199x | 0.34x at n = 128, ib = 16 |
+| `netlib double` | 0.379x - 1.064x | 0.38x at n = 128, ib = 16 |
+
+**So only the double half of the gate was stale, and the split is per-type, not
+per-precision.** The reason is the same `R` arithmetic that sizes the row tile.
+Here `m` is `ib`, in the tens: at `ib <= 32` the kernel runs one 32-row tile,
+`R = 1`, and `(R+1)/2R = 1` means it skips no arithmetic at all. It then wins or
+loses purely on being one kernel instead of a cuBLAS call, and since a complex
+multiply is four real ones, that trade goes negative in complex where it is
+positive in float and double. It closes towards parity at `ib = 64`, where
+`R = 2` finally saves something (0.99x). A trace confirms complex really does
+take `trmm_cuda_custom.triangular_tiles` rather than the expansion fallback, so
+this is the kernel's shape response and not a mis-route.
+
+netlib is out for an unrelated reason: its trmm and its gemm are *both*
+per-batch cblas loops, so batching is not the difference. OpenBLAS's `?trmm` is
+simply weak on a 16x16 triangle against 128 right-hand sides, and the route also
+has to copy B into C first because `cblas_?trmm` works in place. ROCm is out
+because `rocblas_?trmm` is a per-batch vendor loop standing against a
+strided-batched GEMM.
+
+`ormqr_blocked_tests` also gained the two netlib configurations. The type list
+was a CUDA-*or*-host `#if`, so with a GPU backend built the host route had no
+coverage at all -- which is what a lift extending to netlib would have needed.
+(Note that netlib double needs `OPENBLAS_CORETYPE=SKYLAKEX` on this machine, as
+`build/batchlas-env.sh` sets; without it, that configuration fails on `Side::Right`
+too, which never touches trmm.)
+
+## The 16-row tile, and what R = 2 is actually worth to complex
+
+The obvious follow-up from the table above was that complex loses at `ib <= 32`
+because the 32-row tile was the kernel's floor, so those cells ran at `R = 1`
+and skipped no arithmetic at all -- and `ib = 16` was worse still, computing 32
+rows and masking half of them off at the epilogue after the FMAs had issued. So
+a 16-row tile was built to give `ib = 32` `R = 2` and `ib = 16` an exact fit.
+
+It needed one change beyond the instantiation: `ThreadRows` must stay a multiple
+of 4 for the 4-wide fragment bands, and `16 / 8 lanes = 2` is not, so the 16-row
+tile drops to 4 row lanes (a 64-thread block) rather than narrowing the band.
+
+Measured tile16 against tile32, same shapes as above, both forced through
+`BATCHLAS_TRMM_TILE_M` in one binary:
+
+| type | tile16 vs tile32 | tile16 vs GEMM | was, on tile32 |
+|---|---|---|---|
+| `double` | 1.007x - 1.022x | **1.013x - 1.036x** | 1.004x - 1.016x |
+| `complex<double>` | 0.995x - 1.040x | 0.996x - 1.018x | 0.958x - 1.010x |
+| `complex<float>` | 0.993x - 1.026x | 0.946x - 0.983x | 0.944x - 0.995x |
+| `float` | 0.966x - 0.997x | 1.004x - 1.028x | 1.006x - 1.046x |
+
+**The R argument is confirmed and it is not enough for complex.** Every type
+moves the way the argument says it should -- narrower helps where the kernel is
+compute bound (double, complex), and hurts float, which is bandwidth bound and
+pays for it in B's re-read, the same reason 32 loses to 64 for float further up.
+`complex<double>`'s `ib = 16` hole does close, 0.958x to 0.996x, which is the
+single clearest confirmation that the hole was the masked-off half tile. But it
+closes to *parity*, not to a win, and `complex<float>` stays 2-5% behind.
+
+That is because the complex deficit was never mainly the R saving. A complex
+multiply is four real ones, so the kernel starts that much further from cuBLAS's
+per-flop rate, and one 16x16 triangle's worth of skipped arithmetic cannot pay
+the difference back. `wy_trmm_applicable` is therefore unchanged: complex still
+takes the GEMM.
+
+The tile is kept anyway, because the type it does pay for is **double** -- the
+route ormqr had just enabled. It takes double from 1.004x-1.016x to
+1.013x-1.036x against the GEMM, better in all six cells. `trmm_row_tile` now
+routes `double` to 16 through m = 64 and complex to 16 through m = 32; complex's
+64-row cell measured a wash (0.993x in `complex<float>`) and keeps the wider
+tile, since at TileM 16 the launch is down to 64 threads. float is untouched.
+
 ## What is not done
 
+- Complex would need the tile kernel closer to cuBLAS's per-flop rate, not a
+  better R -- see the table above, where R was fixed and complex still lost.
+- Wiring the tile kernel into `rocblas.cc`'s trmm would make ROCm a real
+  candidate; `wy_trmm_applicable` is where to re-measure it.
 - `trmm`'s tile kernel is `Side::Left` only. `ormqr`/`ormbr` use both sides;
   the right-side branch still takes the expansion. syev only uses Left, so this
   costs syev nothing.
