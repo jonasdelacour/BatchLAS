@@ -640,21 +640,41 @@ inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int6
 //   cuSOLVER  values    453.54    626.90       1.38
 //   cuSOLVER  vectors   503.03    707.10       1.41
 //
-// So at n=512 we are 1.53x FASTER than cuSOLVER in float and 1.14x slower in
-// complex, purely because our complex-to-float penalty is ~2.5x against their
-// ~1.4x. Note the penalty is the same in both modes, so this is NOT a
-// back-transform problem -- it is uniform across the whole solve.
+// So at n=512 we were 1.53x FASTER than cuSOLVER in float and 1.14x slower in
+// complex, purely because our complex-to-float penalty was ~2.5x against their
+// ~1.4x. The penalty was the same in both modes, so it was never a
+// back-transform problem -- it was uniform across the whole solve.
 //
-// Where it sits: at matched nb, sytrd_blocked.panel_only is 68% of the complex
-// blocked solve at n=512 and 3.85x its float cost (137.5 ms vs 35.7 ms, batch
-// 128, kernel trace). 3.85x is close to the 4x that complex multiply-add
-// implies, i.e. that panel is ALU-bound on complex arithmetic rather than
-// anomalously slow. Closing the gap means getting that symv nearer its
-// bandwidth bound (~2x) instead of its arithmetic bound (~4x) -- an inner-loop
-// ILP/vectorisation job in latrd_lower_panel, not a routing or tuning one.
+// PARTLY FIXED SINCE, WHICH IS WHY THE COMPLEX BOUNDARY MOVED 448 -> 512. That
+// penalty was traced to sytrd_blocked.panel_only (68% of the complex solve at
+// n=512) and, inside it, to the C99 Annex G complex multiply: clang was emitting
+// a per-element isnan branch and a __mulsc3 call in the symv inner loop. Writing
+// that one loop's multiply-accumulate out in real arithmetic took the panel
+// kernel 1.22x - 1.29x (see the note on `mac` in latrd_lower_panel.cc) and the
+// complex blocked solve with it. Re-measured after that fix, same method:
 //
-// Routing to the vendor above the crossover is the right call until that work
-// is done, not a substitute for doing it.
+//     n   batch    blocked     vendor   winner
+//    64    4096       2.21       2.38   blocked 1.08x
+//    96    2730       5.55       7.40   blocked 1.33x
+//   128    2048      10.98      11.02   blocked (was 1.05x BEHIND)
+//   192    1365      30.60      79.41   blocked 2.59x
+//   256    1024      66.84     126.97   blocked 1.90x
+//   320     819     165.54     247.37   blocked 1.49x
+//   384     682     253.24     363.47   blocked 1.44x
+//   448     585     424.44     529.78   blocked 1.25x
+//   512     512     686.19     706.96   blocked 1.03x   <- crossed over
+//   640     256    1357.40    1267.80   vendor  1.07x
+//   768     192    2335.10    1958.40   vendor  1.19x
+//  1024     128    5236.90    4047.90   vendor  1.29x
+//
+// complex<float> now beats cuSOLVER at every n from 4 to 512 rather than to 448,
+// and the old n=128 blemish (1.05x behind) is gone.
+//
+// What is left above 512 is the rest of the same gap: the symv is now near its
+// bandwidth bound for complex (panel ratio 2.14x vs float, against ~4x for the
+// arithmetic), but the kernel only achieves ~330 GB/s of this card's ~1000 GB/s
+// in BOTH float and complex, so it is latency/occupancy bound. Lifting that
+// helps float and complex alike and is a bigger job than this one.
 //
 // Unrelated but worth not confusing with the above: EIGENVALUES-ONLY still
 // routes complex to two-stage above n=320 and beats cuSOLVER there by 1.30x at
@@ -670,21 +690,30 @@ inline Provider syev_saturated_provider_for_n(int64_t n) {
     constexpr bool kReal = std::is_same_v<T, Real>;
     constexpr bool kDouble = std::is_same_v<Real, double>;
 
-    // complex<double>: blocked only to 256; the vendor wins from 288 up.
+    // complex<double>: blocked only to 256. The symv fix helped here too -- 288
+    // through 512 went from a 1.13x - 1.23x vendor win to a dead heat (blocked
+    // 1009.6/1318.9/1961.4/3047.6/3874.7 against vendor 973.9/1258.4/1974.1/
+    // 2826.4/3929.1 at n = 288/320/384/448/512) -- but every one of those cells
+    // is inside the 1.10x neutral band, so there is no measured reason to move
+    // the boundary. It stays at the last n with a real margin.
     if constexpr (!kReal && kDouble) {
         return n <= 256 ? Provider::BatchLAS_Blocked : Provider::Vendor;
+    } else if constexpr (!kReal) {
+        // complex<float>: 512, not 448 -- see the re-measured grid above.
+        return n <= 512 ? Provider::BatchLAS_Blocked : Provider::Vendor;
     } else {
-        // 64..448: blocked, by up to 2.33x over the vendor and never behind it
-        // by more than 1.04x, in all three remaining types.
+        // 64..448: blocked, by up to 2.33x over the vendor and never behind it.
+        // Unchanged for the real types: `mac` routes them to the plain
+        // multiply-add, so the symv fix did not move their timings at all.
         if (n <= 448) return Provider::BatchLAS_Blocked;
-        if constexpr (kReal && !kDouble) {
+        if constexpr (!kDouble) {
             // float only: two-stage ties blocked at 512/640, wins 1.06x at 768,
             // and is within 1.02x of the vendor at 1024. All neutral, so this
             // keeps the committed behaviour rather than churning it.
             if (n <= 1024) return Provider::BatchLAS_TwoStage;
             return Provider::Vendor;               // 2048+, 1.65x (see the caveat)
         } else {
-            return Provider::Vendor;               // double and complex<float>
+            return Provider::Vendor;               // double
         }
     }
 }
