@@ -893,7 +893,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                             // queues and never see it.
                             const std::size_t her2k_scratch_bytes =
                                 backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
-                            if (backend::detail::expansion_fits(ctx, n2, batch, her2k_scratch_bytes)) {
+                            if (backend::detail::her2k_takes_gemm_route(ctx, n2, batch, her2k_scratch_bytes)) {
                                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_her2k");
                                 her2k<B>(ctx, V2, W2, A22,
                                          {.alpha = T(-1), .beta = float_t<T>(1)});

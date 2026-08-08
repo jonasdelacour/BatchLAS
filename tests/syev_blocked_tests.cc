@@ -185,17 +185,28 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		auto W_blk = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-		// Reference (CPU LAPACKE)
+		// Reference: the VENDOR solver for this backend, called directly.
+		//
+		// Not the queue-dispatching syev(): on the CUDA fixture that enters
+		// syev_dispatch<CUDA>, and choose_syev_provider sends
+		// (NoEigenVectors && n > 32) straight to BatchLAS_Blocked -- so the
+		// n = 96 and n = 320 arms would compare syev_blocked against itself and
+		// could not fail. Checked by injection: flipping bp.order to Descending
+		// in syev_blocked.cc, or making stebz drop every slot >= local_size,
+		// left both arms green. n = 320 is the only shape here that exercises
+		// stebz's wg-clamped strided slot loop (wg = min(256, max_wanted)), so
+		// that gap was precisely the one this test was widened to close.
 		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
+			auto ws_ref = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<B>(*this->ctx,
 																A_ref.view(),
 																W_ref.to_span(),
 																JobType::NoEigenVectors,
 																Uplo::Lower));
-			syev(*this->ctx,
+			backend::syev_vendor<B>(*this->ctx,
 							A_ref.view(),
 							W_ref.to_span(),
-							{.jobz = JobType::NoEigenVectors},
+							JobType::NoEigenVectors,
+							Uplo::Lower,
 							ws_ref.to_span()).wait();
 		}
 
