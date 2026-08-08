@@ -262,3 +262,140 @@ TEST(MatrixCSRTest, ExceptionOnCopyFromMismatchedShape) {
     Matrix<float, MatrixFormat::CSR> b(3, 2, 2, 1);
     EXPECT_THROW(a.copy_from(b.view()), std::runtime_error);
 }
+
+// ---------------------------------------------------------------------------
+// triangularize
+//
+// `uplo` names the triangle to KEEP. These tests exist because the function
+// shipped with that inverted: it named the flat-index quotient the row while
+// addressing it as the column, so under column-major storage
+// triangularize(Uplo::Upper) left a LOWER triangular matrix. It had no test
+// and, in-tree, no caller, so nothing caught it -- PR #66 found it only
+// because extracting R from a geqrf result silently handed back the
+// Householder reflectors instead, which fabricated a 1.7x speedup that was
+// not real.
+//
+// Each entry is seeded with a value encoding its own (row, col), so a
+// transposed or mis-strided write shows up as a wrong *position*, not merely a
+// wrong number.
+// ---------------------------------------------------------------------------
+namespace {
+
+inline float tri_marker(int row, int col) {
+    return 100.0f * static_cast<float>(row + 1) + static_cast<float>(col + 1);
+}
+
+}  // namespace
+
+TEST(MatrixTriangularize, UpperKeepsUpperTriangle) {
+    constexpr int n = 5;
+    constexpr int batch = 2;
+    constexpr int ld = 7;      // deliberately > rows
+    constexpr int stride = 40; // deliberately > ld * cols
+
+    Queue ctx;
+    Matrix<float, MatrixFormat::Dense> mat(n, n, batch, ld, stride);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                mat.data()[b * stride + j * ld + i] = tri_marker(i, j);
+
+    mat.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const float v = mat.data()[b * stride + j * ld + i];
+                if (i <= j) {
+                    EXPECT_FLOAT_EQ(v, tri_marker(i, j)) << "kept (" << i << "," << j << ")";
+                } else {
+                    EXPECT_FLOAT_EQ(v, 0.0f) << "strict lower (" << i << "," << j << ")";
+                }
+            }
+        }
+    }
+}
+
+TEST(MatrixTriangularize, LowerKeepsLowerTriangle) {
+    constexpr int n = 5;
+    constexpr int batch = 2;
+
+    Queue ctx;
+    Matrix<float, MatrixFormat::Dense> mat(n, n, batch);
+    const int ld = mat.view().ld();
+    const int stride = mat.view().stride();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                mat.data()[b * stride + j * ld + i] = tri_marker(i, j);
+
+    mat.view().triangularize(ctx, Uplo::Lower, Diag::NonUnit).wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const float v = mat.data()[b * stride + j * ld + i];
+                if (i >= j) {
+                    EXPECT_FLOAT_EQ(v, tri_marker(i, j)) << "kept (" << i << "," << j << ")";
+                } else {
+                    EXPECT_FLOAT_EQ(v, 0.0f) << "strict upper (" << i << "," << j << ")";
+                }
+            }
+        }
+    }
+}
+
+TEST(MatrixTriangularize, UnitDiagonalOverwritesDiagonal) {
+    constexpr int n = 4;
+
+    Queue ctx;
+    Matrix<float, MatrixFormat::Dense> mat(n, n, 1);
+    const int ld = mat.view().ld();
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            mat.data()[j * ld + i] = tri_marker(i, j);
+
+    mat.view().triangularize(ctx, Uplo::Upper, Diag::Unit).wait();
+
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            const float v = mat.data()[j * ld + i];
+            if (i == j)     EXPECT_FLOAT_EQ(v, 1.0f);
+            else if (i < j) EXPECT_FLOAT_EQ(v, tri_marker(i, j));
+            else            EXPECT_FLOAT_EQ(v, 0.0f);
+        }
+    }
+}
+
+// The element count used to come from data_.size() and the index decode from
+// rows_ alone, so a non-square view decoded its own coordinates wrongly.
+TEST(MatrixTriangularize, NonSquareTallAndWide) {
+    Queue ctx;
+
+    const std::pair<int, int> shapes[] = {{6, 3}, {3, 6}};
+    for (const auto& shape : shapes) {
+        const int rows = shape.first;
+        const int cols = shape.second;
+
+        Matrix<float, MatrixFormat::Dense> mat(rows, cols, 1);
+        const int ld = mat.view().ld();
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                mat.data()[j * ld + i] = tri_marker(i, j);
+
+        mat.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
+
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                const float v = mat.data()[j * ld + i];
+                if (i <= j) {
+                    EXPECT_FLOAT_EQ(v, tri_marker(i, j))
+                        << rows << "x" << cols << " kept (" << i << "," << j << ")";
+                } else {
+                    EXPECT_FLOAT_EQ(v, 0.0f)
+                        << rows << "x" << cols << " zeroed (" << i << "," << j << ")";
+                }
+            }
+        }
+    }
+}

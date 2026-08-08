@@ -75,6 +75,41 @@ namespace batchlas
 
     // Create a batch of random dense matrices with a specified log10 conditioning metric.
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
+    //
+    // `algo` orthonormalises the two random factors. It defaults to CGS2, NOT to
+    // one of the Cholesky variants, and that is deliberate: Chol-QR forms the
+    // Gram matrix and so squares the condition number of its input. The input
+    // here is a raw Matrix::Random, whose conditioning is NOT controlled (the
+    // requested kappa is imposed afterwards, by the diagonal), and in float the
+    // squared Gram goes numerically indefinite once kappa exceeds about 1e4 --
+    // which ordinary random draws reach a few times in a batch of 32 at n=64.
+    // potrf then fails, its info code is discarded (see the note in
+    // src/extra/random_cond.cc), the following trsm back-substitutes through a
+    // garbage diagonal, and the two gemms smear the resulting NaN across every
+    // entry of that batch item. That is the "generator intermittently emits an
+    // entirely non-finite matrix" defect reported against PR #66.
+    //
+    // Measured at n=64, float, batch=32, seed 1, requesting log10(kappa_F) = 5;
+    // "ortho err" is ||Q^H Q - I||_max and the bracket is the range of log10 of
+    // the ACHIEVED condition number over the batch:
+    //
+    //   Chol2 (old default)  3.9e-7   [5.000,  5.000]   2/32 non-finite
+    //   Cholesky             3.2e-2   [4.992,  5.003]   2/32 non-finite
+    //   ShiftChol3           3.4e-7   [5.000,  5.000]   0/32
+    //   Householder          4.3e-7   [5.000, 17.390]   0/32
+    //   CGS2                 2.3e-7   [5.000,  5.000]   0/32
+    //   SVQB2                4.0e-6   [5.000,  5.000]   0/32
+    //
+    // Householder is the obvious candidate and is the WRONG one: it removes the
+    // NaNs but returns a factor that leaves some batch items numerically
+    // singular, so the generator silently stops honouring the requested kappa --
+    // a worse failure than the one being fixed, because it is invisible. That is
+    // a latent defect in ortho's geqrf+orgqr path, not in this generator.
+    //
+    // CGS2 has the best orthogonality of the six, honours the requested kappa
+    // exactly, and uses no potrf at all, so it cannot be caught by the unchecked
+    // info code. Callers who want the faster Cholesky path on input they know to
+    // be well conditioned can still ask for it explicitly.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
                                                                   int n,
@@ -82,10 +117,11 @@ namespace batchlas
                                                                   NormType metric,
                                                                   int batch_size = 1,
                                                                   unsigned int seed = 42,
-                                                                  OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
+                                                                  OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
     // Create a batch of random symmetric/Hermitian dense matrices with a specified log10 conditioning metric.
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
+    // See random_with_log10_cond_metric above for why `algo` defaults to CGS2.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ctx,
                                                                            int n,
@@ -93,7 +129,7 @@ namespace batchlas
                                                                            NormType metric,
                                                                            int batch_size = 1,
                                                                            unsigned int seed = 42,
-                                                                           OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
+                                                                           OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
     // Create a batch of random dense banded matrices (general) with a specified log10 conditioning metric.
     // The resulting bandwidth is <= kd. For small kd, this may produce diagonal matrices.
