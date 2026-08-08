@@ -316,6 +316,19 @@ namespace batchlas {
                 const int m = static_cast<int>(A.rows());
                 const int n = static_cast<int>(A.cols());
                 const int batch = static_cast<int>(A.batch_size());
+                // cusolverDnXgesvdjBatched has no `econ` flag -- econ belongs
+                // to the non-batched cusolverDnXgesvdj, and gesvdaStridedBatched
+                // is a different, rank-truncated algorithm. Refuse rather than
+                // silently mis-serve: want_u below is `== All`, so a Thin
+                // request would quietly mean "no vectors" and the shape checks
+                // would pass with U never written. Costs nothing in practice --
+                // this route caps at 32x32, where canonicalisation has already
+                // rewritten Thin to All for every square case.
+                if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) {
+                    throw std::runtime_error(
+                        "gesvd_vendor (CUSOLVER): thin singular vectors are not supported by the "
+                        "gesvdjBatched route");
+                }
                 const bool want_u = (jobu == SvdVectors::All);
                 const bool want_vh = (jobvh == SvdVectors::All);
                 const bool vectors = want_u || want_vh;
@@ -377,6 +390,19 @@ namespace batchlas {
                 const int n = static_cast<int>(A.cols());
                 const int k = std::min(m, n);
                 const int batch = static_cast<int>(A.batch_size());
+                // cusolverDnXgesvdjBatched has no `econ` flag -- econ belongs
+                // to the non-batched cusolverDnXgesvdj, and gesvdaStridedBatched
+                // is a different, rank-truncated algorithm. Refuse rather than
+                // silently mis-serve: want_u below is `== All`, so a Thin
+                // request would quietly mean "no vectors" and the shape checks
+                // would pass with U never written. Costs nothing in practice --
+                // this route caps at 32x32, where canonicalisation has already
+                // rewritten Thin to All for every square case.
+                if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) {
+                    throw std::runtime_error(
+                        "gesvd_vendor (CUSOLVER): thin singular vectors are not supported by the "
+                        "gesvdjBatched route");
+                }
                 const bool want_u = (jobu == SvdVectors::All);
                 const bool want_vh = (jobvh == SvdVectors::All);
                 const bool vectors = want_u || want_vh;

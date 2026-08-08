@@ -115,6 +115,24 @@ inline bool gesvd_direct_bidiag(GesvdNativeMode mode) {
         && gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
 }
 
+// A thin tall U forces a direct bidiagonal solve even under
+// BATCHLAS_GESVD_BIDIAG=normal.
+//
+// This is deliberate and it overrides the environment variable. The
+// normal-equations path allocates an m x m left_vecs and runs a second
+// order-m eigensolve, and patch_zero_left_vectors writes m columns of U
+// unconditionally. Honouring "normal" for a thin tall request would therefore
+// pay the whole m x m cost the caller asked to avoid -- in the workspace
+// instead of in U, so it would look like it worked -- and then overrun a U that
+// only has k columns.
+//
+// The override depends only on the arguments, never on the environment, so
+// gesvd_native_buffer_size and gesvd_native_impl cannot reach different
+// conclusions about which path runs.
+inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
+    return gesvd_direct_bidiag(mode) || (mode == GesvdNativeMode::Blocked && thin_tall_u);
+}
+
 inline bool gesvd_stage_profile_enabled() {
     return env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
 }
@@ -173,11 +191,26 @@ void validate_gesvd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
         throw std::invalid_argument(std::string(where) + ": singular_values span too small");
     }
 
-    if (jobu == SvdVectors::All && (u.rows() != m || u.cols() != m || u.batch_size() != batch)) {
-        throw std::invalid_argument(std::string(where) + ": U must be (m x m) with matching batch size");
+    // Guard on "computed at all" and take the expected extent from the job, so
+    // Thin is validated against m x k / k x n. Testing `== All` would let a
+    // Thin request through unvalidated with a wrongly-sized output view.
+    jobu = canonical_jobu(jobu, m, k);
+    jobvh = canonical_jobvh(jobvh, n, k);
+    if (jobu != SvdVectors::None) {
+        const int64_t want_cols = svd_u_cols(jobu, m, k);
+        if (u.rows() != m || u.cols() != want_cols || u.batch_size() != batch) {
+            throw std::invalid_argument(std::string(where) + ": U must be (" +
+                                        std::to_string(m) + " x " + std::to_string(want_cols) +
+                                        ") with matching batch size");
+        }
     }
-    if (jobvh == SvdVectors::All && (vh.rows() != n || vh.cols() != n || vh.batch_size() != batch)) {
-        throw std::invalid_argument(std::string(where) + ": Vh must be (n x n) with matching batch size");
+    if (jobvh != SvdVectors::None) {
+        const int64_t want_rows = svd_vh_rows(jobvh, n, k);
+        if (vh.rows() != want_rows || vh.cols() != n || vh.batch_size() != batch) {
+            throw std::invalid_argument(std::string(where) + ": Vh must be (" +
+                                        std::to_string(want_rows) + " x " + std::to_string(n) +
+                                        ") with matching batch size");
+        }
     }
 }
 
@@ -763,8 +796,15 @@ Event gesvd_native_impl(Queue& ctx,
         const int32_t n = static_cast<int32_t>(a_in.cols());
         const int32_t k = std::min(m, n);
         const int32_t batch = static_cast<int32_t>(a_in.batch_size());
-        const bool want_u = jobu == SvdVectors::All;
-        const bool want_vh = jobvh == SvdVectors::All;
+        jobu = canonical_jobu(jobu, m, k);
+        jobvh = canonical_jobvh(jobvh, n, k);
+        // `!= None`, not `== All`. Keeping the old idiom here is the silent
+        // degrade: a Thin request would compute nothing and hand back an
+        // untouched U without raising anything.
+        const bool want_u = jobu != SvdVectors::None;
+        const bool want_vh = jobvh != SvdVectors::None;
+        const int32_t u_cols = static_cast<int32_t>(svd_u_cols(jobu, m, k));
+        const int32_t vh_rows = static_cast<int32_t>(svd_vh_rows(jobvh, n, k));
         const GesvdStageProfiler profiler{ctx, where, std::max(m, n), batch, gesvd_stage_profile_enabled()};
 
         if (m < n) {
@@ -782,13 +822,23 @@ Event gesvd_native_impl(Queue& ctx,
             MatrixView<T, MatrixFormat::Dense> ut_view;
             MatrixView<T, MatrixFormat::Dense> vht_view;
 
+            // With m < n we have k == m, so U is never the thin side here --
+            // jobu has already canonicalised to All. V^H is: n x n for All,
+            // m x n for Thin. Its transposed counterpart ut_view is therefore
+            // n x n or n x m, and sizing it n x n unconditionally would
+            // reintroduce, in the workspace, exactly the allocation Thin exists
+            // to avoid.
+            const SvdVectors trans_jobu = jobvh;   // U of A^T <-> V^H of A
+            const SvdVectors trans_jobvh = jobu;   // V^H of A^T <-> U of A
+            const int32_t ut_cols = static_cast<int32_t>(svd_u_cols(trans_jobu, n, m));
+
             if (want_vh) {
-                auto ut_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+                auto ut_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(ut_cols) * static_cast<size_t>(batch));
                 ut_view = MatrixView<T, MatrixFormat::Dense>(ut_span.data(),
                                                              n,
+                                                             ut_cols,
                                                              n,
-                                                             n,
-                                                             static_cast<int64_t>(n) * static_cast<int64_t>(n),
+                                                             static_cast<int64_t>(n) * static_cast<int64_t>(ut_cols),
                                                              batch);
             } else {
                 auto ut_dummy = pool.allocate<T>(ctx, static_cast<size_t>(batch));
@@ -812,8 +862,10 @@ Event gesvd_native_impl(Queue& ctx,
                 transpose(ctx, a_in, at_view);
             });
 
-            const SvdVectors trans_jobu = want_vh ? SvdVectors::All : SvdVectors::None;
-            const SvdVectors trans_jobvh = want_u ? SvdVectors::All : SvdVectors::None;
+            // trans_jobu / trans_jobvh are computed above, next to ut_view's
+            // extent, so the view and the job it is sized for cannot drift.
+            // They propagate the job VALUE rather than collapsing it to
+            // All/None, which is what carries Thin into the inner solve.
             const size_t inner_ws_bytes = gesvd_native_buffer_size<B, T>(ctx,
                                                                          at_view,
                                                                          singular_values,
@@ -856,7 +908,14 @@ Event gesvd_native_impl(Queue& ctx,
         const bool tridiag_returns_vectors = (mode == GesvdNativeMode::Blocked) || need_vecs;
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k, mode);
         const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k);
-        const int32_t max_order = want_u ? std::max(m, k) : k;
+        const bool thin_tall_u = want_u && u_cols < m;
+        const bool direct_bidiag = gesvd_direct_bidiag(mode, thin_tall_u);
+        // Only a FULL U needs the order-m tridiagonal buffers; with a thin U the
+        // normal-equations branch is unreachable (see gesvd_direct_bidiag's
+        // two-argument overload), so these shrink from max(m,k) to k. That is
+        // the point of the exercise on a 10000 x 32 problem: without it the
+        // m x m cost simply moves from U into the workspace.
+        const int32_t max_order = (want_u && u_cols == m) ? std::max(m, k) : k;
 
         auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
@@ -884,7 +943,7 @@ Event gesvd_native_impl(Queue& ctx,
         // Not needed on the Blocked (bdsqr) path: bdsqr writes its rotations
         // straight into u_out / vh_out, so there is no intermediate k x k
         // eigenvector matrix to hold.
-        if (tridiag_returns_vectors && !gesvd_direct_bidiag(mode)) {
+        if (tridiag_returns_vectors && !direct_bidiag) {
             auto vecs_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(k) * static_cast<size_t>(batch));
             vecs_view = MatrixView<T, MatrixFormat::Dense>(vecs_span.data(), k, k, k, static_cast<int64_t>(k) * static_cast<int64_t>(k), batch);
         }
@@ -896,7 +955,7 @@ Event gesvd_native_impl(Queue& ctx,
         // skipping it is a real saving, not just tidiness. The sizing function is
         // an upper bound that still covers both shapes.
         Span<std::byte> solver_ws;
-        if (!gesvd_direct_bidiag(mode)) {
+        if (!direct_bidiag) {
             size_t solver_ws_bytes = gesvd_solver_workspace_size<B, T>(ctx, k, batch, tridiag_job, mode);
             if (want_u) {
                 solver_ws_bytes = std::max(solver_ws_bytes,
@@ -940,7 +999,7 @@ Event gesvd_native_impl(Queue& ctx,
         //     A = (Q_B Q) S (P^T P_B^H)
         // which is exactly what the two back-transforms below apply (ormbr 'Q' on
         // the left, ormbr 'P' on the right) -- unchanged.
-        if (gesvd_direct_bidiag(mode)) {
+        if (direct_bidiag) {
             const bool use_bdsdc = gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsdc;
             const size_t bidiag_ws_bytes =
                 use_bdsdc ? bdsdc_buffer_size<B, T>(ctx, d_view, e_view, singular_values, need_vecs)
@@ -1157,29 +1216,39 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         const size_t n = static_cast<size_t>(a.cols());
         const size_t k = std::min(m, n);
         const size_t batch = static_cast<size_t>(a.batch_size());
-        const bool want_u = jobu == SvdVectors::All;
-        const bool want_vh = jobvh == SvdVectors::All;
+        // Every line below must mirror gesvd_native_impl exactly. The two are
+        // separate functions over the same decisions, and a divergence is a
+        // silent workspace overrun rather than a compile error.
+        jobu = canonical_jobu(jobu, static_cast<int64_t>(m), static_cast<int64_t>(k));
+        jobvh = canonical_jobvh(jobvh, static_cast<int64_t>(n), static_cast<int64_t>(k));
+        const bool want_u = jobu != SvdVectors::None;
+        const bool want_vh = jobvh != SvdVectors::None;
+        const size_t u_cols = static_cast<size_t>(svd_u_cols(jobu, static_cast<int64_t>(m), static_cast<int64_t>(k)));
         if (m < n) {
-            const SvdVectors trans_jobu = want_vh ? SvdVectors::All : SvdVectors::None;
-            const SvdVectors trans_jobvh = want_u ? SvdVectors::All : SvdVectors::None;
+            const SvdVectors trans_jobu = jobvh;
+            const SvdVectors trans_jobvh = jobu;
+            const size_t ut_cols = static_cast<size_t>(
+                svd_u_cols(trans_jobu, static_cast<int64_t>(n), static_cast<int64_t>(m)));
 
             MatrixView<T, MatrixFormat::Dense> ut_view(nullptr,
                                                        static_cast<int64_t>(n),
-                                                       trans_jobu == SvdVectors::All ? static_cast<int64_t>(n) : 1,
+                                                       want_vh ? static_cast<int64_t>(ut_cols) : 1,
                                                        static_cast<int64_t>(n),
-                                                       static_cast<int64_t>(n) * static_cast<int64_t>(std::max<size_t>(1, n)),
+                                                       static_cast<int64_t>(n) * static_cast<int64_t>(std::max<size_t>(1, ut_cols)),
                                                        static_cast<int64_t>(batch));
+            // m < n means k == m, so the transposed problem's V^H (which is A's
+            // U) is m x m either way -- Thin never shrinks it.
             MatrixView<T, MatrixFormat::Dense> vht_view(nullptr,
-                                                        trans_jobvh == SvdVectors::All ? static_cast<int64_t>(m) : 1,
-                                                        trans_jobvh == SvdVectors::All ? static_cast<int64_t>(m) : 1,
-                                                        trans_jobvh == SvdVectors::All ? static_cast<int64_t>(m) : 1,
+                                                        trans_jobvh != SvdVectors::None ? static_cast<int64_t>(m) : 1,
+                                                        trans_jobvh != SvdVectors::None ? static_cast<int64_t>(m) : 1,
+                                                        trans_jobvh != SvdVectors::None ? static_cast<int64_t>(m) : 1,
                                                         static_cast<int64_t>(std::max<size_t>(1, m)) * static_cast<int64_t>(std::max<size_t>(1, m)),
                                                         static_cast<int64_t>(batch));
 
             size_t bytes = 0;
             bytes += BumpAllocator::allocation_size<T>(ctx, n * m * batch);
             if (want_vh) {
-                bytes += BumpAllocator::allocation_size<T>(ctx, n * n * batch);
+                bytes += BumpAllocator::allocation_size<T>(ctx, n * ut_cols * batch);
             } else {
                 bytes += BumpAllocator::allocation_size<T>(ctx, batch);
             }
@@ -1210,7 +1279,11 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         const bool tridiag_returns_vectors = (mode == GesvdNativeMode::Blocked) || need_vecs;
 
         size_t bytes = 0;
-        const size_t max_order = want_u ? std::max(m, k) : k;
+        // Mirrors gesvd_native_impl: thin tall U forces the direct bidiagonal
+        // solve, which makes the order-m buffers unreachable.
+        const bool thin_tall_u = want_u && u_cols < m;
+        const bool direct_bidiag = gesvd_direct_bidiag(mode, thin_tall_u);
+        const size_t max_order = (want_u && u_cols == m) ? std::max(m, k) : k;
         bytes += BumpAllocator::allocation_size<T>(ctx, k * batch);                                // d
         bytes += BumpAllocator::allocation_size<T>(ctx, (k > 0 ? k - 1 : 0) * batch);             // e
         bytes += BumpAllocator::allocation_size<T>(ctx, k * batch);                                // tauq
@@ -1232,7 +1305,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         // tridiagonal path reserves. bdsqr's is small enough that it used to fit
         // inside the over-allocation here by accident; bdsdc's does not, so this
         // branch is what keeps buffer_size an actual upper bound.
-        if (gesvd_direct_bidiag(mode)) {
+        if (direct_bidiag) {
             VectorView<T> d_dummy(nullptr, k_i32, static_cast<int32_t>(batch), 1, k_i32);
             const int32_t e_size = static_cast<int32_t>(k > 0 ? k - 1 : 0);
             VectorView<T> e_dummy(nullptr, e_size, static_cast<int32_t>(batch), 1, std::max<int32_t>(1, e_size));
@@ -1428,6 +1501,19 @@ Event gesvd_cta(Queue& ctx,
     if (std::max(a_in.rows(), a_in.cols()) > 32) {
         throw std::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
+    // Mode CTA always takes the normal-equations branch, whose
+    // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
+    // genuinely thin request rather than overrun. Dispatch never gets here --
+    // gesvd_supports_cta already declines, and a forced-but-unsupported
+    // provider resets to Auto -- so this guards DIRECT callers.
+    {
+        const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
+        if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
+            canonical_jobvh(jobvh, a_in.cols(), k) == SvdVectors::Thin) {
+            throw std::invalid_argument(
+                "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
+        }
+    }
     return gesvd_native_impl<B, T>(ctx,
                                    a_in,
                                    singular_values,
@@ -1457,6 +1543,19 @@ Event gesvd_cta(Queue& ctx,
     if (std::max(a_in.rows(), a_in.cols()) > 32) {
         throw std::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
+    // Mode CTA always takes the normal-equations branch, whose
+    // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
+    // genuinely thin request rather than overrun. Dispatch never gets here --
+    // gesvd_supports_cta already declines, and a forced-but-unsupported
+    // provider resets to Auto -- so this guards DIRECT callers.
+    {
+        const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
+        if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
+            canonical_jobvh(jobvh, a_in.cols(), k) == SvdVectors::Thin) {
+            throw std::invalid_argument(
+                "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
+        }
+    }
     return gesvd_native_hermitian_impl<B, T>(ctx,
                                              a_in,
                                              singular_values,
@@ -1481,6 +1580,14 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
     if (std::max(a.rows(), a.cols()) > 32) {
         throw std::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
+    }
+    {
+        const int64_t k = std::min<int64_t>(a.rows(), a.cols());
+        if (canonical_jobu(jobu, a.rows(), k) == SvdVectors::Thin ||
+            canonical_jobvh(jobvh, a.cols(), k) == SvdVectors::Thin) {
+            throw std::invalid_argument(
+                "gesvd_cta_buffer_size: thin singular vectors are not supported");
+        }
     }
     return gesvd_native_buffer_size<B, T>(ctx,
                                           a,
@@ -1508,6 +1615,14 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
     }
     if (std::max(a.rows(), a.cols()) > 32) {
         throw std::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
+    }
+    {
+        const int64_t k = std::min<int64_t>(a.rows(), a.cols());
+        if (canonical_jobu(jobu, a.rows(), k) == SvdVectors::Thin ||
+            canonical_jobvh(jobvh, a.cols(), k) == SvdVectors::Thin) {
+            throw std::invalid_argument(
+                "gesvd_cta_buffer_size: thin singular vectors are not supported");
+        }
     }
     return gesvd_native_hermitian_buffer_size<B, T>(ctx,
                                                     a,

@@ -858,17 +858,35 @@ namespace batchlas{
             throw std::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
         }
 
-        const char lapack_jobu = (jobu == SvdVectors::All) ? 'A' : 'N';
-        const char lapack_jobvt = (jobvh == SvdVectors::All) ? 'A' : 'N';
+        // NETLIB implements Thin rather than refusing it. gesvd_dispatch pins
+        // this backend to Vendor unconditionally, so refusing would leave the
+        // whole CPU backend unable to serve Thin -- and this is the reference
+        // the GPU thin results are checked against.
+        jobu = canonical_jobu(jobu, m, k);
+        jobvh = canonical_jobvh(jobvh, n, k);
 
-        if (jobu == SvdVectors::All) {
-            if (U.rows() != m || U.cols() != m || U.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x m) with matching batch");
+        const auto lapack_job = [](SvdVectors j) -> char {
+            switch (j) {
+                case SvdVectors::All:  return 'A';
+                case SvdVectors::Thin: return 'S';
+                default:               return 'N';
+            }
+        };
+        const char lapack_jobu = lapack_job(jobu);
+        const char lapack_jobvt = lapack_job(jobvh);
+
+        if (jobu != SvdVectors::None) {
+            const int want_cols = static_cast<int>(svd_u_cols(jobu, m, k));
+            if (U.rows() != m || U.cols() != want_cols || U.batch_size() != batch) {
+                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x " +
+                                            std::to_string(want_cols) + ") with matching batch");
             }
         }
-        if (jobvh == SvdVectors::All) {
-            if (Vh.rows() != n || Vh.cols() != n || Vh.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): Vh must be (n x n) with matching batch");
+        if (jobvh != SvdVectors::None) {
+            const int want_rows = static_cast<int>(svd_vh_rows(jobvh, n, k));
+            if (Vh.rows() != want_rows || Vh.cols() != n || Vh.batch_size() != batch) {
+                throw std::invalid_argument("gesvd_vendor (NETLIB): Vh must be (" +
+                                            std::to_string(want_rows) + " x n) with matching batch");
             }
         }
 
@@ -886,34 +904,34 @@ namespace batchlas{
             if constexpr (std::is_same_v<T, float>) {
                 info = LAPACKE_sgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                       Ab.data_ptr(), Ab.ld(), sb,
-                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      (jobu != SvdVectors::None) ? Ub.data_ptr() : nullptr,
+                                      (jobu != SvdVectors::None) ? Ub.ld() : 1,
+                                      (jobvh != SvdVectors::None) ? Vhb.data_ptr() : nullptr,
+                                      (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                       superb.data());
             } else if constexpr (std::is_same_v<T, double>) {
                 info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                       Ab.data_ptr(), Ab.ld(), sb,
-                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      (jobu != SvdVectors::None) ? Ub.data_ptr() : nullptr,
+                                      (jobu != SvdVectors::None) ? Ub.ld() : 1,
+                                      (jobvh != SvdVectors::None) ? Vhb.data_ptr() : nullptr,
+                                      (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                       superb.data());
             } else if constexpr (std::is_same_v<T, std::complex<float>>) {
                 info = LAPACKE_cgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                       reinterpret_cast<lapack_complex_float*>(Ab.data_ptr()), Ab.ld(), sb,
-                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Ub.data_ptr()) : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Vhb.data_ptr()) : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      (jobu != SvdVectors::None) ? reinterpret_cast<lapack_complex_float*>(Ub.data_ptr()) : nullptr,
+                                      (jobu != SvdVectors::None) ? Ub.ld() : 1,
+                                      (jobvh != SvdVectors::None) ? reinterpret_cast<lapack_complex_float*>(Vhb.data_ptr()) : nullptr,
+                                      (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                       superb.data());
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 info = LAPACKE_zgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                       reinterpret_cast<lapack_complex_double*>(Ab.data_ptr()), Ab.ld(), sb,
-                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Ub.data_ptr()) : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Vhb.data_ptr()) : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
+                                      (jobu != SvdVectors::None) ? reinterpret_cast<lapack_complex_double*>(Ub.data_ptr()) : nullptr,
+                                      (jobu != SvdVectors::None) ? Ub.ld() : 1,
+                                      (jobvh != SvdVectors::None) ? reinterpret_cast<lapack_complex_double*>(Vhb.data_ptr()) : nullptr,
+                                      (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                       superb.data());
             } else {
                 throw std::runtime_error("gesvd_vendor (NETLIB): unsupported scalar type");

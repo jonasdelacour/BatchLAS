@@ -1192,3 +1192,236 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Thin (economy) singular vectors on the blocked path.
+//
+// Note there is deliberately no GTEST_SKIP on the CUDA backend in the first
+// test: dispatch pins NETLIB to Vendor, so running it on GesvdTest/0 and /1 is
+// what exercises the new LAPACKE jobu='S' mapping, which is in turn the
+// reference the GPU results are checked against.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(GesvdTest, ThinTallRectangular) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    const int m = 192;
+    const int n = 64;
+    const int k = std::min(m, n);
+    const int batch = 2;
+
+    auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8101);
+    Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+    UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
+    Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch);      // thin: m x k, not m x m
+    Matrix<Scalar, MatrixFormat::Dense> Vh(k, n, batch);     // k == n here, so this is full
+
+    const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, U, Vh,
+                                                               SvdVectors::Thin,
+                                                               SvdVectors::Thin,
+                                                               nullptr);
+    ASSERT_TRUE(err.empty()) << err;
+
+    expect_singular_values_match_lapacke(A_ref, s, gesvd_sv_tol<Real>());
+    expect_orthonormal_columns(U);
+    expect_orthonormal_rows(Vh);
+    expect_reconstruction(A_ref, s, U, Vh);
+}
+
+TYPED_TEST(GesvdTest, ThinWideRectangular) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    // m < n takes the transpose branch, where the thin factor is V^H and the
+    // workspace view it is produced through (ut_view) had to become rectangular.
+    const int m = 64;
+    const int n = 192;
+    const int k = std::min(m, n);
+    const int batch = 2;
+
+    auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8102);
+    Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+    UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
+    Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch);      // k == m here, so this is full
+    Matrix<Scalar, MatrixFormat::Dense> Vh(k, n, batch);     // thin: k x n, not n x n
+
+    const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, U, Vh,
+                                                               SvdVectors::Thin,
+                                                               SvdVectors::Thin,
+                                                               nullptr);
+    ASSERT_TRUE(err.empty()) << err;
+
+    expect_singular_values_match_lapacke(A_ref, s, gesvd_sv_tol<Real>());
+    expect_orthonormal_columns(U);
+    expect_orthonormal_rows(Vh);
+    expect_reconstruction(A_ref, s, U, Vh);
+}
+
+// The point of the whole item: a thin request must not pay the full U cost,
+// in U *or* in the workspace. Without the direct-bidiag forcing rule the
+// m x m allocation simply migrates into the scratch buffer and the caller
+// still cannot run the shape.
+TYPED_TEST(GesvdTest, ThinWorkspaceIsSmallerThanFull) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+    } else {
+        const int m = 512;
+        const int n = 32;
+        const int k = std::min(m, n);
+        const int batch = 2;
+
+        Matrix<Scalar, MatrixFormat::Dense> A(m, n, batch);
+        UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
+
+        Matrix<Scalar, MatrixFormat::Dense> U_full(m, m, batch);
+        Matrix<Scalar, MatrixFormat::Dense> Vh_full(n, n, batch);
+        const size_t ws_full = gesvd_buffer_size<B, Scalar>(
+            *this->ctx, A.view(), s.to_span(), U_full.view(), Vh_full.view(),
+            SvdVectors::All, SvdVectors::All);
+
+        Matrix<Scalar, MatrixFormat::Dense> U_thin(m, k, batch);
+        Matrix<Scalar, MatrixFormat::Dense> Vh_thin(k, n, batch);
+        const size_t ws_thin = gesvd_buffer_size<B, Scalar>(
+            *this->ctx, A.view(), s.to_span(), U_thin.view(), Vh_thin.view(),
+            SvdVectors::Thin, SvdVectors::Thin);
+
+        EXPECT_LT(ws_thin, ws_full)
+            << "thin workspace " << ws_thin << " is not smaller than full " << ws_full;
+    }
+}
+
+// Thin must be an economy mode, not a differently-computed answer.
+TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    const int m = 96;
+    const int n = 48;
+    const int k = std::min(m, n);
+    const int batch = 2;
+
+    auto A_full = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8103);
+    Matrix<Scalar, MatrixFormat::Dense> A_thin(m, n, batch);
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_thin.view(), A_full.view()).wait();
+
+    UnifiedVector<Real> s_full(static_cast<size_t>(k) * static_cast<size_t>(batch));
+    Matrix<Scalar, MatrixFormat::Dense> U_full(m, m, batch), Vh_full(n, n, batch);
+    const std::string err_full = run_gesvd_with_provider<Scalar, B>(
+        *this->ctx, A_full, s_full, U_full, Vh_full, SvdVectors::All, SvdVectors::All, nullptr);
+    ASSERT_TRUE(err_full.empty()) << err_full;
+
+    UnifiedVector<Real> s_thin(static_cast<size_t>(k) * static_cast<size_t>(batch));
+    Matrix<Scalar, MatrixFormat::Dense> U_thin(m, k, batch), Vh_thin(k, n, batch);
+    const std::string err_thin = run_gesvd_with_provider<Scalar, B>(
+        *this->ctx, A_thin, s_thin, U_thin, Vh_thin, SvdVectors::Thin, SvdVectors::Thin, nullptr);
+    ASSERT_TRUE(err_thin.empty()) << err_thin;
+
+    const Real sv_tol = gesvd_sv_tol<Real>();
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < k; ++i) {
+            EXPECT_NEAR(static_cast<double>(s_thin[static_cast<size_t>(b) * k + i]),
+                        static_cast<double>(s_full[static_cast<size_t>(b) * k + i]),
+                        static_cast<double>(sv_tol))
+                << "sigma mismatch b=" << b << " i=" << i;
+        }
+        auto Uf = U_full.view().batch_item(b);
+        auto Ut = U_thin.view().batch_item(b);
+        for (int c = 0; c < k; ++c) {
+            // |<u_thin, u_full>| == 1: a singular vector's sign/phase is not
+            // determined, so an entrywise comparison would be wrong.
+            Scalar acc = Scalar(0);
+            for (int i = 0; i < m; ++i) acc += conj_value(Ut(i, c, 0)) * Uf(i, c, 0);
+            EXPECT_NEAR(static_cast<double>(std::abs(acc)), 1.0, 1e-2)
+                << "U column " << c << " differs at b=" << b;
+        }
+    }
+}
+
+// gesvd_cta cannot produce a genuinely thin factor: mode CTA always takes the
+// normal-equations branch, whose patch_zero_left_vectors writes m columns of U
+// unconditionally. Two different things are asserted here, and they differ:
+//
+//  * A DIRECT gesvd_cta call must throw. Silently writing m columns into a U
+//    that has k is an overrun.
+//  * Going through gesvd() with BATCHLAS_GESVD_PROVIDER=cta must still return
+//    the right answer. Dispatch resets an unsupported forced provider to Auto
+//    (gesvd.hh), so the request lands on a route that can serve it. That
+//    degrade is pre-existing behaviour shared by every provider, not something
+//    specific to Thin -- which is exactly why "it ran" is never by itself
+//    evidence that a forced provider was used.
+TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinButDispatchStillSucceeds) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native CTA provider is only dispatched on GPU backends.";
+    } else {
+        const int m = 32, n = 8, k = 8, batch = 2;
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8104);
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+        UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
+        Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch), Vh(k, n, batch);
+
+        EXPECT_THROW(
+            (gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A.view(), s.to_span(),
+                                              U.view(), Vh.view(),
+                                              SvdVectors::Thin, SvdVectors::Thin)),
+            std::invalid_argument);
+
+        const std::string err = run_gesvd_with_provider<Scalar, B>(
+            *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, "cta");
+        ASSERT_TRUE(err.empty()) << err;
+        expect_orthonormal_columns(U);
+        expect_reconstruction(A_ref, s, U, Vh);
+    }
+}
+
+// The only test of the direct-bidiag forcing rule. Without it, a thin tall U
+// under BATCHLAS_GESVD_BIDIAG=normal reaches patch_zero_left_vectors, which
+// writes m columns into a U that has only k.
+TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+    } else {
+        ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
+
+        const int m = 128, n = 48;
+        const int k = std::min(m, n);
+        const int batch = 2;
+
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8105);
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+        UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
+        Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch), Vh(k, n, batch);
+
+        const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, U, Vh,
+                                                                   SvdVectors::Thin,
+                                                                   SvdVectors::Thin,
+                                                                   nullptr);
+        ASSERT_TRUE(err.empty()) << err;
+
+        expect_orthonormal_columns(U);
+        expect_reconstruction(A_ref, s, U, Vh);
+    }
+}
