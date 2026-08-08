@@ -1723,6 +1723,28 @@ namespace batchlas {
         // chosen from n; the result is clamped by the device's maximum
         // work-group size and by available local memory.
         size_t cta_wg_size_multiplier = 1;
+
+        // --- syev_jacobi_blocked only; ignored by syev_jacobi_cta. ---
+
+        // Block-column width nb. 0 selects the widest block that fits local
+        // memory and the panel update's register budget, which is what the
+        // outer loop wants: global traffic per sweep is ~6 n^3 / nb, so nb is
+        // the only knob that moves it. A smaller value is clamped up to at
+        // least ceil(n/2) blocks worth, never above the device limit.
+        size_t block_size = 0;
+
+        // Sweeps of the inner solve on each 2nb x 2nb pivot block. 1 is the
+        // "inexact"/block-oriented variant (MAGMA's batched SVD, Novakovic);
+        // any value at or above max_sweeps diagonalizes each pivot block
+        // exactly, giving classical block Jacobi.
+        //
+        // 0 chooses by measurement: exact when the pivot block is the whole
+        // matrix (there is then no outer cost to amortize and one inner solve
+        // finishes the problem), a single inexact sweep otherwise (the inner
+        // solve costs O(m^3) per block against the outer update's O(n m^2), so
+        // extra inner sweeps buy convergence at a worse rate than another outer
+        // sweep). Measured spread between the two is 1.3x either way.
+        size_t inner_sweeps = 0;
     };
 
     /**
@@ -1768,6 +1790,46 @@ namespace batchlas {
                                        const MatrixView<T, MatrixFormat::Dense>& a,
                                        JobType jobz,
                                        JacobiParams<T> params = JacobiParams<T>());
+
+    /**
+     * @brief Blocked two-sided Jacobi symmetric/Hermitian eigen-solver.
+     *
+     * The n > 32 continuation of syev_jacobi_cta, and the same trade: high
+     * *relative* accuracy on graded or badly scaled input, at a substantially
+     * higher operation count than a tridiagonalizing solver. syev_jacobi_cta is
+     * capped at n <= 32 because it holds A and Z in local memory per sub-group
+     * partition; this kernel gives each matrix a whole work-group and keeps only
+     * the current 2*nb x 2*nb pivot block resident, so n is limited by global
+     * memory rather than by local.
+     *
+     * Notes:
+     * - Intended for 64 <= n <= 256; accepted for 2 <= n <= 1024.
+     * - Real symmetric and complex Hermitian, Uplo::Lower and Uplo::Upper.
+     * - A is DESTROYED in both job modes. With jobz == EigenVectors it is
+     *   overwritten by the eigenvectors; with NoEigenVectors its contents are
+     *   unspecified on return.
+     * - Eigenvalues are returned in ascending order when JacobiParams::sort is
+     *   enabled (default).
+     * - Needs a workspace of n*n*batch elements of T for the eigenvector
+     *   accumulator, and none at all for eigenvalues only.
+     *
+     * See JACOBI_EIGENSOLVER_PLAN.md (Tier B/C) for the design rationale and
+     * SYEV_PERF_IMPLEMENTATION_PLAN.md WP8 for how it is expected to perform.
+     */
+    template <Backend B, typename T>
+    Event syev_jacobi_blocked(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& a_in,
+                              Span<typename base_type<T>::type> eigenvalues,
+                              JobType jobz,
+                              Uplo uplo,
+                              const Span<std::byte>& ws = Span<std::byte>(),
+                              JacobiParams<T> params = JacobiParams<T>());
+
+    template <Backend B, typename T>
+    size_t syev_jacobi_blocked_buffer_size(Queue& ctx,
+                                           const MatrixView<T, MatrixFormat::Dense>& a,
+                                           JobType jobz,
+                                           JacobiParams<T> params = JacobiParams<T>());
 
     /**
      * @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large matrices.
@@ -2470,6 +2532,8 @@ BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_fused)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_fused_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_blocked)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_jacobi_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_blocked)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_two_stage)
