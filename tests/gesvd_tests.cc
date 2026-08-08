@@ -129,8 +129,27 @@ protected:
     }
 };
 
+// Complex GENERAL input, as distinct from the Hermitian-complex fixture above.
+// The suite had no such case at all: gesvd_supports_blocked declines complex,
+// so before gesvdj_cta covered the 33..64 band these shapes fell through to
+// Vendor and threw.
+template <typename Config>
+class GesvdGeneralComplexTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using Scalar = typename Config::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    static constexpr Backend B = Config::BackendVal;
+
+    // Mirrors gesvd_jacobi_max_dim: complex<double> with vectors does not fit
+    // local memory at the C=64 rung on this device.
+    static constexpr int max_dim_with_vectors() {
+        return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
+    }
+};
+
 TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
 TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
+TYPED_TEST_SUITE(GesvdGeneralComplexTest, GesvdHermitianComplexTestTypes);
 
 template <typename T>
 inline T conj_value(const T& value) {
@@ -1575,5 +1594,90 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
         }
         expect_orthonormal_columns(U_blk);
         expect_reconstruction(A_ref, s_blk, U_blk, Vh_blk);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Complex GENERAL SVD above n = 32 (follow-up item 5).
+//
+// This used to throw. gesvd_supports_blocked returns false for complex and
+// gesvd_supports_cta does too outside the Hermitian branch, so complex general
+// input fell through to Vendor, whose only binding is gesvdjBatched at
+// max(m,n) <= 32. Widening gesvdj_cta to 64 is what closes the band.
+//
+// Note the follow-up list attributes "18 gesvd_tests cases skip for this" to
+// this gap. That is not so: all 18 skips are NETLIB-backend skips of GPU-only
+// provider tests, none of them would newly pass, and there was no complex
+// GENERAL case in the suite to un-skip. These are new.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+    } else {
+        if (TestFixture::max_dim_with_vectors() < 64) {
+            GTEST_SKIP() << "complex<double> with vectors is capped at 32 (local memory)";
+        }
+
+        struct Shape { int m; int n; };
+        const Shape shapes[] = {{48, 48}, {64, 40}, {40, 64}};
+
+        for (const auto& sh : shapes) {
+            SCOPED_TRACE("m=" + std::to_string(sh.m) + " n=" + std::to_string(sh.n));
+            const int k = std::min(sh.m, sh.n);
+            const int batch = 2;
+
+            // hermitian=false: this is the GENERAL path, not the Hermitian one.
+            auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(sh.m, sh.n, false, batch, 6161);
+            Matrix<Scalar, MatrixFormat::Dense> A_ref(sh.m, sh.n, batch);
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+            UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
+            Matrix<Scalar, MatrixFormat::Dense> U(sh.m, sh.m, batch);
+            Matrix<Scalar, MatrixFormat::Dense> Vh(sh.n, sh.n, batch);
+
+            // nullptr => the Auto order. Reaching a result at all is the point.
+            const std::string err = run_gesvd_with_provider<Scalar, B>(
+                *this->ctx, A, s, U, Vh, SvdVectors::All, SvdVectors::All, nullptr);
+            ASSERT_TRUE(err.empty()) << err;
+
+            for (int b = 0; b < batch; ++b) {
+                for (int i = 1; i < k; ++i) {
+                    const size_t idx = static_cast<size_t>(b) * k;
+                    EXPECT_LE(s[idx + i], s[idx + i - 1] * Real(1 + 1e-4))
+                        << "sigma not descending at b=" << b << " i=" << i;
+                }
+            }
+            expect_orthonormal_columns(U);
+            expect_orthonormal_rows(Vh);
+            expect_reconstruction(A_ref, s, U, Vh);
+        }
+    }
+}
+
+// Above the Jacobi cap there is still no complex general route, and it must
+// fail loudly rather than return something. This is also what proves the test
+// above is exercising the new band rather than some pre-existing path.
+TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveCapStillRefused) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+    } else {
+        const int n = 96, batch = 2;
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 6162);
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+        Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch), Vh(n, n, batch);
+
+        const std::string err = run_gesvd_with_provider<Scalar, B>(
+            *this->ctx, A, s, U, Vh, SvdVectors::All, SvdVectors::All, nullptr);
+        EXPECT_FALSE(err.empty())
+            << "complex general at n=96 silently produced a result; there is no route for it";
     }
 }

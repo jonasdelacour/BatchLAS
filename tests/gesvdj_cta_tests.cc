@@ -84,6 +84,13 @@ protected:
     static Real recon_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
     static Real ortho_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
 
+    // Mirrors gesvdj_cta_max_dim. complex<double> with vectors needs 138,816 B
+    // of local memory at the C=64 rung against this device's 101,376 B, so it
+    // is capped at 32 and these cases skip rather than fail.
+    static constexpr int max_dim_with_vectors() {
+        return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
+    }
+
     // ||A - U diag(s) Vh||_F / ||A||_F, computed on the host in double.
     // u_ld / vh_ld are passed explicitly rather than assumed to be m and n:
     // a thin V^H is k x n, so its leading dimension is k, and hardcoding n
@@ -297,6 +304,77 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
     for (int n : {2, 5, 8, 16, 32}) {
         this->check(n, n, 3, this->random_matrix(n, n, 3, 1234u + n));
     }
+}
+
+// ---------------------------------------------------------------------------
+// The 33..64 band.
+//
+// Above 32 the kernel keeps P = 32 lanes and grows the tile capacity C to 64,
+// so each lane owns kRPL = C/P = 2 rows instead of one. Everything that
+// indexes a ROW (load, rotation apply, U completion, the non-transposed
+// writeback) gains an rr loop; everything that indexes a COLUMN or a RANK (the
+// epilogue sort, sigma writeback, the transposed writeback) gains a cc loop;
+// and the Gram reduce-scatter is chunked so its 4+1-step butterfly and the
+// lane>>1 pair mapping stay exactly as they were.
+//
+// Sizes that are not multiples of 32 matter most here: they exercise the
+// padding in the second row-slot, where an off-by-one in `row < RR` silently
+// mixes a pad row into a dot product.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    for (int n : {33, 40, 48, 63, 64}) {
+        this->check(n, n, 2, this->random_matrix(n, n, 2, 4321u + n));
+    }
+}
+
+TYPED_TEST(GesvdjCtaTest, TallRectangularAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    this->check(64, 24, 2, this->random_matrix(64, 24, 2, 981u));
+    this->check(48, 33, 2, this->random_matrix(48, 33, 2, 982u));
+}
+
+TYPED_TEST(GesvdjCtaTest, WideRectangularAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    // m < n takes the transposed load (A^H) and the transposed writeback, where
+    // the thin/rank bound lands on the lane index rather than the inner loop.
+    this->check(24, 64, 2, this->random_matrix(24, 64, 2, 983u));
+    this->check(33, 48, 2, this->random_matrix(33, 48, 2, 984u));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    this->check_thin(64, 24, 2, this->random_matrix(64, 24, 2, 985u));
+    this->check_thin(24, 64, 2, this->random_matrix(24, 64, 2, 986u));
+}
+
+TYPED_TEST(GesvdjCtaTest, RankDeficientAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    // Forces the in-kernel Gram-Schmidt completion at C=64, where the trial
+    // vector is distributed over two row-slots per lane and each lane must sum
+    // its own rows before the 32-wide butterfly.
+    const int n = 48, batch = 2;
+    auto host = this->random_matrix(n, n, batch, 987u);
+    for (int b = 0; b < batch; ++b) {
+        for (int dup : {40, 41, 42}) {
+            for (int i = 0; i < n; ++i) {
+                host[static_cast<size_t>(b) * n * n + static_cast<size_t>(dup) * n + i] =
+                    host[static_cast<size_t>(b) * n * n + static_cast<size_t>(3) * n + i];
+            }
+        }
+    }
+    this->check(n, n, batch, std::move(host));
 }
 
 TYPED_TEST(GesvdjCtaTest, TallRectangular) {
