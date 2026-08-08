@@ -20,7 +20,7 @@ namespace batchlas {
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.
-template <typename T, size_t P, bool ComputeV>
+template <typename T, size_t P, size_t C, bool ComputeV>
 class GesvdjCTAKernel;
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ inline void round_robin_pair_g(int32_t mp, int32_t t, int32_t k, int32_t& p, int
     }
 }
 
-template <typename T, size_t P, bool ComputeV>
+template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& a_in,
                             typename base_type<T>::type* s_ptr,
@@ -178,10 +178,23 @@ inline void gesvdj_cta_impl(Queue& ctx,
         // conflict-free: lane i reads [r + c_i*LD] with c_i a permutation, and
         // gcd(LD,32)=1 turns c -> c*LD mod 32 into a bijection. With LD == P the
         // same access serialises 32 ways.
-        constexpr int32_t LD = static_cast<int32_t>(P) + 1;
-        constexpr size_t kTileElems = static_cast<size_t>(LD) * P;
-        constexpr size_t kRotSlots = (P / 2 > 0) ? (P / 2) : 1;
-        constexpr size_t kPairSlots = (P - 1) * kRotSlots;
+        // P is the PARTITION WIDTH (lanes). C is the TILE CAPACITY (rows and
+        // columns of the resident matrix). They are equal on every rung that
+        // existed before n > 32 support, and C > P means each lane owns
+        // kRPL = C/P rows rather than one.
+        //
+        // Splitting them is what keeps the n <= 32 path byte-identical: at
+        // C == P every generalised expression below reduces syntactically to
+        // what it was.
+        static_assert(C % P == 0, "tile capacity must be a whole number of partition widths");
+        static_assert(C <= 64, "int16 pair packing p|(q<<8) overflows above C=127; 64 is the tested cap");
+        constexpr size_t kRPL = C / P;                       // rows per lane
+        static_assert(kRPL == 1 || P == 32,
+                      "multi-row lanes are only defined on a full 32-wide partition");
+        constexpr int32_t LD = static_cast<int32_t>(C) + 1;
+        constexpr size_t kTileElems = static_cast<size_t>(LD) * C;
+        constexpr size_t kRotSlots = (C / 2 > 0) ? (C / 2) : 1;
+        constexpr size_t kPairSlots = (C - 1) * kRotSlots;
         constexpr bool kNeedPhase = internal::is_complex<T>::value;
 
         // Local-memory budget. Note this clamps probs_per_wg DIRECTLY rather
@@ -194,10 +207,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
         constexpr size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
         const size_t bytes_per_prob =
             (1 + (ComputeV ? 1 : 0)) * kTileElems * sizeof(T)
-            + P * sizeof(Real)
+            + C * sizeof(Real)
             + 2 * kRotSlots * sizeof(Real)
             + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
-            + P * sizeof(int16_t);
+            + C * sizeof(int16_t);
 
         const size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
         const size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
@@ -228,13 +241,13 @@ inline void gesvdj_cta_impl(Queue& ctx,
         auto V_local = sycl::local_accessor<T, 1>(
             sycl::range<1>(ComputeV ? static_cast<size_t>(probs_per_wg) * kTileElems : 1), cgh);
         auto Nrm_local = sycl::local_accessor<Real, 1>(
-            sycl::range<1>(static_cast<size_t>(probs_per_wg) * P), cgh);
+            sycl::range<1>(static_cast<size_t>(probs_per_wg) * C), cgh);
         auto Rcs_local = sycl::local_accessor<sycl::vec<Real, 2>, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * kRotSlots), cgh);
         auto Rd_local = sycl::local_accessor<T, 1>(
             sycl::range<1>(kNeedPhase ? static_cast<size_t>(probs_per_wg) * kRotSlots : 1), cgh);
         auto Inv_local = sycl::local_accessor<int16_t, 1>(
-            sycl::range<1>(static_cast<size_t>(probs_per_wg) * P), cgh);
+            sycl::range<1>(static_cast<size_t>(probs_per_wg) * C), cgh);
         auto Pair_local = sycl::local_accessor<int16_t, 1>(sycl::range<1>(kPairSlots), cgh);
 
         const int32_t RR = rows;
@@ -273,7 +286,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         // silently wrong at any other sub-group width. Sibling CTA kernels
         // (steqr_cta, syev_cta_fused, sytrd_sb2st_cta) all carry the attribute;
         // this one and syev_jacobi_cta did not.
-        cgh.parallel_for<GesvdjCTAKernel<T, P, ComputeV>>(
+        cgh.parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
                 const auto wg = it.get_group();
@@ -299,8 +312,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     if (k < pairs_per_round) {
                         round_robin_pair_g(mp, t, k, p, q);
                     } else {
-                        p = static_cast<int32_t>(P);
-                        q = static_cast<int32_t>(P);
+                        p = static_cast<int32_t>(C);
+                        q = static_cast<int32_t>(C);
                     }
                     Pair_local[idx] = static_cast<int16_t>(p | (q << 8));
                 }
@@ -323,9 +336,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
                 const int32_t base_a = part_id * static_cast<int32_t>(kTileElems);
                 const int32_t base_v = ComputeV ? (part_id * static_cast<int32_t>(kTileElems)) : 0;
-                const int32_t base_n = part_id * static_cast<int32_t>(P);
+                const int32_t base_n = part_id * static_cast<int32_t>(C);
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-                const int32_t base_p = part_id * static_cast<int32_t>(P);
+                const int32_t base_p = part_id * static_cast<int32_t>(C);
 
                 // ---- Load. lane = ROW. ----
                 // Lane-as-row makes the global read A_prob(lane,c) (address
@@ -335,7 +348,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // gesvd_blocked's out-of-place transpose + recursion.
                 // The pad region is written as exact zero so a padded pair's
                 // Gram is identically 0 and falls below any threshold.
-                for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
+                for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
                     T v = T(0);
                     if (lane < RR && c < CC) {
                         // For m < n we solve A^H, not A^T. A^H = U' S V'^H gives
@@ -426,7 +439,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // pressure, so it is not worth keeping behind a runtime flag
                 // either. See GESVD_PLAN.md Tier 2.
                 if (beta != Real(1)) {
-                    for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
+                    for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
                         A_local[base_a + lane + c * LD] = A_local[base_a + lane + c * LD] * T(beta);
                     }
                     group_barrier(part);
@@ -727,7 +740,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             // sqrt(n2_c) -- not by sigma, which is that times
                             // 1/beta.
                             const Real inv_s = Real(1) / sycl::sqrt(n2_c);
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
+                            for (int32_t r = 0; r < static_cast<int32_t>(C); ++r) {
                                 A_local[base_a + r + lane * LD] = A_local[base_a + r + lane * LD] * T(inv_s);
                             }
                         }
@@ -972,24 +985,32 @@ Event gesvdj_cta(Queue& ctx,
 
     auto* s_ptr = singular_values.data();
 
-    auto launch = [&](auto P_tag) {
+    // (P, C): P lanes per partition, C the tile capacity. Every rung here has
+    // C == P, i.e. one row per lane -- the shape this kernel has always had.
+    auto launch = [&](auto P_tag, auto C_tag) {
         constexpr size_t Pv = decltype(P_tag)::value;
+        constexpr size_t Cv = decltype(C_tag)::value;
         if (want_right) {
-            gesvdj_cta_impl<T, Pv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
+            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
         } else {
-            gesvdj_cta_impl<T, Pv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
+            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
         }
     };
 
+    constexpr auto k4 = std::integral_constant<size_t, 4>{};
+    constexpr auto k8 = std::integral_constant<size_t, 8>{};
+    constexpr auto k16 = std::integral_constant<size_t, 16>{};
+    constexpr auto k32 = std::integral_constant<size_t, 32>{};
+
     const int32_t md = std::max(m, n);
     if (md <= 4) {
-        launch(std::integral_constant<size_t, 4>{});
+        launch(k4, k4);
     } else if (md <= 8) {
-        launch(std::integral_constant<size_t, 8>{});
+        launch(k8, k8);
     } else if (md <= 16) {
-        launch(std::integral_constant<size_t, 16>{});
+        launch(k16, k16);
     } else {
-        launch(std::integral_constant<size_t, 32>{});
+        launch(k32, k32);
     }
 
     return ctx.get_event();
