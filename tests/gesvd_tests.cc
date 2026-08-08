@@ -108,8 +108,12 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
+    // Guards the values-only result against LAPACKE at n=8, absolute. Was
+    // 5e-2, which at sigma_max ~ 3 is a 1.6% relative check; tightening the
+    // three constants above without this one would just leave the loosest
+    // guard here.
     static constexpr Real tol() {
-        return std::is_same_v<Real, float> ? Real(5e-2f) : Real(1e-10);
+        return std::is_same_v<Real, float> ? Real(2e-3f) : Real(1e-10);
     }
 };
 
@@ -121,7 +125,7 @@ protected:
     static constexpr Backend B = Config::BackendVal;
 
     static constexpr Real tol() {
-        return std::is_same_v<Real, float> ? Real(8e-2f) : Real(1e-10);
+        return std::is_same_v<Real, float> ? Real(5e-3f) : Real(1e-10);
     }
 };
 
@@ -308,19 +312,72 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
 
 namespace {
 
+// The float constants used to be 5e-2 / 2e-1 / 3e-1. Those predate any path
+// accurate enough to justify tightening them, and they had stopped guarding
+// anything: 3e-1 permits a 30% relative reconstruction error against a measured
+// ~1.3e-6 on these shapes.
+//
+// Chosen with margin over BOTH error sources, not only ours. The reference is
+// LAPACKE_sgesvd in the SAME precision, whose own error is about
+// eps_f32 * sigma_max ~= 1.1e-6 absolute at n=64; the test matrices are
+// Random(-1,1), so sigma_max ~= 2*sqrt(n)/sqrt(3) ~= 9.2 there, and the
+// singular-value check is ABSOLUTE.
+//
+// These were fitted by measurement across every provider and all three
+// BATCHLAS_GESVD_BIDIAG settings, which is the sweep that matters: a value
+// tuned only against the bdsdc default will fail the =normal path, whose
+// relative error reaches 4e-1 at kappa=1e4.
+// BATCHLAS_GESVD_BIDIAG=normal selects the OLD normal-equations bidiagonal
+// path, which is retained purely so the three solvers can be A/B'd. It forms
+// the tridiagonal of B^T B, so it squares the condition number and reaches ~4e-1
+// relative error at kappa=1e4 -- it cannot meet the tolerances the default path
+// meets, and it is not supposed to.
+//
+// So the tolerances are solver-aware rather than pinned to the worst path. The
+// alternative was to keep 3e-1 forever, which is what made these guards
+// vacuous in the first place; the alternative after that was to let the =normal
+// A/B arm fail, which would quietly train people to ignore a red suite.
+inline bool gesvd_bidiag_is_normal_equations() {
+    const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
+    return v != nullptr && std::string(v) == "normal";
+}
+
+// The float constants used to be 5e-2 / 2e-1 / 3e-1. Those predate any path
+// accurate enough to justify tightening them, and they had stopped guarding
+// anything: 3e-1 permits a 30% relative reconstruction error against a measured
+// ~1.3e-6 on these shapes.
+//
+// Chosen with margin over BOTH error sources, not only ours. The reference is
+// LAPACKE_sgesvd in the SAME precision, whose own error is about
+// eps_f32 * sigma_max ~= 1.1e-6 absolute at n=64; the test matrices are
+// Random(-1,1), so sigma_max ~= 2*sqrt(n)/sqrt(3) ~= 9.2 there, and the
+// singular-value check is ABSOLUTE. Verified against every provider and all
+// three BATCHLAS_GESVD_BIDIAG settings.
 template <typename Real>
-constexpr Real gesvd_sv_tol() {
-    return std::is_same_v<Real, float> ? Real(5e-2f) : Real(1e-10);
+inline Real gesvd_sv_tol() {
+    if constexpr (std::is_same_v<Real, float>) {
+        return gesvd_bidiag_is_normal_equations() ? Real(5e-2f) : Real(2e-3f);
+    } else {
+        return Real(1e-10);
+    }
 }
 
 template <typename Real>
-constexpr Real gesvd_ortho_tol() {
-    return std::is_same_v<Real, float> ? Real(2e-1f) : Real(5e-8);
+inline Real gesvd_ortho_tol() {
+    if constexpr (std::is_same_v<Real, float>) {
+        return gesvd_bidiag_is_normal_equations() ? Real(2e-1f) : Real(1e-3f);
+    } else {
+        return Real(5e-8);
+    }
 }
 
 template <typename Real>
-constexpr Real gesvd_recon_tol() {
-    return std::is_same_v<Real, float> ? Real(3e-1f) : Real(1e-8);
+inline Real gesvd_recon_tol() {
+    if constexpr (std::is_same_v<Real, float>) {
+        return gesvd_bidiag_is_normal_equations() ? Real(3e-1f) : Real(1e-4f);
+    } else {
+        return Real(1e-8);
+    }
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
