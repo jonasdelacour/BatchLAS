@@ -752,6 +752,38 @@ buggy and worth fixing separately** — likely the Chol2 orthogonalisation insid
 it. It affects all variants equally, so A/B comparisons through the harness
 remain valid.
 
+### The unblocked-gebrd band — a 101x cliff at a single value of n
+
+Found after `bdsdc` landed, by noticing that the Tier 3 cost table has n=64 at
+201 ms and n=128 at 10.0 ms — a problem twice the size running twenty times
+faster. That is not a scaling anomaly, it is a routing one.
+`gesvd_use_blocked_gebrd` returned `n >= 128`, so everything in
+`33 <= n <= 127` ran the **unblocked**, level-2, panel-serial bidiagonalisation.
+That band has no other route: the CTA path stops at 32.
+
+Measured, float, batch=256, full vectors, ms:
+
+| n | 33 | 36 | 48 | 64 | 96 | 127 | 128 |
+|---|---|---|---|---|---|---|---|
+| unblocked (old default) | 10.92 | 15.50 | 44.83 | 99.94 | — | 609.1 | — |
+| blocked | 1.06 | 1.13 | 1.44 | 2.12 | 3.84 | 5.83 | 6.02 |
+| speedup | 10.3x | 13.7x | 31.2x | 47.2x | — | **104x** | — |
+
+`n=127` cost 101x what `n=128` cost. Double is the same story, less extreme:
+batch=256, n=64 107.8 -> 10.6 ms (10.2x), n=127 646.9 -> 36.8 ms (17.6x).
+
+**Blocked wins at every n from 33 up, in both types.** There is no crossover to
+tune for — the unblocked path is simply never the right choice above the CTA
+cutoff, and the old threshold was not a measured tuning constant. The default is
+now 33, so the blocked path takes over exactly where the CTA path hands off, and
+the cost curve is continuous across it (40 -> 1.25, 64 -> 2.12, 96 -> 3.84,
+127 -> 5.83, 128 -> 6.02).
+
+Accuracy is unchanged, which is the part that had to be checked rather than
+assumed: n=64, kappa=1e4, float, 512 samples, orthogonality 1.78e-5 -> 1.79e-5
+and residual 1.29e-6 -> 1.32e-6, Fail% 0 both ways.
+`BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` restores the old behaviour for A/B.
+
 ## Tier 4
 
 ### Coverage gaps

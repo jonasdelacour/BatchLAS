@@ -29,8 +29,30 @@ enum class GesvdNativeMode {
     CTA,
 };
 
+// Smallest n for which the Blocked path uses the BLOCKED bidiagonalisation.
+//
+// This was 128, and everything in 33 <= n <= 127 ran the unblocked, level-2,
+// panel-serial gebrd instead -- exactly the band that has no other route, since
+// the CTA path stops at 32. The cost was not a tuning-scale difference:
+//
+//   float, batch=256, full vectors, ms
+//   n        33      36      48      64      127     128
+//   unblkd   10.92   15.50   44.83   99.94   609.1   (n/a)
+//   blocked   1.06    1.13    1.44    2.12     5.83    6.02
+//
+// so n=127 cost 101x what n=128 cost, and n=64 cost 16x what a problem eight
+// times larger cost. Blocked wins at EVERY n from 33 up in both float and double
+// (double, batch=256: n=64 107.8 -> 10.6, n=127 646.9 -> 36.8) -- there is no
+// crossover to find, the unblocked path is simply never the right choice above
+// the CTA cutoff. Accuracy is unchanged: at n=64, kappa=1e4, float, 512 samples,
+// orthogonality 1.78e-5 -> 1.79e-5 and residual 1.29e-6 -> 1.32e-6.
+//
+// BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the table above was
+// taken; set it above the largest n to get the old behaviour back.
 inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
-    return mode == GesvdNativeMode::Blocked && n >= 128;
+    const char* v = std::getenv("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN");
+    const int32_t threshold = (v != nullptr) ? std::atoi(v) : 33;
+    return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
 
 // Which bidiagonal solver the Blocked path uses.
