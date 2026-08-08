@@ -50,6 +50,9 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
                         internal::sytrd_sb2st_hh<B, T>(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
+    // Per-matrix, so a row compares directly against the syev profile without a
+    // hand division by the batch size.
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
 template <typename T, Backend B>
@@ -91,11 +94,20 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
                                                     Span<const int32_t>(wp, nw));
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
+    state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_SB2ST_HH_CHASE<float, batchlas::Backend::CUDA>), Sizes);
 MINI_BENCHMARK_REGISTER_SIZES((BM_SB2ST_HH_BACK<float, batchlas::Backend::CUDA>), Sizes);
+// The complex rows are the ones worth tuning: at n=512/batch=512/kd=32 the
+// profile attributes 805.0 ms to the back-transform for cfloat against 206.6 ms
+// for float (3.90x) and 4.85x on the chase. Until now only float was registered,
+// so --type=cfloat matched no benchmark name and silently printed zero rows --
+// minibench keys the type filter off the stringized template argument, so the
+// type must be spelled literally std::complex<float>, not through an alias.
+MINI_BENCHMARK_REGISTER_SIZES((BM_SB2ST_HH_CHASE<std::complex<float>, batchlas::Backend::CUDA>), Sizes);
+MINI_BENCHMARK_REGISTER_SIZES((BM_SB2ST_HH_BACK<std::complex<float>, batchlas::Backend::CUDA>), Sizes);
 #endif
 
 MINI_BENCHMARK_MAIN();
