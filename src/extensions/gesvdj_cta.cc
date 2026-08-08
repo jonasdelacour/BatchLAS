@@ -160,6 +160,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             bool transposed,
                             int32_t rows,     // R = max(m,n), rows of the solved matrix
                             int32_t cols,     // C = min(m,n), cols of the solved matrix
+                            int32_t left_cols,// columns of the left factor to emit: R (All) or C (Thin)
                             GesvdjParams<T> params) {
     using Real = typename base_type<T>::type;
 
@@ -238,6 +239,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         const int32_t RR = rows;
         const int32_t CC = cols;
+        // Columns of the left factor actually emitted: RR for All, CC for Thin.
+        // Kernel-uniform, so every partition-wide reduction below stays uniform
+        // and no barrier structure depends on it.
+        const int32_t LC = left_cols;
         // Pivot index space padded to even so the round-robin schedule is well
         // defined; a padded index is never paired with a real one because pairs
         // touching index >= CC are skipped.
@@ -734,7 +739,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         (lane < CC) && (inv_beta * sycl::sqrt(Nrm_local[base_n + lane]) <= tol_zero);
                     const int32_t any_def = part_sum_g(part, deficient_lane ? int32_t(1) : int32_t(0));
 
-                    if (any_def > 0 || RR > CC) {
+                    // LC, not RR: a Thin request wants only the CC columns the
+                    // solve already produced, so the completion block is skipped
+                    // outright unless a column came out numerically deficient
+                    // (any_def > 0), which still has to be repaired.
+                    if (any_def > 0 || LC > CC) {
                         // The trial index cursor RUNS ACROSS dst; it is not reset
                         // per column. That is what makes this terminate.
                         //
@@ -755,8 +764,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         const Real accept_tol = Real(1) / (Real(2) * static_cast<Real>(RR));
                         int32_t jcur = 0;
 
-                        for (int32_t dst = 0; dst < RR; ++dst) {
+                        for (int32_t dst = 0; dst < LC; ++dst) {
                             const int32_t cdst = static_cast<int32_t>(Inv_local[base_p + dst]);
+                            // With LC == CC this never fires, so only genuinely
+                            // deficient columns are rebuilt.
                             bool needs = (dst >= CC);
                             if (!needs) {
                                 needs = (inv_beta * sycl::sqrt(Nrm_local[base_n + cdst])) <= tol_zero;
@@ -797,8 +808,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     if (!transposed_f) {
                         // U(lane, dst): global address dst*ld + lane, so
                         // consecutive lanes are contiguous.
+                        // dst is the output COLUMN, so Thin truncates the loop.
                         if (lane < RR) {
-                            for (int32_t dst = 0; dst < RR; ++dst) {
+                            for (int32_t dst = 0; dst < LC; ++dst) {
                                 const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                                 U_prob(lane, dst) = A_local[base_a + lane + c * LD];
                             }
@@ -807,7 +819,13 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT
                         // ROW. The LDS read [r + c*LD] is conflict-free because
                         // LD is odd and c is a permutation.
-                        if (lane < RR) {
+                        //
+                        // In THIS orientation lane is the rank index (what dst
+                        // is above) while r runs over the output's columns, so
+                        // the thin restriction lands on `lane`, not on `r`.
+                        // Truncating r instead would emit a factor of the wrong
+                        // shape while still writing something plausible.
+                        if (lane < LC) {
                             const int32_t c = static_cast<int32_t>(Inv_local[base_p + lane]);
                             for (int32_t r = 0; r < RR; ++r) {
                                 Vh_prob(lane, r) = conj_if_complex_g(A_local[base_a + r + c * LD]);
@@ -858,11 +876,27 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (singular_values.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
         throw std::invalid_argument(std::string(where) + ": singular_values span too small");
     }
-    if (jobu == SvdVectors::All && (u.rows() != m || u.cols() != m || u.batch_size() != batch)) {
-        throw std::invalid_argument(std::string(where) + ": U must be (m x m) with matching batch size");
+    // Guard on "is computed at all" rather than "== All", and take the expected
+    // column/row count from the job, so Thin is checked against m x k / k x n.
+    // Testing `== All` here would let a Thin request through with an
+    // unvalidated, probably wrongly-sized, output view.
+    jobu = canonical_jobu(jobu, m, k);
+    jobvh = canonical_jobvh(jobvh, n, k);
+    if (jobu != SvdVectors::None) {
+        const int64_t want_cols = svd_u_cols(jobu, m, k);
+        if (u.rows() != m || u.cols() != want_cols || u.batch_size() != batch) {
+            throw std::invalid_argument(std::string(where) + ": U must be (" +
+                                        std::to_string(m) + " x " + std::to_string(want_cols) +
+                                        ") with matching batch size");
+        }
     }
-    if (jobvh == SvdVectors::All && (vh.rows() != n || vh.cols() != n || vh.batch_size() != batch)) {
-        throw std::invalid_argument(std::string(where) + ": Vh must be (n x n) with matching batch size");
+    if (jobvh != SvdVectors::None) {
+        const int64_t want_rows = svd_vh_rows(jobvh, n, k);
+        if (vh.rows() != want_rows || vh.cols() != n || vh.batch_size() != batch) {
+            throw std::invalid_argument(std::string(where) + ": Vh must be (" +
+                                        std::to_string(want_rows) + " x " + std::to_string(n) +
+                                        ") with matching batch size");
+        }
     }
 }
 
@@ -882,15 +916,13 @@ Event gesvdj_cta(Queue& ctx,
 
     validate_gesvdj_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta");
 
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) {
-        throw std::invalid_argument("gesvdj_cta: unsupported jobu");
-    }
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) {
-        throw std::invalid_argument("gesvdj_cta: unsupported jobvh");
-    }
-
     const int32_t m = static_cast<int32_t>(a_in.rows());
     const int32_t n = static_cast<int32_t>(a_in.cols());
+    {
+        const int64_t k = std::min<int64_t>(m, n);
+        jobu = canonical_jobu(jobu, m, k);
+        jobvh = canonical_jobvh(jobvh, n, k);
+    }
     if (std::max(m, n) > 32) {
         throw std::invalid_argument("gesvdj_cta: currently supports max(m, n) <= 32");
     }
@@ -911,21 +943,33 @@ Event gesvdj_cta(Queue& ctx,
     const int32_t RR = transposed ? n : m;
     const int32_t CC = transposed ? m : n;
 
-    const bool want_u = (jobu == SvdVectors::All);
-    const bool want_vh = (jobvh == SvdVectors::All);
+    const bool want_u = (jobu != SvdVectors::None);
+    const bool want_vh = (jobvh != SvdVectors::None);
     // The R-sized factor lands in U when m >= n and in Vh when m < n, because
     // A^T = U' S V'^H gives A = V' S U'^H.
     const bool want_left = transposed ? want_vh : want_u;
     const bool want_right = transposed ? want_u : want_vh;
+
+    // How many columns of the RR-sized left factor to produce. The solve yields
+    // CC of them for free -- they are the rotated, normalised columns of A --
+    // and any beyond that have to be manufactured by an in-kernel Gram-Schmidt
+    // against canonical basis vectors. A Thin request wants exactly those CC, so
+    // left_cols == CC skips that block entirely.
+    //
+    // Only the left factor can be thin: the right factor is CC x CC, and Thin
+    // never shrinks it (the same m<=n / m>=n coincidence that canonicalisation
+    // exploits).
+    const SvdVectors job_left = transposed ? jobvh : jobu;
+    const int32_t left_cols = (job_left == SvdVectors::All) ? RR : CC;
 
     auto* s_ptr = singular_values.data();
 
     auto launch = [&](auto P_tag) {
         constexpr size_t Pv = decltype(P_tag)::value;
         if (want_right) {
-            gesvdj_cta_impl<T, Pv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, params);
+            gesvdj_cta_impl<T, Pv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
         } else {
-            gesvdj_cta_impl<T, Pv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, params);
+            gesvdj_cta_impl<T, Pv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
         }
     };
 

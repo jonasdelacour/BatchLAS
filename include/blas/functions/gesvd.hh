@@ -219,8 +219,18 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
     if (caps.max_sub_group < 32) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
     if (std::max(A.rows(), A.cols()) > 32) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    // Canonicalise here too, not only at the dispatch entry point: these
+    // predicates are the contract, and one that disagreed with the caller about
+    // what "Thin" means would reject shapes it can serve.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+    // A genuinely thin factor is out of reach for this route: mode CTA always
+    // takes the normal-equations branch, whose patch_zero_left_vectors writes m
+    // columns of U unconditionally.
+    if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) return false;
     if (hermitian_uplo.has_value()) {
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
@@ -246,8 +256,10 @@ inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
     if (caps.max_sub_group < 32) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
     if (std::max(A.rows(), A.cols()) > 32) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    // Every job combination is served, Thin included: one-sided Jacobi produces
+    // the thin U natively -- it IS the rotated, normalised A -- and the full-U
+    // columns are the extra work, manufactured by an in-kernel Gram-Schmidt
+    // that a Thin request skips outright.
     return true;
 }
 
@@ -257,12 +269,11 @@ inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    SvdVectors jobu,
                                    SvdVectors jobvh,
                                    std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    // Current native path supports real matrices with optional full U and/or
-    // V^H backtransforms via ORMBR. Hermitian support remains square-only.
+    // Current native path supports real matrices with optional full, thin, or
+    // absent U and/or V^H backtransforms via ORMBR. Hermitian support remains
+    // square-only, where Thin canonicalises to All anyway.
     if (!caps.is_gpu) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     if (hermitian_uplo.has_value()) {
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower;
@@ -324,6 +335,16 @@ inline Event gesvd_dispatch(Queue& ctx,
                             SvdVectors jobvh,
                             std::optional<Uplo> hermitian_uplo,
                             Span<std::byte> workspace) {
+    // Canonicalise before anything else, and identically to
+    // gesvd_buffer_size_dispatch below: these two independently repeat the
+    // provider choice, and a divergence in what they think "Thin" means sizes
+    // the workspace for a different computation than the one that runs.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
     Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
@@ -398,6 +419,13 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
                                          SvdVectors jobu,
                                          SvdVectors jobvh,
                                          std::optional<Uplo> hermitian_uplo) {
+    // Must match gesvd_dispatch's canonicalisation exactly -- see the note there.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
     Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
