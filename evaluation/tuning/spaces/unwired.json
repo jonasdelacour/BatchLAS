@@ -1,0 +1,95 @@
+{
+  "_comment": [
+    "Parameters that measurably matter but that NO constant in",
+    "include/batchlas/tuning_params.hh can carry. generate_tuning_header.py",
+    "ignores every bench in this file -- running it produces a profile for a",
+    "human to read, not a header.",
+    "",
+    "They are split out rather than deleted because the alternative is worse:",
+    "before 2026-08-06 the steqr bench sat in default.json and burned 18",
+    "invocations a run for a result nothing could ever consume, which looked",
+    "exactly like tuning.",
+    "",
+    "sb2st and sy2sb graduated to default.json on 2026-08-07, once",
+    "SB2ST_BACK_TILE_*, SB2ST_BACK_SUBS_* and SY2SB_ORMQR_NB_* existed and the",
+    "call sites read them.",
+    "",
+    "To promote one of these you must do all three, in order: add",
+    "<NAME>_{TINY..XLARGE} constants and a *_for_n accessor to",
+    "include/batchlas/tuning_params.hh, teach generate_tuning_header.py to",
+    "derive them, and make the production call site read the accessor instead",
+    "of its hardcoded default. Skipping the third makes the whole thing a no-op.",
+    "",
+    "Run with:",
+    "  python3 evaluation/tuning/tune.py --space evaluation/tuning/spaces/unwired.json \\",
+    "      --backend CUDA --type float --out build/tuning/unwired.json --skip-missing"
+  ],
+  "spaces": [
+    {
+      "bench": "steqr_cta",
+      "exe": "steqr_benchmark",
+      "metric": "T(µs)/matrix",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "n_sweeps", "wg_multiplier", "shift_kind"],
+      "_comment": [
+        "Blocked on: SteqrParams::cta_wg_size_multiplier (=1) and",
+        "cta_shift_strategy (=Lapack) are plain C++ member initialisers in",
+        "include/blas/extensions.hh, and stedc's leaf solve takes them as they",
+        "come. Nothing reads a tuning constant.",
+        "Worth doing: measured spreads are 12.2% for shift_kind and 3.1% for",
+        "wg_multiplier, and a sweep picked wg_multiplier=2 over the shipped 1.",
+        "shift_kind is 1=Wilkinson, anything else=Lapack, so the grid is [0,1].",
+        "The old grid swept [0,1,2] and measured Lapack twice."
+      ],
+      "cases": [
+        { "fixed": { "n": 16, "batch": 4096, "n_sweeps": 10 }, "tune": { "wg_multiplier": [1, 2, 4], "shift_kind": [0, 1] } },
+        { "fixed": { "n": 32, "batch": 4096, "n_sweeps": 10 }, "tune": { "wg_multiplier": [1, 2, 4], "shift_kind": [0, 1] } }
+      ]
+    },
+
+    {
+      "bench": "syev_two_stage_kd",
+      "exe": "syev_two_stage_benchmark",
+      "metric": "Time (ms)",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "kd"],
+      "row": "BM_SYEV_TWO_STAGE",
+      "_comment": [
+        "The executable also emits BM_SYEV_BLOCKED_BASELINE, which kd does not",
+        "affect at all; 'row' selects the two-stage path.",
+        "Blocked on: the band width is chosen by choose_two_stage_kd() in",
+        "src/extensions/two_stage_common.hh, a hand-written table justified by a",
+        "comment block, overridable only via BATCHLAS_SYEV_TWO_STAGE_KD.",
+        "Worth measuring: that comment records 425.8 vs 500.1 ms between kd=32",
+        "and kd=16 at n=1024, i.e. ~18%. Note kd also sets the ceiling for",
+        "sy2sb's clamped WY width, so retuning kd invalidates SY2SB_ORMQR_NB_*.",
+        "kd is positional here, so no env override is needed."
+      ],
+      "cases": [
+        { "fixed": { "n": 256,  "batch": 1024 }, "tune": { "kd": [16, 32, 48, 64] } },
+        { "fixed": { "n": 512,  "batch": 512  }, "tune": { "kd": [16, 32, 48, 64] } },
+        { "fixed": { "n": 1024, "batch": 128  }, "tune": { "kd": [16, 32, 48, 64, 96] } },
+        { "fixed": { "n": 2048, "batch": 32   }, "tune": { "kd": [16, 32, 48, 64, 96] } }
+      ]
+    },
+
+    {
+      "bench": "sb2st_block",
+      "exe": "syev_two_stage_benchmark",
+      "metric": "Time (ms)",
+      "direction": "min",
+      "arg_spec": ["n", "batch", "kd"],
+      "row": "BM_SYEV_TWO_STAGE",
+      "env": { "sb2st_block": "BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK" },
+      "_comment": [
+        "Blocked on: choose_two_stage_sb2st_block_size() returns a hardcoded 32.",
+        "This is the chase blocking factor, distinct from the back-transform",
+        "geometry now tuned by the sb2st bench in default.json."
+      ],
+      "cases": [
+        { "fixed": { "n": 512,  "batch": 512, "kd": 32 }, "tune": { "sb2st_block": [16, 32, 64] } },
+        { "fixed": { "n": 1024, "batch": 128, "kd": 32 }, "tune": { "sb2st_block": [16, 32, 64] } }
+      ]
+    }
+  ]
+}

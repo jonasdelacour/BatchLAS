@@ -317,8 +317,39 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
 //     routes elsewhere changes;
 //   * an explicitly forced Provider::BatchLAS_CTA still wins, since the forced
 //     branch returns before this is consulted.
+// The default is per type: see syev_cta_max_n_default_for<T> below. The env knob
+// overrides whatever that default is, for every type.
+template <typename T>
+inline constexpr int64_t syev_cta_max_n_default_for() {
+    using Real = typename base_type<T>::type;
+    constexpr bool kReal = std::is_same_v<T, Real>;
+    constexpr bool kDouble = std::is_same_v<Real, double>;
+    // complex<double> ONLY: the vendor takes over at n = 25, not 33. MEASURED
+    // 2026-08-07, RTX 4090 device 1, eigenvectors, us/matrix, median of 3:
+    //
+    //     n   batch      cta  cta_fused    vendor   winner
+    //    18  14564    2.5293     2.9254    2.7744   cta
+    //    20  13107    3.0015     3.4597    3.1085   cta
+    //    22  11916    3.5318     4.0359    3.4564   tie (vendor 1.02x)
+    //    24  10923    4.0806     4.6301    3.8184   tie (vendor 1.07x)
+    //    26  10082    5.4993     5.3048    4.4835   vendor 1.23x
+    //    28   9362    6.2862     5.9845    4.9477   vendor 1.27x
+    //    30   8738    7.1533     6.6465    5.4089   vendor 1.32x
+    //    32   8192    8.0253     7.4929    5.6531   vendor 1.42x
+    //
+    // This is an FP64-rate artifact and therefore the most machine-specific
+    // number here: the card runs FP64 at 1/64 rate, which throttles our CTA
+    // kernel far harder than it throttles cuSOLVER's. complex<float> does NOT
+    // cross over -- CTA still beats the vendor 1.23x at n=32 and 1.38x at n=28 --
+    // so this deliberately does not generalise to "complex".
+    if constexpr (!kReal && kDouble) return 24;
+    return 32;
+}
+
+template <typename T>
 inline int64_t syev_cta_max_n_for_vectors() {
-    // Default 32 == OFF: CTA keeps the whole n <= 32 range, as it always has.
+    // Default 32 == OFF for every type but complex<double>: CTA keeps the whole
+    // n <= 32 range, as it always has.
     //
     // Lowering this IS a measured speedup for the projected Rayleigh-Ritz solve
     // inside LOBPCG. Measured, LOBPCG EigenVectors, n=256, us/matrix:
@@ -340,7 +371,7 @@ inline int64_t syev_cta_max_n_for_vectors() {
     // Resolving it means deciding whether that assertion should tolerate a tie on an
     // already-converged case, or whether the vendor projected solve genuinely hurts
     // LOBPCG convergence. Until then, a 1.1x win does not justify shipping a red test.
-    constexpr int64_t kDefault = 32;
+    constexpr int64_t kDefault = syev_cta_max_n_default_for<T>();
     const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
     if (!v || !*v) return kDefault;
     char* end = nullptr;
@@ -406,12 +437,48 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     const SyevSmallKernel env = syev_small_kernel_env(forced);
     if (forced) return env;
 
-    // Complex was never measured -- keep the historical kernel. `internal::is_complex` lives
-    // in src/math-helpers.hh and is not visible from this public header, so detect complex
-    // via the public base_type trait: for a real T, base_type<T>::type IS T.
+    // `internal::is_complex` lives in src/math-helpers.hh and is not visible from this public
+    // header, so detect complex via the public base_type trait: for a real T,
+    // base_type<T>::type IS T.
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     if constexpr (!kReal) {
-        return SyevSmallKernel::Cta;
+        // COMPLEX WAS MEASURED 2026-08-07 (it previously said "never measured --
+        // keep the historical kernel", and the historical kernel is mostly right).
+        // RTX 4090 device 1, complex<float>, eigenvectors, us/matrix, median of 3
+        // at each cell's saturating batch:
+        //
+        //     n   batch        cta   cta_fused     jacobi     vendor   winner
+        //     4  65536   0.0035387   0.0014881  0.0013689   0.052079  jacobi/fused
+        //     5  52429   0.0067438   0.0055953  0.0056986   0.078717  fused 1.21x
+        //     6  43691   0.0102170   0.0073592  0.0078113   0.031830  fused 1.39x
+        //     7  37449   0.0105900   0.0084175  0.0119040   0.037963  fused 1.26x
+        //     8  32768   0.0132190   0.0105830  0.0143920   0.044342  fused 1.25x
+        //     9  29127   0.0213110   0.0281870  0.0544510   0.079653  cta
+        //    12  21845   0.0384370   0.0422290  0.0967020   0.103430  cta
+        //    16  16384   0.0670010   0.0655850  0.1857200   0.133530  tie
+        //    20  13107   0.1685500   0.2894300  0.9536300   0.286910  cta
+        //    24  10923   0.2204500   0.3810900  1.3444000   0.339650  cta
+        //    32   8192   0.3825800   0.5948600  2.4824000   0.470900  cta
+        //
+        // So the historical Cta IS the right kernel for complex from n >= 9, and
+        // the float rule (fused from 16 up, jacobi below 8) would have been WRONG
+        // here -- jacobi is 4x-6x off the pace at n >= 20 in complex, where in
+        // float it wins below 8. The only real gap is n <= 8, worth 1.21x - 1.39x,
+        // and 2.38x at n = 4.
+        //
+        // n = 4 is the one cell where jacobi edges fused (0.0013689 vs 0.0014881,
+        // 1.09x). That is inside the 1.10x neutral band, so it does not buy a
+        // second boundary -- one threshold at 8 takes essentially all of it.
+        //
+        // complex<double> is NOT split: fused is ahead of cta there by only
+        // 1.03x - 1.08x from n=4..16, all neutral. Its real small-n fix is the
+        // vendor crossover at n=25, which lives in syev_cta_max_n_default_for.
+        constexpr bool is_double_c = std::is_same_v<typename base_type<T>::type, double>;
+        if constexpr (is_double_c) {
+            return SyevSmallKernel::Cta;
+        } else {
+            return A.rows() <= 8 ? SyevSmallKernel::CtaFused : SyevSmallKernel::Cta;
+        }
     } else {
         constexpr bool is_double = std::is_same_v<typename base_type<T>::type, double>;
         if constexpr (is_double) {
@@ -430,7 +497,7 @@ inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
     if (!caps.is_gpu) return false;
     if (jobtype != JobType::EigenVectors) return false;
     if (!syev_supports_cta(caps, A)) return false;
-    return A.rows() > syev_cta_max_n_for_vectors();
+    return A.rows() > syev_cta_max_n_for_vectors<T>();
 }
 
 // Eigenvalues-only: is the two-stage solver the best choice for this shape?
@@ -486,10 +553,169 @@ inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int6
 //   * EIGENVECTORS only. Eigenvalues-only has its own table and its own rule; see
 //     syev_saturated_provider_for_n_values below. (syev_benchmark grew a jobz argument so
 //     that mode could be measured against the vendor at all.)
+// RE-MEASURED AND CORRECTED 2026-08-07, and split by scalar type. Two separate
+// defects were found in the rule above; both are fixed here.
+//
+// DEFECT 1: THE 320 BOUNDARY WAS NEVER MEASURED. The grid above jumps from
+// n = 320 straight to n = 512, so nothing checked where blocked actually stops
+// winning. It does not stop at 320. Filling the gap (RTX 4090 device 1, float,
+// eigenvectors, us/matrix, median of 5, harness-default nb, one process on the
+// device):
+//
+//     n   batch    blocked  two_stage    vendor   winner      old routing
+//   320     819      67.84     113.39    203.00   blocked     blocked   ok
+//   384     682     120.99     179.18    309.10   blocked     two_stage 1.48x LOSS
+//   448     585     195.27     262.79    400.59   blocked     two_stage 1.35x LOSS
+//   512     512     326.71     332.55    504.40   tie         two_stage neutral
+//   640     256     687.94     674.25    905.04   tie         two_stage ok
+//   768     192    1241.90    1172.90   1348.30   two_stage   two_stage ok
+//  1024     128    3296.80    2614.70   2552.10   tie(v/2s)   two_stage neutral
+//
+// So the real crossover is 448, not 320, and the two rows in between cost
+// 1.35x - 1.48x. Everything from 512 up is unchanged.
+//
+// DEFECT 2: THE RULE WAS APPLIED TO COMPLEX, HAVING ONLY BEEN MEASURED ON
+// FLOAT. The caveat on the grid above said as much and was never followed up.
+// For complex the two-stage solver is not merely mistuned, it is never the
+// right answer at any n -- it loses to blocked by ~2.2x through the whole
+// blocked-winning range and still loses to the vendor above it. Same method,
+// complex<float>, eigenvectors, blocked column at its own best nb (see
+// sytrd_block_size_default in src/extensions/syev_blocked.cc):
+//
+//     n   batch    blocked  two_stage    vendor   winner       old routing
+//    64    4096       2.36       5.41      2.38   tie          blocked   ok
+//    96    2730       5.92      13.24      7.38   blocked      blocked   ok
+//   128    2048      11.51      25.35      11.03  tie          blocked   ok
+//   192    1365      33.83      72.62      78.97  blocked      blocked   ok
+//   256    1024      74.13     158.23     126.88  blocked      blocked   ok
+//   320     819     166.27     296.94     247.59  blocked      blocked   ok
+//   384     682     304.06     419.48     363.64  blocked      two_stage 1.38x LOSS
+//   448     585     540.06     677.67     530.16  tie(b/v)     two_stage 1.25x LOSS
+//   512     512     802.74     973.80     707.05  vendor       two_stage 1.38x LOSS
+//   640     256    1557.10    1548.50    1265.90  vendor       two_stage 1.22x LOSS
+//   768     192    2872.50    2919.60   1957.20   vendor       two_stage 1.49x LOSS
+//  1024     128    7706.30    6816.10   4036.20   vendor       two_stage 1.69x LOSS
+//
+// Complex therefore gets: blocked up to 448 (where it beats the vendor by up to
+// 2.33x and is never worse than 1.04x behind it), vendor above. There is no n
+// at which two-stage is the complex winner, so complex never routes to it.
+//
+// THE SAME CHECK ON THE OTHER TWO TYPES, which had also only ever inherited the
+// float rule. Both want the vendor where the float rule sends them to two-stage,
+// and complex<double> wants it much earlier:
+//
+//   double, eigenvectors        blocked  two_stage    vendor   winner
+//    384/341                     771.15    1012.70    874.97   blocked
+//    448/292                    1193.00    1548.80   1199.80   tie(b/v)
+//    512/256                    1662.80    2055.80   1617.90   vendor  (2s 1.27x LOSS)
+//    640/128                    3035.10    4434.40   2860.30   vendor  (2s 1.55x LOSS)
+//    768/96                     5389.50    7734.80   4544.10   vendor  (2s 1.70x LOSS)
+//   1024/64                    12797.00   18128.00   9177.70   vendor  (2s 1.98x LOSS)
+//
+//   complex<double>, eigenvectors
+//    128/1024                    108.09     201.68    156.18   blocked
+//    192/682                     342.50     625.98    385.63   blocked
+//    224/585                     489.86     946.78    549.91   blocked
+//    256/512                     649.59    1313.40    723.36   blocked
+//    288/455                    1131.00    2031.90    974.79   vendor
+//    320/409                    1498.50    2751.60   1258.90   vendor
+//    448/292                    3485.50    6715.40   2825.70   vendor
+//
+// So two-stage in EIGENVECTOR mode is a float-only win, and even there it is
+// worth at most 1.06x. complex<double>'s blocked crossover is 256, not 448 --
+// FP64 runs at 1/64 rate on this card, which penalises our panel far more than
+// it penalises cuSOLVER, so that boundary is the most hardware-specific number
+// here and should be re-measured on a data-center GPU.
+//
+// WHY WE LOSE TO THE VENDOR IN COMPLEX ABOVE THE CROSSOVER, WHEN WE BEAT IT
+// COMFORTABLY IN FLOAT. It is not that our complex path is broken; it is that
+// our float path is much better optimised than the vendor's, and complex costs
+// us proportionally more than it costs them. n = 512, batch = 512, us/matrix:
+//
+//                        float   complex   complex/float
+//   blocked   values    272.61    687.27       2.52
+//   blocked   vectors   328.53    802.62       2.44
+//   two_stage values    151.45    440.56       2.91
+//   two_stage vectors   332.26    973.60       2.93
+//   cuSOLVER  values    453.54    626.90       1.38
+//   cuSOLVER  vectors   503.03    707.10       1.41
+//
+// So at n=512 we were 1.53x FASTER than cuSOLVER in float and 1.14x slower in
+// complex, purely because our complex-to-float penalty was ~2.5x against their
+// ~1.4x. The penalty was the same in both modes, so it was never a
+// back-transform problem -- it was uniform across the whole solve.
+//
+// PARTLY FIXED SINCE, WHICH IS WHY THE COMPLEX BOUNDARY MOVED 448 -> 512. That
+// penalty was traced to sytrd_blocked.panel_only (68% of the complex solve at
+// n=512) and, inside it, to the C99 Annex G complex multiply: clang was emitting
+// a per-element isnan branch and a __mulsc3 call in the symv inner loop. Writing
+// that one loop's multiply-accumulate out in real arithmetic took the panel
+// kernel 1.22x - 1.29x (see the note on `mac` in latrd_lower_panel.cc) and the
+// complex blocked solve with it. Re-measured after that fix, same method:
+//
+//     n   batch    blocked     vendor   winner
+//    64    4096       2.21       2.38   blocked 1.08x
+//    96    2730       5.55       7.40   blocked 1.33x
+//   128    2048      10.98      11.02   blocked (was 1.05x BEHIND)
+//   192    1365      30.60      79.41   blocked 2.59x
+//   256    1024      66.84     126.97   blocked 1.90x
+//   320     819     165.54     247.37   blocked 1.49x
+//   384     682     253.24     363.47   blocked 1.44x
+//   448     585     424.44     529.78   blocked 1.25x
+//   512     512     686.19     706.96   blocked 1.03x   <- crossed over
+//   640     256    1357.40    1267.80   vendor  1.07x
+//   768     192    2335.10    1958.40   vendor  1.19x
+//  1024     128    5236.90    4047.90   vendor  1.29x
+//
+// complex<float> now beats cuSOLVER at every n from 4 to 512 rather than to 448,
+// and the old n=128 blemish (1.05x behind) is gone.
+//
+// What is left above 512 is the rest of the same gap: the symv is now near its
+// bandwidth bound for complex (panel ratio 2.14x vs float, against ~4x for the
+// arithmetic), but the kernel only achieves ~330 GB/s of this card's ~1000 GB/s
+// in BOTH float and complex, so it is latency/occupancy bound. Lifting that
+// helps float and complex alike and is a bigger job than this one.
+//
+// Unrelated but worth not confusing with the above: EIGENVALUES-ONLY still
+// routes complex to two-stage above n=320 and beats cuSOLVER there by 1.30x at
+// n >= 768. That happens despite the same ~2.9x complex penalty, because
+// two-stage's float baseline is 3x better than the vendor's, which is enough to
+// absorb it. See syev_saturated_provider_for_n_values, which is correct as
+// committed and is deliberately NOT changed.
+template <typename T>
 inline Provider syev_saturated_provider_for_n(int64_t n) {
-    if (n <= 320) return Provider::BatchLAS_Blocked;   // 64..320, up to 1.49x over the vendor
-    if (n <= 1024) return Provider::BatchLAS_TwoStage; // 512..1024, up to 1.19x
-    return Provider::Vendor;                           // 2048+, 1.65x (but see the caveat)
+    // `internal::is_complex` is not visible from this public header; for a real
+    // T, base_type<T>::type IS T. Same detection as syev_choose_small_kernel.
+    using Real = typename base_type<T>::type;
+    constexpr bool kReal = std::is_same_v<T, Real>;
+    constexpr bool kDouble = std::is_same_v<Real, double>;
+
+    // complex<double>: blocked only to 256. The symv fix helped here too -- 288
+    // through 512 went from a 1.13x - 1.23x vendor win to a dead heat (blocked
+    // 1009.6/1318.9/1961.4/3047.6/3874.7 against vendor 973.9/1258.4/1974.1/
+    // 2826.4/3929.1 at n = 288/320/384/448/512) -- but every one of those cells
+    // is inside the 1.10x neutral band, so there is no measured reason to move
+    // the boundary. It stays at the last n with a real margin.
+    if constexpr (!kReal && kDouble) {
+        return n <= 256 ? Provider::BatchLAS_Blocked : Provider::Vendor;
+    } else if constexpr (!kReal) {
+        // complex<float>: 512, not 448 -- see the re-measured grid above.
+        return n <= 512 ? Provider::BatchLAS_Blocked : Provider::Vendor;
+    } else {
+        // 64..448: blocked, by up to 2.33x over the vendor and never behind it.
+        // Unchanged for the real types: `mac` routes them to the plain
+        // multiply-add, so the symv fix did not move their timings at all.
+        if (n <= 448) return Provider::BatchLAS_Blocked;
+        if constexpr (!kDouble) {
+            // float only: two-stage ties blocked at 512/640, wins 1.06x at 768,
+            // and is within 1.02x of the vendor at 1024. All neutral, so this
+            // keeps the committed behaviour rather than churning it.
+            if (n <= 1024) return Provider::BatchLAS_TwoStage;
+            return Provider::Vendor;               // 2048+, 1.65x (see the caveat)
+        } else {
+            return Provider::Vendor;               // double
+        }
+    }
 }
 
 // --- The same, for EIGENVALUES-ONLY -----------------------------------------
@@ -571,7 +797,7 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
         // cells and picks the wrong provider at five of nine measured sizes. n <= 32 falls
         // through to the order loop so the CTA branch keeps it.
         if (jobtype == JobType::EigenVectors && A.rows() > 32) {
-            const Provider want = syev_saturated_provider_for_n(A.rows());
+            const Provider want = syev_saturated_provider_for_n<T>(A.rows());
             if (want == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) {
                 return want;
             }

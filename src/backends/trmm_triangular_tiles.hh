@@ -62,8 +62,13 @@ inline constexpr int kTrmmTileK = 16;
 
 // Threads per side of the tile, and hence the per-thread tile. A 128-wide side
 // gets 16 lanes of 8; anything narrower keeps the 4-wide band the vectorized
-// fragment load is built on and drops lanes instead.
-inline constexpr int trmm_lanes(int tile) { return tile >= 64 ? 16 : 8; }
+// fragment load is built on and drops lanes instead. That is what fixes the
+// 16-row tile at 4 lanes: ThreadRows must stay a multiple of 4, and 16/8 = 2 is
+// not one, so the lanes go rather than the band.
+inline constexpr int trmm_lanes(int tile) {
+    if (tile >= 64) return 16;
+    return tile >= 32 ? 8 : 4;
+}
 
 template <typename T, int TileM>
 class TrmmTriangularTilesKernel;
@@ -388,19 +393,41 @@ bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
 // This is why one threshold cannot serve both, and why the first version of
 // this kernel -- tuned on float alone, one tile for m <= 128 -- could not beat
 // a GEMM at m = 128 in any type: R = 1 saves nothing at all.
+//
+// The 32-row tile used to be the floor, which left ormqr's WY update -- m = ib,
+// in the tens -- with R = 1 and no saving at all, and at m = 16 with half the
+// tile masked off at the epilogue after the arithmetic had already been issued.
+// A 16-row tile fixes both, and measured through ormqr_blocked_benchmark
+// (n 256/512, batch 128-256, ib 16/32/64) it goes exactly where the argument
+// above says it should -- tile16 against tile32:
+//
+//   double           1.007x - 1.022x   wins at every ib, including 64
+//   complex<double>  0.995x - 1.040x   wins to ib 32, a wash at 64
+//   complex<float>   0.993x - 1.026x   wins to ib 32, a wash at 64
+//   float            0.966x - 0.997x   loses everywhere, as predicted
+//
+// float losing is the B re-read, which is the same reason 32 loses to 64 for it
+// further up. The thresholds below are that table.
 template <typename T>
 inline int trmm_row_tile(int m) {
-    constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || sycl::detail::is_complex<T>::value;
-    if (m <= 32) {
-        return 32;
-    }
+    constexpr bool complex_t = sycl::detail::is_complex<T>::value;
+    constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || complex_t;
     if constexpr (wide) {
+        // Complex stops at 32 because its 64-row cell measured a wash either
+        // way (0.993x in complex<float>), and the wider tile keeps more of the
+        // block: at TileM 16 the launch is down to 64 threads.
+        if (m <= (complex_t ? 32 : 64)) {
+            return 16;
+        }
         // Never 128. Beyond the argument above, a 128x128 tile is an 8x8 thread
         // tile, which in complex<double> is 256 registers of accumulator alone
         // -- 256 threads x 256 is the entire 65536 a work-group gets, and the
         // runtime rejects the launch rather than spilling.
         return m <= 64 ? 32 : 64;
     } else {
+        if (m <= 32) {
+            return 32;
+        }
         // Measured, float, against the GEMM (ms): at m = 128 nC = 512 batch
         // 1024, TileM 32/64/128 gives 0.663 / 0.658 / 0.699 against a GEMM's
         // 0.674 -- so 128 loses and 64 wins. 32 is worse than 64 everywhere,
@@ -427,6 +454,9 @@ Event trmm_triangular_tiles(Queue& ctx,
     }();
 
     const int tile_m = forced ? forced : trmm_row_tile<T>(m);
+    if (tile_m <= 16) {
+        return launch_trmm_triangular_tiles<T, 16>(ctx, A, B, C, alpha, uplo, transA, diag);
+    }
     if (tile_m <= 32) {
         return launch_trmm_triangular_tiles<T, 32>(ctx, A, B, C, alpha, uplo, transA, diag);
     }

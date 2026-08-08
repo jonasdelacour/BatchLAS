@@ -855,7 +855,7 @@ Event gesvd_native_impl(Queue& ctx,
         const bool need_vecs = want_u || want_vh;
         const bool tridiag_returns_vectors = (mode == GesvdNativeMode::Blocked) || need_vecs;
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k, mode);
-        const int32_t gebrd_block_size = tuning::ormqr_block_size_for_n(k);
+        const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k);
         const int32_t max_order = want_u ? std::max(m, k) : k;
 
         auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -1222,7 +1222,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         const int32_t k_i32 = static_cast<int32_t>(k);
         const int32_t m_i32 = static_cast<int32_t>(m);
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k_i32, mode);
-        const int32_t gebrd_block_size = tuning::ormqr_block_size_for_n(k_i32);
+        const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k_i32);
 
         // Mirror the run path's branch exactly. A direct bidiagonal solve
         // allocates neither the right-singular-vector scratch nor the tridiagonal

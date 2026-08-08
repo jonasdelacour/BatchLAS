@@ -11,6 +11,7 @@
 #include <sycl/sycl.hpp>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -779,7 +780,10 @@ Event unmqr_hb2st(Queue& ctx,
         // no longer costs occupancy the way it did at S=1; C is chosen to keep
         // the footprint near a budget rather than as small as possible. Measured
         // best at 8 columns for every n tried (see the subs table below).
+        // Precedence: the legacy env knob forces a value, then the tuned
+        // constant (0 = no opinion), then the budget heuristic below.
         int tile = env_positive_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
+        if (tile <= 0) tile = tuning::sb2st_back_tile_for_n(n);
         if (tile <= 0) {
             constexpr size_t kTargetLocalBytes = 32768;
             tile = 1;
@@ -801,6 +805,7 @@ Event unmqr_hb2st(Queue& ctx,
         //   subs=16     20.6    58.5    103.5    207.1
         // -- 8 wins where waves hold ~8, 16 wins where they hold ~16.
         int subs = env_positive_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
+        if (subs <= 0) subs = tuning::sb2st_back_subs_for_n(n);
         if (subs <= 0) {
             const int32_t avg = (num_waves > 0) ? (nrefl + num_waves - 1) / num_waves : 1;
             subs = (avg >= 12) ? 16 : (avg >= 6 ? 8 : 4);
