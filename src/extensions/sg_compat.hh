@@ -190,4 +190,87 @@ inline T sg_leader_broadcast(SubGroupPartition<P> part, T value) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WorkGroupPartition<P>
+//
+// Same collective surface as SubGroupPartition<P>, but every collective is
+// backed by a shared-memory scratch buffer and a *real* work-group barrier
+// instead of warp shuffles.  That lifts the structural P <= sub_group_size
+// restriction: P may be any work-group size the device accepts.
+//
+// Contract (the caller MUST honour all of it -- violating it produces silent
+// wrong answers, not crashes):
+//   * One partition == one entire work-group == one problem.  The work-group
+//     size must be exactly P.
+//   * Every work-item of the work-group must reach every collective call,
+//     in the same order.  (Whole-work-group early exits are fine; per-lane
+//     ones are not.)
+//   * `scratch` points at >= P elements of the value type used in collectives,
+//     in local memory, suitably aligned.  It is owned by the partition: no
+//     other code may touch it between collectives.
+//
+// Barrier discipline: each collective does barrier-write-barrier and relies on
+// the *next* collective's leading barrier to fence its reads against the next
+// write.  group_barrier(part) is a full work-group barrier, so unlike the
+// sub-group flavour it is never a no-op.
+// ---------------------------------------------------------------------------
+template <size_t P>
+struct WorkGroupPartition {
+    sycl::group<1> grp;
+    void* scratch;
+    uint32_t lid;
+
+    WorkGroupPartition(sycl::group<1> g, void* scratch_)
+        : grp(g), scratch(scratch_),
+          lid(static_cast<uint32_t>(g.get_local_linear_id())) {}
+
+    uint32_t get_local_linear_id() const { return lid; }
+    uint32_t get_local_linear_range() const { return static_cast<uint32_t>(P); }
+    sycl::range<1> get_local_range() const { return sycl::range<1>{P}; }
+    sycl::id<1> get_local_id() const { return sycl::id<1>{lid}; }
+    bool leader() const { return lid == 0u; }
+
+    // A work-group partition is the whole group, so there is exactly one.
+    uint32_t get_group_linear_id() const { return 0u; }
+    uint32_t get_group_linear_range() const { return 1u; }
+};
+
+template <size_t P>
+inline void group_barrier(const WorkGroupPartition<P>& part) noexcept {
+    sycl::group_barrier(part.grp);
+}
+
+template <size_t P, typename T>
+inline T permute_group_by_xor(const WorkGroupPartition<P>& part, T v, uint32_t mask) {
+    T* s = static_cast<T*>(part.scratch);
+    sycl::group_barrier(part.grp);   // fence against the previous collective's reads
+    s[part.lid] = v;
+    sycl::group_barrier(part.grp);
+    return s[part.lid ^ mask];
+}
+
+template <size_t P, typename T>
+inline T select_from_group(const WorkGroupPartition<P>& part, T v, uint32_t local_id) {
+    T* s = static_cast<T*>(part.scratch);
+    sycl::group_barrier(part.grp);
+    s[part.lid] = v;
+    sycl::group_barrier(part.grp);
+    return s[local_id];
+}
+
+template <size_t P, typename T>
+inline T shift_group_left(const WorkGroupPartition<P>& part, T v, uint32_t delta) {
+    T* s = static_cast<T*>(part.scratch);
+    sycl::group_barrier(part.grp);
+    s[part.lid] = v;
+    sycl::group_barrier(part.grp);
+    const uint32_t src = part.lid + delta;
+    return (src < static_cast<uint32_t>(P)) ? s[src] : v;
+}
+
+template <size_t P, typename T>
+inline T sg_leader_broadcast(const WorkGroupPartition<P>& part, T value) {
+    return select_from_group(part, value, 0u);
+}
+
 } // namespace batchlas

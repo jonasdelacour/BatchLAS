@@ -8,6 +8,8 @@
 #include <util/sycl-span.hh>
 #include <util/sycl-vector.hh>
 
+#include <blas/cta_limits.hh>
+
 #include "test_utils.hh"
 
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <complex>
 #include <cstddef>
 #include <limits>
+#include <iostream>
 #include <random>
 #include <type_traits>
 #include <vector>
@@ -494,6 +497,138 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_N32_Stre
 		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
 		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
 	}
+}
+
+// --- Coverage above the historical n <= 32 cap -------------------------------
+//
+// syev_cta's supported n is now whatever the device's shared memory affords for
+// the scalar type (see include/blas/cta_limits.hh).  These cases exercise the
+// WorkGroupPartition<P> path (shared-memory collectives + real work-group
+// barriers) that replaces the warp-chunk partition above 32.
+TYPED_TEST(SyevCtaTest, EigenvectorsLargeNResidualAndOrtho) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const std::size_t local_mem =
+		static_cast<std::size_t>(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+	const int max_n = cta_max_partition(sizeof(Scalar), local_mem);
+	std::cerr << "[cta-test] local_mem=" << local_mem << " sizeof(Scalar)=" << sizeof(Scalar)
+			  << " max_n=" << max_n << std::endl;
+	if (max_n <= 32) {
+		GTEST_SKIP() << "device/scalar combination caps the CTA path at n=32";
+	}
+
+	for (int n : {33, 48, 64, 96, 128}) {
+		if (n > max_n) continue;
+		SCOPED_TRACE(::testing::Message() << "n=" << n);
+
+		const int batch = 3;
+		Matrix<Scalar, MatrixFormat::Dense> A0 =
+			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/909 + n);
+		Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
+		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+
+		auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+
+#if BATCHLAS_HAS_HOST_BACKEND
+		{
+			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors,
+								  Uplo::Lower, ws_ref.to_span()).wait();
+		}
+#endif
+
+		SteqrParams<Scalar> p;
+		auto ws_cta = UnifiedVector<std::byte>(
+			syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::EigenVectors, p));
+		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors,
+							Uplo::Lower, ws_cta.to_span(), p).wait();
+
+		// Eigenvalues as a multiset (the CTA path does not guarantee ordering here).
+		const Real tol_w = test_utils::tolerance<Scalar>() * Real(20);
+#if BATCHLAS_HAS_HOST_BACKEND
+		for (int b = 0; b < batch; ++b) {
+			std::vector<Real> wc(static_cast<std::size_t>(n)), wr(static_cast<std::size_t>(n));
+			for (int i = 0; i < n; ++i) {
+				const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(b) * n;
+				wc[static_cast<std::size_t>(i)] = W_cta[idx];
+				wr[static_cast<std::size_t>(i)] = W_ref[idx];
+			}
+			std::sort(wc.begin(), wc.end());
+			std::sort(wr.begin(), wr.end());
+			for (int i = 0; i < n; ++i) {
+				ASSERT_NEAR(wc[static_cast<std::size_t>(i)], wr[static_cast<std::size_t>(i)], tol_w)
+					<< "eigenvalue mismatch (sorted) n=" << n << " batch=" << b << " i=" << i;
+			}
+		}
+#else
+		(void)tol_w;
+#endif
+
+		// Residual/orthogonality on batch item 0 (the helpers read item 0).
+		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(20));
+		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(20));
+	}
+}
+
+TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLargeNMatchesNetlib) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const std::size_t local_mem =
+		static_cast<std::size_t>(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+	const int max_n = cta_max_partition(sizeof(Scalar), local_mem);
+	if (max_n <= 32) {
+		GTEST_SKIP() << "device/scalar combination caps the CTA path at n=32";
+	}
+
+	const int n = std::min(64, max_n);
+	const int batch = 16;
+
+	Matrix<Scalar, MatrixFormat::Dense> A0 =
+		Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/5150);
+	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
+	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+
+	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+
+#if BATCHLAS_HAS_HOST_BACKEND
+	{
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors,
+							  Uplo::Lower, ws_ref.to_span()).wait();
+	}
+#endif
+
+	SteqrParams<Scalar> p;
+	auto ws_cta = UnifiedVector<std::byte>(
+		syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::NoEigenVectors, p));
+	syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::NoEigenVectors,
+						Uplo::Lower, ws_cta.to_span(), p).wait();
+
+#if BATCHLAS_HAS_HOST_BACKEND
+	const Real tol = test_utils::tolerance<Scalar>() * Real(20);
+	for (int b = 0; b < batch; ++b) {
+		std::vector<Real> wc(static_cast<std::size_t>(n)), wr(static_cast<std::size_t>(n));
+		for (int i = 0; i < n; ++i) {
+			const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(b) * n;
+			wc[static_cast<std::size_t>(i)] = W_cta[idx];
+			wr[static_cast<std::size_t>(i)] = W_ref[idx];
+		}
+		std::sort(wc.begin(), wc.end());
+		std::sort(wr.begin(), wr.end());
+		for (int i = 0; i < n; ++i) {
+			ASSERT_NEAR(wc[static_cast<std::size_t>(i)], wr[static_cast<std::size_t>(i)], tol)
+				<< "eigenvalue mismatch (sorted) batch=" << b << " i=" << i;
+		}
+	}
+#endif
 }
 
 TYPED_TEST(SyevCtaTest, RepeatedRunsDoNotHang) {
