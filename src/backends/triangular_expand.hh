@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../expansion_budget.hh"
 #include "../queue.hh"
 #include "cublasdx_dispatch_common.hh"
 
@@ -25,57 +26,9 @@
 // kernels reading it have only been enqueued.
 namespace batchlas::backend::detail {
 
-// Leading dimension of an expanded copy. The caller's own ld is irrelevant --
-// the expansion writes every element -- so pack the columns and pad only to
-// 16 bytes, which is the alignment the vendor and cuBLASDx GEMM kernels want
-// before they will use packet loads.
-template <typename T>
-int expanded_ld(int n) {
-    constexpr int elements_per_packet = std::max<int>(1, 16 / sizeof(T));
-    return ceil_div(n, elements_per_packet) * elements_per_packet;
-}
-
-template <typename T>
-std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
-    auto sizer = BumpAllocator::measuring();
-    sizer.allocate<T>(ctx, static_cast<std::size_t>(expanded_ld<T>(n)) *
-                               static_cast<std::size_t>(n) *
-                               static_cast<std::size_t>(batch));
-    return sizer.required_bytes();
-}
-
-// Whether an n x n x batch expansion can be built at all. Two ceilings, both
-// hard rather than tuned:
-//
-//   - SYCL linearises the global id, and the runtime rejects a range whose
-//     product does not fit in an int. The grid is one work item per element, so
-//     it hits that at 2^31 elements -- measured, as a thrown sycl::exception at
-//     n = 2048 batch = 512.
-//   - The scratch shares the device with A, B and C, which for a square problem
-//     are together about three times its size. A quarter of global memory
-//     leaves room for them; at n = 2048 batch = 256 that is 4.3 GB of scratch
-//     inside 17 GB of live operands, which runs.
-//
-// A caller that exceeds either has to fall back to whatever route needs no
-// scratch.
-//
-// BATCHLAS_EXPAND_MAX_BYTES lowers the memory ceiling, for sharing a device
-// with something else -- and for reaching the no-scratch fallback from a test
-// without allocating gigabytes to get there.
-inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    const std::size_t elements = static_cast<std::size_t>(n) *
-                                 static_cast<std::size_t>(n) *
-                                 static_cast<std::size_t>(batch);
-    if (elements > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-
-    std::size_t budget = ctx.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
-    if (const char* capped = std::getenv("BATCHLAS_EXPAND_MAX_BYTES")) {
-        budget = std::min(budget, static_cast<std::size_t>(std::strtoull(capped, nullptr, 10)));
-    }
-    return bytes <= budget;
-}
+// expanded_ld, expanded_workspace_bytes and expansion_fits moved to
+// ../expansion_budget.hh, so that callers outside src/backends/ can consult
+// the same fit predicate this file's routes branch on.
 
 // Where an expansion starts beating a per-batch loop over the vendor's own
 // triangular primitive. Measured on sm_89 against cublas?symm in float over

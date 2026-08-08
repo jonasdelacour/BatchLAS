@@ -240,15 +240,13 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
 
 // Eigenvalues-only exercises sy2sb with kd>1 plus the *Givens* stage 2.
 //
-// DISABLED: this fails today for *every* scalar type (errors of 0.3-0.6), and
-// the cause is pre-existing and unrelated to the Householder work.
-// syev_two_stage passes JobType::NoEigenVectors to stedc, but stedc_impl only
-// honours jobz at the leaf (stedc.cc:76). Above the leaves the merge reads the
-// child eigenvector rows unconditionally (stedc.cc:139,142) while steqr_cta
-// skipped forming them, so the secular vector is identically zero, everything
-// deflates, and the returned values are the eigenvalues of the *split* matrix
-// whenever n > recursion_threshold. Re-enable once stedc grows a real
-// eigenvalues-only path.
+// DISABLED, and the recorded cause is now STALE. It read: syev_two_stage passes
+// NoEigenVectors to stedc, stedc_impl honours jobz only at the leaf, so above the
+// leaves the merge reads child eigenvector rows that steqr_cta never formed and
+// the returned values are those of the *split* matrix. Neither side does that any
+// more -- two_stage routes values mode to stebz, and so does syev_blocked as of
+// the WP1 change. Flip DISABLED_ off and re-measure; it sorts both sides before
+// comparing, so it asserts spectra, not ordering.
 TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;

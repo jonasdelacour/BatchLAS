@@ -380,16 +380,11 @@ namespace batchlas {
     // BATCHLAS_EXPAND_ROUTE pins the route, as it does for the mirrored
     // expansion in triangular_expand.hh, so a test can reach whichever one the
     // shape would not have picked. Returns -1 when it is unset.
+    // One definition, in ../expansion_budget.hh, because sytrd_blocked.cc has to
+    // predict this route before calling her2k and a second parse here could
+    // drift from it silently.
     inline int rankk_route_pin() {
-        if (const char* route = std::getenv("BATCHLAS_EXPAND_ROUTE")) {
-            if (std::string_view(route) == "expand") {
-                return 1;
-            }
-            if (std::string_view(route) == "loop") {
-                return 0;
-            }
-        }
-        return -1;
+        return ::batchlas::backend::detail::expansion_route_pin();
     }
 
     // Where a GEMM over the whole n x n product beats a per-batch loop over
@@ -413,19 +408,11 @@ namespace batchlas {
         return batch >= 4 && n <= 768;
     }
 
-    // HER2K's is a far better trade and the crossover moves accordingly. Its
-    // two terms are conjugate transposes of one another, so one GEMM plus the
-    // mirrored fold does half the arithmetic of the two rank-k updates the
-    // vendor performs rather than twice it. Over the same grid it wins by 1.4x
-    // to 128x everywhere except batch 1 at n <= 64, where the fold's own launch
-    // is not repaid: 0.74x at n = 32, 0.89x at n = 64.
-    inline bool her2k_gemm_preferred(int n, int batch) {
-        const int pin = rankk_route_pin();
-        if (pin >= 0) {
-            return pin != 0;
-        }
-        return batch >= 2 || n >= 128;
-    }
+    // HER2K's is a far better trade and the crossover moves accordingly; the
+    // threshold and its measurements now live in ../expansion_budget.hh, next to
+    // the size ceiling, so that sytrd_blocked.cc can evaluate the same
+    // conjunction this function is one half of before it decides to call her2k.
+    using ::batchlas::backend::detail::her2k_gemm_preferred;
 
     // Fold a dense rank-k product into the referenced triangle of a Hermitian
     // C: C = product + beta * C, or, for TwoSided, C = product + product^H +
