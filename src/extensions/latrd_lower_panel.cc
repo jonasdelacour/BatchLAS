@@ -115,6 +115,75 @@ inline U conj_if_needed(const U& x) {
     }
 }
 
+// acc += a * b, and acc += conj(a) * b, in explicit real arithmetic.
+//
+// WHY THESE EXIST AT ALL. `std::complex<float> * std::complex<float>` is not four
+// multiplies. C99 Annex G (which C++ inherits, and which clang implements unless
+// -fcx-limited-range / -ffast-math is passed -- this build passes neither) requires
+// that a complex multiply producing (NaN, NaN) be retried by a recovery routine that
+// rescues infinities. clang emits the four multiplies inline, then a branch on
+// isnan(re) && isnan(im), then a call to __mulsc3 (__muldc3 for double). Both symbols
+// are present in this library's device code.
+//
+// In a matvec inner loop that is ruinous. The branch is per element, it is opaque to
+// the unroller, and it holds live the operands the call would need -- so the loop
+// cannot keep several loads in flight, which is the one thing this kernel depends on
+// (see the note on the symv below: it is memory-latency bound, and memory-level
+// parallelism is what matters).
+//
+// Every dense BLAS makes exactly this trade: the naive form is what -fcx-limited-range
+// gives, and what cuBLAS/MKL/MAGMA use. The semantic difference is confined to operands
+// that already carry Inf/NaN. This kernel is fed a Hermitian matrix and Householder
+// reflectors computed from it; if those contain Inf or NaN the eigensolve is meaningless
+// long before the recovery path could matter.
+//
+// The product is formed first and only then added, which is the SAME association the
+// `acc += a * b` it replaces used. Writing it as `acc.real() + ar*br - ai*bi` instead
+// would re-associate the sum and perturb the last ulp for no gain; it is not faster,
+// because the compiler contracts these into fma either way.
+//
+// Real types route to the plain multiply-add and are completely unaffected: this is a
+// complex-only change, and the float and double panel timings confirm it (n=512,
+// batch=1024: 50.86 us/matrix before, 50.87 after).
+template <typename U>
+inline void mac(U& acc, const U& a, const U& b) {
+    if constexpr (internal::is_complex<U>::value) {
+        using R = typename U::value_type;
+        const R ar = a.real(), ai = a.imag();
+        const R br = b.real(), bi = b.imag();
+        const R pr = ar * br - ai * bi;
+        const R pi = ar * bi + ai * br;
+        acc = U(acc.real() + pr, acc.imag() + pi);
+    } else {
+        acc += a * b;
+    }
+}
+
+// acc += conj(a) * b == (ar - i.ai)(br + i.bi)
+template <typename U>
+inline void mac_conj(U& acc, const U& a, const U& b) {
+    if constexpr (internal::is_complex<U>::value) {
+        using R = typename U::value_type;
+        const R ar = a.real(), ai = a.imag();
+        const R br = b.real(), bi = b.imag();
+        const R pr = ar * br + ai * bi;
+        const R pi = ar * bi - ai * br;
+        acc = U(acc.real() + pr, acc.imag() + pi);
+    } else {
+        acc += a * b;
+    }
+}
+
+// APPLIED TO THE SYMV ONLY, DELIBERATELY. The same escape was tried at every other
+// complex multiply in this kernel -- the rank-2 column update, the gamma/delta
+// reductions, the tau/alpha scalings, the fused trailing update -- and it made the
+// panel 1.16x SLOWER, reproducibly (n=512 batch=1024: 108.4 us/matrix symv-only,
+// 125.8 with all sites converted; n=512 batch=512: 103.3 vs 122.1). Those sites are
+// together about 6% of the panel's work, so this is not their arithmetic; it is that
+// inlining the expanded form everywhere costs enough registers to lose occupancy in
+// the one loop that matters. Converting the symv and nothing else is the measured
+// optimum -- do not "finish the job" here without re-measuring.
+
 template <typename T>
 inline typename base_type<T>::type abs2_if_complex(const T& x) {
     using Real = typename base_type<T>::type;
@@ -452,7 +521,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         // coalesced access across the warp.
                         #pragma unroll 4
                         for (int c = i + 1; c <= c_split; ++c) {
-                            acc += Ab(r, c) * v_local[c];
+                            mac(acc, Ab(r, c), v_local[c]);
                         }
 
                         // c in (r, n): walk column r of the lower triangle.
@@ -460,7 +529,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         // same cache lines.
                         #pragma unroll 4
                         for (int c = c_split + 1; c < n; ++c) {
-                            acc += conj_if_needed(Ab(c, r)) * v_local[c];
+                            mac_conj(acc, Ab(c, r), v_local[c]);
                         }
 
                         wcol_local[r] = acc;
@@ -766,11 +835,11 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         T acc = T(0);
                         #pragma unroll 4
                         for (int c = base_r; c <= c_split; ++c) {
-                            acc += Ab(r, c) * v_local[c];
+                            mac(acc, Ab(r, c), v_local[c]);
                         }
                         #pragma unroll 4
                         for (int c = c_split + 1; c < n; ++c) {
-                            acc += conj_if_needed(Ab(c, r)) * v_local[c];
+                            mac_conj(acc, Ab(c, r), v_local[c]);
                         }
                         wcol_local[r] = acc;
                     }
