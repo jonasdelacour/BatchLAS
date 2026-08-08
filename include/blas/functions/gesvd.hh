@@ -219,8 +219,18 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
     if (caps.max_sub_group < 32) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
     if (std::max(A.rows(), A.cols()) > 32) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    // Canonicalise here too, not only at the dispatch entry point: these
+    // predicates are the contract, and one that disagreed with the caller about
+    // what "Thin" means would reject shapes it can serve.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+    // A genuinely thin factor is out of reach for this route: mode CTA always
+    // takes the normal-equations branch, whose patch_zero_left_vectors writes m
+    // columns of U unconditionally.
+    if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) return false;
     if (hermitian_uplo.has_value()) {
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
@@ -231,10 +241,27 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
     return true;
 }
 
+// Largest max(m, n) gesvdj_cta accepts, per scalar type. Mirrors
+// gesvdj_cta_max_dim in src/extensions/gesvdj_cta.cc.
+//
+// The kernel keeps P = 32 lanes above n = 32 and grows the tile capacity C to
+// 64, so each lane owns two rows. The limit is local memory: per problem with
+// the V tile resident, C=64 costs 37,952 B for float, 71,744 B for double and
+// complex<float>, and 138,816 B for complex<double>, against a measured device
+// limit of 101,376 B. Values-only drops the V tile and halves it.
+template <typename T>
+inline constexpr int64_t gesvd_jacobi_max_dim(bool want_vectors) {
+    if constexpr (std::is_same_v<T, std::complex<double>>) {
+        return want_vectors ? 32 : 64;
+    } else {
+        return 64;
+    }
+}
+
 // gesvdj_cta supports complex GENERAL input natively, unlike the two predicates
 // below, which both return false for non-real T outside the Hermitian branch.
-// That is the Tier 4 coverage gap: complex general SVD on GPU currently falls
-// through to Vendor and throws. Do NOT copy the RealScalar gate here.
+// That is the Tier 4 coverage gap: complex general SVD on GPU used to fall
+// through to Vendor and throw. Do NOT copy the RealScalar gate here.
 template <typename T>
 inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
                                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -245,9 +272,12 @@ inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    if (std::max(A.rows(), A.cols()) > 32) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    const bool want_vectors = (jobu != SvdVectors::None) || (jobvh != SvdVectors::None);
+    if (std::max(A.rows(), A.cols()) > gesvd_jacobi_max_dim<T>(want_vectors)) return false;
+    // Every job combination is served, Thin included: one-sided Jacobi produces
+    // the thin U natively -- it IS the rotated, normalised A -- and the full-U
+    // columns are the extra work, manufactured by an in-kernel Gram-Schmidt
+    // that a Thin request skips outright.
     return true;
 }
 
@@ -257,12 +287,11 @@ inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    SvdVectors jobu,
                                    SvdVectors jobvh,
                                    std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    // Current native path supports real matrices with optional full U and/or
-    // V^H backtransforms via ORMBR. Hermitian support remains square-only.
+    // Current native path supports real matrices with optional full, thin, or
+    // absent U and/or V^H backtransforms via ORMBR. Hermitian support remains
+    // square-only, where Thin canonicalises to All anyway.
     if (!caps.is_gpu) return false;
     if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
-    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
     if (hermitian_uplo.has_value()) {
         if (A.rows() != A.cols()) return false;
         return *hermitian_uplo == Uplo::Lower;
@@ -298,7 +327,31 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
     for (Provider p : policy.order) {
         p = normalize_gesvd_vendor_like(p);
         if (p == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return p;
+            // The 33..64 band is served by Jacobi only where the alternative
+            // cannot serve it at all -- that is, complex GENERAL input, which
+            // gesvd_supports_blocked declines, leaving Vendor and a throw.
+            //
+            // For REAL input in that band the blocked path is the better
+            // default, and this is the one place the two disagree. Measured at
+            // n=64, batch=4096, float, full vectors: blocked 4.86 us/matrix
+            // against Jacobi's 7.25, and at low conditioning blocked is also
+            // the more accurate of the two (kappa=1e1: 1.1e-6 vs 1.2e-5).
+            //
+            // Jacobi wins decisively at HIGH conditioning -- kappa=1e6, n=64:
+            // singular-value relative error 6.2e-3 vs 0.526, orthogonality
+            // 3.7e-5 vs 0.144, i.e. the blocked path returns no correct digits
+            // and a U that is not a basis. But which regime a caller is in is
+            // not knowable from the shape, and unlike the n <= 32 case (where
+            // the CTA path was worse from kappa=1e2 up) blocked is genuinely
+            // better below ~1e4. So the default stays blocked and the accurate
+            // route is opt-in via BATCHLAS_GESVD_PROVIDER=jacobi, which is
+            // checked ahead of this loop and so is unaffected by this rule.
+            const bool wide_band = std::max(A.rows(), A.cols()) > 32;
+            if constexpr (RealScalar<T>) {
+                if (!wide_band) return p;
+            } else {
+                return p;
+            }
         }
         if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return p;
@@ -324,6 +377,16 @@ inline Event gesvd_dispatch(Queue& ctx,
                             SvdVectors jobvh,
                             std::optional<Uplo> hermitian_uplo,
                             Span<std::byte> workspace) {
+    // Canonicalise before anything else, and identically to
+    // gesvd_buffer_size_dispatch below: these two independently repeat the
+    // provider choice, and a divergence in what they think "Thin" means sizes
+    // the workspace for a different computation than the one that runs.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
     Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
@@ -398,6 +461,13 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
                                          SvdVectors jobu,
                                          SvdVectors jobvh,
                                          std::optional<Uplo> hermitian_uplo) {
+    // Must match gesvd_dispatch's canonicalisation exactly -- see the note there.
+    {
+        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
+        jobu = canonical_jobu(jobu, A.rows(), k);
+        jobvh = canonical_jobvh(jobvh, A.cols(), k);
+    }
+
     const DeviceCaps caps = query_caps(ctx);
     const DispatchPolicy policy = policy_from_env("GESVD");
     Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);

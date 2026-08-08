@@ -16,12 +16,13 @@ enum class Provider {
 
 struct DispatchPolicy {
     Provider forced = Provider::Auto;
-    // BatchLAS_Jacobi sits AFTER the CTA/Blocked paths deliberately. For real
-    // input CTA precedes it and accepts every shape it accepts, so it is
-    // reachable in exactly two useful ways: forced via BATCHLAS_GESVD_PROVIDER,
-    // and automatically for complex GENERAL input, where the CTA and Blocked
-    // predicates return false and dispatch currently falls through to Vendor and
-    // throws. Promoting it ahead of CTA is a separate, measured change.
+    // This is the SHARED fallback order, used by every op that does not name
+    // itself in default_order_for_op (blas/dispatch/env.hh).
+    //
+    // BatchLAS_Jacobi sits after the CTA/Blocked paths here, which is harmless:
+    // gesvd is the only op whose chooser matches BatchLAS_Jacobi at all, and
+    // gesvd no longer uses this array -- it has its own order, with Jacobi
+    // first, and env.hh carries the measurement that put it there.
     std::array<Provider, 6> order = {
         Provider::BatchLAS_CTA,
         Provider::BatchLAS_Blocked,

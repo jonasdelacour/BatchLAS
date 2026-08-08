@@ -364,3 +364,63 @@ TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondSpectral) {
     }
 }
 
+// The generator must never emit a non-finite matrix.
+//
+// It used to, intermittently: it orthonormalised two raw Matrix::Random factors
+// with OrthoAlgorithm::Chol2, and Chol-QR forms the Gram matrix, squaring the
+// condition number of its input. That input is UNconditioned -- the requested
+// kappa is imposed afterwards by the diagonal -- so in float the squared Gram
+// goes numerically indefinite whenever an ordinary random draw lands above
+// kappa ~ 1e4, which happens a few times in a batch of 32 at n=64. potrf then
+// fails, its info code is discarded, the following trsm back-substitutes
+// through a garbage diagonal, and two gemms smear the NaN over every entry of
+// that batch item.
+//
+// benchmarks/gesvd_relacc.cc works around it by re-drawing up to 8 times, so
+// this has to test the generator directly; going through the benchmark would
+// hide exactly the failure being guarded. The default is now Householder,
+// which is unconditionally backward stable.
+//
+// Seeds matter: at n=64/batch=32 the reported reproduction failed on seed 1 and
+// not on 123 or 2024, so a single seed proves nothing. Float only in practice
+// (double needs kappa > 6.7e7), but both are swept here since the fixture is
+// typed anyway.
+TYPED_TEST(CondTest, RandomMatrixGeneratorIsAlwaysFinite) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+
+    const int n = 64;
+    const int batch_size = 32;
+    const real_t log10_cond = real_t(4);
+
+    for (unsigned seed : {1u, 7u, 42u, 123u, 2024u}) {
+        auto mat = random_with_log10_cond_metric<B, T>(
+            *this->ctx, n, log10_cond, NormType::Spectral, batch_size, seed);
+        this->ctx->wait();
+
+        const auto view = mat.view();
+        const T* base = view.data_ptr();
+        const int64_t stride = view.stride();
+        const int64_t ld = view.ld();
+
+        int non_finite_items = 0;
+        for (int b = 0; b < batch_size; ++b) {
+            bool bad = false;
+            for (int c = 0; c < n && !bad; ++c) {
+                for (int r = 0; r < n; ++r) {
+                    const T v = base[b * stride + static_cast<int64_t>(c) * ld + r];
+                    if (!std::isfinite(static_cast<double>(std::abs(v)))) {
+                        bad = true;
+                        break;
+                    }
+                }
+            }
+            if (bad) ++non_finite_items;
+        }
+
+        EXPECT_EQ(non_finite_items, 0)
+            << "seed " << seed << ": " << non_finite_items << " of " << batch_size
+            << " batch items are non-finite";
+    }
+}

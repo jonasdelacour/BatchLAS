@@ -84,11 +84,21 @@ protected:
     static Real recon_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
     static Real ortho_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
 
+    // Mirrors gesvdj_cta_max_dim. complex<double> with vectors needs 138,816 B
+    // of local memory at the C=64 rung against this device's 101,376 B, so it
+    // is capped at 32 and these cases skip rather than fail.
+    static constexpr int max_dim_with_vectors() {
+        return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
+    }
+
     // ||A - U diag(s) Vh||_F / ||A||_F, computed on the host in double.
+    // u_ld / vh_ld are passed explicitly rather than assumed to be m and n:
+    // a thin V^H is k x n, so its leading dimension is k, and hardcoding n
+    // would silently read the wrong elements.
     static double reconstruction(int m, int n, int batch,
                                  const std::vector<Scalar>& A,
-                                 const Scalar* U, int64_t u_stride,
-                                 const Scalar* Vh, int64_t vh_stride,
+                                 const Scalar* U, int64_t u_stride, int u_ld,
+                                 const Scalar* Vh, int64_t vh_stride, int vh_ld,
                                  const Real* s) {
         const int k = std::min(m, n);
         double worst = 0.0;
@@ -98,8 +108,8 @@ protected:
                 for (int i = 0; i < m; ++i) {
                     std::complex<double> acc(0.0, 0.0);
                     for (int t = 0; t < k; ++t) {
-                        const std::complex<double> u = to_cd(U[b * u_stride + static_cast<size_t>(t) * m + i]);
-                        const std::complex<double> v = to_cd(Vh[b * vh_stride + static_cast<size_t>(j) * n + t]);
+                        const std::complex<double> u = to_cd(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
+                        const std::complex<double> v = to_cd(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
                         acc += u * static_cast<double>(s[b * k + t]) * v;
                     }
                     const std::complex<double> a = to_cd(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
@@ -175,8 +185,8 @@ protected:
         }
 
         EXPECT_LE(reconstruction(m, n, batch, host_A,
-                                 U.view().data_ptr(), U.view().stride(),
-                                 Vh.view().data_ptr(), Vh.view().stride(),
+                                 U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
+                                 Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
                                  s.data()),
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
@@ -202,6 +212,77 @@ protected:
             << "V orthogonality m=" << m << " n=" << n;
     }
 
+    // Same validation as check(), but with U as m x k and Vh as k x n.
+    //
+    // Worth stating what this can and cannot catch on its own: for m >= n a
+    // thin V^H IS a full V^H, and for m <= n a thin U IS a full U, so exactly
+    // one side is genuinely narrower in each shape. The tall and wide cases
+    // below therefore exercise DIFFERENT code -- the tall one skips the
+    // in-kernel Gram-Schmidt completion, the wide one takes the transposed
+    // writeback where the thin bound lands on `lane` rather than on the inner
+    // loop. Both are needed.
+    void check_thin(int m, int n, int batch, std::vector<Scalar> host_A) {
+        auto& ctx = *this->ctx;
+        const int k = std::min(m, n);
+
+        Matrix<Scalar> A(m, n, batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < m; ++i) {
+                    A.view().data_ptr()[b * A.view().stride() + static_cast<size_t>(j) * A.view().ld() + i] =
+                        host_A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i];
+                }
+            }
+        }
+
+        Matrix<Scalar> U(m, k, batch);
+        Matrix<Scalar> Vh(k, n, batch);
+        UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
+
+        gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+                              SvdVectors::Thin, SvdVectors::Thin);
+        ctx.wait_and_throw();
+
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < k; ++i) {
+                EXPECT_GE(s[b * k + i], Real(0)) << "negative sigma at b=" << b << " i=" << i;
+                if (i > 0) {
+                    EXPECT_LE(s[b * k + i], s[b * k + i - 1] * (Real(1) + Real(1e-5)))
+                        << "not descending at b=" << b << " i=" << i;
+                }
+            }
+        }
+
+        // A = U S V^H must still hold exactly: the discarded columns of a full U
+        // multiply zero singular values, so thin loses nothing here.
+        EXPECT_LE(reconstruction(m, n, batch, host_A,
+                                 U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
+                                 Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
+                                 s.data()),
+                  static_cast<double>(recon_tol()))
+            << "thin reconstruction m=" << m << " n=" << n;
+
+        EXPECT_LE(col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld())),
+                  static_cast<double>(ortho_tol()))
+            << "thin U orthogonality m=" << m << " n=" << n;
+
+        // Vh is k x n; its k ROWS must be orthonormal, so build Vh^H (n x k)
+        // and check its columns.
+        std::vector<Scalar> vht(static_cast<size_t>(n) * k * batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < k; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    vht[static_cast<size_t>(b) * n * k + static_cast<size_t>(j) * n + i] =
+                        conj_h(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                }
+            }
+        }
+        EXPECT_LE(col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n),
+                  static_cast<double>(ortho_tol()))
+            << "thin V orthogonality m=" << m << " n=" << n;
+    }
+
     std::vector<Scalar> random_matrix(int m, int n, int batch, unsigned seed) {
         std::mt19937 rng(seed);
         std::uniform_real_distribution<double> d(-1.0, 1.0);
@@ -223,6 +304,77 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
     for (int n : {2, 5, 8, 16, 32}) {
         this->check(n, n, 3, this->random_matrix(n, n, 3, 1234u + n));
     }
+}
+
+// ---------------------------------------------------------------------------
+// The 33..64 band.
+//
+// Above 32 the kernel keeps P = 32 lanes and grows the tile capacity C to 64,
+// so each lane owns kRPL = C/P = 2 rows instead of one. Everything that
+// indexes a ROW (load, rotation apply, U completion, the non-transposed
+// writeback) gains an rr loop; everything that indexes a COLUMN or a RANK (the
+// epilogue sort, sigma writeback, the transposed writeback) gains a cc loop;
+// and the Gram reduce-scatter is chunked so its 4+1-step butterfly and the
+// lane>>1 pair mapping stay exactly as they were.
+//
+// Sizes that are not multiples of 32 matter most here: they exercise the
+// padding in the second row-slot, where an off-by-one in `row < RR` silently
+// mixes a pad row into a dot product.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    for (int n : {33, 40, 48, 63, 64}) {
+        this->check(n, n, 2, this->random_matrix(n, n, 2, 4321u + n));
+    }
+}
+
+TYPED_TEST(GesvdjCtaTest, TallRectangularAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    this->check(64, 24, 2, this->random_matrix(64, 24, 2, 981u));
+    this->check(48, 33, 2, this->random_matrix(48, 33, 2, 982u));
+}
+
+TYPED_TEST(GesvdjCtaTest, WideRectangularAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    // m < n takes the transposed load (A^H) and the transposed writeback, where
+    // the thin/rank bound lands on the lane index rather than the inner loop.
+    this->check(24, 64, 2, this->random_matrix(24, 64, 2, 983u));
+    this->check(33, 48, 2, this->random_matrix(33, 48, 2, 984u));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    this->check_thin(64, 24, 2, this->random_matrix(64, 24, 2, 985u));
+    this->check_thin(24, 64, 2, this->random_matrix(24, 64, 2, 986u));
+}
+
+TYPED_TEST(GesvdjCtaTest, RankDeficientAboveThirtyTwo) {
+    if (TestFixture::max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    }
+    // Forces the in-kernel Gram-Schmidt completion at C=64, where the trial
+    // vector is distributed over two row-slots per lane and each lane must sum
+    // its own rows before the 32-wide butterfly.
+    const int n = 48, batch = 2;
+    auto host = this->random_matrix(n, n, batch, 987u);
+    for (int b = 0; b < batch; ++b) {
+        for (int dup : {40, 41, 42}) {
+            for (int i = 0; i < n; ++i) {
+                host[static_cast<size_t>(b) * n * n + static_cast<size_t>(dup) * n + i] =
+                    host[static_cast<size_t>(b) * n * n + static_cast<size_t>(3) * n + i];
+            }
+        }
+    }
+    this->check(n, n, batch, std::move(host));
 }
 
 TYPED_TEST(GesvdjCtaTest, TallRectangular) {
@@ -363,12 +515,117 @@ TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
     ctx.wait_and_throw();
 
     EXPECT_LE(TestFixture::reconstruction(n, n, batch, host,
-                                          U.view().data_ptr(), U.view().stride(),
-                                          Vh.view().data_ptr(), Vh.view().stride(),
+                                          U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
+                                          Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
                                           s.data()),
-              // Loose: for real T this is still the normal-equations CTA path by
-              // default. The point is that it dispatches and reconstructs at all.
+              // Loose because the point of this test is that it dispatches and
+              // reconstructs at all, not how well. (It used to reach the
+              // normal-equations CTA path for real T; Auto now routes n <= 32
+              // to gesvdj_cta, so the achieved value is far below this.)
               0.3);
+}
+
+// ---------------------------------------------------------------------------
+// Thin (economy) vectors.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(GesvdjCtaTest, ThinTallRectangular) {
+    // m > n: U is the genuinely thin factor (32 x 8 instead of 32 x 32), and
+    // the in-kernel Gram-Schmidt that manufactures the other 24 columns is
+    // skipped entirely.
+    this->check_thin(32, 8, 3, this->random_matrix(32, 8, 3, 20241u));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinWideRectangular) {
+    // m < n: the kernel solves A^H, so the thin factor is written through the
+    // TRANSPOSED writeback, where the bound applies to `lane` (the rank index)
+    // rather than to the inner loop. Truncating the wrong one still produces
+    // plausible-looking output, so this shape is not redundant with the tall one.
+    this->check_thin(8, 32, 3, this->random_matrix(8, 32, 3, 20242u));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinSquareEqualsAll) {
+    // Square input: Thin and All request the same shapes, so this must behave
+    // identically to check() -- it is the canonicalisation path.
+    this->check_thin(16, 16, 3, this->random_matrix(16, 16, 3, 20243u));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinRankDeficientStillRepairsColumns) {
+    // A numerically deficient column must still be rebuilt even when no
+    // completion columns are wanted: the gate is `any_def > 0 || LC > CC`, and
+    // dropping the first disjunct would leave a zero column in a thin U that
+    // still has to be orthonormal.
+    const int m = 32, n = 8, batch = 2;
+    auto host = this->random_matrix(m, n, batch, 20244u);
+    // Force rank 6 of 8: make columns 6 and 7 copies of column 0.
+    for (int b = 0; b < batch; ++b) {
+        for (int dup : {6, 7}) {
+            for (int i = 0; i < m; ++i) {
+                host[static_cast<size_t>(b) * m * n + static_cast<size_t>(dup) * m + i] =
+                    host[static_cast<size_t>(b) * m * n + static_cast<size_t>(0) * m + i];
+            }
+        }
+    }
+    this->check_thin(m, n, batch, std::move(host));
+}
+
+TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
+    // The thin U must be the first k columns of the full U, up to a per-column
+    // sign (real) or unit phase (complex). This is what makes Thin a genuine
+    // economy mode rather than a differently-computed answer.
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    auto& ctx = *this->ctx;
+
+    const int m = 32, n = 8, batch = 2;
+    const int k = std::min(m, n);
+    auto host = this->random_matrix(m, n, batch, 20245u);
+
+    auto load = [&](Matrix<Scalar>& A) {
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i)
+                    A.view().data_ptr()[b * A.view().stride() + static_cast<size_t>(j) * A.view().ld() + i] =
+                        host[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i];
+    };
+
+    Matrix<Scalar> A_all(m, n, batch);
+    load(A_all);
+    Matrix<Scalar> U_all(m, m, batch), Vh_all(n, n, batch);
+    UnifiedVector<Real> s_all(static_cast<size_t>(k) * batch);
+    gesvdj_cta<B, Scalar>(ctx, A_all.view(), s_all.to_span(), U_all.view(), Vh_all.view(),
+                          SvdVectors::All, SvdVectors::All);
+    ctx.wait_and_throw();
+
+    Matrix<Scalar> A_thin(m, n, batch);
+    load(A_thin);
+    Matrix<Scalar> U_thin(m, k, batch), Vh_thin(k, n, batch);
+    UnifiedVector<Real> s_thin(static_cast<size_t>(k) * batch);
+    gesvdj_cta<B, Scalar>(ctx, A_thin.view(), s_thin.to_span(), U_thin.view(), Vh_thin.view(),
+                          SvdVectors::Thin, SvdVectors::Thin);
+    ctx.wait_and_throw();
+
+    const double tol = static_cast<double>(TestFixture::ortho_tol());
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < k; ++i) {
+            EXPECT_NEAR(static_cast<double>(s_thin[b * k + i]),
+                        static_cast<double>(s_all[b * k + i]), tol)
+                << "sigma mismatch b=" << b << " i=" << i;
+        }
+        for (int c = 0; c < k; ++c) {
+            // Compare |<u_thin, u_all>| == 1 rather than entrywise: the sign or
+            // phase of a singular vector is not determined.
+            std::complex<double> acc(0.0, 0.0);
+            for (int i = 0; i < m; ++i) {
+                acc += std::conj(TestFixture::to_cd(
+                           U_thin.view().data_ptr()[b * U_thin.view().stride() + static_cast<size_t>(c) * U_thin.view().ld() + i]))
+                     * TestFixture::to_cd(
+                           U_all.view().data_ptr()[b * U_all.view().stride() + static_cast<size_t>(c) * U_all.view().ld() + i]);
+            }
+            EXPECT_NEAR(std::abs(acc), 1.0, 1e-3) << "U column " << c << " differs at b=" << b;
+        }
+    }
 }
 
 } // namespace

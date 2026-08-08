@@ -1,6 +1,7 @@
 #pragma once
 #include <complex>
 #include <concepts>
+#include <cstdint>
 #include <type_traits>
 namespace batchlas {
     template<typename T>
@@ -85,11 +86,60 @@ namespace batchlas {
         NoEigenVectors
     };
 
-    // SVD vector output policy (LAPACK-style semantics, simplified for now).
+    // SVD vector output policy, LAPACK jobu/jobvt semantics.
+    //
+    // With k = min(m, n), for an m x n input:
+    //   None  -- the factor is not computed and its MatrixView is not touched.
+    //   All   -- LAPACK 'A'. U is m x m, V^H is n x n.
+    //   Thin  -- LAPACK 'S'. U is m x k (the first k left singular vectors),
+    //            V^H is k x n (the first k right singular vectors, conjugated).
+    //
+    // Thin exists because All is unusable on tall-skinny input: a 10000 x 32
+    // problem has to materialise a 10000 x 10000 U, 400 MB per matrix in float,
+    // so batch=4 needs 1.6 GB for a factor whose last 9968 columns are an
+    // arbitrary orthonormal completion the caller did not ask for.
+    //
+    // The key identity, which most of the implementation rests on: Thin and All
+    // DIFFER ON AT MOST ONE SIDE. For m <= n, k == m, so a thin U (m x k) is
+    // exactly a full U (m x m); for m >= n, k == n, so a thin V^H is exactly a
+    // full V^H. Square input has Thin == All on both sides. Entry points
+    // therefore canonicalise Thin to All whenever the shapes coincide (see
+    // canonical_jobu / canonical_jobvh below) and only the genuinely thinner
+    // side has to be handled -- or rejected -- by any given route.
+    //
+    // LAPACK's 'O' (overwrite A with one of the factors) is deliberately absent;
+    // add it as a further enumerator if it is ever wanted, since appending keeps
+    // the existing ordinals stable for the benchmarks that pass jobs as ints.
     enum class SvdVectors {
         None,
-        All
+        All,
+        Thin
     };
+
+    // Number of columns of U / rows of V^H implied by a job, given the input
+    // shape and k = min(m, n). None yields 0: nothing is written.
+    inline constexpr int64_t svd_u_cols(SvdVectors job, int64_t m, int64_t k) {
+        return job == SvdVectors::All ? m : (job == SvdVectors::Thin ? k : 0);
+    }
+
+    inline constexpr int64_t svd_vh_rows(SvdVectors job, int64_t n, int64_t k) {
+        return job == SvdVectors::All ? n : (job == SvdVectors::Thin ? k : 0);
+    }
+
+    // Rewrite Thin to All when the two request the same shape, so that a route
+    // which cannot produce a genuinely thin factor still serves every request
+    // where "thin" is not actually asking for anything smaller. Call these once
+    // at each entry point, and pass the canonical values onward -- in
+    // particular, the buffer_size and the run path must canonicalise
+    // identically or the workspace is sized for a different computation than
+    // the one performed.
+    inline constexpr SvdVectors canonical_jobu(SvdVectors job, int64_t m, int64_t k) {
+        return (job == SvdVectors::Thin && k == m) ? SvdVectors::All : job;
+    }
+
+    inline constexpr SvdVectors canonical_jobvh(SvdVectors job, int64_t n, int64_t k) {
+        return (job == SvdVectors::Thin && k == n) ? SvdVectors::All : job;
+    }
 
     enum class Uplo {
         Upper,

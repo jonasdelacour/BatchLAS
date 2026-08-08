@@ -356,10 +356,54 @@ void bdsdc_repair_degenerate(Queue& ctx,
         // relative at n=256 in float, which sweeps in singular values that carry
         // real information: their vectors get thrown away and rebuilt as
         // arbitrary orthonormal ones. It also made this kernel fire on ordinary
-        // random matrices. 16*eps sits an order of magnitude above where an exact
-        // zero lands (measured 1.2e-16 relative in double) and orders below any
-        // sigma worth keeping.
-        const T tol_factor = static_cast<T>(16) * std::numeric_limits<T>::epsilon();
+        // random matrices.
+        //
+        // The multiplier is DERIVED rather than tuned. It was 16, on the grounds
+        // that this sits an order of magnitude above where an exact zero lands
+        // (measured 1.2e-16 relative in double) and orders below any sigma worth
+        // keeping. That is the right criterion for detecting an exact zero and
+        // the wrong one for keeping U orthogonal, because the damage is not
+        // confined to sigma = 0.
+        //
+        // stedc's eigenvectors for a cluster of gap g carry error ~eps*||T||/g.
+        // The +sigma_i / -sigma_i pair has gap 2*sigma_i, so once that pair stops
+        // being resolvable the two eigenvectors are an arbitrary basis of the
+        // pair's 2-D eigenspace -- and BOTH halves then normalise to the same
+        // (v, u), giving U two parallel columns. The orthogonality error
+        // contributed by column i is therefore about eps*sigma_max/(2*sigma_i).
+        // Holding that below a target `tau` requires
+        //     sigma_i >= eps*sigma_max / (2*tau),
+        // i.e. a threshold of (1/(2*tau)) * eps * sigma_max. With tau = 1e-3 the
+        // multiplier is 500.
+        //
+        // Measured end-to-end (gesvd_relacc, float, n=64, 128 samples), 16 -> 500,
+        // orthogonality / reconstruction by log10(kappa):
+        //
+        //   kappa   1e1        1e3        1e4        1e5        1e6
+        //   ortho   unchanged  unchanged  unchanged  5.2e-4 ->  0.143 ->
+        //                                            4.6e-5     1.1e-4
+        //   recon   unchanged  unchanged  unchanged  1.3e-6 ->  3.1e-6 ->
+        //                                            7.2e-5     7.3e-5
+        //
+        // So it is a real trade and this is the knee of it: kappa <= 1e4 is
+        // untouched, and above it ~1300x of orthogonality costs ~20x of
+        // reconstruction, from 1e-6 to 1e-5 -- both still far inside any
+        // tolerance the suite applies. Pushing further does keep helping
+        // orthogonality (3000 -> 6.6e-5) but starts discarding vectors that carry
+        // information at kappa=1e4 too (recon 1.3e-6 -> 4.2e-4), which is the
+        // failure the paragraph above warns about.
+        //
+        // n=128 behaves identically (ortho 0.200 -> 2.5e-4). DOUBLE is completely
+        // unchanged at every kappa measured -- its resolution limit is never
+        // reached in this range -- and 500*eps in double is 1.1e-13 relative,
+        // still three orders above where an exact zero lands.
+        //
+        // This does NOT fix the singular VALUES, which stay at 0.52 relative
+        // error at kappa=1e6: that is gebrd's own eps*||A|| floor, unreachable
+        // from here. Use the one-sided Jacobi route (n <= 64) for those.
+        constexpr T kOrthTarget = T(1e-3);
+        const T tol_factor =
+            (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
 
         h.parallel_for<BdsdcRepair<B, T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),

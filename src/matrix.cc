@@ -774,34 +774,57 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
                                                     Diag diag) const {
+    // `uplo` names the triangle to KEEP: Uplo::Upper zeroes the strict lower
+    // triangle and leaves an upper-triangular matrix.
+    //
+    // This used to do the opposite. The decode named `i` the row and `j` the
+    // column, but addressed `b*stride + i*ld + j`, and this library is
+    // column-major (`data_[b*stride_ + j*ld_ + i]`, matrix.hh:80) -- so `i` was
+    // really the column and `j` the row, and `Upper && i > j` zeroed col>row,
+    // i.e. the strict UPPER triangle. The names were wrong, not the address
+    // arithmetic, so the fix is to name them correctly and compare the right
+    // way round. The inversion cost PR #66 a day: extracting R from a geqrf
+    // result silently yielded the Householder reflectors instead, which are
+    // easier to diagonalise, and fabricated an apparent 1.7x win for QR
+    // preconditioning that did not exist.
+    //
+    // Two further bugs went with it: the element count came from `data_.size()`
+    // (the span extent, which for a sliced or strided view is not
+    // batch*rows*cols) and `n` was taken from rows_ alone, so a non-square view
+    // decoded its own indices wrongly. Both are fixed here.
     T* data_ptr = data_.data();
-    size_t total_elements = data_.size();
-    auto n = rows_; // Assuming square matrix
+    const size_t rows = static_cast<size_t>(rows_);
+    const size_t cols = static_cast<size_t>(cols_);
     auto batch_size = batch_size_;
     auto stride = stride_; // Stride for batched matrices
     auto ld = ld_; // Leading dimension
 
+    const size_t elems_per_matrix = rows * cols;
+    const size_t total_elements = elems_per_matrix * static_cast<size_t>(batch_size);
+    if (total_elements == 0) return ctx.get_event();
+
     // Use batched matrix decomposition strategy
     auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
-        batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
+        batch_size, static_cast<int>(elems_per_matrix), ctx.device(), KernelType::ELEMENTWISE);
 
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
         size_t global_id = item.get_global_id(0);
         size_t total_work_items = item.get_global_range(0);
-        
+
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
             // Calculate 3D coordinates from flat index
-            size_t b = flat_idx / (n * n);          // batch index
-            size_t remainder = flat_idx % (n * n);
-            size_t i = remainder / n;               // row index
-            size_t j = remainder % n;               // column index
-            
-            if (i == j && diag == Diag::Unit) {
-                data_ptr[b * stride + i * ld + j] = T(1);
-            } else if ((uplo == Uplo::Lower && i < j) || (uplo == Uplo::Upper && i > j)) {
-                // Zero out elements above or below the diagonal depending on Uplo
-                data_ptr[b * stride + i * ld + j] = T(0);
+            size_t b = flat_idx / elems_per_matrix;   // batch index
+            size_t remainder = flat_idx % elems_per_matrix;
+            // Column-major: consecutive flat indices walk DOWN a column.
+            size_t col = remainder / rows;
+            size_t row = remainder % rows;
+
+            if (row == col && diag == Diag::Unit) {
+                data_ptr[b * stride + col * ld + row] = T(1);
+            } else if ((uplo == Uplo::Lower && row < col) || (uplo == Uplo::Upper && row > col)) {
+                // Zero the triangle that `uplo` does not name.
+                data_ptr[b * stride + col * ld + row] = T(0);
             }
         }
     });
