@@ -166,52 +166,64 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	using Real = typename base_type<Scalar>::type;
 	constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 96;      // ensure sytrd_blocked path
-	const int batch = 16;
+	// Values mode takes a different tridiagonal solver from eigenvector mode
+	// (stebz, not stedc), so it needs its own shape coverage: n=8/32 below the
+	// point where Auto would route here at all but reachable by direct call,
+	// n=96 the historical case, n=320 the top of the blocked values-mode region
+	// (syev_saturated_provider_for_n_values). Batch shrinks with n to keep the
+	// dense host reference solve cheap.
+	struct Shape { int n; int batch; };
+	for (const Shape s : {Shape{8, 16}, Shape{32, 16}, Shape{96, 16}, Shape{320, 4}}) {
+		const int n = s.n;
+		const int batch = s.batch;
+		SCOPED_TRACE("n=" + std::to_string(n) + " batch=" + std::to_string(batch));
 
-	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 123);
-	Matrix<Scalar, MatrixFormat::Dense> A_blk = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+		Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 123);
+		Matrix<Scalar, MatrixFormat::Dense> A_blk = A0;
+		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
-	auto W_blk = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+		auto W_blk = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	// Reference (CPU LAPACKE)
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-															A_ref.view(),
-															W_ref.to_span(),
-															JobType::NoEigenVectors,
-															Uplo::Lower));
-		syev(*this->ctx,
-                        A_ref.view(),
-                        W_ref.to_span(),
-                        {.jobz = JobType::NoEigenVectors},
-                        ws_ref.to_span()).wait();
-	}
-
-	// Blocked pipeline
-	{
-		StedcParams<Real> params;
-		params.recursion_threshold = 32;
-		auto ws_blk = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(*this->ctx,
-																A_blk.view(),
+		// Reference (CPU LAPACKE)
+		{
+			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
+																A_ref.view(),
+																W_ref.to_span(),
 																JobType::NoEigenVectors,
-																Uplo::Lower,
-																params));
-		syev_blocked<B, Scalar>(*this->ctx,
-						A_blk.view(),
-						W_blk.to_span(),
-						JobType::NoEigenVectors,
-						Uplo::Lower,
-						ws_blk.to_span(),
-						params).wait();
-	}
+																Uplo::Lower));
+			syev(*this->ctx,
+							A_ref.view(),
+							W_ref.to_span(),
+							{.jobz = JobType::NoEigenVectors},
+							ws_ref.to_span()).wait();
+		}
 
-	const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
-	for (int j = 0; j < batch; ++j) {
-		for (int i = 0; i < n; ++i) {
-			EXPECT_NEAR(W_blk[i + j * n], W_ref[i + j * n], tol) << "(i,b)= (" << i << "," << j << ")";
+		// Blocked pipeline
+		{
+			StedcParams<Real> params;
+			params.recursion_threshold = 32;
+			auto ws_blk = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(*this->ctx,
+																	A_blk.view(),
+																	JobType::NoEigenVectors,
+																	Uplo::Lower,
+																	params));
+			syev_blocked<B, Scalar>(*this->ctx,
+							A_blk.view(),
+							W_blk.to_span(),
+							JobType::NoEigenVectors,
+							Uplo::Lower,
+							ws_blk.to_span(),
+							params).wait();
+		}
+
+		// Element-by-element, so this doubles as the ordering test: stebz must
+		// return the same ascending order stedc did.
+		const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
+		for (int j = 0; j < batch; ++j) {
+			for (int i = 0; i < n; ++i) {
+				EXPECT_NEAR(W_blk[i + j * n], W_ref[i + j * n], tol) << "(i,b)= (" << i << "," << j << ")";
+			}
 		}
 	}
 }
