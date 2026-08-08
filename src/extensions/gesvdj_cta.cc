@@ -265,9 +265,17 @@ inline void gesvdj_cta_impl(Queue& ctx,
                           ? params.sweep_counts.data()
                           : nullptr;
 
+        // The 32 here is load-bearing and was previously only checked on the
+        // host, which cannot constrain what the compiler picks. The exact-norm
+        // reduction and the Gram reduce-scatter below are hardcoded 5- and
+        // (4+1)-step butterflies, probs_per_warp is sg_size/P with sg_size
+        // fixed at 32, and part_id assumes the same -- every one of those is
+        // silently wrong at any other sub-group width. Sibling CTA kernels
+        // (steqr_cta, syev_cta_fused, sytrd_sb2st_cta) all carry the attribute;
+        // this one and syev_jacobi_cta did not.
         cgh.parallel_for<GesvdjCTAKernel<T, P, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) {
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
