@@ -127,6 +127,58 @@ The `latrd` grid escape hatch (`BATCHLAS_LATRD_GRID_FORCE_UNSAFE`) is in but **n
 exercised** — it is deadlock-capable by construction and belongs with the A5 measurement, not
 with this batch.
 
+## WP2 is excluded from the PR, and why that is not just the perf result
+
+The B3 port is reverted out of this branch (`git revert -m 1` of its merge). It survives on
+`worktree-wf_3b4af334-426-9` with the measurements above.
+
+The performance rejection alone would not force that — a dead forced-provider path is
+harmless. The deciding fact is different: the port also **rewrites the n ≤ 32 CTA kernels**
+(`sytrd_cta.cc`, `ormqr_cta.cc`, `syev_cta.cc`, and the sub-group→work-group partition
+machinery in `sg_compat.hh`), and `Auto` *does* route there — `cta` owns cfloat at n = 9..32.
+Its tests pass, but its effect on that live route was never measured. Carrying an unmeasured
+change to a routed path, in service of a feature measured as 85–211× slower, is not a trade
+worth making. If the partition refactor is wanted for its own sake it should come back as its
+own change, with n ≤ 32 numbers attached.
+
+## An incremental build is not trustworthy across this revert
+
+Recorded because it cost an hour and would cost it again.
+
+Reverting WP2 removed a member from `DeviceCaps` (`include/blas/dispatch/context.hh`), which
+main does not have and the port added. `cmake --build` reported success and the test suites
+passed, but `two_stage` then **segfaulted for both scalar types at n ≥ 256**, in
+`~DeviceCaps` freeing a `std::string` at the wrong offset — objects built against the two
+struct layouts had been mixed. A stale-object ODR violation, not a code defect:
+
+```
+#0  __GI___libc_free (mem=0x18c00)
+#7  ~DeviceCaps () at include/blas/dispatch/context.hh:11
+#8  ormqr_buffer_size_dispatch<CUDA, complex<float>>
+#11 syev_two_stage_buffer_size<CUDA, complex<float>>
+```
+
+`cmake --build --target clean` plus a full rebuild fixed it, and every figure in this document
+was then re-measured on that clean build:
+
+| | pre-revert | clean rebuild | |
+|---|---|---|---|
+| WP1 float values n=256 | 14.476 | **14.463** | reproduces |
+| WP1 cfloat values n=256 | 38.250 | **38.358** | reproduces |
+| WP3 cfloat vectors n=256 | 63.899 | **63.889** | reproduces |
+| WP4 cfloat two-stage n=512 | 852.46 | **852.30** | reproduces |
+| WP4 float two-stage n=512 | 331.25 | **334.50** | baseline 334.28 — unchanged |
+
+Two lessons. First, after reverting a merge that changed a struct in a widely-included header,
+rebuild clean before believing anything — including the tests, which passed against the broken
+library. Second, the intermediate spot-check that read float values-only at 15.301 instead of
+14.463 was an artifact of that same broken build; a 6% anomaly is exactly the size that gets
+rationalised as thermal drift rather than investigated. It was worth chasing.
+
+Note also that benchmark targets here are `EXCLUDE_FROM_ALL`: after `--target clean`, a plain
+`cmake --build` rebuilds the tests but leaves no benchmark binaries, and the next measurement
+fails with "No such file or directory" rather than anything informative.
+
 ## What this changes in the plan
 
 1. **B3 leaves the front of the queue** and becomes a recorded negative result. The plan's
