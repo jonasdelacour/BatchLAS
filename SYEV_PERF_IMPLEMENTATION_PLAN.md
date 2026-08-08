@@ -39,7 +39,7 @@ The research document's §7 order is kept, with two deviations, both stated:
 | **WP5** | Single-read panel symv | B1 | new kernel | **1.22–1.82×** end to end, both types |
 | **WP6** | Complex stage-2 occupancy | B2 | kernel rework | 1.49× cfloat two-stage; opens n ≥ 512 |
 | **WP7** | Measurement debt | A4, A5, B4 | investigation | routing corrections |
-| **WP8** | Block Jacobi | C1 | large | 1.5–2.5× at n = 128–256 (speculative) |
+| **WP8** | Block Jacobi | C1 | large | ~~1.5–2.5× at n = 128–256~~ — **done, measured 2.0–11.5× *slower*; ships unrouted as an accuracy backend** |
 
 **Deviation 1 — WP0 goes first.** Two of the packages below cannot be measured with the
 harness as it stands (§WP0). Fixing that is ~40 lines and removes the need to tune A3 and
@@ -570,6 +570,28 @@ eigenvector mode only.
 ---
 
 ## WP8 — C1: block Jacobi at n = 64–256
+
+> **Status: implemented and measured. It loses.** Shipped as `syev_jacobi_blocked`
+> (`src/extensions/syev_jacobi_blocked.cc`), covering n = 64–256 for all four scalar types,
+> **not routed from `Auto`**. Full write-up in `SYEV_JACOBI_BLOCKED_RESULTS.md`.
+>
+> Measured, RTX 4090 / float / saturating batch, eigenvectors: **2.03x slower** than the routed
+> path at n = 64, **6.83x** at n = 128, **11.5x** at n = 256. Eigenvalues-only is worse again
+> (5.9x / 12.7x / 17.7x). The accuracy payoff is confirmed and large: max relative eigenvalue
+> error on graded SPD input with kappa ~ 1e35 is 3.0e-06 at n = 64 against the routed `syev`'s
+> 1.6e+27, on identical float input.
+>
+> **The cost estimate below is wrong by 3x, and the error is arithmetic, not luck.** "~8–10
+> sweeps × ~4n³" counts one of the *three* block updates each round performs: right-multiplying
+> A by the block-diagonal V is 4n³ per sweep, but V^H·A is another 4n³ and Z·V a third. The real
+> figure is 12n³ per sweep with vectors, so ~100n³ — a ~25x premium over syev's ~4n³, not 10x.
+> Break-even at n = 256 needs ~51 TFLOP/s, which is above the ~47 TFLOP/s this card sustains on
+> cuBLAS SGEMM. **No implementation of this item could have won at n = 256.**
+>
+> What binds in practice is not flops but global traffic, `6n³/nb` per sweep, with nb capped by
+> the local memory the pivot block needs. That produces a cliff rather than a slope: n = 64 is
+> fully resident (l = 2, zero global traffic between load and store) and costs 2.03x; n = 128
+> is not, and costs 6.83x.
 
 Kept last deliberately: highest ceiling among the conventional-alternative items, entirely
 unmeasured, and it should only start once WP1–WP6 have bounded what the current path can

@@ -6,6 +6,7 @@ set(EXTENSIONS_CTA_SOURCES
     sytrd_cta.cc
     sytrd_sb2st_cta.cc
     syev_jacobi_cta.cc
+    syev_jacobi_blocked.cc
     gesvdj_cta.cc
     syev_cta_fused.cc
 )
