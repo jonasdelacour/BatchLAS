@@ -1926,6 +1926,48 @@ namespace batchlas {
         return bdsqr_buffer_size(ctx, d, e, singular_values_out);
     }
 
+    /**
+     * @brief Bidiagonal divide-and-conquer SVD for a real upper bidiagonal matrix.
+     *
+     * Same problem as `bdsqr`, but parallel instead of a serial Golub-Kahan
+     * sweep: it reduces the bidiagonal SVD to the symmetric tridiagonal
+     * eigenproblem of the interleaved Golub-Kahan form (zero diagonal,
+     * off-diagonal `(d_0, e_0, d_1, e_1, ...)`, order `2n`) and hands that to
+     * `stedc`. Nothing is squared, so unlike the normal-equation path the error
+     * stays proportional to `kappa`, not `kappa^2`.
+     *
+     * Unlike `bdsqr`, which *accumulates* into whatever it is handed
+     * (`u <- u*Q`), `bdsdc` *writes* the leading `n x n` block of `u` and of
+     * `vh` directly and leaves the rest of those views untouched -- seed them
+     * with the identity if the trailing columns matter.
+     *
+     * Workspace is dominated by a `2n x 2n` eigenvector matrix per batch item.
+     */
+    template <Backend B, typename T>
+    Event bdsdc(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                bool sort_desc = true);
+
+    template <Backend B, typename T>
+    Event bdsdc(Queue& ctx,
+                const VectorView<T>& d,
+                const VectorView<T>& e,
+                Span<T> singular_values_out,
+                const Span<std::byte>& ws,
+                const MatrixView<T, MatrixFormat::Dense>& u,
+                const MatrixView<T, MatrixFormat::Dense>& vh,
+                bool sort_desc = true);
+
+    template <Backend B, typename T>
+    size_t bdsdc_buffer_size(Queue& ctx,
+                             const VectorView<T>& d,
+                             const VectorView<T>& e,
+                             Span<T> singular_values_out,
+                             bool want_vectors);
+
     
     /**
      * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
@@ -2048,6 +2090,89 @@ namespace batchlas {
                                  SvdVectors jobu,
                                  SvdVectors jobvh,
                                  Uplo hermitian_uplo);
+
+    /**
+     * @brief Parameters for the one-sided Jacobi SVD (`gesvdj_cta`).
+     *
+     * Deliberately NOT a reuse of JacobiParams: that struct's `sort_order`
+     * defaults to Ascending, while gesvd's contract admits exactly one order
+     * (descending), so reusing it invites a silent reversal. The shared field
+     * names carry the same meaning; see the JacobiParams comment above for the
+     * rationale behind the relative threshold.
+     */
+    template <typename T>
+    struct GesvdjParams {
+        using Real = typename base_type<T>::type;
+
+        // A rotation is applied to pivot pair (p,q) only when
+        //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
+        // where a_** are the 2x2 Gram entries of the current columns. This
+        // relative form is what yields the high relative accuracy.
+        Real tol_multiplier = Real(1);
+
+        // Cap on cyclic sweeps. Convergence normally occurs in well under 10.
+        size_t max_sweeps = 30;
+
+        // Multiplies the baseline problems-per-work-group. Baseline is
+        // 32 / P problems, clamped by local memory and max work-group size.
+        size_t cta_wg_size_multiplier = 1;
+
+        // sigma_j <= zero_sigma_multiplier * eps * sigma_max means U_j is not
+        // determined by A and is filled from the orthogonal complement.
+        Real zero_sigma_multiplier = Real(1);
+
+        // NOTE: de Rijk pre-ordering (columns sorted by decreasing norm before
+        // the first sweep) was implemented, measured, and removed -- there is
+        // deliberately no knob for it. Mean sweeps at n=32 float,
+        // kappa = 1e1 / 1e4 / 1e6 were 8.91 / 13.52 / 15.53 with it against
+        // 8.95 / 13.25 / 15.22 without: no reduction, slightly worse when graded.
+        // Keeping even the untaken branch cost 13% of wall clock through
+        // register pressure. Same for QR preconditioning: running the kernel on
+        // R from a (non-pivoted) geqrf changed the sweep count by less than 0.1
+        // at every conditioning tested. See GESVD_PLAN.md Tier 2.
+
+        // Optional per-problem convergence diagnostic, the analogue of
+        // cusolverDnXgesvdjGetSweeps. When non-empty (size >= batch_size) the
+        // kernel writes the number of sweeps each problem consumed. Sweeps are
+        // the dominant cost term, so this is what any preconditioning change has
+        // to be judged on.
+        Span<int32_t> sweep_counts = Span<int32_t>();
+    };
+
+    /**
+     * @brief One-sided (Hestenes) Jacobi SVD for batches of small matrices.
+     *
+     * Computes A = U * diag(s) * Vh with high RELATIVE accuracy: the error in
+     * the singular values is governed by the condition number of the
+     * column-equilibrated matrix rather than of A itself, so graded and badly
+     * scaled inputs keep their small singular values. This is the property the
+     * gebrd -> normal-equation-tridiagonal -> steqr path in `gesvd_cta` and
+     * `gesvd_blocked` does not have.
+     *
+     * Supports max(m, n) <= 32, real and complex, rectangular in both
+     * orientations. A is DESTROYED. Singular values are returned descending.
+     * Requires no workspace -- everything is local-memory resident.
+     */
+    template <Backend B, typename T>
+    Event gesvdj_cta(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& a_in,
+                     Span<typename base_type<T>::type> singular_values,
+                     const MatrixView<T, MatrixFormat::Dense>& u_out,
+                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                     SvdVectors jobu,
+                     SvdVectors jobvh,
+                     const Span<std::byte>& ws = Span<std::byte>(),
+                     GesvdjParams<T> params = GesvdjParams<T>());
+
+    template <Backend B, typename T>
+    size_t gesvdj_cta_buffer_size(Queue& ctx,
+                                  const MatrixView<T, MatrixFormat::Dense>& a,
+                                  Span<typename base_type<T>::type> singular_values,
+                                  const MatrixView<T, MatrixFormat::Dense>& u_out,
+                                  const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                  SvdVectors jobu,
+                                  SvdVectors jobvh,
+                                  GesvdjParams<T> params = GesvdjParams<T>());
 
     /**
      * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
@@ -2354,12 +2479,16 @@ BATCHLAS_DISPATCH_ON_QUEUE(gebrd_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked)
 BATCHLAS_DISPATCH_ON_QUEUE(gebrd_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(bdsqr)
+BATCHLAS_DISPATCH_ON_QUEUE(bdsdc)
+BATCHLAS_DISPATCH_ON_QUEUE(bdsdc_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ormbr)
 BATCHLAS_DISPATCH_ON_QUEUE(ormbr_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_blocked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_cta_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta)
+BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ormqx_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(stedc)
 BATCHLAS_DISPATCH_ON_QUEUE(stedc_workspace_size)

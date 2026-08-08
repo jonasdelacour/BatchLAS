@@ -24,6 +24,26 @@
 
 namespace batchlas {
 
+// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
+// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+namespace sig {
+template <typename T>
+using gesvd_vendor = Event(Queue&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           Span<typename base_type<T>::type>,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           SvdVectors, SvdVectors, Span<std::byte>);
+
+template <typename T>
+using gesvd_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        Span<typename base_type<T>::type>,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        SvdVectors, SvdVectors);
+}  // namespace sig
+
 // A is overwritten during factorization. General real-matrix support accepts
 // rectangular inputs with full-vector outputs (U and V^H). Hermitian overloads
 // remain square-only.
@@ -147,7 +167,18 @@ inline size_t gesvd_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Vendor path for gesvd. Implementations are provided incrementally by backend TUs.
+// Vendor path for gesvd.
+//
+// DECLARATION ONLY. Each backend wrapper TU (cuSOLVER / rocSOLVER / LAPACKE)
+// defines this primary template for its own Backend value and explicitly
+// instantiates it there -- the same mechanism syev_vendor (functions/syev.hh)
+// and ormqr_vendor (functions/ormqr.hh) use.
+//
+// It used to be *defined* here: a NETLIB LAPACKE loop plus a throw for every
+// other backend. That made a CUDA definition in src/backends/cusolver.cc a
+// redefinition error rather than an override, which is why there was never a
+// cuSOLVER SVD binding. The LAPACKE body now lives in
+// src/backends/netlib_lapack.cc.
 template <Backend B, typename T>
 Event gesvd_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& A,
@@ -156,137 +187,7 @@ Event gesvd_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& Vh,
                    SvdVectors jobu,
                    SvdVectors jobvh,
-                   Span<std::byte> workspace) {
-    static_cast<void>(workspace);
-
-    if constexpr (B != Backend::NETLIB) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(singular_values);
-        static_cast<void>(U);
-        static_cast<void>(Vh);
-        static_cast<void>(jobu);
-        static_cast<void>(jobvh);
-        throw std::runtime_error("gesvd_vendor: backend implementation not available yet");
-    } else {
-#if BATCHLAS_HAS_HOST_BACKEND
-        if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
-            throw std::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
-        }
-
-        const int m = static_cast<int>(A.rows());
-        const int n = static_cast<int>(A.cols());
-        const int k = std::min(m, n);
-        const int batch = static_cast<int>(A.batch_size());
-        const std::size_t need_s = static_cast<std::size_t>(k) * static_cast<std::size_t>(batch);
-        if (singular_values.size() < need_s) {
-            throw std::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
-        }
-
-        const char lapack_jobu = (jobu == SvdVectors::All) ? 'A' : 'N';
-        const char lapack_jobvt = (jobvh == SvdVectors::All) ? 'A' : 'N';
-
-        if (jobu == SvdVectors::All) {
-            if (U.rows() != m || U.cols() != m || U.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x m) with matching batch");
-            }
-        }
-        if (jobvh == SvdVectors::All) {
-            if (Vh.rows() != n || Vh.cols() != n || Vh.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): Vh must be (n x n) with matching batch");
-            }
-        }
-
-        ctx.wait();
-
-        std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
-        auto& A_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(A);
-        for (int b = 0; b < batch; ++b) {
-            auto Ab = A_mut.batch_item(b);
-            auto Ub = U.batch_item(b);
-            auto Vhb = Vh.batch_item(b);
-            typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
-
-            lapack_int info = 0;
-            if constexpr (std::is_same_v<T, float>) {
-                info = LAPACKE_sgesvd(LAPACK_COL_MAJOR,
-                                      lapack_jobu,
-                                      lapack_jobvt,
-                                      m,
-                                      n,
-                                      Ab.data_ptr(),
-                                      Ab.ld(),
-                                      sb,
-
-                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
-                                      superb.data());
-            } else if constexpr (std::is_same_v<T, double>) {
-                info = LAPACKE_dgesvd(LAPACK_COL_MAJOR,
-                                      lapack_jobu,
-                                      lapack_jobvt,
-                                      m,
-                                      n,
-                                      Ab.data_ptr(),
-                                      Ab.ld(),
-                                      sb,
-                                      (jobu == SvdVectors::All) ? Ub.data_ptr() : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? Vhb.data_ptr() : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
-                                      superb.data());
-            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-                info = LAPACKE_cgesvd(LAPACK_COL_MAJOR,
-                                      lapack_jobu,
-                                      lapack_jobvt,
-                                      m,
-                                      n,
-                                      reinterpret_cast<lapack_complex_float*>(Ab.data_ptr()),
-                                      Ab.ld(),
-                                      sb,
-                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Ub.data_ptr()) : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_float*>(Vhb.data_ptr()) : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
-                                      superb.data());
-            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
-                info = LAPACKE_zgesvd(LAPACK_COL_MAJOR,
-                                      lapack_jobu,
-                                      lapack_jobvt,
-                                      m,
-                                      n,
-                                      reinterpret_cast<lapack_complex_double*>(Ab.data_ptr()),
-                                      Ab.ld(),
-                                      sb,
-                                      (jobu == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Ub.data_ptr()) : nullptr,
-                                      (jobu == SvdVectors::All) ? Ub.ld() : 1,
-                                      (jobvh == SvdVectors::All) ? reinterpret_cast<lapack_complex_double*>(Vhb.data_ptr()) : nullptr,
-                                      (jobvh == SvdVectors::All) ? Vhb.ld() : 1,
-                                      superb.data());
-            } else {
-                throw std::runtime_error("gesvd_vendor (NETLIB): unsupported scalar type");
-            }
-
-            if (info != 0) {
-                throw std::runtime_error("gesvd_vendor (NETLIB): LAPACKE gesvd failed");
-            }
-        }
-
-        return ctx.create_event_after_external_work();
-#else
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(singular_values);
-        static_cast<void>(U);
-        static_cast<void>(Vh);
-        static_cast<void>(jobu);
-        static_cast<void>(jobvh);
-        throw std::runtime_error("gesvd_vendor (NETLIB): host backend not enabled");
-#endif
-    }
-}
+                   Span<std::byte> workspace);
 
 template <Backend B, typename T>
 size_t gesvd_vendor_buffer_size(Queue& ctx,
@@ -295,16 +196,7 @@ size_t gesvd_vendor_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& U,
                                 const MatrixView<T, MatrixFormat::Dense>& Vh,
                                 SvdVectors jobu,
-                                SvdVectors jobvh) {
-    static_cast<void>(ctx);
-    static_cast<void>(A);
-    static_cast<void>(singular_values);
-    static_cast<void>(U);
-    static_cast<void>(Vh);
-    static_cast<void>(jobu);
-    static_cast<void>(jobvh);
-    return 0;
-}
+                                SvdVectors jobvh);
 
 } // namespace batchlas::backend
 
@@ -339,6 +231,26 @@ inline bool gesvd_supports_cta(const DeviceCaps& caps,
     return true;
 }
 
+// gesvdj_cta supports complex GENERAL input natively, unlike the two predicates
+// below, which both return false for non-real T outside the Hermitian branch.
+// That is the Tier 4 coverage gap: complex general SVD on GPU currently falls
+// through to Vendor and throws. Do NOT copy the RealScalar gate here.
+template <typename T>
+inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
+                                  const MatrixView<T, MatrixFormat::Dense>& A,
+                                  SvdVectors jobu,
+                                  SvdVectors jobvh,
+                                  std::optional<Uplo> hermitian_uplo = std::nullopt) {
+    if (hermitian_uplo.has_value()) return false;   // no Hermitian shortcut
+    if (!caps.is_gpu) return false;
+    if (caps.max_sub_group < 32) return false;
+    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
+    if (std::max(A.rows(), A.cols()) > 32) return false;
+    if (jobu != SvdVectors::None && jobu != SvdVectors::All) return false;
+    if (jobvh != SvdVectors::None && jobvh != SvdVectors::All) return false;
+    return true;
+}
+
 template <typename T>
 inline bool gesvd_supports_blocked(const DeviceCaps& caps,
                                    const MatrixView<T, MatrixFormat::Dense>& A,
@@ -370,6 +282,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
                                       std::optional<Uplo> hermitian_uplo = std::nullopt) {
     Provider chosen = normalize_gesvd_vendor_like(policy.forced);
     if (chosen != Provider::Auto) {
+        if (chosen == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
+            return chosen;
+        }
         if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return chosen;
         }
@@ -382,6 +297,9 @@ inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
 
     for (Provider p : policy.order) {
         p = normalize_gesvd_vendor_like(p);
+        if (p == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
+            return p;
+        }
         if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
             return p;
         }
@@ -417,6 +335,8 @@ inline Event gesvd_dispatch(Queue& ctx,
     size_t need_ws = 0;
     if (chosen == Provider::Vendor) {
         need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    } else if (chosen == Provider::BatchLAS_Jacobi) {
+        need_ws = gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else if (chosen == Provider::BatchLAS_CTA) {
         need_ws = hermitian_uplo.has_value()
             ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
@@ -450,6 +370,14 @@ inline Event gesvd_dispatch(Queue& ctx,
         return backend::gesvd_vendor<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
+    // The explicit branch is not optional: the tail of this function is an
+    // unguarded `return gesvd_blocked(...)`, so a provider without its own
+    // branch silently executes the blocked normal-equation path -- the exact
+    // defect this kernel exists to remove -- while every label says otherwise.
+    if (chosen == Provider::BatchLAS_Jacobi) {
+        return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+    }
+
     if (chosen == Provider::BatchLAS_CTA) {
         return hermitian_uplo.has_value()
             ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
@@ -480,6 +408,10 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
 
     if (chosen == Provider::Vendor) {
         return backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+    }
+
+    if (chosen == Provider::BatchLAS_Jacobi) {
+        return gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
     if (chosen == Provider::BatchLAS_CTA) {

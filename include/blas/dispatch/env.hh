@@ -37,6 +37,10 @@ inline Provider parse_provider_value(const char* v) {
         return Provider::BatchLAS_TwoStage;
     }
 
+    if (s == "jacobi" || s == "batchlas_jacobi" || s == "batchlas-jacobi") {
+        return Provider::BatchLAS_Jacobi;
+    }
+
     if (s == "netlib") return Provider::Netlib;
 
     // Unknown value: keep behavior conservative (Auto).
@@ -50,15 +54,16 @@ inline Provider parse_provider_env(const char* opname) {
     return parse_provider_value(std::getenv(key.c_str()));
 }
 
-inline constexpr std::array<Provider, 5> default_order_cta_blocked_vendor_netlib = {
+inline constexpr std::array<Provider, 6> default_order_cta_blocked_vendor_netlib = {
     Provider::BatchLAS_CTA,
     Provider::BatchLAS_Blocked,
     Provider::BatchLAS_TwoStage,
+    Provider::BatchLAS_Jacobi,
     Provider::Vendor,
     Provider::Netlib,
 };
 
-inline constexpr std::array<Provider, 5> default_order_for_op(const char* /*opname*/) {
+inline constexpr std::array<Provider, 6> default_order_for_op(const char* /*opname*/) {
     // Phase 0: keep a single default order. Extend per-op later.
     return default_order_cta_blocked_vendor_netlib;
 }

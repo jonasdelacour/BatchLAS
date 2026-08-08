@@ -6,6 +6,7 @@ set(EXTENSIONS_CTA_SOURCES
     sytrd_cta.cc
     sytrd_sb2st_cta.cc
     syev_jacobi_cta.cc
+    gesvdj_cta.cc
     syev_cta_fused.cc
 )
 
@@ -29,6 +30,7 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     gebrd.cc
     gebrd_blocked.cc
     bdsqr.cc
+    bdsdc.cc
     ormbr.cc
     gesvd_blocked.cc
     inv.cc
