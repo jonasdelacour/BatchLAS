@@ -17,6 +17,7 @@
 
 #include "../math-helpers.hh"
 #include <util/env.hh>
+#include <blas/cta_limits.hh>
 
 namespace batchlas {
 
@@ -50,6 +51,17 @@ inline void cta_debug_sync(Queue& ctx, const char* stage) {
         std::cerr << "[cta-debug] exception: " << e.what() << std::endl;
         throw;
     }
+}
+
+// Largest n the CTA chain (sytrd_cta -> steqr -> ormqx_cta) supports for this
+// scalar type on this device.  MUST be identical in syev_cta and
+// syev_cta_buffer_size -- the workspace is sized from n, so a mismatch would
+// overrun the BumpAllocator.
+template <typename T>
+inline int32_t syev_cta_max_n(Queue& ctx) {
+    const std::size_t local_mem =
+        static_cast<std::size_t>(ctx->get_device().get_info<sycl::info::device::local_mem_size>());
+    return static_cast<int32_t>(cta_max_partition(sizeof(T), local_mem));
 }
 
 inline std::byte* align_up(std::byte* p, std::size_t align) {
@@ -114,8 +126,8 @@ Event syev_cta(Queue& ctx,
     const int64_t n64 = a_in.rows();
     const int64_t batch64 = a_in.batch_size();
 
-    if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_cta currently supports 1 <= n <= 32.");
+    if (n64 < 1 || n64 > static_cast<int64_t>(syev_cta_max_n<T>(ctx))) {
+        throw std::invalid_argument("syev_cta: n out of range for the CTA partition width.");
     }
     const int32_t n = static_cast<int32_t>(n64);
     const int32_t batch = static_cast<int32_t>(batch64);
@@ -564,8 +576,8 @@ size_t syev_cta_buffer_size(Queue& ctx,
 
         const int64_t n64 = a.rows();
         const int64_t batch64 = a.batch_size();
-        if (n64 < 1 || n64 > 32) {
-            throw std::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
+        if (n64 < 1 || n64 > static_cast<int64_t>(syev_cta_max_n<T>(ctx))) {
+            throw std::invalid_argument("syev_cta_buffer_size: n out of range for the CTA partition width.");
         }
 
         const int32_t n = static_cast<int32_t>(n64);
@@ -627,8 +639,8 @@ size_t syev_cta_buffer_size(Queue& ctx,
 
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
-    if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
+    if (n64 < 1 || n64 > static_cast<int64_t>(syev_cta_max_n<T>(ctx))) {
+        throw std::invalid_argument("syev_cta_buffer_size: n out of range for the CTA partition width.");
     }
 
     const int32_t n = static_cast<int32_t>(n64);

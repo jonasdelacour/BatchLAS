@@ -1,5 +1,7 @@
 #pragma once
 
+#include <blas/cta_limits.hh>
+
 #include <cstdlib>
 #include <optional>
 #include <stdexcept>
@@ -120,9 +122,12 @@ template <typename T>
 inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int64_t n = A.rows();
     if (A.rows() != A.cols()) return false;
-    if (n < 1 || n > 32) return false;
-    // CTA supports small sizes (n<=32). Note: some sizes may be slower than others,
-    // but this predicate is about functional support, not performance heuristics.
+    // The CTA chain runs one problem per partition and keeps an n x n tile in
+    // shared memory, so the supported n is whatever the device's local memory
+    // affords for this scalar type (>= 32 always).  BATCHLAS_CTA_LARGE_N=0
+    // restores the historical n <= 32 cap.
+    if (n < 1 || n > static_cast<int64_t>(cta_max_partition(sizeof(T), caps.local_mem_size))) return false;
+    // This predicate is about functional support, not performance heuristics.
     if (!caps.is_gpu) return false;
     if (caps.max_sub_group < 32) return false;
     return true;
@@ -436,6 +441,17 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     bool forced = false;
     const SyevSmallKernel env = syev_small_kernel_env(forced);
     if (forced) return env;
+
+    // Only the three-kernel chain (sytrd_cta -> steqr -> ormqx_cta) was lifted above n = 32;
+    // syev_cta_fused still throws there (src/extensions/syev_cta_fused.cc:528) and so does
+    // syev_jacobi_cta (src/extensions/syev_jacobi_cta.cc:564). The measured table below is
+    // an n <= 32 table and says nothing about 33..128 anyway.
+    //
+    // Reachable ONLY through a forced BATCHLAS_SYEV_PROVIDER=cta: Auto keeps the CTA
+    // provider at n <= 32 on every backend (see the order loop in choose_syev_provider).
+    // Without this line that forced request throws instead of running the kernel it asked
+    // for, which is exactly the measurement the large-n CTA work exists to produce.
+    if (A.rows() > 32) return SyevSmallKernel::Cta;
 
     // `internal::is_complex` lives in src/math-helpers.hh and is not visible from this public
     // header, so detect complex via the public base_type trait: for a real T,
@@ -819,7 +835,16 @@ inline Provider choose_syev_provider(const DispatchPolicy& policy,
 
     for (Provider p : policy.order) {
         p = normalize_vendor_like(p);
-        if (p == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return p;
+        // n <= 32 here and not in syev_supports_cta: the functional predicate now admits n up
+        // to the shared-memory cap (include/blas/cta_limits.hh), but that lift has NO
+        // performance data behind it yet and this loop is the one place Auto could act on it.
+        // On CUDA the loop is dead for n > 32 (both jobz blocks above return first), so this
+        // only bites the backends that skip the CUDA block entirely -- there Auto would
+        // silently move n = 33..128 off the blocked path onto an unmeasured one. Drop the
+        // clause once the forced-provider numbers justify it (and re-run
+        // ILUKTests.SyevxInstrumentationAndPreconditioner, which is sensitive to which
+        // solver runs the projected Rayleigh-Ritz step -- see syev_cta_max_n_for_vectors).
+        if (p == Provider::BatchLAS_CTA && A.rows() <= 32 && syev_supports_cta(caps, A)) return p;
         if (p == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return p;
         if (p == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) return p;
         if (p == Provider::Vendor) return Provider::Vendor;
