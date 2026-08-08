@@ -47,11 +47,31 @@ enum class GesvdNativeMode {
 // the CTA cutoff. Accuracy is unchanged: at n=64, kappa=1e4, float, 512 samples,
 // orthogonality 1.78e-5 -> 1.79e-5 and residual 1.29e-6 -> 1.32e-6.
 //
-// BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the table above was
-// taken; set it above the largest n to get the old behaviour back.
+// The threshold is now 1, not 33. 33 was chosen on the reasoning that the CTA
+// path takes over below it -- but that is only true for SQUARE input. The CTA
+// and Jacobi predicates both require max(m, n) <= 32, so a TALL matrix with
+// n <= 32 satisfies neither and lands here, on the level-2 path, where it is
+// the m rows that make it ruinous. Nothing covered that band: it needs
+// min(m,n) <= 32 to reach it and m > 32 to be slow, and every gesvd benchmark
+// built a square Random(n, n) until the m/n split.
+//
+// Measured, float, m=1024, batch=128, jobu=None jobvh=All, us per matrix:
+//
+//   n              8      16      24      32
+//   unblocked  138.73  604.48  1535.2  2537.2
+//   blocked      2.15    5.69     9.42   14.15
+//   speedup       64x    106x     163x    179x
+//
+// And it is not only the tall case. Square input through this provider is
+// faster blocked too -- 8x8 0.935 -> 0.370 us, 32x32 48.67 -> 1.84 us (26x) --
+// so there is no n at which the unblocked path is the right choice, and the
+// threshold is a floor of 1 rather than a tuned constant.
+//
+// BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the tables above
+// were taken; set it above the largest n to get the old behaviour back.
 inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
     const char* v = std::getenv("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN");
-    const int32_t threshold = (v != nullptr) ? std::atoi(v) : 33;
+    const int32_t threshold = (v != nullptr) ? std::atoi(v) : 1;
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
 

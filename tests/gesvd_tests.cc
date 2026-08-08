@@ -1482,3 +1482,98 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
         expect_reconstruction(A_ref, s, U, Vh);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tall input with min(m, n) <= 32.
+//
+// This band had no coverage at all, which is why it stayed 64-179x slow. It
+// needs min(m,n) <= 32 to reach the blocked provider's small-n branch and
+// m > 32 for the level-2 bidiagonalisation to hurt, and until the gesvd
+// benchmarks took m and n separately, every one of them built a square
+// Random(n, n). The CTA and Jacobi predicates both require max(m,n) <= 32, so
+// these shapes reach neither -- they are blocked-provider-only by construction.
+// ---------------------------------------------------------------------------
+TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+    } else {
+        struct Shape { int m; int n; };
+        const Shape shapes[] = {{256, 8}, {256, 16}, {512, 32}};
+
+        for (const auto& sh : shapes) {
+            SCOPED_TRACE("m=" + std::to_string(sh.m) + " n=" + std::to_string(sh.n));
+            const int k = std::min(sh.m, sh.n);
+            const int batch = 3;
+
+            auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(sh.m, sh.n, false, batch, 9101);
+            Matrix<Scalar, MatrixFormat::Dense> A_ref(sh.m, sh.n, batch);
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+            UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
+            Matrix<Scalar, MatrixFormat::Dense> U(sh.m, k, batch);
+            Matrix<Scalar, MatrixFormat::Dense> Vh(k, sh.n, batch);
+
+            // nullptr => the Auto order, which must land on Blocked here.
+            const std::string err = run_gesvd_with_provider<Scalar, B>(
+                *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
+            ASSERT_TRUE(err.empty()) << err;
+
+            expect_singular_values_match_lapacke(A_ref, s, gesvd_sv_tol<Real>());
+            expect_orthonormal_columns(U);
+            expect_orthonormal_rows(Vh);
+            expect_reconstruction(A_ref, s, U, Vh);
+        }
+    }
+}
+
+// The blocked bidiagonalisation must agree with the unblocked one it now
+// replaces at small n. BATCHLAS_GESVD_BLOCKED_GEBRD_MIN restores the old path,
+// so this is differential rather than absolute.
+TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+    } else {
+        const int m = 192, n = 16, k = 16, batch = 3;
+
+        auto A_ref = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 9102);
+        Matrix<Scalar, MatrixFormat::Dense> A_blk(m, n, batch), A_unb(m, n, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_blk.view(), A_ref.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_unb.view(), A_ref.view()).wait();
+
+        UnifiedVector<Real> s_blk(static_cast<size_t>(k) * batch), s_unb(static_cast<size_t>(k) * batch);
+        Matrix<Scalar, MatrixFormat::Dense> U_blk(m, k, batch), Vh_blk(k, n, batch);
+        Matrix<Scalar, MatrixFormat::Dense> U_unb(m, k, batch), Vh_unb(k, n, batch);
+
+        {
+            const std::string err = run_gesvd_with_provider<Scalar, B>(
+                *this->ctx, A_blk, s_blk, U_blk, Vh_blk, SvdVectors::Thin, SvdVectors::Thin, "blocked");
+            ASSERT_TRUE(err.empty()) << "blocked gebrd: " << err;
+        }
+        {
+            ScopedEnvVar old_path("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN", "9999");
+            const std::string err = run_gesvd_with_provider<Scalar, B>(
+                *this->ctx, A_unb, s_unb, U_unb, Vh_unb, SvdVectors::Thin, SvdVectors::Thin, "blocked");
+            ASSERT_TRUE(err.empty()) << "unblocked gebrd: " << err;
+        }
+
+        const Real sv_tol = gesvd_sv_tol<Real>();
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < k; ++i) {
+                const size_t idx = static_cast<size_t>(b) * k + i;
+                EXPECT_NEAR(static_cast<double>(s_blk[idx]), static_cast<double>(s_unb[idx]),
+                            static_cast<double>(sv_tol))
+                    << "sigma b=" << b << " i=" << i;
+            }
+        }
+        expect_orthonormal_columns(U_blk);
+        expect_reconstruction(A_ref, s_blk, U_blk, Vh_blk);
+    }
+}
