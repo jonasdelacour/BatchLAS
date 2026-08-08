@@ -70,6 +70,70 @@ Two things follow, and the second is the more important one:
 
 **Gate:** ≥ 1.10× on cfloat *and* float bit-identical (same instantiation selected).
 
+## WP3 (A1) — the primitive-level gate, settled
+
+The plan required this before the solver was touched: *"measure the primitive first. If
+`her2k` does not win at the panel's shapes, this package stops."* The concern was that
+`her2k_gemm_preferred`'s crossover was measured on general rank-k shapes, while the panel loop
+produces a narrow update (k = ib ∈ {16,24,32} against n₂ up to 480) where the fold's extra
+n₂²·batch traffic could eat the halved arithmetic.
+
+Measured at n₂ = 480, batch 512, cfloat — `her2k` against the GEMM pair it replaces
+(one `gemm` of m=n=480, k=ib, doubled):
+
+| k = ib | her2k | one GEMM | the pair | her2k vs pair |
+|---|---|---|---|---|
+| 16 | 3.2401 ms | 2.1314 ms | 4.2628 ms | **1.32×** |
+| 24 | 3.2703 ms | 2.1603 ms | 4.3206 ms | **1.32×** |
+| 32 | 3.3010 ms | 2.1933 ms | 4.3866 ms | **1.33×** |
+
+**her2k wins, and the package proceeds.** But note the shape of the result: her2k's time is
+almost independent of k (3.24 → 3.30 ms as k doubles), which is precisely the signature the
+concern predicted — it is dominated by the n₂² product-buffer traffic, not by arithmetic. The
+GEMM pair is nearly k-independent too, so the ratio holds; but it means this win will *not*
+grow with a larger `nb`, and it caps what A1 can deliver.
+
+Propagating 1.33× through the measured phase share (the trailing update is roughly half of the
+34.6% that vendor GEMM occupies in the cfloat solve at n = 256) predicts about **1.04×**
+end to end — the low end of the plan's 1.05–1.12× estimate, not the middle.
+
+### The fallback, quantified
+
+Forcing the host-loop route (`BATCHLAS_EXPAND_ROUTE=loop`) at n₂=480, k=32, batch 512:
+
+| route | time | vs GEMM pair |
+|---|---|---|
+| her2k, GEMM+fold | 3.3010 ms | 1.33× faster |
+| GEMM pair (today) | 4.3866 ms | — |
+| her2k, per-batch host loop | 5.3924 ms | **1.23× slower** |
+
+So the call-site guard is genuinely necessary — but the downside is 1.23×, **not** the 7.8×
+that the analogous real-`syr2k` comment in `sytrd_blocked.cc` warns about. That comment was
+measured in double, where the vendor loop is far worse. Recording the milder number so nobody
+over-engineers the guard on the strength of the wrong precedent.
+
+## WP5 (B1) — the counter premise, independently confirmed
+
+WP5 is the largest package and its entire case rests on the counters in §3 of the research
+document. Re-measured here with `ncu` on `LatrdLowerPanelKernelLegacy<float, 256, 0>`,
+n = 512, batch 256, ib = 32, j₀ = 0:
+
+| metric | this build | research doc |
+|---|---|---|
+| DRAM bytes | 4,845 MB | 4,850 MB |
+| L2 (`lts__t_bytes`) | 10,050 MB | 10,069 MB |
+| L1TEX bytes | **52,499 MB** | **52,499 MB** |
+| SM throughput | 10.84% | 10.8% |
+| achieved occupancy | 33.19% | 33.2% |
+| kernel duration | 11.444 ms | 11.37 ms |
+
+Identical to the byte in the L1 figure. So the 12.2× L1 over-fetch, the 2.34× L2 double-read,
+and the 10.8% SM idle all stand, and with them the 2.7× headroom.
+
+The profile also confirms the structural constraint the redesign must respect: the launch is
+grid (256,1,1) with 256-thread blocks at batch 256 — **one work-group per matrix**, exactly as
+WP5's design section assumes.
+
 ## WP2 (B3) — eigenvectors, `provider=blocked`, batch 2048
 
 The n range the `cta-large-n` port targets (its measured local-memory limits are n = 128 for
