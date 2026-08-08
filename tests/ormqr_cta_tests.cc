@@ -4,7 +4,6 @@
 #include <blas/enums.hh>
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
-#include <blas/cta_limits.hh>
 #include <util/sycl-device-queue.hh>
 #include <util/sycl-span.hh>
 
@@ -152,70 +151,11 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 	}
 }
 
-// Direct coverage of the work-group-partition (n > 32) Left path.
-TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftLargeN) {
-	using T = typename TestFixture::ScalarType;
-	constexpr Backend B = TestFixture::BackendType;
-
-	const std::size_t local_mem =
-		static_cast<std::size_t>(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-	const int max_n = cta_max_partition(sizeof(T), local_mem);
-	if (max_n <= 32) {
-		GTEST_SKIP() << "device/scalar combination caps the CTA path at n=32";
-	}
-
-	for (int n : {33, 64, 128}) {
-		if (n > max_n) continue;
-		SCOPED_TRACE(::testing::Message() << "n=" << n);
-
-		const int batch = 3;
-		const int k = n;
-		const T tol = cta_tol<T>();
-
-		Queue ctx_cpu("cpu");
-		Matrix<T, MatrixFormat::Dense> A_fact =
-			Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/808 + n);
-
-		UnifiedVector<T> tau(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-		UnifiedVector<std::byte> ws_geqrf(
-			geqrf_buffer_size<Backend::NETLIB>(ctx_cpu, A_fact.view(), tau.to_span()), std::byte{0});
-		geqrf<Backend::NETLIB>(ctx_cpu, A_fact.view(), tau.to_span(), ws_geqrf.to_span()).wait();
-		ctx_cpu.wait();
-
-		VectorView<T> tau_view(tau.to_span(), /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
-
-		for (Transpose trans : {Transpose::NoTrans, Transpose::Trans}) {
-			Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(
-				n, n, /*hermitian=*/false, batch, /*seed=*/(trans == Transpose::NoTrans ? 31 : 32) + n);
-			Matrix<T, MatrixFormat::Dense> C_ref = C0;
-			Matrix<T, MatrixFormat::Dense> C_cta = C0;
-
-			UnifiedVector<std::byte> ws_ref(
-				ormqr_buffer_size<Backend::NETLIB>(ctx_cpu, A_fact.view(), C_ref.view(), Side::Left, trans, tau.to_span()),
-				std::byte{0});
-			ormqr<Backend::NETLIB>(ctx_cpu, A_fact.view(), C_ref.view(), Side::Left, trans, tau.to_span(),
-								   ws_ref.to_span()).wait();
-			ctx_cpu.wait();
-
-			UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
-			ormqx_cta<B, T>(*this->ctx, A_fact.view(), tau_view, C_cta.view(), Uplo::Upper, Side::Left,
-							trans, k, ws_dummy.to_span(), /*cta_wg_size_multiplier=*/1).wait();
-			this->ctx->wait();
-
-			assert_allclose_matrix(C_cta, C_ref, tol);
-		}
-	}
-}
-
 TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 	using T = typename TestFixture::ScalarType;
 	constexpr Backend B = TestFixture::BackendType;
 
-	// The Side::Left path now supports n up to whatever shared memory affords
-	// (work-group partition); one past that must still throw.
-	const std::size_t local_mem =
-		static_cast<std::size_t>(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-	const int n = cta_max_partition(sizeof(T), local_mem) + 1;
+	const int n = 33;
 	Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
 	Matrix<T, MatrixFormat::Dense> C = Matrix<T, MatrixFormat::Dense>::Random(n, n);
 	Vector<T> tau(n, /*batch=*/1);

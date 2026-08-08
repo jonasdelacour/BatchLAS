@@ -5,7 +5,6 @@
 #include <blas/functions.hh>
 #include <blas/extensions.hh>
 #include <blas/extra.hh>
-#include <blas/cta_limits.hh>
 #include <util/kernel-heuristics.hh>
 #include <util/mempool.hh>
 #include <util/group-invoke.hh>
@@ -30,9 +29,7 @@ namespace batchlas {
 // to a matrix C.
 //
 // Notes:
-// - Small sizes only.  Side::Left runs one work-group per problem above n=32
-//   (WorkGroupPartition), so its cap is what shared memory affords; Side::Right
-//   still uses the warp-chunk partition and stays at n <= 32.
+// - This file is intended for very small sizes (n <= 32).
 // - Current implementation focuses on the n-by-n case (C is square), which is
 //   exactly what we need to post-process tridiagonal eigenvectors in SYEVD.
 // - Order/storage match LAPACK's DORMQR/ZUNMQR and DORMQL/ZUNMQL contracts.
@@ -76,7 +73,7 @@ inline T group_sum(const Group& g, T v) {
 
 } // namespace detail
 
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool UseWg>
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
 class OrmQxCTAKernel;
 
 // Apply one Householder reflector H = I - tau * v * v^H to C.
@@ -144,9 +141,7 @@ inline void apply_reflector_small(const Partition& part,
     }
 }
 
-// UseWg == true selects the one-work-group-per-problem variant (P may exceed the
-// sub-group width).  Only implemented for Left, which is the case syev_cta needs.
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool UseWg = false>
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
 inline void ormqx_cta_impl(Queue& ctx,
                            MatrixView<T, MatrixFormat::Dense>& a,
                            VectorView<T>& tau,
@@ -206,89 +201,11 @@ inline void ormqx_cta_impl(Queue& ctx,
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
-        if constexpr (UseWg) {
-            wg_size = static_cast<int32_t>(P);
-        }
-
-        const int32_t probs_per_wg = UseWg ? 1 : (wg_size / static_cast<int32_t>(P));
+        const int32_t probs_per_wg = wg_size / static_cast<int32_t>(P);
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
-        if constexpr (UseWg) {
-            // One work-group of P work-items per problem, lane j owning column j
-            // of C.  C stays in shared memory (a P-element register column would
-            // spill at these widths), row-padded to P+1 so that the per-lane
-            // column stride is odd and bank-conflict free.
-            constexpr int32_t LDC = static_cast<int32_t>(P) + 1;
-            auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<std::size_t>(LDC) * P), cgh);
-            auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(P), cgh);
-
-            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, UseWg>>(
-                sycl::nd_range<1>(global_size, wg_size),
-                [=](sycl::nd_item<1> it) {
-                    const auto wg = it.get_group();
-                    const int32_t prob_id = static_cast<int32_t>(wg.get_group_linear_id());
-                    if (prob_id >= static_cast<int32_t>(batch_size)) return;  // work-group uniform
-
-                    const int32_t lane = static_cast<int32_t>(it.get_local_id(0));
-
-                    auto A_prob = A_view.batch_item(prob_id);
-                    auto TAU_prob = TAU_view.batch_item(prob_id);
-                    auto C_prob = C_view.batch_item(prob_id);
-
-                    const bool active_col = (lane < n);
-
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        C_local[r + lane * LDC] = (active_col && r < n) ? C_prob(r, lane) : T(0);
-                    }
-                    sycl::group_barrier(wg);
-
-                    const bool descending = (Left ^ QL) ? (!TransposeOrConj) : TransposeOrConj;
-                    const int32_t i0 = descending ? (k - 1) : 0;
-                    const int32_t i1 = descending ? -1 : k;
-                    const int32_t step = descending ? -1 : 1;
-
-                    for (int32_t ii = i0; ii != i1; ii += step) {
-                        const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
-                        const T tau_eff = TransposeOrConj ? detail::conj_val(tau_i) : tau_i;
-
-                        // Reflector staged by absolute row, explicitly zeroed
-                        // outside its support (same convention as the sub-group
-                        // Left path) so the update loop needs no predication.
-                        if constexpr (!QL) {
-                            const bool in_support = (lane >= ii) && (lane < n);
-                            V_local[lane] = !in_support ? T(0) : ((lane == ii) ? T(1) : A_prob(lane, ii));
-                        } else {
-                            const int32_t col = (n - k) + ii;
-                            const int32_t pivot = (n - k) + ii;
-                            const bool in_support = (lane <= pivot) && (lane < n);
-                            V_local[lane] = !in_support ? T(0) : ((lane == pivot) ? T(1) : A_prob(lane, col));
-                        }
-
-                        sycl::group_barrier(wg);
-
-                        if (active_col && tau_eff != T(0)) {
-                            T dot = T(0);
-                            for (int32_t r = 0; r < n; ++r) {
-                                dot += detail::conj_val(V_local[r]) * C_local[r + lane * LDC];
-                            }
-                            const T gamma = tau_eff * dot;
-                            for (int32_t r = 0; r < n; ++r) {
-                                C_local[r + lane * LDC] -= V_local[r] * gamma;
-                            }
-                        }
-
-                        // All lanes must be done reading v before it is rewritten.
-                        sycl::group_barrier(wg);
-                    }
-
-                    if (active_col) {
-                        for (int32_t r = 0; r < n; ++r) {
-                            C_prob(r, lane) = C_local[r + lane * LDC];
-                        }
-                    }
-                });
-        } else if constexpr (Left) {
+        if constexpr (Left) {
             // LEFT specialization: lane->column and keep that column in registers.
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
@@ -304,7 +221,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                 ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
                 (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;
 
-            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, UseWg>>(
+            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -458,7 +375,7 @@ inline void ormqx_cta_impl(Queue& ctx,
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto Work_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, UseWg>>(
+            cgh.parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto sg = it.get_sub_group();
@@ -574,8 +491,7 @@ inline void ormqx_cta_impl(Queue& ctx,
 
 // Public entrypoint.
 //
-// CTA-only small-n routine to apply Q from a QR/QL factorization.
-// See cta_limits.hh for the supported n (>= 32; larger for Side::Left).
+// CTA-only small-n routine (n <= 32) to apply Q from a QR/QL factorization.
 // Semantics match LAPACK ORMQx/UNMQx via (factorization, side, trans).
 
 template <Backend B, typename T>
@@ -600,12 +516,8 @@ Event ormqx_cta(Queue& ctx,
     }
 
     const int32_t n = static_cast<int32_t>(a_in.rows());
-    const int32_t max_n = left
-        ? cta_max_partition(sizeof(T),
-                            static_cast<std::size_t>(ctx->get_device().get_info<sycl::info::device::local_mem_size>()))
-        : 32;  // the Side::Right kernel has no work-group-partition variant yet
-    if (n < 0 || n > max_n) {
-        throw std::invalid_argument("ormqx_cta: n out of range for the CTA partition width.");
+    if (n < 0 || n > 32) {
+        throw std::invalid_argument("ormqx_cta: currently supports 0 <= n <= 32.");
     }
     if (k < 0 || k > n) {
         throw std::invalid_argument("ormqx_cta: invalid k.");
@@ -664,36 +576,14 @@ Event ormqx_cta(Queue& ctx,
         }
     };
 
-    // Work-group-partition variant, Left only (see max_n above).
-    auto launch_wg = [&](auto P_tag) {
-        constexpr int32_t P = decltype(P_tag)::value;
-        if (ql) {
-            if (transpose_or_conj) {
-                ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/true, /*UseWg=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
-            } else {
-                ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/false, /*UseWg=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
-            }
-        } else {
-            if (transpose_or_conj) {
-                ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/true, /*UseWg=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
-            } else {
-                ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/false, /*UseWg=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
-            }
-        }
-    };
-
     if (n <= 4) {
         launch(std::integral_constant<int32_t, 4>{});
     } else if (n <= 8) {
         launch(std::integral_constant<int32_t, 8>{});
     } else if (n <= 16) {
         launch(std::integral_constant<int32_t, 16>{});
-    } else if (n <= 32) {
-        launch(std::integral_constant<int32_t, 32>{});
-    } else if (n <= 64) {
-        launch_wg(std::integral_constant<int32_t, 64>{});
     } else {
-        launch_wg(std::integral_constant<int32_t, 128>{});
+        launch(std::integral_constant<int32_t, 32>{});
     }
 
     return ctx.get_event();
