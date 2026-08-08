@@ -282,11 +282,13 @@ using GridBarrierWord = uint32_t;
 //
 // SAFETY: this only terminates if every participating work-group is
 // simultaneously resident on the device. The launch configuration guarantees
-// that (see choose_grid_groups): total work-groups <= MAX_COMPUTE_UNITS, and
+// that (see choose_grid_launch): total work-groups <= MAX_COMPUTE_UNITS, and
 // each work-group needs at most ~2*n*sizeof(T) bytes of local memory and
 // <= 256 work-items, so one block per SM is always schedulable. Blocks are
 // dispatched to distinct SMs while the block count does not exceed the SM
 // count, hence all of them are co-resident before any of them spins.
+// BATCHLAS_LATRD_GRID_FORCE_UNSAFE deliberately breaks that guarantee for
+// measurement; see the comment on the override in choose_grid_launch.
 inline void grid_barrier(const sycl::nd_item<1>& it, GridBarrierWord* bar, int groups) {
     if (groups <= 1) {
         it.barrier(sycl::access::fence_space::global_and_local);
@@ -1154,13 +1156,35 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
 
     const int cus = static_cast<int>(q.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     const int resident_cap = std::max(1, cus);
+    const int forced_g = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
     int cap = resident_cap / batch;            // integer division, never rounds up
+
+    // MEASUREMENT ONLY, DEADLOCK-CAPABLE. The cap above makes the grid path
+    // unreachable at batch >= MAX_COMPUTE_UNITS (128 SMs here): at batch == 128
+    // it clamps BATCHLAS_LATRD_GRID_GROUPS to 1, and at batch > 128 cap is 0 and
+    // we return before ever reading the variable. The escape hatch was therefore
+    // clamped by the cap it exists to escape, and the recorded L2-residency A/B
+    // -- taken at batch 512-1024 -- compared legacy against legacy: float
+    // n=256/b=1024 31.06 vs 32.19 ms, float n=512/b=512 327.3 vs 325.9, cfloat
+    // n=512/b=512 698.8 vs 698.3, i.e. identical to three digits, which is the
+    // signature of the fallback, not of a fast grid kernel.
+    //
+    // Raising cap here is not safe in general: grid_barrier spins, so a forced
+    // launch whose G work-groups of one matrix are not co-resident hangs rather
+    // than fails, and a hang here looks exactly like slow JIT. The barrier is
+    // per matrix (bar_all + 2*b, b = glid / G), so the requirement is only that
+    // the G groups of a single matrix are co-resident, which small G plausibly
+    // satisfies at large batch -- but it rests on an in-order block dispatch the
+    // spec does not promise. Run forced-unsafe measurements under `timeout`.
+    // Do not use this to relax the default cap; that needs its own argument.
+    if (forced_g > 0 && env_truthy(std::getenv("BATCHLAS_LATRD_GRID_FORCE_UNSAFE"))) {
+        cap = forced_g;
+    }
     if (cap < 1) return out;
 
     const int rows = n - 1;
     int G = std::min(cap, std::max(1, (rows + 31) / 32));
 
-    const int forced_g = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
     if (forced_g > 0) {
         G = std::min(forced_g, cap);           // never exceed the residency cap
     }

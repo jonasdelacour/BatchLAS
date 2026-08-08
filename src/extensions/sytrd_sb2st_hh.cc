@@ -716,6 +716,69 @@ Event unmqr_hb2st_tiled(Queue& ctx,
     return ctx.get_event();
 }
 
+namespace {
+
+// Per-scalar-type geometry for the wave-parallel back-transform, consulted in
+// unmqr_hb2st after tuning::sb2st_back_*_for_n and before the budget
+// heuristic. 0 means "no opinion" and hands the choice back to the heuristic;
+// that is what every unswept cell returns, including every real type, so real
+// scalars take byte-for-byte the path they took before this helper existed.
+//
+// The heuristic is not type-blind to begin with: its budget is in bytes and
+// per_col is n*sizeof(T), so replaying it at kd=32 gives float (8,4)/(8,8)/
+// (8,16) but cfloat (8,4)/(8,8)/(4,16) at n=256/512/1024. What complex does
+// inherit from float is the 32 KB *budget*, and that is the wrong budget for a
+// kernel that is register bound rather than local-memory bound (stage 2 at
+// n=512 cfloat issues on 35.3% of SM cycles at 49.8% occupancy).
+//
+// Measured, RTX 4090, batch = 512, two-stage eigenvectors, us/matrix:
+//
+//   cfloat n=512   heuristic (tile=8, subs=8) 972.41   (2,4) 855.75   1.136x
+//
+// That is the entire table. cfloat at n=256 and n=1024, and both double types
+// at every n, are UNSWEPT and deliberately return 0 rather than inheriting
+// 512's answer: the float subs table at the call site shows the optimum moving
+// with n (8 wins where a wave holds ~8 reflectors, 16 where it holds ~16), so a
+// single constant stretched across n is a regression waiting to happen. The
+// bucket is an equality for the same reason -- 512 is the only n measured.
+//
+// The missing rows get cheap once sb2st_hh_benchmark registers a complex type:
+// sweep n in {256, 512, 1024} and pass kd positionally, e.g.
+// `sb2st_hh_benchmark 256 1024 32`. The benchmark's default n=256 row is
+// registered with kd=16, which gives subs=8 where the solver's kd=32 gives 4 --
+// sweeping it measures a geometry syev never runs.
+//
+// This is the cheap fraction of the complex stage-2 occupancy problem: it
+// reshapes the launch, it does not touch the kernel. It is NOT additive with a
+// type-aware retiling of unmqr_hb2st_wave, which moves the same occupancy limit
+// and would re-open the geometry question from scratch.
+//
+// internal::is_complex rather than the base_type/is_same_v dance used in
+// include/blas/functions/syev.hh: that idiom exists because is_complex is not
+// visible from a public header, and here it is (math-helpers.hh, used by
+// conj_if above).
+template <typename T>
+constexpr int32_t sb2st_back_tile_for(int32_t n) {
+    if constexpr (internal::is_complex<T>::value) {
+        if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
+            if (n == 512) return 2;
+        }
+    }
+    return 0;
+}
+
+template <typename T>
+constexpr int32_t sb2st_back_subs_for(int32_t n) {
+    if constexpr (internal::is_complex<T>::value) {
+        if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
+            if (n == 512) return 4;
+        }
+    }
+    return 0;
+}
+
+}  // namespace
+
 // True for any spelling a user would plausibly write to mean "off", matched
 // case-insensitively. See the call site in unmqr_hb2st for why this is local
 // rather than a widening of util/env.hh's env_falsy.
@@ -779,11 +842,15 @@ Event unmqr_hb2st(Queue& ctx,
         // With S sub-groups the tile is shared by 32*S threads, so a wider tile
         // no longer costs occupancy the way it did at S=1; C is chosen to keep
         // the footprint near a budget rather than as small as possible. Measured
-        // best at 8 columns for every n tried (see the subs table below).
+        // best at 8 columns for every n tried on float (see the subs table
+        // below); cfloat at n=512 wants 2, see sb2st_back_tile_for.
         // Precedence: the legacy env knob forces a value, then the tuned
-        // constant (0 = no opinion), then the budget heuristic below.
+        // constant (0 = no opinion), then the per-type constant (likewise), then
+        // the budget heuristic below. The lmem clamp afterwards applies to all
+        // four.
         int tile = env_positive_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
         if (tile <= 0) tile = tuning::sb2st_back_tile_for_n(n);
+        if (tile <= 0) tile = sb2st_back_tile_for<T>(n);
         if (tile <= 0) {
             constexpr size_t kTargetLocalBytes = 32768;
             tile = 1;
@@ -806,6 +873,7 @@ Event unmqr_hb2st(Queue& ctx,
         // -- 8 wins where waves hold ~8, 16 wins where they hold ~16.
         int subs = env_positive_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
         if (subs <= 0) subs = tuning::sb2st_back_subs_for_n(n);
+        if (subs <= 0) subs = sb2st_back_subs_for<T>(n);
         if (subs <= 0) {
             const int32_t avg = (num_waves > 0) ? (nrefl + num_waves - 1) / num_waves : 1;
             subs = (avg >= 12) ? 16 : (avg >= 6 ? 8 : 4);
