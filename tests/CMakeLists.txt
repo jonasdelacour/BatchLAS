@@ -205,6 +205,23 @@ function(batchlas_add_test_target test_name)
                 GTest::gtest_main
         )
     endif()
+    # A few tests reach past BatchLAS' public API, so they have to ask for the
+    # requirements BatchLAS deliberately no longer propagates. The backend
+    # libraries are now linked PRIVATE into the component .so files (see
+    # src/CMakeLists.txt) because PUBLIC pushed absolute -dev paths and a
+    # find_dependency(CUDAToolkit) onto every installed consumer.
+    #
+    # LAPACKE: these two call LAPACKE_* directly for their reference results.
+    if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests)$")
+        target_link_libraries(${test_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+    endif()
+    # CUDA headers: these #include src/backends/*cublasdx*.hh, which reaches
+    # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir.
+    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
+       AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
+        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
+    endif()
+
     add_test(NAME ${test_name} COMMAND ${test_name})
 
     batchlas_test_component(_component ${test_name})
@@ -230,4 +247,47 @@ endforeach()
 
 if(BATCHLAS_SMOKE_TEST_TARGETS)
     add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
+endif()
+
+# ---------------------------------------------------------------------------
+# consumer_package_tests: the outside-in guard.
+#
+# Everything above tests the library from inside its own build tree, where the
+# include paths, compile flags and library paths are all handed to it. This one
+# installs the just-built library to a throwaway prefix and consumes it the way
+# an outside project does -- its own project(), find_package(BatchLAS CONFIG
+# REQUIRED), nothing else -- then runs the result and checks the numbers. It is
+# the only test that can see a packaging defect: a flag baked into the exported
+# interface, an absolute path in the export, a header that does not exist after
+# install, or an include root squatted with generic directory names.
+#
+# The work is in examples/consumer_test.sh so it stays readable and runnable by
+# hand; see that file and examples/consumer/README.md.
+#
+# Labels: 'packaging' (component) and 'slow' (it installs ~250 MB and drives a
+# second CMake configure+build), so `ctest -LE slow` -- the default iteration
+# loop -- does not pay for it. Not part of the smoke subset either. It skips
+# rather than fails when a prerequisite is missing (no SYCL compiler, nothing
+# built yet, no device).
+# ---------------------------------------------------------------------------
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    find_program(BATCHLAS_BASH_PROGRAM bash)
+    if(BATCHLAS_BASH_PROGRAM AND EXISTS "${PROJECT_SOURCE_DIR}/examples/consumer_test.sh")
+        add_test(NAME consumer_package_tests
+            COMMAND "${BATCHLAS_BASH_PROGRAM}" "${PROJECT_SOURCE_DIR}/examples/consumer_test.sh"
+                    --build-dir "${PROJECT_BINARY_DIR}"
+                    --example-dir "${PROJECT_SOURCE_DIR}/examples/consumer"
+                    --compiler "${CMAKE_CXX_COMPILER}"
+                    --cmake "${CMAKE_COMMAND}")
+        set_tests_properties(consumer_package_tests PROPERTIES
+            LABELS "packaging;slow"
+            SKIP_RETURN_CODE 77
+            TIMEOUT 1200)
+        if(BATCHLAS_OPENBLAS_CORETYPE)
+            set_tests_properties(consumer_package_tests PROPERTIES
+                ENVIRONMENT "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+        endif()
+    else()
+        message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
+    endif()
 endif()

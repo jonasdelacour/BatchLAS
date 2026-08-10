@@ -76,7 +76,9 @@ bool Queue::backend_available(batchlas::Backend backend) {
 
 void Queue::set_backend(batchlas::Backend backend) {
     if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
-        throw std::runtime_error("Queue::set_backend: backend is not compiled into this build of BatchLAS.");
+        throw std::runtime_error(
+            std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
+            " is not compiled into this build of BatchLAS.");
     }
     backend_ = backend;
     resolved_backend_ = batchlas::Backend::AUTO;  // re-resolve on next query
@@ -145,8 +147,8 @@ bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
 
 namespace batchlas {
 
-Span<std::byte> WorkspaceLease::span() const { return Span<std::byte>(ptr_, size_); }
-WorkspaceLease::operator Span<std::byte>() const { return span(); }
+Span<std::byte> WorkspaceLease::span() const & { return Span<std::byte>(ptr_, size_); }
+WorkspaceLease::operator Span<std::byte>() const & { return span(); }
 
 void WorkspaceLease::release() noexcept { release_(/*diagnose_out_of_order=*/true); }
 

@@ -81,6 +81,29 @@ endfunction()
 function(batchlas_add_benchmark_target target_name)
     add_executable(${target_name} ${target_name}.cc)
     batchlas_configure_binary_target(${target_name})
+    # Accuracy benchmarks need LAPACKE_* for their reference results.
+    # libbatchlas_backends links Netlib PRIVATE (PUBLIC put absolute -dev paths
+    # into the installed export), so a direct caller must ask for it itself.
+    #
+    # Deliberately every benchmark rather than a name list: only four of them
+    # spell LAPACKE_* in their own source, but ten end up with the undefined
+    # symbol, because the reference helpers in miniacc_accuracy_common.hh are
+    # inline templates and land in whichever TU instantiates them. A name list
+    # cannot be derived by grep and goes stale on the next accuracy benchmark;
+    # an unused shared library on a link line costs nothing.
+    if(BATCHLAS_HAS_HOST_BACKEND)
+        target_link_libraries(${target_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+    endif()
+    # CUDA headers: these #include ../src/backends/cusolverdx.hh, which reaches
+    # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir; it
+    # used to arrive via batchlas_backends_cuda's PUBLIC link, which now has to
+    # be PRIVATE so the installed export carries no find_dependency(CUDAToolkit)
+    # and no absolute /usr/local/cuda-* path. Same compensation as the one in
+    # tests/CMakeLists.txt.
+    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
+       AND target_name MATCHES "^(cusolverdx_heev_benchmark|cusolverdx_htev_benchmark|htev_compare_benchmark)$")
+        target_link_libraries(${target_name} PRIVATE CUDA::cudart)
+    endif()
     batchlas_register_benchmark(${target_name})
 endfunction()
 

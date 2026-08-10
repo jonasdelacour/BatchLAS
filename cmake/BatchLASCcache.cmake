@@ -54,6 +54,17 @@ if(NOT BATCHLAS_USE_CCACHE)
     return()
 endif()
 
+# Only when BatchLAS is the top-level project. Everything below writes global
+# state - a generated script in the binary dir and a CACHE ... FORCE write to
+# CMAKE_CXX_COMPILER_LAUNCHER - and under add_subdirectory()/FetchContent that
+# would silently reroute the *consuming* project's compiler through our wrapper.
+# This file runs before BatchLASOptions.cmake, so BATCHLAS_IS_TOP_LEVEL does not
+# exist yet; compare the directories directly.
+if(NOT CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    message(STATUS "BatchLAS is a subproject: leaving CMAKE_CXX_COMPILER_LAUNCHER to the parent project")
+    return()
+endif()
+
 if(CMAKE_CXX_COMPILER_LAUNCHER)
     message(STATUS "CMAKE_CXX_COMPILER_LAUNCHER already set - leaving it alone: ${CMAKE_CXX_COMPILER_LAUNCHER}")
     return()

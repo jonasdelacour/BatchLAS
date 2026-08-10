@@ -12,7 +12,7 @@
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
 #include "../util/template-instantiations.hh"
-#include <internal/sort.hh>
+#include "../sort.hh"
 #include "steqr_cta_device.hh"
 #include <array>
 #include <numeric>

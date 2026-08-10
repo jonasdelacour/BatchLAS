@@ -14,7 +14,7 @@
 #include <blas/functions/iluk.hh>
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
-#include <internal/sort.hh>
+#include "../sort.hh"
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -52,7 +53,8 @@ inline auto with_backend(Queue& ctx, F&& f) {
             break;
     }
     throw std::runtime_error(
-        "BatchLAS: this Queue's backend has no implementation in this build. "
+        std::string("BatchLAS: backend ") + std::string(to_string(ctx.backend())) +
+        " has no implementation in this build. "
         "Check Queue::backend_available() before pinning a backend.");
 }
 

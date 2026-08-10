@@ -4,7 +4,10 @@
 #include <algorithm>
 #include <limits>
 #include <cstdint>
-#include "../../src/queue.hh"
+// Only Device/DeviceProperty/DeviceType/Vendor are used below, all of which are
+// public; reaching into src/queue.hh made this installed header uncompilable for
+// a consumer, since src/ is not installed.
+#include <util/sycl-device-queue.hh>
 
 namespace batchlas {
 

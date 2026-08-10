@@ -13,10 +13,6 @@
 
 #include <batchlas/backend_config.h>
 
-#if BATCHLAS_HAS_HOST_BACKEND
-#include <lapacke.h>
-#endif
-
 #include <blas/dispatch/context.hh>
 #include <blas/dispatch/env.hh>
 #include <blas/dispatch/provider.hh>

@@ -341,14 +341,33 @@ namespace batchlas {
         Matrix(int rows, int cols, int nnz, int batch_size = 1);
 
         // Constructor from existing data (will copy data)
+        // (ld, stride) describe the *source* buffer: element (i, j, b) is read from
+        // data[b * stride + j * ld + i], with ld defaulting to rows and stride to ld * cols.
+        // The copy keeps the caller's leading dimension (ld() == ld) but packs the batch
+        // items back to back (stride() == ld * cols). Throws std::invalid_argument if the
+        // arguments cannot describe a valid buffer (null data, non-positive shape, ld < rows,
+        // or a batched stride smaller than ld * cols).
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Matrix(const T* data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
 
         // Constructor from existing data (will copy data)
+        // Same layout rules as the raw pointer overload above, and additionally checks that
+        // the span is long enough for the requested shape.
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(Span<const T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+
+        // Convenience overload for mutable spans (and UnifiedVector, which converts to one)
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(Span<T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1)
+            : Matrix(Span<const T>(data.data(), data.size()), rows, cols, ld, stride, batch_size) {}
+
+        // Constructor from existing data (will copy data)
         template <typename U = T, MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
-        Matrix(const T* data, const int* row_offsets, const int* col_indices, 
+        Matrix(const T* data, const int* row_offsets, const int* col_indices,
                int nnz, int rows, int cols, int matrix_stride = 0, 
                int offset_stride = 0, int batch_size = 1);
                

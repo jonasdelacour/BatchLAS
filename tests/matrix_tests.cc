@@ -202,6 +202,194 @@ TEST(MatrixDenseTest, ExceptionOnCopyFromMismatchedShape) {
     EXPECT_THROW(a.copy_from(b.view()), std::runtime_error);
 }
 
+// ---------------------------------------------------------------------------
+// Matrix(const T* data, rows, cols, ld, stride, batch_size)
+//
+// (ld, stride) describe the *source* buffer: element (i, j, b) lives at
+// data[b * stride + j * ld + i]. The copy keeps the caller's leading dimension and
+// packs the batch items (stride() == ld * cols). The invariant every test below
+// checks is that view()(i, j, b) returns what the caller had at their own (i, j, b) -
+// this constructor used to size its allocation from rows * cols while advertising
+// ld_ = ld, and to test the raw `stride` argument for its fast path, so a batched call
+// with the defaulted stride silently copied batch item 0 into every item.
+// ---------------------------------------------------------------------------
+
+TEST(MatrixDenseTest, ConstructionFromDataPacked) {
+    constexpr int rows = 3, cols = 2;
+    // Column-major, no padding
+    float src[rows * cols] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+
+    Matrix<float, MatrixFormat::Dense> mat(src, rows, cols, rows);
+    EXPECT_EQ(mat.rows_, rows);
+    EXPECT_EQ(mat.cols_, cols);
+    EXPECT_EQ(mat.batch_size_, 1);
+    EXPECT_EQ(mat.ld(), rows);
+    EXPECT_EQ(mat.stride(), rows * cols);
+    EXPECT_EQ(mat.data().size(), rows * cols);
+
+    auto view = mat.view();
+    for (int j = 0; j < cols; ++j) {
+        for (int i = 0; i < rows; ++i) {
+            EXPECT_FLOAT_EQ(view(i, j, 0), src[j * rows + i]);
+        }
+    }
+}
+
+TEST(MatrixDenseTest, ConstructionFromDataPaddedLeadingDimension) {
+    constexpr int rows = 3, cols = 2, ld = 5;
+    // Padding rows carry a sentinel that must not show up in the copy
+    std::vector<float> src(ld * cols, -1.0f);
+    for (int j = 0; j < cols; ++j) {
+        for (int i = 0; i < rows; ++i) {
+            src[j * ld + i] = static_cast<float>(j * 10 + i);
+        }
+    }
+
+    Matrix<float, MatrixFormat::Dense> mat(src.data(), rows, cols, ld);
+    EXPECT_EQ(mat.ld(), ld);
+    EXPECT_EQ(mat.stride(), ld * cols);
+    EXPECT_EQ(mat.data().size(), ld * cols);
+
+    auto view = mat.view();
+    for (int j = 0; j < cols; ++j) {
+        for (int i = 0; i < rows; ++i) {
+            EXPECT_FLOAT_EQ(view(i, j, 0), src[j * ld + i]);
+        }
+        for (int i = rows; i < ld; ++i) {
+            // Source padding is not copied; the destination padding is zeroed
+            EXPECT_FLOAT_EQ(mat.data()[j * ld + i], 0.0f);
+        }
+    }
+}
+
+TEST(MatrixDenseTest, ConstructionFromDataExplicitStride) {
+    constexpr int rows = 2, cols = 2, ld = 3, stride = 10, batch = 2;
+    // stride > ld * cols: the batch items are separated by a gap in the source
+    std::vector<float> src(stride * batch, -1.0f);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src[b * stride + j * ld + i] = static_cast<float>(b * 100 + j * 10 + i);
+            }
+        }
+    }
+
+    Matrix<float, MatrixFormat::Dense> mat(src.data(), rows, cols, ld, stride, batch);
+    EXPECT_EQ(mat.batch_size_, batch);
+    EXPECT_EQ(mat.ld(), ld);
+    EXPECT_EQ(mat.stride(), ld * cols);  // the source gap is not carried into the copy
+    EXPECT_EQ(mat.data().size(), ld * cols * batch);
+
+    auto view = mat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_FLOAT_EQ(view(i, j, b), src[b * stride + j * ld + i]);
+            }
+        }
+    }
+}
+
+TEST(MatrixDenseTest, ConstructionFromDataDefaultStrideBatched) {
+    constexpr int rows = 2, cols = 3, batch = 3;
+    // Packed batched source with the defaulted stride - every item must survive
+    std::vector<float> src(rows * cols * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src[b * rows * cols + j * rows + i] = static_cast<float>(b * 100 + j * 10 + i);
+            }
+        }
+    }
+
+    Matrix<float, MatrixFormat::Dense> mat(src.data(), rows, cols, rows, 0, batch);
+    EXPECT_EQ(mat.ld(), rows);
+    EXPECT_EQ(mat.stride(), rows * cols);
+    EXPECT_EQ(mat.data().size(), rows * cols * batch);
+
+    auto view = mat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_FLOAT_EQ(view(i, j, b), src[b * rows * cols + j * rows + i]);
+            }
+        }
+    }
+}
+
+TEST(MatrixDenseTest, ConstructionFromDataDefaultStridePaddedBatched) {
+    constexpr int rows = 2, cols = 2, ld = 4, batch = 3;
+    // Defaulted stride with ld > rows: source items are ld * cols apart
+    std::vector<std::complex<double>> src(ld * cols * batch, std::complex<double>(-1.0, -1.0));
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src[b * ld * cols + j * ld + i] = std::complex<double>(b * 100 + j * 10 + i, -b);
+            }
+        }
+    }
+
+    Matrix<std::complex<double>, MatrixFormat::Dense> mat(src.data(), rows, cols, ld, 0, batch);
+    EXPECT_EQ(mat.ld(), ld);
+    EXPECT_EQ(mat.stride(), ld * cols);
+    EXPECT_EQ(mat.data().size(), ld * cols * batch);
+
+    auto view = mat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_EQ(view(i, j, b), src[b * ld * cols + j * ld + i]);
+            }
+        }
+    }
+}
+
+TEST(MatrixDenseTest, ConstructionFromDataThrowsOnBadShape) {
+    using DenseMatrix = Matrix<float, MatrixFormat::Dense>;
+    std::vector<float> src(16, 1.0f);
+
+    EXPECT_THROW(DenseMatrix(nullptr, 2, 2, 2), std::invalid_argument);
+    EXPECT_THROW(DenseMatrix(src.data(), 0, 2, 2), std::invalid_argument);
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 0, 2), std::invalid_argument);
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 2, 1), std::invalid_argument);        // ld < rows
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 2, -1), std::invalid_argument);       // negative ld
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 2, 2, -1), std::invalid_argument);    // negative stride
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 2, 2, 0, 0), std::invalid_argument);  // empty batch
+    EXPECT_THROW(DenseMatrix(src.data(), 2, 2, 2, 3, 2), std::invalid_argument);  // stride < ld * cols
+
+    // ld == 0 falls back to rows, like the sizing constructor
+    DenseMatrix defaulted(src.data(), 2, 2, 0);
+    EXPECT_EQ(defaulted.ld(), 2);
+    EXPECT_EQ(defaulted.stride(), 4);
+}
+
+TEST(MatrixDenseTest, ConstructionFromSpanChecksLength) {
+    using DenseMatrix = Matrix<float, MatrixFormat::Dense>;
+    constexpr int rows = 2, cols = 3, batch = 2;
+    std::vector<float> src(rows * cols * batch);
+    for (size_t i = 0; i < src.size(); ++i) src[i] = static_cast<float>(i);
+
+    // Mutable span overload
+    DenseMatrix mat(Span<float>(src.data(), src.size()), rows, cols, rows, 0, batch);
+    EXPECT_EQ(mat.data().size(), rows * cols * batch);
+    auto view = mat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_FLOAT_EQ(view(i, j, b), src[b * rows * cols + j * rows + i]);
+            }
+        }
+    }
+
+    // Const span overload
+    DenseMatrix const_mat(Span<const float>(src.data(), src.size()), rows, cols, rows, 0, batch);
+    EXPECT_FLOAT_EQ(const_mat.view()(rows - 1, cols - 1, batch - 1), src.back());
+
+    // A span that is too short for the requested shape is rejected
+    EXPECT_THROW((DenseMatrix(Span<const float>(src.data(), src.size() - 1), rows, cols, rows, 0, batch)),
+                 std::invalid_argument);
+}
+
 // --- CSR Matrix tests ---
 TEST(MatrixCSRTest, BasicConstructionAndFill) {
     constexpr int rows = 3, cols = 3, nnz = 4, batch = 2;

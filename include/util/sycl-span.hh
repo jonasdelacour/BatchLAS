@@ -24,7 +24,14 @@ struct Span
     inline constexpr Span(Span<T> &&other) = default;
     inline constexpr Span(const Span<T>& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
     inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
-    inline constexpr Span(T& value) : data_(&value), size_(1) {}
+    // Explicit on purpose: implicitly, any scalar lvalue became a length-1
+    // buffer at every call site taking a Span whose element type is not deduced
+    // from that argument -- the whole eigenvalue/singular-value/pivot/workspace
+    // surface. `syev(q, A, W[i * n], ...)`, the LAPACK idiom minus the
+    // ampersand, then compiled clean and overran the caller's array on the
+    // backends that do not size-check. Spell it `Span(x)` when a one-element
+    // view really is what you want.
+    inline constexpr explicit Span(T& value) : data_(&value), size_(1) {}
 
     Event set_read_mostly(const Queue &ctx = Queue()) const;
     Event unset_read_mostly(const Queue &ctx = Queue()) const;

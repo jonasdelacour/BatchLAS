@@ -10,7 +10,7 @@
 #include <oneapi/dpl/algorithm>
 #include <blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include <internal/sort.hh>
+#include "../sort.hh"
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>

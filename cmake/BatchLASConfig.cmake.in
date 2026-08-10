@@ -6,12 +6,93 @@ if(@BATCHLAS_ENABLE_OPENMP@)
     find_dependency(OpenMP REQUIRED)
 endif()
 
-if(@BATCHLAS_HAS_CUDA_BACKEND@)
-    find_dependency(CUDAToolkit REQUIRED)
-endif()
+# No find_dependency(CUDAToolkit) / LAPACK here on purpose. The CUDA and Netlib
+# libraries are linked PRIVATE into the component shared objects (see
+# src/CMakeLists.txt), which already carry the right DT_NEEDED entries, so the
+# exported interface no longer references them and a CPU-only machine can
+# find_package(BatchLAS) against a CUDA-enabled install.
 
 if(@BATCHLAS_HAS_MKL_BACKEND@)
     find_dependency(MKL CONFIG REQUIRED)
 endif()
 
+# ---------------------------------------------------------------------------
+# Compiler check.
+#
+# BatchLAS' public headers use C++20 constrained templates, and clang mangles
+# the requires-clause into the symbol name while GCC (and clang < 16) does not:
+#     ...Matrix<float, Dense>::Matrix<float, Dense>(int, int, int, int, int)
+#     clang: ..._C1IfLS1_0EQ17DenseMatrixFormatIXTL0_0_EEEE...
+#     gcc  : ..._C1IfLS1_0EEE...
+# The headers compile cleanly under GCC and then fail at link with "undefined
+# reference", with nothing pointing at BatchLAS. The requirement is therefore
+# project-wide, not per-target.
+#
+# Compare by realpath, not by CMAKE_CXX_COMPILER_ID: a stock clang++ reports
+# "Clang" too and then dies on '-fsycl-unnamed-lambda'.
+# ---------------------------------------------------------------------------
+set(BatchLAS_CXX_COMPILER "@CMAKE_CXX_COMPILER@")
+set(BatchLAS_SYCL_TARGETS "@BATCHLAS_SYCL_TARGETS_STRING@")
+
+option(BATCHLAS_REQUIRE_MATCHING_COMPILER
+    "Make a CMAKE_CXX_COMPILER that differs from the one BatchLAS was built with a hard error instead of a warning"
+    OFF)
+
+if(BatchLAS_CXX_COMPILER AND CMAKE_CXX_COMPILER)
+    get_filename_component(_batchlas_built_with "${BatchLAS_CXX_COMPILER}" REALPATH)
+    get_filename_component(_batchlas_using "${CMAKE_CXX_COMPILER}" REALPATH)
+    if(NOT _batchlas_built_with STREQUAL _batchlas_using)
+        if(BATCHLAS_REQUIRE_MATCHING_COMPILER)
+            set(_batchlas_compiler_message_type FATAL_ERROR)
+        else()
+            set(_batchlas_compiler_message_type WARNING)
+        endif()
+        message(${_batchlas_compiler_message_type}
+            "BatchLAS was built with\n"
+            "    ${BatchLAS_CXX_COMPILER}\n"
+            "but this project is configuring with\n"
+            "    ${CMAKE_CXX_COMPILER}\n"
+            "BatchLAS' public headers use C++20 constrained templates; clang mangles the "
+            "requires-clause into the symbol name and GCC (and clang < 16) does not, so the "
+            "headers will compile and the link will fail with 'undefined reference to "
+            "batchlas::Matrix<...>::Matrix(...)'. Configure the WHOLE consuming project with "
+            "-DCMAKE_CXX_COMPILER=${BatchLAS_CXX_COMPILER}.\n"
+            "Note also that BatchLAS no longer forces its own SYCL flags onto your translation "
+            "units; if your own sources use SYCL directly you must add -fsycl yourself. This "
+            "install is AOT-compiled for: ${BatchLAS_SYCL_TARGETS}.\n"
+            "Set BATCHLAS_REQUIRE_MATCHING_COMPILER=ON to make this an error, or ignore it if "
+            "you know the two compilers are ABI-compatible.")
+        unset(_batchlas_compiler_message_type)
+    endif()
+    unset(_batchlas_built_with)
+    unset(_batchlas_using)
+endif()
+
+# ---------------------------------------------------------------------------
+# OpenBLAS coretype workaround.
+#
+# If the build machine's OpenBLAS auto-selects a kernel that computes wrong
+# double-precision results, the health check pins a working coretype for
+# BatchLAS' own tests. A consumer linking the same libopenblas gets the same
+# wrong answers unless it exports the same variable, and nothing else tells it
+# so - hence the warning here rather than a comment in a build dir.
+# ---------------------------------------------------------------------------
+set(BATCHLAS_OPENBLAS_CORETYPE "@BATCHLAS_OPENBLAS_CORETYPE@")
+if(NOT BATCHLAS_OPENBLAS_CORETYPE STREQUAL "")
+    message(WARNING
+        "BatchLAS was built against an OpenBLAS whose auto-selected kernel produces "
+        "incorrect double-precision results on this machine. Run anything that links "
+        "the host/NETLIB backend with\n"
+        "    export OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}\n"
+        "or source <prefix>/@CMAKE_INSTALL_DATADIR@/batchlas/batchlas-env.sh. "
+        "BatchLAS also checks this at run time on first double-precision host use; "
+        "set BATCHLAS_BLAS_HEALTH=off to silence it, =error to make it throw.")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/BatchLASTargets.cmake")
+
+# BatchLAS ships no independently usable components (every component .so has
+# unresolved symbols in its siblings), and no BatchLAS_<comp>_FOUND is ever set,
+# so this makes find_package(BatchLAS COMPONENTS <anything>) fail loudly instead
+# of silently succeeding.
+check_required_components(BatchLAS)

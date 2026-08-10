@@ -140,6 +140,73 @@ inline int csr_random_nnz_per_matrix(int n, float density) {
     return n + offdiag_nnz;
 }
 
+// Resolved layout of the caller's buffer in the dense "copy from existing data"
+// constructors.
+struct DenseSourceLayout {
+    int ld;
+    std::size_t stride;
+};
+
+// Validates the arguments of the dense "copy from existing data" constructors and
+// resolves the layout of the source buffer they describe.
+inline DenseSourceLayout dense_source_layout(const char* ctor, bool has_data,
+                                             int rows, int cols, int ld, int stride,
+                                             int batch_size) {
+    const std::string prefix = std::string(ctor) + ": ";
+    if (!has_data) {
+        throw std::invalid_argument(prefix + "data pointer is null");
+    }
+    if (rows <= 0 || cols <= 0) {
+        throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+                                    std::to_string(rows) + "x" + std::to_string(cols));
+    }
+    if (batch_size <= 0) {
+        throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+    }
+    if (ld < 0) {
+        throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+    }
+    if (stride < 0) {
+        throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+    }
+
+    const int src_ld = ld > 0 ? ld : rows;
+    if (src_ld < rows) {
+        throw std::invalid_argument(prefix + "leading dimension " + std::to_string(src_ld) +
+                                    " is smaller than the row count " + std::to_string(rows));
+    }
+
+    const std::size_t packed = static_cast<std::size_t>(src_ld) * static_cast<std::size_t>(cols);
+    const std::size_t src_stride = stride > 0 ? static_cast<std::size_t>(stride) : packed;
+    if (batch_size > 1 && src_stride < packed) {
+        throw std::invalid_argument(prefix + "stride " + std::to_string(src_stride) +
+                                    " is smaller than ld * cols (" + std::to_string(packed) + ")");
+    }
+    return DenseSourceLayout{src_ld, src_stride};
+}
+
+// Number of elements the source buffer must hold for the given layout.
+inline std::size_t dense_source_extent(const DenseSourceLayout& src, int rows, int cols,
+                                       int batch_size) {
+    return static_cast<std::size_t>(batch_size - 1) * src.stride +
+           static_cast<std::size_t>(cols - 1) * static_cast<std::size_t>(src.ld) +
+           static_cast<std::size_t>(rows);
+}
+
+// Validates a Span source (shape plus length) and hands back its pointer.
+template <typename T>
+inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int ld,
+                                     int stride, int batch_size) {
+    constexpr const char* ctor = "Matrix(Span<const T> data, rows, cols, ld, stride, batch_size)";
+    const auto src = dense_source_layout(ctor, data.data() != nullptr, rows, cols, ld, stride, batch_size);
+    const std::size_t required = dense_source_extent(src, rows, cols, batch_size);
+    if (data.size() < required) {
+        throw std::invalid_argument(std::string(ctor) + ": span holds " + std::to_string(data.size()) +
+                                    " elements but the requested shape needs " + std::to_string(required));
+    }
+    return data.data();
+}
+
 }  // namespace
 
 //----------------------------------------------------------------------
@@ -166,30 +233,44 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
 }
 
 // Constructor from existing data (copies the data)
+// (ld, stride) describe the *source* buffer; the destination keeps the caller's leading
+// dimension but packs the batch items back to back (stride_ == ld_ * cols).
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld, 
+Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
                         int stride, int batch_size)
-    : rows_(rows), cols_(cols), ld_(ld), stride_(stride > 0 ? stride : ld * cols), 
-      batch_size_(batch_size) {
-    // Allocate memory and copy the data
-    data_.resize(static_cast<size_t>(rows) * cols * batch_size);
-    
-    if (stride == ld * cols) {
-        // Contiguous data, we can copy all at once
-        std::copy(data, data + static_cast<size_t>(stride_) * batch_size, data_.data());
+    : rows_(rows), cols_(cols), batch_size_(batch_size),
+      ld_(ld > 0 ? ld : rows), stride_((ld > 0 ? ld : rows) * cols) {
+    const auto src = dense_source_layout("Matrix(const T* data, rows, cols, ld, stride, batch_size)",
+                                         data != nullptr, rows, cols, ld, stride, batch_size);
+
+    // Allocate memory in the destination layout and copy the data
+    const std::size_t dst_stride = static_cast<std::size_t>(ld_) * static_cast<std::size_t>(cols);
+    const std::size_t dst_size = dst_stride * static_cast<std::size_t>(batch_size);
+    data_.resize(dst_size);
+
+    if (src.ld == rows && src.stride == dst_stride) {
+        // Source and destination are both packed, we can copy all at once
+        std::copy(data, data + dst_size, data_.data());
     } else {
-        // Non-contiguous data, copy each matrix separately
+        // The source columns are padded and/or the batch items are separated by gaps.
+        // Copy column by column so that neither the padding (which need not be part of
+        // the caller's allocation) nor the gaps are read.
+        if (ld_ > rows) {
+            std::fill(data_.data(), data_.data() + dst_size, T{});
+        }
         for (int b = 0; b < batch_size; ++b) {
             for (int j = 0; j < cols; ++j) {
-                for (int i = 0; i < rows; ++i) {
-                    data_[b * stride_ + j * rows + i] = data[b * stride + j * ld + i];
-                }
+                const T* src_col = data + static_cast<std::size_t>(b) * src.stride +
+                                          static_cast<std::size_t>(j) * static_cast<std::size_t>(src.ld);
+                std::copy(src_col, src_col + rows,
+                          data_.data() + static_cast<std::size_t>(b) * dst_stride +
+                                         static_cast<std::size_t>(j) * static_cast<std::size_t>(ld_));
             }
         }
     }
-    
+
     // If batched, set up the data pointers
     if (batch_size > 1) {
         data_ptrs_.resize(batch_size);
@@ -198,6 +279,15 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
         }
     }
 }
+
+// Constructor from an existing span (copies the data, and checks the span length)
+template <typename T, MatrixFormat MType>
+template <typename U, MatrixFormat M>
+    requires DenseMatrixFormat<M>
+Matrix<T, MType>::Matrix(Span<const T> data, int rows, int cols, int ld,
+                        int stride, int batch_size)
+    : Matrix(dense_checked_source<T>(data, rows, cols, ld, stride, batch_size),
+             rows, cols, ld, stride, batch_size) {}
 
 //----------------------------------------------------------------------
 // Matrix class implementation - CSR format
@@ -2117,6 +2207,11 @@ template Matrix<float, MatrixFormat::Dense>::Matrix(const float*, int, int, int,
 template Matrix<double, MatrixFormat::Dense>::Matrix(const double*, int, int, int, int, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(const std::complex<float>*, int, int, int, int, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(const std::complex<double>*, int, int, int, int, int);
+
+template Matrix<float, MatrixFormat::Dense>::Matrix(Span<const float>, int, int, int, int, int);
+template Matrix<double, MatrixFormat::Dense>::Matrix(Span<const double>, int, int, int, int, int);
+template Matrix<std::complex<float>, MatrixFormat::Dense>::Matrix(Span<const std::complex<float>>, int, int, int, int, int);
+template Matrix<std::complex<double>, MatrixFormat::Dense>::Matrix(Span<const std::complex<double>>, int, int, int, int, int);
 
 // CSR constructor instantiations
 template Matrix<float, MatrixFormat::CSR>::Matrix(int, int, int, int);

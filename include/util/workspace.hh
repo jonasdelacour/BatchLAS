@@ -104,10 +104,28 @@ public:
 
     ~WorkspaceLease() { release(); }
 
-    Span<std::byte> span() const;
-    operator Span<std::byte>() const;
+    // Every accessor that hands out the borrowed memory is lvalue-only, and the
+    // rvalue overload is deleted rather than absent. A lease is a scope guard:
+    // the bytes go back to the arena when it dies, and the arena re-serves them
+    // to the next borrow, so a pointer taken from a temporary lease is already
+    // stale on the next line. All three of these compiled clean before, under
+    // -Wall -Wextra -Wdangling, and all three aliased:
+    //
+    //     Span<std::byte> ws = ctx.workspace(n);      // lease dies here
+    //     auto s = ctx.workspace(n).span();           // and here
+    //     std::byte* p = ctx.workspace(n).data();     // and here
+    //
+    // The correct spelling differs from the first only by `auto`, which is why
+    // the compiler has to be the one to say it. A const lvalue reference does
+    // not do the job -- it binds to a prvalue -- so the accessors are
+    // ref-qualified.
+    Span<std::byte> span() const &;
+    Span<std::byte> span() const && = delete;
+    operator Span<std::byte>() const &;
+    operator Span<std::byte>() const && = delete;
 
-    std::byte* data() const { return ptr_; }
+    std::byte* data() const & { return ptr_; }
+    std::byte* data() const && = delete;
     std::size_t size() const { return size_; }
 
     // Give the bytes back before the handle goes out of scope. Idempotent, and

@@ -14,6 +14,13 @@
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
 
+// OPENBLAS_CORETYPE value that the configure-time BLAS health check found to be
+// required for the host BLAS to compute dgemm correctly (see
+// cmake/BatchLASBlasHealthCheck.cmake). Empty when nothing was needed or the
+// check did not run. The host backend re-verifies this at runtime, because an
+// install tree is routinely used on a machine other than the one that built it.
+#define BATCHLAS_REQUIRED_OPENBLAS_CORETYPE "@BATCHLAS_OPENBLAS_CORETYPE@"
+
 // Helper macros for conditional compilation
 #if BATCHLAS_HAS_CUDA_BACKEND
   #define BATCHLAS_IF_CUDA(x) x

@@ -27,7 +27,7 @@ else()
 endif()
 
 function(find_nvidia_libs)
-    if(NOT BATCHLAS_ENABLE_CUDA)
+    if(NOT BATCHLAS_CUDA_ENABLED)
         return()
     endif()
 
@@ -240,7 +240,39 @@ function(find_netlib_libs)
     endif()
 endfunction()
 
-if(BATCHLAS_ENABLE_CUDA)
+# oneDPL is a hard dependency: src/matrix.cc, src/extensions/lanczos.cc,
+# src/extensions/tridiag_solver.cc and src/extensions/syevx_lobpcg.cc all
+# include <oneapi/dpl/{algorithm,execution,random}> unconditionally. DPC++ does
+# not bundle it, so without this the build dies on a missing header with no hint
+# about which knob to turn.
+find_path(BATCHLAS_ONEDPL_INCLUDE_DIR
+    NAMES oneapi/dpl/algorithm
+    HINTS
+        "${ONEDPL_ROOT}/include"
+        "$ENV{ONEDPL_ROOT}/include"
+        "$ENV{DPL_ROOT}/include"
+        "$ENV{DPLROOT}/include"
+        "/opt/intel/oneapi/dpl/latest/include"
+    DOC "Directory containing oneapi/dpl (oneDPL headers)"
+)
+if(NOT BATCHLAS_ONEDPL_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "oneDPL headers not found. BatchLAS requires them unconditionally "
+        "(<oneapi/dpl/algorithm>, <oneapi/dpl/execution>, <oneapi/dpl/random>). "
+        "Configure with -DONEDPL_ROOT=<prefix>, where <prefix>/include/oneapi/dpl exists, "
+        "or set the ONEDPL_ROOT / DPL_ROOT environment variable "
+        "(oneAPI's setvars.sh sets DPL_ROOT for you).")
+endif()
+message(STATUS "Found oneDPL headers: ${BATCHLAS_ONEDPL_INCLUDE_DIR}")
+# Skip the -I when the headers are already on the default search path; adding
+# /usr/include explicitly reorders the system include search and breaks builds.
+if(NOT BATCHLAS_ONEDPL_INCLUDE_DIR STREQUAL "/usr/include")
+    target_include_directories(batchlas_dep_options INTERFACE
+        $<BUILD_INTERFACE:${BATCHLAS_ONEDPL_INCLUDE_DIR}>
+    )
+endif()
+
+if(BATCHLAS_CUDA_ENABLED)
     enable_language(CUDA)
     find_nvidia_libs()
 endif()

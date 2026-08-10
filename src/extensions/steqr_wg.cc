@@ -9,7 +9,7 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
-#include <internal/sort.hh>
+#include "../sort.hh"
 
 namespace batchlas {
 

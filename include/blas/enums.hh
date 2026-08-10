@@ -2,7 +2,18 @@
 #include <complex>
 #include <concepts>
 #include <cstdint>
+#include <iosfwd>
+#include <string_view>
 #include <type_traits>
+
+// Every public enum below carries a `constexpr std::string_view to_string(E)`
+// right next to its definition, and a single templated `operator<<` at the end
+// of the namespace picks all of them up through ADL. The returned text is the
+// enumerator's own spelling, so a printed value can be pasted back into source.
+//
+// The stream operator is a template on the stream type deliberately: this header
+// is pulled into device code by nearly every other one, and templating it means
+// only <iosfwd> is needed here rather than all of <ostream>.
 namespace batchlas {
     template<typename T>
     struct base_type {
@@ -45,6 +56,19 @@ namespace batchlas {
         BLOCKED_ELL // Blocked ELLPACK
     };
 
+    inline constexpr std::string_view to_string(MatrixFormat v) {
+        switch (v) {
+            case MatrixFormat::Dense:       return "Dense";
+            case MatrixFormat::CSR:         return "CSR";
+            case MatrixFormat::CSC:         return "CSC";
+            case MatrixFormat::COO:         return "COO";
+            case MatrixFormat::SELL:        return "SELL";
+            case MatrixFormat::BSR:         return "BSR";
+            case MatrixFormat::BLOCKED_ELL: return "BLOCKED_ELL";
+        }
+        return "MatrixFormat(?)";
+    }
+
     template <MatrixFormat F>
     concept DenseMatrixFormat = F == MatrixFormat::Dense;
 
@@ -62,6 +86,19 @@ namespace batchlas {
         // Add more as needed
     };
 
+    inline constexpr std::string_view to_string(Backend v) {
+        switch (v) {
+            case Backend::AUTO:   return "AUTO";
+            case Backend::CUDA:   return "CUDA";
+            case Backend::ROCM:   return "ROCM";
+            case Backend::MKL:    return "MKL";
+            case Backend::MAGMA:  return "MAGMA";
+            case Backend::SYCL:   return "SYCL";
+            case Backend::NETLIB: return "NETLIB";
+        }
+        return "Backend(?)";
+    }
+
     enum class BackendLibrary {
         CUBLAS,     //Belongs to CUDA backend
         CUSPARSE,   //Belongs to CUDA backend
@@ -75,16 +112,49 @@ namespace batchlas {
         LAPACKE     //Belongs to NETLIB backend
     };
 
+    inline constexpr std::string_view to_string(BackendLibrary v) {
+        switch (v) {
+            case BackendLibrary::CUBLAS:    return "CUBLAS";
+            case BackendLibrary::CUSPARSE:  return "CUSPARSE";
+            case BackendLibrary::CUSOLVER:  return "CUSOLVER";
+            case BackendLibrary::ROCBLAS:   return "ROCBLAS";
+            case BackendLibrary::ROCSPARSE: return "ROCSPARSE";
+            case BackendLibrary::ROCSOLVER: return "ROCSOLVER";
+            case BackendLibrary::MAGMA:     return "MAGMA";
+            case BackendLibrary::MKL:       return "MKL";
+            case BackendLibrary::CBLAS:     return "CBLAS";
+            case BackendLibrary::LAPACKE:   return "LAPACKE";
+        }
+        return "BackendLibrary(?)";
+    }
+
     enum class Transpose {
         NoTrans,
         Trans,
         ConjTrans
     };
 
+    inline constexpr std::string_view to_string(Transpose v) {
+        switch (v) {
+            case Transpose::NoTrans:   return "NoTrans";
+            case Transpose::Trans:     return "Trans";
+            case Transpose::ConjTrans: return "ConjTrans";
+        }
+        return "Transpose(?)";
+    }
+
     enum class JobType {
         EigenVectors,
         NoEigenVectors
     };
+
+    inline constexpr std::string_view to_string(JobType v) {
+        switch (v) {
+            case JobType::EigenVectors:   return "EigenVectors";
+            case JobType::NoEigenVectors: return "NoEigenVectors";
+        }
+        return "JobType(?)";
+    }
 
     // SVD vector output policy, LAPACK jobu/jobvt semantics.
     //
@@ -116,6 +186,15 @@ namespace batchlas {
         Thin
     };
 
+    inline constexpr std::string_view to_string(SvdVectors v) {
+        switch (v) {
+            case SvdVectors::None: return "None";
+            case SvdVectors::All:  return "All";
+            case SvdVectors::Thin: return "Thin";
+        }
+        return "SvdVectors(?)";
+    }
+
     // Number of columns of U / rows of V^H implied by a job, given the input
     // shape and k = min(m, n). None yields 0: nothing is written.
     inline constexpr int64_t svd_u_cols(SvdVectors job, int64_t m, int64_t k) {
@@ -146,26 +225,66 @@ namespace batchlas {
         Lower
     };
 
+    inline constexpr std::string_view to_string(Uplo v) {
+        switch (v) {
+            case Uplo::Upper: return "Upper";
+            case Uplo::Lower: return "Lower";
+        }
+        return "Uplo(?)";
+    }
+
     enum class Diag {
         NonUnit,
         Unit
     };
+
+    inline constexpr std::string_view to_string(Diag v) {
+        switch (v) {
+            case Diag::NonUnit: return "NonUnit";
+            case Diag::Unit:    return "Unit";
+        }
+        return "Diag(?)";
+    }
 
     enum class Side {
         Left,
         Right
     };
 
+    inline constexpr std::string_view to_string(Side v) {
+        switch (v) {
+            case Side::Left:  return "Left";
+            case Side::Right: return "Right";
+        }
+        return "Side(?)";
+    }
+
     enum class SortOrder {
         Ascending,
         Descending
     };
 
+    inline constexpr std::string_view to_string(SortOrder v) {
+        switch (v) {
+            case SortOrder::Ascending:  return "Ascending";
+            case SortOrder::Descending: return "Descending";
+        }
+        return "SortOrder(?)";
+    }
+
     enum class ApplyOrder {
         Forward,
         Backward
     };
-    
+
+    inline constexpr std::string_view to_string(ApplyOrder v) {
+        switch (v) {
+            case ApplyOrder::Forward:  return "Forward";
+            case ApplyOrder::Backward: return "Backward";
+        }
+        return "ApplyOrder(?)";
+    }
+
     // Algorithm family used by `syevx` (partial symmetric eigensolve).
     //
     // `Auto` picks based on matrix format, size and the requested fraction of the
@@ -188,6 +307,17 @@ namespace batchlas {
         LOBPCG          // Locally Optimal Block Preconditioned Conjugate Gradient
     };
 
+    inline constexpr std::string_view to_string(SyevxAlgorithm v) {
+        switch (v) {
+            case SyevxAlgorithm::Auto:          return "Auto";
+            case SyevxAlgorithm::Direct:        return "Direct";
+            case SyevxAlgorithm::DirectSubset:  return "DirectSubset";
+            case SyevxAlgorithm::Filtered:      return "Filtered";
+            case SyevxAlgorithm::LOBPCG:        return "LOBPCG";
+        }
+        return "SyevxAlgorithm(?)";
+    }
+
     // How `syevx` chooses which part of the spectrum to return.
     //
     // `Extremal` is the historical behaviour and the default: `neigs` eigenpairs
@@ -206,6 +336,15 @@ namespace batchlas {
         Index,     // SyevxParams::il .. iu inclusive, 0-based, ascending spectrum
         Value      // every eigenvalue in the half-open interval (vl, vu]
     };
+
+    inline constexpr std::string_view to_string(SyevxSelect v) {
+        switch (v) {
+            case SyevxSelect::Extremal: return "Extremal";
+            case SyevxSelect::Index:    return "Index";
+            case SyevxSelect::Value:    return "Value";
+        }
+        return "SyevxSelect(?)";
+    }
 
     // Preconditioner family used by the LOBPCG path of `syevx`. Set per call via
     // SyevxParams::preconditioner_type; `Auto` picks ILU(k) when a factor has been
@@ -254,6 +393,17 @@ namespace batchlas {
         ILUK            // Supplied or syevx-built ILU(k) factor; CSR and smallest-first only
     };
 
+    inline constexpr std::string_view to_string(SyevxPreconditioner v) {
+        switch (v) {
+            case SyevxPreconditioner::Auto:          return "Auto";
+            case SyevxPreconditioner::None:          return "None";
+            case SyevxPreconditioner::Jacobi:        return "Jacobi";
+            case SyevxPreconditioner::JacobiShifted: return "JacobiShifted";
+            case SyevxPreconditioner::ILUK:          return "ILUK";
+        }
+        return "SyevxPreconditioner(?)";
+    }
+
     enum class OrthoAlgorithm {
         Chol2,          //Default
         Cholesky,       //Rarely sufficient
@@ -264,7 +414,22 @@ namespace batchlas {
         SVQB2,          //2 Iterations of SVQB
         NUM_ALGORITHMS  //Used to determine the number of algorithms
     };
-    
+
+    inline constexpr std::string_view to_string(OrthoAlgorithm v) {
+        switch (v) {
+            case OrthoAlgorithm::Chol2:          return "Chol2";
+            case OrthoAlgorithm::Cholesky:       return "Cholesky";
+            case OrthoAlgorithm::ShiftChol3:     return "ShiftChol3";
+            case OrthoAlgorithm::Householder:    return "Householder";
+            case OrthoAlgorithm::CGS2:           return "CGS2";
+            case OrthoAlgorithm::SVQB:           return "SVQB";
+            case OrthoAlgorithm::SVQB2:          return "SVQB2";
+            case OrthoAlgorithm::NUM_ALGORITHMS: return "NUM_ALGORITHMS";
+        }
+        return "OrthoAlgorithm(?)";
+    }
+
+
     //Some of the types are not supported by all backends, compilation errors will make this apparent
     enum class ComputePrecision {
         Default, //Use same precision as input
@@ -275,10 +440,30 @@ namespace batchlas {
         TF32
     };
 
+    inline constexpr std::string_view to_string(ComputePrecision v) {
+        switch (v) {
+            case ComputePrecision::Default: return "Default";
+            case ComputePrecision::F32:     return "F32";
+            case ComputePrecision::F64:     return "F64";
+            case ComputePrecision::F16:     return "F16";
+            case ComputePrecision::BF16:    return "BF16";
+            case ComputePrecision::TF32:    return "TF32";
+        }
+        return "ComputePrecision(?)";
+    }
+
     enum class VectorOrientation {
         Row,
         Column
     };
+
+    inline constexpr std::string_view to_string(VectorOrientation v) {
+        switch (v) {
+            case VectorOrientation::Row:    return "Row";
+            case VectorOrientation::Column: return "Column";
+        }
+        return "VectorOrientation(?)";
+    }
 
     enum class NormType {
         Frobenius, //Most commonly used
@@ -288,8 +473,37 @@ namespace batchlas {
         Spectral   //Spectral (L2) norm, symmetric/Hermitian only
     };
 
+    inline constexpr std::string_view to_string(NormType v) {
+        switch (v) {
+            case NormType::Frobenius: return "Frobenius";
+            case NormType::One:       return "One";
+            case NormType::Inf:       return "Inf";
+            case NormType::Max:       return "Max";
+            case NormType::Spectral:  return "Spectral";
+        }
+        return "NormType(?)";
+    }
+
     enum class Layout {
         RowMajor,
         ColMajor
     };
+
+    inline constexpr std::string_view to_string(Layout v) {
+        switch (v) {
+            case Layout::RowMajor: return "RowMajor";
+            case Layout::ColMajor: return "ColMajor";
+        }
+        return "Layout(?)";
+    }
+
+    // One stream operator for every enum above, found by ADL because they all
+    // live in this namespace. Constrained on `to_string` being callable so that
+    // an enum added later without a printer simply does not get an `operator<<`
+    // rather than getting one that fails to compile inside its own body.
+    template <typename CharT, typename Traits, typename E>
+        requires std::is_enum_v<E> && requires(E e) { to_string(e); }
+    std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, E value) {
+        return os << to_string(value);
+    }
 }

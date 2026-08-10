@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <iosfwd>
+#include <string_view>
+#include <type_traits>
 
 #include <util/workspace.hh>
 #include <blas/enums.hh>
@@ -35,6 +38,71 @@ enum class Vendor
     NVIDIA,
     OTHER
 };
+
+// Printers for the three enums above. These enums live in the GLOBAL namespace,
+// so their to_string() overloads must too or ADL will not find them, and the
+// templated operator<< in namespace batchlas cannot pick them up. See the same
+// pattern (and the same rationale) in <blas/enums.hh>.
+inline constexpr std::string_view to_string(Policy v) {
+    switch (v) {
+        case Policy::SYNC: return "SYNC";
+        case Policy::ASYNC: return "ASYNC";
+    }
+    return "Policy(?)";
+}
+
+inline constexpr std::string_view to_string(DeviceType v) {
+    switch (v) {
+        case DeviceType::CPU: return "CPU";
+        case DeviceType::GPU: return "GPU";
+        case DeviceType::ACCELERATOR: return "ACCELERATOR";
+        case DeviceType::HOST: return "HOST";
+        case DeviceType::NUM_DEV_TYPES: return "NUM_DEV_TYPES";
+    }
+    return "DeviceType(?)";
+}
+
+inline constexpr std::string_view to_string(Vendor v) {
+    switch (v) {
+        case Vendor::AMD: return "AMD";
+        case Vendor::ARM: return "ARM";
+        case Vendor::INTEL: return "INTEL";
+        case Vendor::NVIDIA: return "NVIDIA";
+        case Vendor::OTHER: return "OTHER";
+    }
+    return "Vendor(?)";
+}
+
+// One overload per enum, with the enum spelled out in the parameter list rather
+// than deduced.
+//
+// The obvious spelling - one template constrained on
+// `std::is_enum_v<E> && requires(E e) { to_string(e); }` - is exactly the
+// constraint the templated operator<< in namespace batchlas carries, so every
+// `os << Backend::CUDA` in the tree would become ambiguous. Constraining that
+// template to these three types instead does not help either: batchlas'
+// constraint is *satisfied* for Vendor/DeviceType/Policy, because the
+// `to_string(e)` in it resolves by ADL to the overloads above, so any TU that
+// says `using namespace batchlas;` (or streams from inside the namespace) sees
+// two viable candidates in no subsumption relation and fails to compile.
+//
+// Naming the type makes these strictly more specialised than the batchlas
+// template under function-template partial ordering, which settles the tie in
+// both directions without either header having to know about the other's enums.
+template <typename CharT, typename Traits>
+std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
+    return os << to_string(value);
+}
+
+template <typename CharT, typename Traits>
+std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, DeviceType value) {
+    return os << to_string(value);
+}
+
+template <typename CharT, typename Traits>
+std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Vendor value) {
+    return os << to_string(value);
+}
 
 inline Vendor str_to_vendor(std::string&& v) {
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
@@ -135,6 +203,30 @@ struct Event {
 
 struct QueueImpl;
 
+// A Queue is SINGLE-THREADED. It owns a bump-allocated workspace arena and a
+// cached "last event", neither of which is synchronised, so handing one Queue to
+// a thread pool corrupts both: the arena double-frees or blows its capacity up by
+// orders of magnitude, and the cached event aborts inside the SYCL runtime even
+// when the caller supplies its own workspace and the arena is never touched.
+//
+// The rule is one Queue per thread. Queues built for the same Device share a SYCL
+// context (see the Queue(const Queue&, bool) constructor), so per-thread queues
+// still see each other's USM allocations -- what is per-thread is the arena and
+// the event bookkeeping, not the memory.
+//
+// This is enforced, not merely documented: the operations that mutate that state
+// -- workspace(), trim_workspace(), and everything that touches the event chain
+// (submissions, enqueue(), get_event(), create_event_after_external_work()) --
+// compare std::this_thread::get_id() against the thread that constructed the
+// Queue and throw std::runtime_error if they differ. The check is a thread-id
+// compare on paths that are already submitting work to a device; it is not
+// measurable. It is deliberately NOT a mutex: the arena rewinds a cursor on
+// release, so serialising the calls would still hand two threads interleaved
+// leases out of the same block. A lock would buy silence, not safety.
+//
+// Moving a Queue to another thread and using it exclusively there is fine, but
+// say so with attach_to_current_thread(); otherwise the guard fires on the first
+// call from the new thread.
 struct Queue{
 
     /*  
@@ -174,6 +266,18 @@ struct Queue{
 
     void wait() const;
     void wait_and_throw() const;
+
+    // Hand this Queue's single-thread ownership to the calling thread, so that
+    // the guard described above accepts calls from here instead of from the
+    // thread that constructed it. This is the supported way to build queues on
+    // one thread and run them on another; it is a transfer, not a share.
+    //
+    // Call it from the new owner, once, before that thread's first use, and only
+    // while no other thread is using the Queue -- there is no way for this to
+    // check that for you. Throws if a workspace lease is still outstanding, since
+    // a lease released on the new thread would rewind an arena the old thread is
+    // still carving from.
+    void attach_to_current_thread();
 
     // Borrow `bytes` of device scratch backed by this queue's workspace arena.
     // See util/workspace.hh for the lifetime rules; in short, the memory is
@@ -224,6 +328,32 @@ struct Queue{
     // Whether a backend was compiled into this build. Runtime-queryable
     // counterpart to the BATCHLAS_HAS_*_BACKEND macros.
     static bool backend_available(batchlas::Backend backend);
+
+    // The backend-native stream this queue submits on, as an opaque pointer:
+    // a CUstream (the same thing as cudaStream_t) when the queue runs on the
+    // CUDA backend, a hipStream_t on HIP. static_cast it back to that type.
+    //
+    // Returns nullptr on every other backend -- including the host/CPU one, which
+    // has no such handle, and Level Zero and OpenCL, whose SYCL interop returns a
+    // variant and a retained (caller-must-release) handle respectively; neither
+    // fits "an unowned pointer you may keep using". Check for nullptr rather than
+    // assuming; a Queue built with Device("cpu") is the common surprise.
+    //
+    // The stream belongs to the Queue. Use it to run your own work in the same
+    // stream -- cublasSetStream, cudaMemcpyAsync, your own kernels -- but do not
+    // destroy it, and do not use it after the Queue is gone. Work you push onto it
+    // is ordered by the stream itself, so on the default in-order Queue it runs
+    // after everything BatchLAS has already submitted. The reverse direction is
+    // not automatic: SYCL does not know about your work, so to make the next
+    // BatchLAS call wait for it, take create_event_after_external_work() after
+    // enqueueing it and pass that event on. That is exactly what that function is
+    // for.
+    //
+    // No SYCL types appear in this signature on purpose, so it stays usable
+    // without <sycl/sycl.hpp>. For the SYCL-typed conversions -- the sycl::queue
+    // itself, and sycl::event in both directions -- include
+    // <batchlas/sycl_interop.hh>, which is not pulled in by the umbrella headers.
+    void* native_handle() const;
 
     private:
         Device device_;

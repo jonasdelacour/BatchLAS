@@ -1,0 +1,78 @@
+# Packaging and list-file gate.
+#
+# WHAT THIS DOES NOT COVER - read this before trusting a green tick:
+#   * No GPU, no CUDA, no ROCm. Nothing here executes a kernel.
+#   * No SYCL compiler. A GitHub-hosted runner has no DPC++, so the project is
+#     never configured and never compiled. Compile errors, link errors, ABI
+#     breakage and wrong numbers all pass this workflow.
+#   * No tests. ctest never runs.
+#   * No install. The generated BatchLASConfig/BatchLASTargets cannot be
+#     produced without a build, so the export is checked at the source level
+#     here; run `.github/ci/run_local_checks.sh <install-prefix>` on a machine
+#     with the toolchain to check the real generated files.
+#
+# What it DOES cover is the class of defect that broke consumption of this
+# project and went unnoticed for 1116 commits: list files that no longer parse,
+# a package export pinned to one workstation's filesystem, and public headers
+# that reach into src/. All three are cheap, need no hardware, and each one maps
+# to a defect found by an outside-in integration review.
+#
+# Every check is a script under .github/ci/ so it is runnable locally:
+#   .github/ci/run_local_checks.sh
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cmake-lint:
+    name: CMake list files parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every CMakeLists.txt and cmake/*.cmake
+        # Unbalanced parentheses, unterminated strings, if() without endif().
+        # A real `cmake -S . -B build` would be stronger, but it needs the SYCL
+        # compiler; `cmake -P` would parse yet also execute (these list files
+        # write files and fetch dependencies), so this is a static check.
+        run: python3 .github/ci/check_cmake_syntax.py
+      - name: Validate CMakePresets.json
+        # cmake reads and schema-validates the presets file without configuring.
+        run: cmake --list-presets=all -S .
+
+  exported-package:
+    name: Exported package is relocatable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No host paths or SYCL flags on the exported interface
+        # Source mode only, and it only sees what is written literally: a
+        # spelled-out --cuda-path=/usr/local/cuda-13.2 or
+        # /usr/lib/x86_64-linux-gnu/liblapacke.so handed to an exported batchlas
+        # target's INTERFACE/PUBLIC requirements, plus PUBLIC ${..._LINK_LIBRARIES}
+        # for the variables known to expand to absolute host paths.
+        #
+        # It cannot see a machine path that arrives through any other variable,
+        # which is most of them. The real gate is --package against an install
+        # prefix, and CI cannot run it: generating the export needs a SYCL
+        # compiler. Run it before pushing:
+        #   cmake --install build --prefix /tmp/inst
+        #   .github/ci/run_local_checks.sh /tmp/inst
+        run: python3 .github/ci/check_exported_package.py --source
+
+  public-headers:
+    name: Public headers are installable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No include/ header reaches into src/
+        # src/ is not installed, so `#include "../../src/queue.hh"` in a public
+        # header is a compile error for every consumer and for nobody in-tree.
+        run: python3 .github/ci/check_public_headers.py

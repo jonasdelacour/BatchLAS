@@ -3,7 +3,7 @@
 #include <blas/extensions.hh>
 #include <util/mempool.hh>
 #include <util/sycl-local-accessor-helpers.hh>
-#include <internal/sort.hh>
+#include "../sort.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
