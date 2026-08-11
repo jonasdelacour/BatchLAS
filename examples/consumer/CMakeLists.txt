@@ -40,12 +40,18 @@ if(BATCHLAS_CONSUMER_USE_FSYCL)
 endif()
 
 # The include-root squatting guard. See decoy_include/util/workspace.hh: the
-# directory holds one header whose name collides with a BatchLAS-internal one,
-# placed where a consumer's own headers go -- i.e. AHEAD of anything an imported
-# target propagates. consumer_test.sh builds the example a second time with this
-# ON and classifies the result; it is off by default so the primary build stays
-# a plain, copyable example.
-option(BATCHLAS_CONSUMER_DECOY "Put a colliding util/workspace.hh on the include path" OFF)
+# directory holds three headers named blas/enums.hh, util/workspace.hh and
+# internal/ormqr_blocked.hh -- the three top-level names BatchLAS used to squat
+# -- placed where a consumer's own headers go, i.e. AHEAD of anything an
+# imported target propagates (a target's own include dirs are ordered before
+# propagated ones, and imported targets propagate theirs as -isystem). Each is
+# an #error, so reaching any of them fails the build with a named sentinel.
+#
+# Since the public headers moved under include/batchlas/ and are spelled
+# <batchlas/...>, this build must now succeed. consumer_test.sh builds the
+# example a second time with this ON and FAILS if a sentinel fires. It stays
+# off by default only so the primary build stays a plain, copyable example.
+option(BATCHLAS_CONSUMER_DECOY "Put colliding blas/, util/ and internal/ headers on the include path" OFF)
 if(BATCHLAS_CONSUMER_DECOY)
     target_include_directories(hello_batched_gemm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/decoy_include")
 endif()

@@ -1,5 +1,5 @@
-#include <util/minibench.hh>
-#include <blas/linalg.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/linalg.hh>
 #include "../src/sort.hh"
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>

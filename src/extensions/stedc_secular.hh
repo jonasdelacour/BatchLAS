@@ -1,7 +1,7 @@
 #pragma once
 
-#include <blas/matrix.hh>
-#include <blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
 
 namespace batchlas {
 

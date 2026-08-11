@@ -129,6 +129,28 @@ if [[ ${#squatters[@]} -gt 0 ]]; then
 fi
 say "include root is clean (no top-level blas/, util/, internal/)"
 
+# The matching positive assertion. A clean include root is also what a
+# completely broken install(DIRECTORY) destination produces, so check that the
+# headers actually landed where <batchlas/...> will find them -- one from each
+# moved directory, both generated headers, and the umbrella.
+for header in batchlas/blas/linalg.hh \
+              batchlas/blas/enums.hh \
+              batchlas/util/workspace.hh \
+              batchlas/internal/ormqr_blocked.hh \
+              batchlas/backend_config.h \
+              batchlas/device_limits.hh \
+              batchlas.hh; do
+    [[ -f "${prefix}/include/${header}" ]] \
+        || fail "missing installed header: include/${header} -- check install(DIRECTORY)/install(FILES) destinations in cmake/BatchLASPackaging.cmake"
+done
+# The old export root needed <prefix>/include/batchlas as the include dir, so
+# the generated headers were installed to include/batchlas/batchlas/ to be
+# spelled <batchlas/...>. With the include ROOT exported that is now one level
+# too deep, and nothing in-tree would notice.
+[[ -e "${prefix}/include/batchlas/batchlas" ]] \
+    && fail "headers are double-nested at include/batchlas/batchlas/ -- the generated-header install(FILES) destination was not updated"
+say "public headers are installed under include/batchlas/ and reachable as <batchlas/...>"
+
 # ---------------------------------------------------------------------------
 # Phase 3: the actual consumer. Configure, build, run, check the numbers.
 # ---------------------------------------------------------------------------
@@ -169,10 +191,17 @@ grep -q 'PASS' "${run_log}" || fail "consumer example did not report PASS"
 say "consumer ran and the numbers are right"
 
 # ---------------------------------------------------------------------------
-# Phase 4: the include-collision probe. Build the same example again with a
-# consumer-owned util/workspace.hh ahead of BatchLAS's headers -- see
-# consumer/decoy_include/util/workspace.hh for what the outcomes mean. Only an
-# unrecognised failure is fatal here; the known shadowing state is reported.
+# Phase 4: the include-collision probe. Build the same example again with
+# consumer-owned blas/enums.hh, util/workspace.hh and internal/ormqr_blocked.hh
+# ahead of BatchLAS's headers -- see consumer/decoy_include/util/workspace.hh.
+#
+# Phase 2 proves the install does not squat the include ROOT. This proves the
+# other half: that no installed BatchLAS header reaches for an unprefixed
+# <blas/...>, <util/...> or <internal/...> spelling, which would find the
+# consumer's file instead. Both halves are needed; the include root was already
+# clean while every internal spelling was still unprefixed.
+#
+# This is a hard assertion now. Anything but a clean build is a failure.
 # ---------------------------------------------------------------------------
 decoy_build="${work_dir}/build-decoy"
 decoy_log="${log_dir}/decoy.log"
@@ -185,11 +214,12 @@ else
 fi
 
 if [[ ${decoy_rc} -eq 0 ]]; then
-    say "include-collision probe: CLEAN -- a consumer header named util/workspace.hh no longer shadows anything"
-elif grep -q 'BATCHLAS_DECOY_WORKSPACE_SHADOWED' "${decoy_log}"; then
-    say "include-collision probe: SHADOWED (known) -- the install root is clean, but BatchLAS's own headers still"
-    say "                         spell <util/...> unprefixed, so a consumer header of that name wins. Closing it"
-    say "                         needs include/{blas,util,internal} moved under include/batchlas/."
+    say "include-collision probe: CLEAN -- consumer headers named blas/enums.hh, util/workspace.hh and"
+    say "                         internal/ormqr_blocked.hh shadow nothing; BatchLAS is reachable only as <batchlas/...>"
+elif grep -q 'BATCHLAS_DECOY_[A-Z_]*_SHADOWED' "${decoy_log}"; then
+    grep -o 'BATCHLAS_DECOY_[A-Z_]*_SHADOWED' "${decoy_log}" | sort -u | sed 's/^/[consumer]   /'
+    tail -n 40 "${decoy_log}" >&2
+    fail "REGRESSION: an installed BatchLAS header still spells an unprefixed <blas/...>, <util/...> or <internal/...> include (full log: ${decoy_log})"
 else
     tail -n 40 "${decoy_log}" >&2
     fail "include-collision probe failed for an unexpected reason (full log: ${decoy_log})"

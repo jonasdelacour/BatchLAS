@@ -30,7 +30,11 @@
 // See README.md next to this file for the build recipe; the compiler choice and
 // LD_LIBRARY_PATH are load-bearing too.
 
-#include <blas/linalg.hh>
+// Both spellings are exercised on purpose: <batchlas.hh> is the umbrella header
+// a consumer would normally use, and the direct <batchlas/blas/linalg.hh> is
+// what proves the moved header tree resolves out of the install prefix.
+#include <batchlas.hh>
+#include <batchlas/blas/linalg.hh>
 
 #include <cmath>
 #include <cstdio>

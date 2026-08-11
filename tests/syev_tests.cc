@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-span.hh>
-#include <util/sycl-vector.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
 #include <iostream>
 #include <vector>
 #include <cmath>

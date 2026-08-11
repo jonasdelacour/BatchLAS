@@ -4,7 +4,7 @@
 
 #include "../queue.hh"
 
-#include <blas/matrix.hh>
+#include <batchlas/blas/matrix.hh>
 
 namespace batchlas::backend {
 

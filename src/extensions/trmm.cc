@@ -1,5 +1,5 @@
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 #include <complex>

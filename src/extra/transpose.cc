@@ -1,4 +1,4 @@
-#include <blas/extra.hh>
+#include <batchlas/blas/extra.hh>
 #include "../queue.hh"
 
 namespace batchlas {

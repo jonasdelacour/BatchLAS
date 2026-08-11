@@ -6,18 +6,18 @@
 // See SYEVX_PLAN.md §2 (cost model) and §3.1.
 
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <stdexcept>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include <blas/functions/syev.hh>
+#include <batchlas/blas/functions/syev.hh>
 #include "../util/template-instantiations.hh"
 
 namespace batchlas {

@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
 #include <limits>

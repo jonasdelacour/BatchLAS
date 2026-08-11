@@ -1,10 +1,10 @@
-#include <blas/extensions.hh>
-#include <blas/extra.hh>
-#include <blas/functions.hh>
-#include <blas/linalg.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <util/env.hh>
+#include <batchlas/util/env.hh>
 
 namespace batchlas {
 

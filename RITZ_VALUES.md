@@ -19,8 +19,8 @@ This represents the Rayleigh quotient, which provides an approximation to an eig
 ### Basic Example
 
 ```cpp
-#include <blas/linalg.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/extensions.hh>
 
 using namespace batchlas;
 

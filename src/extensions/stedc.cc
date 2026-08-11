@@ -1,8 +1,8 @@
-#include <blas/matrix.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
-#include <util/mempool.hh>
-#include <util/sycl-local-accessor-helpers.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include "../sort.hh"
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>

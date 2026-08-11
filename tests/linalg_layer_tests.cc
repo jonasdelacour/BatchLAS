@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <cmath>
 #include <vector>
@@ -34,10 +34,10 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
 
 // Compile guard for docs/cpp-api.md.
 //
-// Every code block in that document appears here. Nothing calls this -- it only
-// has to compile. Documentation that shows a call the library no longer accepts
-// is worse than no documentation, and the API-modernisation sweep is exactly the
-// kind of change that would invalidate these silently.
+// Most code blocks in that document appear here. Nothing calls this -- it only
+// has to compile. A signature change that invalidates a documented call site
+// must fail the build rather than rot in the document. When you add a block to
+// the document, add it here too.
 [[maybe_unused]] void docs_cpp_api_examples(Queue& ctx,
                                             const Dense& A,
                                             const Dense& B,
@@ -45,7 +45,26 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
                                             Span<float> W,
                                             Span<int64_t> pivots,
                                             Span<std::byte> my_span) {
-    // "1. The backend comes from the Queue"
+    // "Getting host data in"
+    {
+        const int n = 4, batch = 2;
+        std::vector<float> host(static_cast<size_t>(n) * n * batch);
+        Matrix<float, MatrixFormat::Dense> Ah(
+            Span<const float>(host.data(), host.size()),
+            n, n, /*ld=*/n, /*stride=*/0, /*batch_size=*/batch);
+
+        [[maybe_unused]] auto R = Matrix<float, MatrixFormat::Dense>::Random(n, n, true, batch);
+        [[maybe_unused]] auto I = Matrix<float, MatrixFormat::Dense>::Identity(n, batch);
+        [[maybe_unused]] auto Z = Matrix<float, MatrixFormat::Dense>::Zeros(n, n, batch);
+
+        Matrix<float, MatrixFormat::Dense> Bh(n, n, batch), dst(n, n, batch);
+        UnifiedVector<float> d(n);
+        Bh.view().fill_diagonal(ctx, d.to_span());
+        Bh.view().fill_zeros(ctx);
+        MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), Bh.view());
+    }
+
+    // "The backend comes from the Queue"
     Queue host(Device::default_device(), Backend::NETLIB);
     if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
     [[maybe_unused]] Backend resolved = ctx.backend();
@@ -54,27 +73,27 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         gemm<Bk>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     });
 
-    // "2. Options are structs with defaults"
+    // "Options are structs with defaults"
     gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
     syev(ctx, A, W, {.jobz = JobType::NoEigenVectors});
     getrs(ctx, A, C, pivots, {.trans = Transpose::Trans});
 
-    // "3. Workspaces come from the queue's arena"
+    // "Workspaces come from the queue's arena"
     potrf(ctx, A, {.uplo = Uplo::Lower});
     auto lease = ctx.workspace(1024);
     [[maybe_unused]] Span<std::byte> bytes = lease.span();
     [[maybe_unused]] auto capacity = ctx.workspace_capacity();
     potrf(ctx, A, {.uplo = Uplo::Lower}, my_span);
 
-    // "Write `PotrfOptions{}`, never a bare `{}`" -- the correct spelling from
-    // that section. The incorrect one is deliberately absent: it compiles, which
-    // is the whole problem, so it is pinned by an assertion instead, in
-    // OptionsApi.NamedEmptyOptionsSelectTheOptionOverload.
+    // "Options are structs with defaults" -- an empty option struct passed
+    // with an explicit workspace names its type. The bare-`{}` spelling is
+    // absent because it is ill-formed; the deleted overload that makes it so is
+    // pinned by static_asserts in tests/options_api_tests.cc.
     with_backend(ctx, [&](auto Back) {
         potrf<Back.value>(ctx, A, PotrfOptions{}, my_span);
     });
 
-    // "4. The linalg convenience layer"
+    // "The linalg convenience layer"
     [[maybe_unused]] auto product = linalg::matmul(ctx, A, B);
     [[maybe_unused]] auto chol = linalg::cholesky(ctx, A);
     [[maybe_unused]] auto solution = linalg::solve(ctx, A, B);

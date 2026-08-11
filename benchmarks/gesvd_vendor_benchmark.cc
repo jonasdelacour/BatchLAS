@@ -20,11 +20,11 @@
 //    to see gesvdjBatched unencumbered.
 //  - gesvdjBatched is capped at 32x32, so this benchmark stops at n=32.
 
-#include <util/minibench.hh>
+#include <batchlas/util/minibench.hh>
 
-#include <blas/enums.hh>
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
 
 #include "bench_utils.hh"
 

@@ -1,4 +1,4 @@
-#include <blas/csr_generators.hh>
+#include <batchlas/blas/csr_generators.hh>
 
 namespace batchlas {
 namespace csr_generators {

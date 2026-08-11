@@ -1,5 +1,5 @@
-#include <blas/extensions.hh>
-#include <blas/matrix.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include <batchlas/backend_config.h>
 

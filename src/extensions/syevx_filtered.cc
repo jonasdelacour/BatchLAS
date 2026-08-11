@@ -33,10 +33,10 @@
 // (not per matvec), so it is far less severe here than there.
 
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <cmath>
@@ -47,8 +47,8 @@
 #include <stdexcept>
 #include <cstdio>
 #include <type_traits>
-#include <blas/linalg.hh>
-#include <blas/functions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 

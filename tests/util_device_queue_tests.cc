@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <util/env.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/env.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
 #include <string>

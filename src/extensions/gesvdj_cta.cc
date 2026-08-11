@@ -1,10 +1,10 @@
-#include <blas/matrix.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
-#include <blas/extra.hh>
-#include <util/kernel-heuristics.hh>
-#include <util/mempool.hh>
-#include <util/group-invoke.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/util/kernel-heuristics.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"

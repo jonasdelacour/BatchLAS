@@ -1,8 +1,8 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include "../util/template-instantiations.hh"
 

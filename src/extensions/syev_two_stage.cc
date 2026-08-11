@@ -1,10 +1,10 @@
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 #include "uplo_mirror.hh"
-#include <blas/functions.hh>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
-#include <internal/ormqr_blocked.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/internal/ormqr_blocked.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>

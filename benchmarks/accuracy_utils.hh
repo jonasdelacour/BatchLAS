@@ -1,8 +1,8 @@
 #pragma once
 
-#include <blas/functions.hh>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include "../src/queue.hh"
 
 #include <algorithm>

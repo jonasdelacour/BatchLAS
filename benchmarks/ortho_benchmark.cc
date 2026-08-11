@@ -1,6 +1,6 @@
-#include <util/minibench.hh>
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
 #include "bench_utils.hh"
 
 using namespace batchlas;

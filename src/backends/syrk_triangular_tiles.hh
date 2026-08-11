@@ -32,8 +32,8 @@
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
 
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include <sycl/sycl.hpp>
 

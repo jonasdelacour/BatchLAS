@@ -12,7 +12,7 @@
 //     ==> template Event gemm<Backend::NETLIB, float>(Queue&, ...);
 //
 // SIG must be a *function type* (see the `sig` namespaces next to each public
-// declaration in include/blas/functions/). Naming the type explicitly, rather
+// declaration in include/batchlas/blas/functions/). Naming the type explicitly, rather
 // than deducing it, is what makes this work: every public entry point is an
 // overload set -- the MatrixView primary plus an inline Matrix-taking forwarder
 // with an identical template parameter list -- so the tempting

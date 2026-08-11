@@ -1,13 +1,13 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include <util/kernel-heuristics.hh>
+#include <batchlas/util/kernel-heuristics.hh>
 
 #include "../util/template-instantiations.hh"
 

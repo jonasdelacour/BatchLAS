@@ -1,9 +1,9 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <blas/functions.hh>
+#include <batchlas/blas/functions.hh>
 #include <complex>
 
 #include "gemm_variant.hh"

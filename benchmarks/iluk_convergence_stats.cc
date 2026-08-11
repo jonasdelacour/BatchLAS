@@ -1,5 +1,5 @@
 #include <batchlas/backend_config.h>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
 #include <algorithm>
 #include <cmath>

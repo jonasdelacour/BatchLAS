@@ -1,7 +1,7 @@
-#include <blas/extra.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/util/mempool.hh>
 #include <complex>
 #include <limits>
 #include <type_traits>

@@ -1,13 +1,16 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-vector.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/queue-dispatch.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-vector.hh>
 
 #include <complex>
+#include <fstream>
+#include <string>
 #include <vector>
 
 using namespace batchlas;
@@ -497,4 +500,153 @@ TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
     EXPECT_NO_THROW(gemm(q, a, b, c, GemmOptions<float>{}));
     q.wait();
     EXPECT_NEAR(c.data_ptr()[0], 6.0f, 1e-5f);
+}
+
+// A default-constructed view is how this API spells "this optional matrix is not
+// in use": `syevx(ctx, A, W, k, ws, JobType::NoEigenVectors,
+// MatrixView<T, MatrixFormat::Dense>(), params)` is the documented call and ~50
+// call sites in this repo write it. It owns no memory, so the USM check has
+// nothing to reach and must let it through. When it did not, every such call
+// threw "the pointer is null" and four iluk_tests failed -- and iluk_tests is
+// `slow`-labelled, so the usual `-LE slow` run could not see it. Hence this
+// cheap guard in a `util`-labelled test.
+TEST(OptionsApi, EmptyViewSentinelIsNotRejected) {
+    Queue q;
+
+    MatrixView<float, MatrixFormat::Dense> absent_matrix{};
+    VectorView<float> absent_vector{};
+    EXPECT_NO_THROW(detail::require_arg_accessible(q, absent_matrix, "syevx: V"));
+    EXPECT_NO_THROW(detail::require_arg_accessible(q, absent_vector, "syevx: v"));
+
+    // ...while a view that does address elements is still checked, or the
+    // exemption would have swallowed the contract it is carved out of.
+    if (q.device().type != DeviceType::CPU) {
+        std::vector<float> host(16, 0.0f);
+        MatrixView<float, MatrixFormat::Dense> host_backed(host.data(), 4, 4);
+        EXPECT_THROW(detail::require_arg_accessible(q, host_backed, "syevx: A"),
+                     std::invalid_argument);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every backend-deducing option overload checks its pointers.
+//
+// The option struct is written as a braced initialiser on purpose. That is the
+// spelling that makes the variadic queue-dispatch overload drop out (Args cannot
+// be deduced from a braced-init-list), so the call lands on the overload in
+// options.hh and nothing else can supply the check on its behalf. `getrs`'s
+// workspace-taking overload was the one that had no BATCHLAS_CHECK_ARGS: with a
+// braced option struct it reached the backend with a host pointer, while its
+// siblings -- potrf and syev in the same shape -- threw.
+//
+// A missing check here does not fail cleanly: the call reaches the device with a
+// wild address and aborts the process. That is the failure this test exists to
+// keep from coming back; see also OptionsHeaderKeepsEveryDeducingOverloadChecked
+// below, which catches it without running anything.
+// ---------------------------------------------------------------------------
+TEST(OptionsApi, EveryDeducingOptionOverloadRejectsHostMemory) {
+    Queue q;
+    if (q.device().type == DeviceType::CPU) {
+        GTEST_SKIP() << "host memory is legitimately device-accessible on a CPU device";
+    }
+
+    constexpr int n = 4;
+    std::vector<float> hf(n * n, 1.0f);
+    std::vector<std::complex<float>> hc(n * n, std::complex<float>(1.0f, 0.0f));
+    std::vector<int64_t> hpiv(n, 0);
+    std::vector<std::byte> hws(4096);
+
+    using DenseF = MatrixView<float, MatrixFormat::Dense>;
+    using DenseC = MatrixView<std::complex<float>, MatrixFormat::Dense>;
+    DenseF A(hf.data(), n, n), B(hf.data(), n, n), C(hf.data(), n, n);
+    DenseC Ac(hc.data(), n, n), Bc(hc.data(), n, n), Cc(hc.data(), n, n);
+    VectorView<float> x(hf.data(), n), y(hf.data(), n);
+    Span<float> tau(hf.data(), n);
+    Span<float> W(hf.data(), n);
+    Span<int64_t> pivots(hpiv.data(), hpiv.size());
+    Span<std::byte> ws(hws.data(), hws.size());
+
+    // dense BLAS
+    EXPECT_THROW(gemm(q, A, B, C, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(gemv(q, A, x, y, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(symm(q, A, B, C, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(hemm(q, Ac, Bc, Cc, {.alpha = std::complex<float>(1.0f)}),
+                 std::invalid_argument);
+    EXPECT_THROW(herk(q, Ac, Cc, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(her2k(q, Ac, Bc, Cc, {.alpha = std::complex<float>(1.0f)}),
+                 std::invalid_argument);
+    EXPECT_THROW(syrk(q, A, C, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(syr2k(q, A, B, C, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(trmm(q, A, B, C, {.alpha = 1.0f}), std::invalid_argument);
+    EXPECT_THROW(trsm(q, A, B, {.alpha = 1.0f}), std::invalid_argument);
+
+    // dense LAPACK, both the arena spelling and the workspace-taking one
+    EXPECT_THROW(potrf(q, A, {.uplo = Uplo::Lower}), std::invalid_argument);
+    EXPECT_THROW(potrf(q, A, {.uplo = Uplo::Lower}, ws), std::invalid_argument);
+    EXPECT_THROW(getrf(q, A, pivots), std::invalid_argument);
+    EXPECT_THROW(getrs(q, A, B, pivots, {.trans = Transpose::NoTrans}),
+                 std::invalid_argument);
+    EXPECT_THROW(getrs(q, A, B, pivots, {.trans = Transpose::NoTrans}, ws),
+                 std::invalid_argument);
+    EXPECT_THROW(getri(q, A, B, pivots), std::invalid_argument);
+    EXPECT_THROW(geqrf(q, A, tau), std::invalid_argument);
+    EXPECT_THROW(orgqr(q, A, tau), std::invalid_argument);
+    EXPECT_THROW(syev(q, A, W, {.jobz = JobType::EigenVectors}), std::invalid_argument);
+    EXPECT_THROW(syev(q, A, W, {.jobz = JobType::EigenVectors}, ws), std::invalid_argument);
+}
+
+// The behavioural test above can only cover the entry points that exist today,
+// and a new one added without BATCHLAS_CHECK_ARGS would sail past it. This reads
+// options.hh itself and holds every backend-deducing overload -- the ones a
+// caller reaches by writing `f(ctx, ...)` -- to the rule. The Backend-explicit
+// `f<B>(ctx, ...)` overloads are deliberately exempt: they are the library's own
+// inner-loop spelling (src/extensions/*.cc calls them inside iteration loops),
+// where a sycl::get_pointer_type per argument per call is not worth paying.
+TEST(OptionsApi, OptionsHeaderKeepsEveryDeducingOverloadChecked) {
+#ifndef BATCHLAS_OPTIONS_HH_PATH
+    GTEST_SKIP() << "options.hh path not passed in by the build";
+#else
+    std::ifstream in(BATCHLAS_OPTIONS_HH_PATH);
+    ASSERT_TRUE(in.is_open()) << "cannot read " << BATCHLAS_OPTIONS_HH_PATH;
+
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);) lines.push_back(line);
+    ASSERT_FALSE(lines.empty());
+
+    int deducing_overloads = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        // A definition starts at `inline Event NAME(Queue& ctx`.
+        if (lines[i].find("inline Event ") == std::string::npos) continue;
+        if (lines[i].find("(Queue& ctx") == std::string::npos) continue;
+
+        // Walk back over the template head; `template <Backend B, ...` marks the
+        // Backend-explicit forms.
+        bool backend_explicit = false;
+        for (size_t k = i; k-- > 0;) {
+            if (lines[k].find("template <") != std::string::npos) {
+                backend_explicit = lines[k].find("Backend B") != std::string::npos;
+                break;
+            }
+            if (lines[k].empty()) break;
+        }
+        if (backend_explicit) continue;
+        ++deducing_overloads;
+
+        // ...and forward over the body, to the closing brace in column 0.
+        bool checked = false;
+        for (size_t k = i; k < lines.size(); ++k) {
+            if (lines[k].find("BATCHLAS_CHECK_ARGS") != std::string::npos) checked = true;
+            if (k > i && !lines[k].empty() && lines[k][0] == '}') break;
+        }
+        EXPECT_TRUE(checked)
+            << "backend-deducing overload at options.hh:" << (i + 1)
+            << " has no BATCHLAS_CHECK_ARGS -- a caller can hand it host memory and "
+               "the process aborts inside the runtime instead of throwing:\n  "
+            << lines[i];
+    }
+    // Guards the scan itself: if the parse stops matching the file, this drops
+    // to zero and the loop above silently passes.
+    EXPECT_GE(deducing_overloads, 20) << "only found " << deducing_overloads
+                                      << " backend-deducing overloads; the scan is stale";
+#endif
 }

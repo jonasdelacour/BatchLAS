@@ -1,6 +1,6 @@
 #include "../queue.hh"
 #include <batchlas/backend_config.h>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif

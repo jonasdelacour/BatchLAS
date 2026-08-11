@@ -1,7 +1,7 @@
-#include "../../include/blas/linalg.hh"
+#include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
@@ -15,12 +15,12 @@
 #include <string>
 #include <vector>
 #include <lapack.h>
-#include <blas/linalg.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/mempool.hh>
 
-#include <blas/functions/ormqr.hh>
-#include <blas/functions/syev.hh>
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/dispatch/op.hh>
 
 #include "gemm_variant.hh"
 #include "../util/template-instantiations.hh"
@@ -1008,7 +1008,7 @@ namespace batchlas{
         return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
     }
 
-    // Moved verbatim from include/blas/functions/gesvd.hh, which used to *define*
+    // Moved verbatim from include/batchlas/blas/functions/gesvd.hh, which used to *define*
     // the primary template (and therefore made a cuSOLVER definition a
     // redefinition error). Semantics are unchanged, including the synchronous
     // ctx.wait() -- LAPACKE ?gesvd needs A on the host and this path is the
@@ -1426,7 +1426,7 @@ namespace batchlas{
 
 
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/blas/functions/*.hh), so changing one is a single
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 

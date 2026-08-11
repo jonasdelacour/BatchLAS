@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-span.hh>
 #include <vector>
 #include <array>
 

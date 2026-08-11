@@ -10,8 +10,8 @@
 // A single definition keeps the fused and partitioned SYEV paths numerically
 // identical, so a benchmark between them measures fusion and nothing else.
 
-#include <blas/matrix.hh>
-#include <util/group-invoke.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include "../math-helpers.hh"
 

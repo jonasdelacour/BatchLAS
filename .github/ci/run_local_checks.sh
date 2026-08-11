@@ -20,6 +20,7 @@ run() {
 run python3 "$here/check_cmake_syntax.py"
 run python3 "$here/check_exported_package.py"
 run python3 "$here/check_public_headers.py"
+run python3 "$here/check_no_unprefixed_includes.py"
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
 fi

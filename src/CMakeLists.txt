@@ -79,10 +79,11 @@ function(batchlas_configure_component target)
         PUBLIC
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
             $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
-            # The headers install under <prefix>/include/batchlas/ so that
-            # blas/, util/ and internal/ do not squat the consumer's include
-            # root. Every existing #include spelling is unchanged.
-            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/batchlas>
+            # Every public header lives under include/batchlas/ in the source
+            # tree and installs to <prefix>/include/batchlas/, so the only name
+            # BatchLAS claims in a consumer's include root is `batchlas`.
+            # The include root itself is therefore what we export.
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     target_compile_features(${target} PUBLIC cxx_std_20)
     target_link_libraries(${target}
@@ -266,7 +267,9 @@ target_include_directories(batchlas
     INTERFACE
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/batchlas>
+        # Must stay in lockstep with batchlas_configure_component() above and
+        # with INCLUDES DESTINATION in cmake/BatchLASPackaging.cmake.
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(batchlas INTERFACE cxx_std_20)
 target_link_libraries(batchlas

@@ -10,9 +10,9 @@
 // Keeping a single definition is what makes the fused-vs-partitioned comparison
 // a measurement of *fusion* rather than of two independently drifting solvers.
 
-#include <blas/matrix.hh>
-#include <blas/extensions.hh>
-#include <util/group-invoke.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include "../math-helpers.hh"
 

@@ -1,11 +1,11 @@
-#include <blas/functions.hh>
-#include <blas/extra.hh>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
 
-#include <util/miniacc.hh>
+#include <batchlas/util/miniacc.hh>
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"
 

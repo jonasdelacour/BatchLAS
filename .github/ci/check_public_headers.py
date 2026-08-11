@@ -7,8 +7,8 @@ consumer with
 
     fatal error: '../../src/queue.hh' file not found
 
-which is exactly what happened to include/internal/sort.hh and
-include/util/kernel-heuristics.hh. The rule enforced here: a quoted include in a
+which is exactly what happened to include/batchlas/internal/sort.hh and
+include/batchlas/util/kernel-heuristics.hh. The rule enforced here: a quoted include in a
 public header must resolve to something that stays inside the include tree
 (either the checked-in one or the generated one under <build>/include).
 

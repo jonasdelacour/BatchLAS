@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
-#include <blas/extra.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
 using namespace batchlas;

@@ -2,7 +2,7 @@
 
 #include "../linalg-impl.hh"
 #include "../queue.hh"
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/dispatch/op.hh>
 #include <batchlas/backend_config.h>
 #include <complex>
 #include <string>

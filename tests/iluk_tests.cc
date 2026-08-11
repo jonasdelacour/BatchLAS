@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
-#include <blas/linalg.hh>
-#include <blas/functions/syev.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/functions/syev.hh>
 
 #include <algorithm>
 #include <optional>
@@ -141,7 +141,7 @@ Matrix<float, MatrixFormat::CSR> make_laplacian_2d(int m, int batch) {
     }
 
     const int nnz = static_cast<int>(ci.size());
-    Matrix<float, MatrixFormat::CSR> A(n, n, nnz, batch);
+    Matrix<float, MatrixFormat::CSR> A(n, n, NonZeros{nnz}, batch);
     auto v = A.view();
     auto Ro = v.row_offsets();
     auto Ci = v.col_indices();
@@ -200,7 +200,7 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
     }
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                            nnz, n, n, nnz, n + 1, batch);
+                                            n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     Matrix<float, MatrixFormat::Dense> rhs(n, nrhs, batch);
     Matrix<float, MatrixFormat::Dense> out(n, nrhs, batch);
@@ -248,7 +248,7 @@ TEST_F(ILUKTests, SymbolicPatternUsesMaxLevelRecurrence) {
     UnifiedVector<float> values(nnz, 1.0f);
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                            nnz, n, n, nnz, n + 1, batch);
+                                            n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 2;
@@ -283,7 +283,7 @@ TEST_F(ILUKTests, HeterogeneousBatchSparsityThrows) {
     UnifiedVector<float> values(nnz * batch, 1.0f);
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                            nnz, n, n, nnz, n + 1, batch);
+                                            n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     EXPECT_THROW((iluk_factorize(*ctx, A, ILUKParams<float>{})), std::invalid_argument);
 }
@@ -300,7 +300,7 @@ TEST_F(ILUKTests, ZeroShiftZeroPivotFactorizationThrows) {
                                                               1.0f, 1.0f});
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                            nnz, n, n, nnz, n + 1, batch);
+                                            n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 0;
@@ -315,7 +315,7 @@ TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
     constexpr int nnz = 2;
 
     ILUKPreconditioner<float> M;
-    M.lu = Matrix<float, MatrixFormat::CSR>(n, n, nnz, batch);
+    M.lu = Matrix<float, MatrixFormat::CSR>(n, n, NonZeros{nnz}, batch);
     M.diag_positions = make_unified_vector<int>({0, 1});
     M.n = n;
     M.batch_size = batch;
@@ -358,7 +358,7 @@ TEST_F(ILUKTests, DropToleranceRemovesTinyOffDiagonalEntries) {
                                                               6.0f});
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                           nnz, n, n, nnz, n + 1, batch);
+                                           n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 0;
@@ -386,7 +386,7 @@ TEST_F(ILUKTests, FillFactorCapsAdditionalFill) {
     UnifiedVector<float> values(nnz, 1.0f);
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                           nnz, n, n, nnz, n + 1, batch);
+                                           n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 2;
@@ -419,7 +419,7 @@ TEST_F(ILUKTests, PivotThresholdStabilizesTinyDiagonal) {
     UnifiedVector<float> values = make_unified_vector<float>({1e-8f, 2.0f});
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                           nnz, n, n, nnz, n + 1, batch);
+                                           n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 0;
@@ -443,7 +443,7 @@ TEST_F(ILUKTests, ModifiedIluAccumulatesDroppedMassOnDiagonal) {
                                                               5.0f});
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                           nnz, n, n, nnz, n + 1, batch);
+                                           n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 0;
@@ -471,7 +471,7 @@ TEST_F(ILUKTests, InverseResidualIsNearZeroForExactTridiagonalFactorization) {
                                                               -1.0f, 4.0f});
 
     MatrixView<float, MatrixFormat::CSR> A(values.data(), row_offsets.data(), col_indices.data(),
-                                           nnz, n, n, nnz, n + 1, batch);
+                                           n, n, NonZeros{nnz}, nnz, n + 1, batch);
 
     ILUKParams<float> params;
     params.levels_of_fill = 0;

@@ -1,10 +1,10 @@
-#include <blas/device.hh>
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <internal/sytrd_blocked.hh>
-#include <util/mempool.hh>
-#include <util/sycl-local-accessor-helpers.hh>
+#include <batchlas/blas/device.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/internal/sytrd_blocked.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
@@ -23,7 +23,7 @@
 #include <string>
 #include <stdexcept>
 #include <type_traits>
-#include <util/env.hh>
+#include <batchlas/util/env.hh>
 
 namespace batchlas {
 

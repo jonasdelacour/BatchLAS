@@ -2,7 +2,7 @@
 // SYCL interop: BatchLAS's Queue/Event <-> sycl::queue/sycl::event.
 //
 // This is the one BatchLAS header that speaks SYCL types, and it is deliberately
-// unreachable from <batchlas.hh> and <blas/linalg.hh>. Those keep <sycl/sycl.hpp>
+// unreachable from <batchlas.hh> and <batchlas/blas/linalg.hh>. Those keep <sycl/sycl.hpp>
 // out of the umbrella on purpose -- see the note at the top of blas/linalg.hh; it
 // is worth ~4.1 s per consumer translation unit -- so nothing in BatchLAS's public
 // headers includes this file. Include it yourself, in the few translation units
@@ -11,7 +11,7 @@
 // rest of your project pulls in; that undoes the saving for the whole project.
 //
 // If all you need is the native stream (cudaStream_t / hipStream_t), you do not
-// need this header at all: Queue::native_handle() in <util/sycl-device-queue.hh>
+// need this header at all: Queue::native_handle() in <batchlas/util/sycl-device-queue.hh>
 // returns it as a void* with no SYCL types involved.
 //
 // Memory needs nothing from here either. Device pointers from sycl::malloc_device,
@@ -23,7 +23,7 @@
 // contract note on struct Queue.
 #include <sycl/sycl.hpp>
 
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas {
 

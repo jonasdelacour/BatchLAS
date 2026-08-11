@@ -1,4 +1,4 @@
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 #include <stdexcept>

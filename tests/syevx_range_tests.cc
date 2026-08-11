@@ -14,9 +14,9 @@
 // be caught, instead of only when someone opts into the slow label.
 
 #include <gtest/gtest.h>
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/extensions.hh>
 
 #include <string>
 #include <vector>

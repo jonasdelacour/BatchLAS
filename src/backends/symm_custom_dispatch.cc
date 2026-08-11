@@ -8,7 +8,7 @@
 
 #include "../util/kernel-trace.hh"
 
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <algorithm>
 #include <cstddef>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 
 namespace batchlas {
 

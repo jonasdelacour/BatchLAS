@@ -36,25 +36,34 @@ function(batchlas_install_package)
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas"
+        # The include ROOT, not <root>/batchlas: every public header is spelled
+        # <batchlas/...>. Must stay in lockstep with the $<INSTALL_INTERFACE:>
+        # genexes in src/CMakeLists.txt - if the two disagree, the exported
+        # target carries both dirs and the unprefixed spellings resolve again.
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     )
 
-    # Headers go under <prefix>/include/batchlas/, not straight into
-    # <prefix>/include/. The old destination wrote blas/, util/ and internal/
-    # into the consumer's include root - under the default /usr/local prefix
-    # that means /usr/local/include/util/env.hh, which can overwrite another
-    # package's files and shadows any same-named header the consumer owns.
-    # The exported include dir is <prefix>/include/batchlas (see
-    # src/CMakeLists.txt), so every existing #include spelling still resolves.
+    # The whole public header tree lives in include/batchlas/ and is copied
+    # verbatim to <prefix>/include/batchlas/. Only the directory `batchlas` and
+    # the single file `batchlas.hh` are ever created in the consumer's include
+    # root, so a consumer header named util/workspace.hh, blas/enums.hh or
+    # internal/sort.hh can neither be overwritten by us nor shadow us.
+    #
+    # This installs the directory rather than include/'s contents on purpose:
+    # a future include/foo/ then cannot silently re-squat the include root.
+    # examples/consumer_test.sh asserts both halves of that (nothing at
+    # <prefix>/include/{blas,util,internal}, everything at
+    # <prefix>/include/batchlas/...).
     #
     # FILES_MATCHING keeps non-header files out. The EXCLUDEs drop the benchmark
-    # harness: util/minibench.hh defines MINI_BENCHMARK_MAIN() -> int main(),
-    # and none of util/minibench.hh, util/minibench_structured.hh,
-    # util/bench_structured.hh is reachable from <batchlas.hh> or from any
-    # installed header under blas/, util/ or internal/ (verified by grep: they
-    # are only included by each other and by benchmarks/).
-    install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas"
+    # harness: batchlas/util/minibench.hh defines MINI_BENCHMARK_MAIN() ->
+    # int main(), and none of minibench.hh, minibench_structured.hh,
+    # bench_structured.hh is reachable from <batchlas.hh> or from any other
+    # installed header (verified by grep: they are only included by each other
+    # and by benchmarks/). PATTERN matches the last path component only, which
+    # is all these three need.
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/batchlas"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
         FILES_MATCHING
             PATTERN "*.hh"
             PATTERN "*.h"
@@ -62,6 +71,10 @@ function(batchlas_install_package)
             PATTERN "minibench_structured.hh" EXCLUDE
             PATTERN "bench_structured.hh" EXCLUDE
     )
+    # The umbrella header is the one file that legitimately sits in the include
+    # root; install(DIRECTORY) above cannot carry it.
+    install(FILES "${PROJECT_SOURCE_DIR}/include/batchlas.hh"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
     # tuning_params.hh is deliberately NOT listed here. src/CMakeLists.txt and
     # batchlas_dep_options both put ${PROJECT_SOURCE_DIR}/include ahead of
     # ${PROJECT_BINARY_DIR}/include, so the library is compiled against
@@ -71,10 +84,15 @@ function(batchlas_install_package)
     # copy shipped consumers different constants than the .so was built with and
     # silently preempted the library's own inline definitions. The source copy is
     # installed by the install(DIRECTORY) above, which is what we want.
+    #
+    # These two exist ONLY in the binary tree, so they cannot collide with the
+    # source-tree copy of include/batchlas/ installed above. The destination is
+    # <prefix>/include/batchlas so that <batchlas/backend_config.h> resolves
+    # identically in the build tree and the install tree.
     install(FILES
         "${PROJECT_BINARY_DIR}/include/batchlas/backend_config.h"
         "${PROJECT_BINARY_DIR}/include/batchlas/device_limits.hh"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas/batchlas"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas"
     )
 
     # The BLAS health check writes this when it detects an OpenBLAS whose

@@ -1,7 +1,7 @@
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 
 #include "../queue.hh"
@@ -16,7 +16,7 @@
 #include <iostream>
 
 #include "../math-helpers.hh"
-#include <util/env.hh>
+#include <batchlas/util/env.hh>
 
 namespace batchlas {
 

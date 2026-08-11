@@ -24,10 +24,10 @@
 //
 // so the back-transform applies them in *reverse* generation order.
 
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
 
 #include <cstdint>
 #include <vector>

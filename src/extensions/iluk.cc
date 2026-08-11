@@ -1,7 +1,7 @@
 #include "../linalg-impl.hh"
 
-#include <blas/functions/iluk.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/functions/iluk.hh>
+#include <batchlas/util/mempool.hh>
 #include <optional>
 #include <cstdlib>
 #include <algorithm>
@@ -1187,7 +1187,7 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     if (!iluk_prefer_device(batch_size)) {
         const auto host = compute_iluk(A, params);
         ILUKPreconditioner<T> result;
-        result.lu = Matrix<T, MatrixFormat::CSR>(n, n, host.nnz, batch_size);
+        result.lu = Matrix<T, MatrixFormat::CSR>(n, n, NonZeros{host.nnz}, batch_size);
         result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch_size));
         result.n = n;
         result.batch_size = batch_size;
@@ -1217,7 +1217,7 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     auto dev = run_device_numeric<B, T>(ctx, A, sym, params);
 
     ILUKPreconditioner<T> result;
-    result.lu = Matrix<T, MatrixFormat::CSR>(n, n, dev.nnz, batch_size);
+    result.lu = Matrix<T, MatrixFormat::CSR>(n, n, NonZeros{dev.nnz}, batch_size);
     result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch_size));
     result.n = n;
     result.batch_size = batch_size;
@@ -1326,8 +1326,8 @@ ILUKView<T> iluk_factorize(Queue& ctx,
     for (std::size_t i = 0; i < sched_u.level_ptr.size(); ++i) u_level_ptr[i] = sched_u.level_ptr[i];
 
     ILUKView<T> view;
-    view.lu = MatrixView<T, MatrixFormat::CSR>(values.data(), row_offsets.data(), col_indices.data(), nnz, n, n,
-                                               nnz, n + 1, batch_size);
+    view.lu = MatrixView<T, MatrixFormat::CSR>(values.data(), row_offsets.data(), col_indices.data(), n, n,
+                                               NonZeros{nnz}, nnz, n + 1, batch_size);
     view.diag_positions = diag_positions;
     view.l_rows = l_rows;
     view.l_level_ptr = l_level_ptr;

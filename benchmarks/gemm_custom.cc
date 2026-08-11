@@ -1,5 +1,5 @@
-#include <blas/linalg.hh>
-#include <util/minibench.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/minibench.hh>
 #include <batchlas/backend_config.h>
 
 using namespace batchlas;

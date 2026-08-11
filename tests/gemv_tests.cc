@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/matrix.hh>
 #include <iostream>
 #include <vector>
 #include <cmath>

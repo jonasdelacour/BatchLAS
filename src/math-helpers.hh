@@ -2,9 +2,9 @@
 
 #include <sycl/sycl.hpp>
 
-#include <blas/enums.hh>
-#include <blas/device.hh>
-#include <util/group-invoke.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/device.hh>
+#include <batchlas/util/group-invoke.hh>
 
 #include <complex>
 

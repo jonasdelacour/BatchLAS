@@ -1,0 +1,1692 @@
+#pragma once
+#include <random>
+#include <memory>
+#include <complex>
+#include <type_traits>
+#include <iostream> // Added for std::ostream, std::cout
+#include <iomanip>  // Added for std::setw, std::scientific, etc.
+#include <algorithm> // Added for std::min
+#include <tuple>
+#include <array>    // Added for std::array element types
+#include <sstream>  // Added for temporary string formatting of non-streamable types
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/blas/enums.hh>
+
+namespace batchlas {
+    // Forward declarations with default template parameters
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class Matrix;
+
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class MatrixView;
+
+    //Forward declare VectorView with default parameter
+    template <typename T = float>
+    struct VectorView;
+
+    // Forward declare the backend handle - implementation will be in src/ folder
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    class BackendMatrixHandle;
+
+    // The number of stored non-zeros in a CSR matrix. It has its own type because the
+    // dense and CSR constructors otherwise differ only in what an int in the third
+    // position means, which is not a difference a reader or a compiler can see.
+    struct NonZeros {
+        int value;
+        explicit constexpr NonZeros(int v) : value(v) {}
+        constexpr operator int() const = delete;   // no silent decay back to int
+    };
+    static_assert(std::is_trivially_copyable_v<NonZeros>, "NonZeros must stay trivially copyable");
+
+    struct SliceEnd {};
+    struct Slice { //Default Slice selects entire matrix
+        int64_t start = std::numeric_limits<int64_t>::min();
+        int64_t end = std::numeric_limits<int64_t>::max();
+        Slice(int64_t start, SliceEnd) : start(start), end(std::numeric_limits<int64_t>::max()) {}
+        Slice(int64_t start, int64_t end) : start(start), end(end) {}
+        Slice(int64_t start) : Slice(start, SliceEnd()) {}
+        Slice() = default;
+    };
+
+    // ------------------------------------------------------------------
+    // KernelMatrixView<T, MType>: device-passing trivial view mirroring
+    // a subset of MatrixView functionality. It is template-specialized by
+    // MatrixFormat so we avoid a runtime tag and allow the compiler to
+    // optimize format-specific paths. Slicing operators mimic those of
+    // MatrixView but (like MatrixView) are only defined for dense format.
+    // CSR variant intentionally omits slicing to match existing MatrixView.
+    // ------------------------------------------------------------------
+    template <typename T, MatrixFormat MType>
+    struct KernelMatrixView {
+        // Common fields
+        T*   data_ = nullptr;
+        int  rows_ = 0;
+        int  cols_ = 0;
+        int  batch_size_ = 1;
+
+        // Dense specific
+        int  ld_ = 0;      // leading dimension
+        int  stride_ = 0;  // batch stride (elements)
+        int* active_rows_ = nullptr;
+        int* active_cols_ = nullptr;
+
+        // CSR specific (only meaningful if MType == MatrixFormat::CSR)
+        int* row_offsets_ = nullptr;  // length rows+1 per batch
+        int* col_indices_ = nullptr;  // length nnz per batch
+        int  nnz_ = 0;
+        int  matrix_stride_ = 0;      // stride between value arrays
+        int  offset_stride_ = 0;      // stride between offset arrays
+
+        // Element access (Dense only)
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        inline constexpr T& operator()(int i, int j, int b = 0) const { 
+            assert(i < rows_); assert(i >= 0);
+            assert(j < cols_); assert(j >= 0);
+            assert(b < batch_size_); assert(b >= 0);
+            assert(b * stride_ + j * ld_ + i < batch_size_ * stride_);
+            return data_[b * stride_ + j * ld_ + i]; }
+
+        // CSR coefficient lookup (returns zero if absent)
+        template <MatrixFormat MF = MType>
+            requires CsrMatrixFormat<MF>
+        inline constexpr T get(int i, int j, int b = 0) const {
+            const int ro_base = b * offset_stride_;
+            const int val_base = b * matrix_stride_;
+            int rs = row_offsets_[ro_base + i];
+            int re = row_offsets_[ro_base + i + 1];
+            for (int p = rs; p < re; ++p) {
+                if (col_indices_[val_base + p] == j) return data_[val_base + p];
+            }
+            return T(0);
+        }
+
+        // Batch item extraction - works for both formats
+        inline constexpr KernelMatrixView batch_item(int b) const {
+            KernelMatrixView out = *this;
+            if (b < 0 || b >= batch_size_) { out.rows_ = out.cols_ = 0; return out; }
+            if constexpr (MType == MatrixFormat::Dense) {
+                out.data_ += b * stride_;
+                out.rows_ = active_rows_ ? active_rows_[b] : rows_;
+                out.cols_ = active_cols_ ? active_cols_[b] : cols_;
+                out.active_rows_ = nullptr;
+                out.active_cols_ = nullptr;
+            } else if constexpr (MType == MatrixFormat::CSR) {
+                out.data_        += b * matrix_stride_;
+                out.row_offsets_ += b * offset_stride_;
+                out.col_indices_ += b * matrix_stride_; // assumes same stride
+            }
+            out.batch_size_ = 1;
+            return out;
+        }
+
+        inline auto data() const { return data_; }
+        inline auto rows() const { return rows_; }
+        inline auto rows(int batch_index) const { return active_rows_ ? active_rows_[batch_index] : rows_; }
+        inline auto cols() const { return cols_; }
+        inline auto cols(int batch_index) const { return active_cols_ ? active_cols_[batch_index] : cols_; }
+        inline auto batch_size() const { return batch_size_; }
+        inline auto ld() const { return ld_; }
+        inline auto stride() const { return stride_; }
+        inline auto nnz() const { return nnz_; }
+        inline bool is_heterogeneous() const { return active_rows_ || active_cols_; }
+        
+        // Dense slicing operators (host-side; mirror MatrixView logic)
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        KernelMatrixView operator()(Slice rows_slice, Slice cols_slice = {}) const;
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        KernelMatrixView operator()(Slice rows_slice) const { return (*this)(rows_slice, {}); }
+
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        VectorView<T> operator()(int32_t row, Slice cols_slice) const;
+
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        VectorView<T> operator()(Slice rows_slice, int32_t col) const;
+
+        KernelMatrixView() = default;
+        KernelMatrixView(const KernelMatrixView&) = default;
+        KernelMatrixView& operator=(const KernelMatrixView&) = default;
+        KernelMatrixView(KernelMatrixView&&) = default;
+        KernelMatrixView& operator=(KernelMatrixView&&) = default;
+
+        // Dense-shaped; constrained so a CSR kernel view cannot be built from it with the
+        // CSR fields left null. CSR kernel views come from Matrix/MatrixView::kernel_view().
+        template <MatrixFormat MF = MType>
+            requires DenseMatrixFormat<MF>
+        KernelMatrixView(T* data, int rows, int cols, int ld = 0, int stride = 0, int batch_size = 1)
+            : data_(data), rows_(rows), cols_(cols), batch_size_(batch_size),
+              ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld * cols) {}
+    };
+
+    // (Slice already defined earlier)
+
+    // --- Slice utilities (de-duplication) ---------------------------------
+    namespace detail {
+        inline std::pair<int64_t,int64_t> normalize_slice_component(Slice s, int64_t dim) {
+            int64_t len;
+            if (s.start == std::numeric_limits<int64_t>::min() && s.end == std::numeric_limits<int64_t>::max()) { s.start = 0; len = dim; }
+            else if (s.end == std::numeric_limits<int64_t>::max()) { s.start = s.start < 0 ? dim + s.start : s.start; len = dim - s.start; }
+            else { if (s.start < 0) s.start = dim + s.start; if (s.end < 0) s.end = dim + s.end; len = s.end - s.start; }
+            return {s.start, len};
+        }
+
+        inline void validate_dense_active_dims(int rows_capacity,
+                                              int cols_capacity,
+                                              int batch_size,
+                                              Span<int> active_rows,
+                                              Span<int> active_cols) {
+            if (active_rows.empty() && active_cols.empty()) {
+                return;
+            }
+
+            if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
+                active_cols.size() != static_cast<std::size_t>(batch_size)) {
+                throw std::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
+            }
+
+            for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
+                const int rows = active_rows[batch_index];
+                const int cols = active_cols[batch_index];
+                if (rows < 0 || cols < 0) {
+                    throw std::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
+                }
+                if (rows > rows_capacity || cols > cols_capacity) {
+                    throw std::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
+                }
+            }
+        }
+
+        inline int dense_active_rows(int rows_capacity, Span<int> active_rows, int batch_index) {
+            return active_rows.empty() ? rows_capacity : active_rows[batch_index];
+        }
+
+        inline int dense_active_cols(int cols_capacity, Span<int> active_cols, int batch_index) {
+            return active_cols.empty() ? cols_capacity : active_cols[batch_index];
+        }
+
+        template <typename T>
+        inline void apply_dense_slice_pointer_arithmetic(T*& base, int ld, int64_t row_start, int64_t col_start) {
+            base += col_start * ld + row_start; // column-major offset
+        }
+
+        
+        template <typename T>
+        T convert_to_fill_value(int64_t value) {
+            if constexpr (std::is_floating_point_v<T>) {
+                return static_cast<T>(value);
+            } else if constexpr (std::is_integral_v<T>) {
+                return static_cast<T>(value);
+            } else if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                    std::is_same_v<T, std::complex<double>> ||
+                                    std::is_same_v<T, std::complex<long double>>) {
+                using Real = typename T::value_type;
+                return T(static_cast<Real>(value));
+            } else if constexpr (
+                // Detect std::array<T, N>
+                std::is_class_v<T> &&
+                std::is_same_v<T, std::array<typename T::value_type,
+                                                std::tuple_size<T>::value>>
+            ) {
+                T result{};
+                for (auto &elem : result) {
+                    using Elem = typename T::value_type;
+                    elem = convert_to_fill_value<Elem>(value);
+                }
+                return result;
+            } else {
+                return T{};
+            }
+        }
+
+        // Detection idiom for streamability
+        template <typename U, typename = void>
+        struct is_streamable : std::false_type {};
+        template <typename U>
+        struct is_streamable<U, std::void_t<decltype(std::declval<std::ostream&>() << std::declval<const U&>())>> : std::true_type {};
+
+        // Trait to detect std::array
+        template <typename U>
+        struct is_std_array : std::false_type {};
+        template <typename V, std::size_t N>
+        struct is_std_array<std::array<V, N>> : std::true_type {};
+
+        // Generic element printer (no width handling)
+        template <typename U>
+        inline void print_value(std::ostream& os, const U& value) {
+            if constexpr (is_streamable<U>::value) {
+                os << value;
+            } else if constexpr (is_std_array<U>::value) {
+                os << '[';
+                for (std::size_t i = 0; i < value.size(); ++i) {
+                    if (i) os << ',';
+                    os << value[i];
+                }
+                os << ']';
+            } else {
+                os << "{?}"; // Fallback for unknown, non-streamable types
+            }
+        }
+
+        // Width-aware printer used in formatted matrix printing
+        template <typename U>
+        inline void print_with_width(std::ostream& os, const U& value, int width) {
+            if constexpr (is_streamable<U>::value) {
+                os << std::setw(width) << value;
+            } else {
+                std::ostringstream tmp;
+                print_value(tmp, value);
+                const std::string s = tmp.str();
+                if ((int)s.size() < width) {
+                    os << std::setw(width) << s;
+                } else {
+                    // If the representation is wider than the field, print as-is to retain info
+                    os << s;
+                }
+            }
+        }
+    }
+
+    // Implement dense slicing operator outside struct for clarity using helpers
+    template <typename T, MatrixFormat MType>
+    template <MatrixFormat MF>
+        requires DenseMatrixFormat<MF>
+    KernelMatrixView<T, MType> KernelMatrixView<T, MType>::operator()(Slice rows_slice, Slice cols_slice) const {
+        KernelMatrixView<T, MType> out = *this;
+        auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
+        auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
+        if (r_len <= 0 || c_len <= 0) {
+            assert("Invalid slice dimensions in KernelMatrixView");
+        }
+        detail::apply_dense_slice_pointer_arithmetic(out.data_, ld_, r_start, c_start);
+        out.rows_ = static_cast<int>(r_len);
+        out.cols_ = static_cast<int>(c_len);
+        return out;
+    }
+
+    template <typename T, MatrixFormat MType>
+    template <MatrixFormat MF>
+        requires DenseMatrixFormat<MF>
+    VectorView<T> KernelMatrixView<T, MType>::operator()(int32_t row, Slice cols_slice) const {
+        auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
+        if (c_len <= 0) {
+            assert("Invalid slice dimensions in KernelMatrixView row extraction");
+        }
+        T* row_data = data_ + row + c_start * ld_;
+        return VectorView<T>(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
+    }
+
+    template <typename T, MatrixFormat MType>
+    template <MatrixFormat MF>
+        requires DenseMatrixFormat<MF>
+    VectorView<T> KernelMatrixView<T, MType>::operator()(Slice rows_slice, int32_t col) const {
+        auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
+        if (r_len <= 0) {
+            assert("Invalid slice dimensions in KernelMatrixView column extraction");
+        }
+        T* col_data = data_ + r_start + col * ld_;
+        return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
+    }
+
+    // Static asserts for dense and CSR instantiations
+    static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::Dense>>, "KernelMatrixView Dense must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::CSR>>,   "KernelMatrixView CSR must be trivially copyable");
+
+    // Matrix class - owning container for matrix data
+    template <typename T, MatrixFormat MType>
+    class Matrix {
+    public:
+        // Make MatrixView a friend class to allow access to private members
+        friend class MatrixView<T, MType>;
+        
+        // Basic constructors for dense matrix (allocate uninitialized memory)
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(int rows, int cols, int batch_size = 1, int ld = 0, int stride = 0);
+
+        // Basic constructors for CSR sparse matrix (allocate uninitialized memory)
+        // Mirrors the dense overload above: shape first, then the format-specific extra
+        // (nnz here, ld/stride there), then batch_size with its usual default.
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Matrix(int rows, int cols, NonZeros nnz, int batch_size = 1);
+
+        // A CSR matrix needs its non-zero count spelled out: the third argument is the batch
+        // size for a dense Matrix, so a bare int here would silently mean the wrong thing.
+        //     Matrix<T, MatrixFormat::CSR> S(rows, cols, NonZeros{nnz}, batch);
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Matrix(int rows, int cols, int nnz, int batch_size = 1) = delete;
+
+        // Constructor from existing data (will copy data)
+        // (ld, stride) describe the *source* buffer: element (i, j, b) is read from
+        // data[b * stride + j * ld + i], with ld = 0 meaning rows and stride = 0 meaning
+        // ld * cols. ld carries no default argument here and must be passed.
+        // The copy keeps the caller's leading dimension (ld() == ld) but packs the batch
+        // items back to back (stride() == ld * cols). Throws std::invalid_argument if the
+        // arguments cannot describe a valid buffer (null data, non-positive shape, ld < rows,
+        // or a batched stride smaller than ld * cols).
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(const T* data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+
+        // Constructor from existing data (will copy data)
+        // Same layout rules as the raw pointer overload above, and additionally checks that
+        // the span is long enough for the requested shape.
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(Span<const T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+
+        // Convenience overload for mutable spans (and UnifiedVector, which converts to one)
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix(Span<T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1)
+            : Matrix(Span<const T>(data.data(), data.size()), rows, cols, ld, stride, batch_size) {}
+
+        // Constructor from existing data (will copy data)
+        // Mirrors the dense raw-pointer overload above: buffers, then shape, then the
+        // format-specific extra (nnz), then the strides, then batch_size.
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Matrix(const T* values, const int* row_offsets, const int* col_indices,
+               int rows, int cols, NonZeros nnz, int matrix_stride = 0,
+               int offset_stride = 0, int batch_size = 1);
+
+        // The CSR argument order now matches the dense one: shape (rows, cols) comes before
+        // the non-zero count, and the count carries its own type.
+        //     Matrix<T, MatrixFormat::CSR> S(values, row_offsets, col_indices,
+        //                                    rows, cols, NonZeros{nnz},
+        //                                    matrix_stride, offset_stride, batch);
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Matrix(const T* values, const int* row_offsets, const int* col_indices,
+               int nnz, int rows, int cols, int matrix_stride = 0,
+               int offset_stride = 0, int batch_size = 1) = delete;
+
+
+        // Convenience factory methods for common patterns
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Identity(int n, int batch_size = 1);
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned int seed = 42);
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        static Matrix<T, MType> RandomSparseHermitian(int n,
+                                  float density,
+                                  int batch_size = 1,
+                                  unsigned int seed = 42,
+                                  typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                  bool shared_pattern = true);
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned int seed = 42) {
+            auto result = Matrix<T, MType>(n, n, batch_size);
+            result.view().fill_triangular_random(uplo, diag, seed).wait();
+            return result;
+        }
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Zeros(int rows, int cols, int batch_size = 1);
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Ones(int rows, int cols, int batch_size = 1);
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Diagonal(const Span<T>& diag_values, int batch_size = 1);
+
+        // Create a triangular matrix with specific values
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1), 
+                                          T non_diagonal_value = T(0.5), int batch_size = 1);
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static Matrix<T, MType> TriDiagToeplitz(int n, T diag = T(1), 
+                                                T sub_diag = T(-0.5), T super_diag = T(0.5), int batch_size = 1);
+        
+        // Convert row-major to column-major format.
+        //
+        // The source is read with this matrix' own layout: batch items are
+        // stride() apart, and the row pitch is ld() when ld() > rows() (the only
+        // way to express a padded row-major buffer here) and cols() otherwise.
+        // The returned matrix is packed: ld = rows, stride = rows * cols.
+        //
+        // The queue-taking form submits to the queue you pass; the other builds
+        // a queue of its own. Both wait before returning, since the result owns
+        // the memory the kernel writes.
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix<T, MType> to_column_major(const Queue& ctx) const;
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix<T, MType> to_column_major() const;
+
+        // Convert to a different matrix format
+        template <MatrixFormat NewMType>
+        Matrix<T, NewMType> convert_to(const float_t<T>& zero_threshold = 1e-7) const;
+
+        // Create a copy with data in row-major format from column-major.
+        //
+        // The source is read with this matrix' own ld() and stride(); the result
+        // holds packed row-major data (row pitch cols, batch stride rows * cols).
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix<T, MType> to_row_major(const Queue& ctx) const;
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix<T, MType> to_row_major() const;
+        
+        // Destructor
+        ~Matrix();
+
+        // Add deep copy functionality while allowing moving
+        Matrix(const Matrix& other) = default;
+        Matrix& operator=(const Matrix& other) = default;
+        Matrix(Matrix&&) noexcept = default;
+        Matrix& operator=(Matrix&&) noexcept = default;
+
+        // Create a deep copy
+        Matrix<T, MType> clone() const {
+            Matrix<T, MType> result = [&]() -> Matrix<T, MType> {
+                if constexpr (MType == MatrixFormat::CSR) {
+                    // matrix_stride_ (not nnz_) is the allocated slots per batch item, so
+                    // it is what the copies below need room for.
+                    return Matrix<T, MType>(rows_, cols_, NonZeros{matrix_stride_}, batch_size_);
+                } else {
+                    return Matrix<T, MType>(rows_, cols_, batch_size_);
+                }
+            }();
+            
+            // Copy main data
+            std::copy(data_.begin(), data_.end(), result.data_.begin());
+            
+            // Copy CSR format data if applicable
+            if constexpr (MType == MatrixFormat::CSR) {
+                std::copy(row_offsets_.begin(), row_offsets_.end(), result.row_offsets_.begin());
+                std::copy(col_indices_.begin(), col_indices_.end(), result.col_indices_.begin());
+                result.nnz_ = nnz_;
+                result.matrix_stride_ = matrix_stride_;
+                result.offset_stride_ = offset_stride_;
+            }
+            
+            // Copy dense format specific data
+            result.ld_ = ld_;
+            result.stride_ = stride_;
+            if constexpr (MType == MatrixFormat::Dense) {
+                if (active_rows_.size() != 0 || active_cols_.size() != 0) {
+                    result.set_active_dims(active_rows_.to_span(), active_cols_.to_span());
+                }
+            }
+            
+            return result;
+        }
+
+        // Create a view
+        MatrixView<T, MType> view() const;
+        MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
+
+        // Convert to a different scalar type (dense only)
+        template <typename U>
+        Matrix<U, MType> astype() const;
+
+        // Dense-only slicing operators producing MatrixView (non-owning)
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
+            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            if (r_len <= 0 || c_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+            }
+            auto offset = c_start * ld_ + r_start;
+            return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
+        }
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> operator()(Slice rows) const { return (*this)(rows, {}); }
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        U& operator()(int row, int col, int batch) {
+            return data_.at(batch * stride_ + col * ld_ + row);
+        }
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        const U& operator()(int row, int col, int batch) const {
+            return data_.at(batch * stride_ + col * ld_ + row);
+        }
+
+        // Methods to initialize backend
+        void init() const;
+        // Initialize data pointers for batched operations
+        Span<T*> data_ptrs(Queue& ctx) const {
+            init_data_ptr_array(ctx);
+            return data_ptrs_.to_span();
+        }
+
+        // Accessors
+        BackendMatrixHandle<T, MType>* operator->();
+        BackendMatrixHandle<T, MType>& operator*();
+
+        // Common dimensions and properties
+        int rows_, cols_, batch_size_;
+
+        // Data access - provides non-owning view of the data
+        // USM preparation helpers (non-owning, safe to call on const objects)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.to_span().set_access_device(ctx);
+                (void)col_indices_.to_span().set_access_device(ctx);
+            }
+            return data_.to_span().set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.to_span().prefetch(ctx);
+                (void)col_indices_.to_span().prefetch(ctx);
+            }
+            return data_.to_span().prefetch(ctx);
+        }
+        Span<T> data() const { return data_.to_span(); }
+        
+        // Fill the matrix with a specific value
+        void fill(T value) {this->view().fill(value).wait();}
+        
+        // Deep copy from another matrix or view
+        void copy_from(const MatrixView<T, MType>& src);
+        
+        // Print the matrix content
+        void print(std::ostream& os = std::cout, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            this->view().print(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
+        }
+
+        int rows() const { return rows_; }
+        int rows(int batch_index) const {
+            return detail::dense_active_rows(rows_, active_rows_.to_span(), batch_index);
+        }
+        int cols() const { return cols_; }
+        int cols(int batch_index) const {
+            return detail::dense_active_cols(cols_, active_cols_.to_span(), batch_index);
+        }
+        int batch_size() const { return batch_size_; }
+        int rows_capacity() const { return rows_; }
+        int cols_capacity() const { return cols_; }
+        bool is_heterogeneous() const { return active_rows_.size() != 0 || active_cols_.size() != 0; }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Span<int> active_rows() const { return active_rows_.to_span(); }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Span<int> active_cols() const { return active_cols_.to_span(); }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Matrix<T, MType>& set_active_dims(Span<int> active_rows, Span<int> active_cols) {
+            detail::validate_dense_active_dims(rows_, cols_, batch_size_, active_rows, active_cols);
+            if (active_rows.empty() && active_cols.empty()) {
+                active_rows_.clear();
+                active_cols_.clear();
+                return *this;
+            }
+
+            active_rows_.resize(active_rows.size());
+            active_cols_.resize(active_cols.size());
+            std::copy(active_rows.begin(), active_rows.end(), active_rows_.begin());
+            std::copy(active_cols.begin(), active_cols.end(), active_cols_.begin());
+            return *this;
+        }
+
+        // Build a KernelMatrixView (device POD) for this owning Matrix
+        KernelMatrixView<T, MType> kernel_view() const noexcept {
+            KernelMatrixView<T, MType> kv;
+            kv.data_       = const_cast<T*>(data_.data());
+            kv.rows_       = rows_;
+            kv.cols_       = cols_;
+            kv.ld_         = ld_;
+            kv.stride_     = stride_;
+            kv.active_rows_ = active_rows_.size() == 0 ? nullptr : const_cast<int*>(active_rows_.data());
+            kv.active_cols_ = active_cols_.size() == 0 ? nullptr : const_cast<int*>(active_cols_.data());
+            kv.batch_size_ = batch_size_;
+            if constexpr (MType == MatrixFormat::CSR) {
+                kv.row_offsets_   = const_cast<int*>(row_offsets_.data());
+                kv.col_indices_   = const_cast<int*>(col_indices_.data());
+                kv.nnz_           = nnz_;
+                kv.matrix_stride_ = matrix_stride_;
+                kv.offset_stride_ = offset_stride_;
+            }
+            return kv;
+        }
+
+        // Dense matrix specific accessors
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        int ld() const { return ld_; }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        int stride() const { return stride_; }
+
+        // CSR specific accessors
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Span<int> row_offsets() const { return row_offsets_.to_span(); }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Span<int> col_indices() const { return col_indices_.to_span(); }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz() const { return nnz_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int matrix_stride() const { return matrix_stride_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int offset_stride() const { return offset_stride_; }
+        
+        // Backend handle access
+        std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle() const { 
+            return backend_handle_; 
+        }
+
+    private:
+        void init_data_ptr_array(Queue& ctx) const;
+
+        // Data storage - owned by Matrix
+        UnifiedVector<T> data_;
+        
+        // Dense specific data
+        int ld_ = 0;       // Leading dimension (for dense matrices)
+        int stride_ = 0;   // Stride between matrices in a batch
+        
+        // For batched operations - array of pointers to the start of each matrix
+        UnifiedVector<T*> data_ptrs_;
+        UnifiedVector<int> active_rows_;
+        UnifiedVector<int> active_cols_;
+
+        // CSR specific data
+        UnifiedVector<int> row_offsets_;  // Row offsets for CSR format 
+        UnifiedVector<int> col_indices_;  // Column indices for CSR format
+        int nnz_ = 0;              // Number of non-zeros
+        int matrix_stride_ = 0;    // Stride between value arrays in a batch
+        int offset_stride_ = 0;    // Stride between offset arrays in a batch
+        
+        // Backend handle - shared with views of this matrix
+        // Make mutable so it can be modified in const methods
+        mutable std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
+    };
+
+    // MatrixView class - non-owning view of a matrix
+    template <typename T, MatrixFormat MType>
+    class MatrixView {
+    public:
+        // Constructors for dense matrix view - from raw spans
+        // data_ptrs: Optional array of pointers to the start of each matrix in a batch
+        // This enables direct use of the pointers in batched operations
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView(T* data, int rows, int cols, int ld = 0,
+                  int stride = 0, int batch_size = 1, T** data_ptrs = nullptr);
+
+        // Constructors for CSR sparse matrix view
+        // Mirrors the dense overload above: buffers, then shape, then the format-specific
+        // extra (nnz), then the strides, then batch_size, then data_ptrs.
+        // data_ptrs: Optional array of pointers to the start of each matrix's values in a batch
+        // This enables direct use of the pointers in batched operations
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        MatrixView(T* data, int* row_offsets, int* col_indices,
+                  int rows, int cols, NonZeros nnz, int matrix_stride = 0,
+                  int offset_stride = 0, int batch_size = 1, T** data_ptrs = nullptr);
+
+        // The CSR argument order now matches the dense one: shape (rows, cols) comes before
+        // the non-zero count, and the count carries its own type.
+        //     MatrixView<T, MatrixFormat::CSR> V(values, row_offsets, col_indices,
+        //                                        rows, cols, NonZeros{nnz},
+        //                                        matrix_stride, offset_stride, batch);
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        MatrixView(T* data, int* row_offsets, int* col_indices,
+                  int nnz, int rows, int cols, int matrix_stride = 0,
+                  int offset_stride = 0, int batch_size = 1, T** data_ptrs = nullptr) = delete;
+
+        // Constructors from Matrix objects - view entire matrix
+        MatrixView(const Matrix<T, MType>& matrix);
+
+        // Constructs from VectorView - for creating a matrix view of a vector
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView(const VectorView<T>& vector_view, VectorOrientation orientation = VectorOrientation::Column);
+        
+        // Constructors from Matrix objects - view subset of matrix
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView(const Matrix<T, MType>& matrix,
+                  int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView(const MatrixView<T, MType>& matrix_view,
+                  int rows = -1, int cols = -1, int ld = -1, int stride = -1, int batch_size = -1);
+        
+        MatrixView() = default;
+
+        template <typename U = T, MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
+                                                T* data, //storage for the new view
+                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
+                                                );
+        
+        template <typename U = T, MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
+                                                T* data, int* row_offsets, int* col_indices, //storage for the new view
+                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
+                                                );
+        
+        static Event copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src);
+
+        // Copy and move
+        MatrixView(const MatrixView&) = default;
+        MatrixView& operator=(const MatrixView&) = default;
+        MatrixView(MatrixView&&) noexcept = default;
+        MatrixView& operator=(MatrixView&&) noexcept = default;
+
+        // Destructor
+        ~MatrixView() = default;
+
+        // Initialize backend - need to make backend_handle_ mutable
+        void init() const;
+
+        // Accessors
+        BackendMatrixHandle<T, MType>* operator->() const;
+        BackendMatrixHandle<T, MType>& operator*() const;
+
+        // Access single matrix in batch (returns view for a single matrix)
+        MatrixView<T, MType> operator[](int i) const;
+        
+        // Common data members
+        int rows_, cols_, batch_size_;
+
+        // Data access
+        Span<T> data() const { return data_; }
+        // USM preparation helpers (non-owning, safe to call on const views)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.set_access_device(ctx);
+                (void)col_indices_.set_access_device(ctx);
+            }
+            return data_.set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            if constexpr (MType == MatrixFormat::CSR) {
+                (void)row_offsets_.prefetch(ctx);
+                (void)col_indices_.prefetch(ctx);
+            }
+            return data_.prefetch(ctx);
+        }
+        T* data_ptr() const { return data_.data(); }
+        
+
+        int batch_size() const { return batch_size_; }
+        int rows() const { return rows_; }
+        int rows(int batch_index) const {
+            return detail::dense_active_rows(rows_, active_rows_, batch_index);
+        }
+        int cols() const { return cols_; }
+        int cols(int batch_index) const {
+            return detail::dense_active_cols(cols_, active_cols_, batch_index);
+        }
+        int rows_capacity() const { return rows_; }
+        int cols_capacity() const { return cols_; }
+        bool is_heterogeneous() const { return !active_rows_.empty() || !active_cols_.empty(); }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Span<int> active_rows() const { return active_rows_; }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Span<int> active_cols() const { return active_cols_; }
+
+        // Convert to a different scalar type (dense only)
+        template <typename U>
+        Matrix<U, MType> astype() const;
+        
+        // Dense matrix specific
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        int ld() const { return ld_; }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        int stride() const { return stride_; }
+
+        // Increment for dense vectors (assuming contiguous)
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        int inc() const { return 1; } // Assuming contiguous elements for vector views
+
+        // CSR specific accessors
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Span<int> row_offsets() const { return row_offsets_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Span<int> col_indices() const { return col_indices_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz() const { return nnz_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int matrix_stride() const { return matrix_stride_; }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int offset_stride() const { return offset_stride_; }
+
+        // Access pointer array for batched operations
+        Span<T*> data_ptrs(Queue& ctx) const { 
+            init_data_ptr_array(ctx);
+            return data_ptrs_; 
+        }
+
+        // Access to individual elements (for dense matrices)
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        T& at(int row, int col, int batch = 0);
+        
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        const T& at(int row, int col, int batch = 0) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        T& operator()(int row, int col, int batch = 0) {
+            return at(row, col, batch);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        const T& operator()(int row, int col, int batch = 0) const {
+            return at(row, col, batch);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
+            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            if (r_len <= 0 || c_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+            }
+            auto offset = c_start * ld_ + r_start;
+            // Do not propagate the parent pointer-array into a slice: those pointers refer to the
+            // *unsliced* base addresses. Backends that use pointer-array batched kernels (e.g. cuBLAS)
+            // would then read/write the wrong addresses. Leaving it null lets backends regenerate the
+            // correct pointer array for this view if needed.
+            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> operator()(Slice rows) const {
+            return (*this)(rows, {});
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        VectorView<T> operator()(int32_t row, Slice cols) const {
+            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            if (c_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
+            }
+            auto offset = c_start * ld_ + row;
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        VectorView<T> operator()(Slice rows, int32_t col) const {
+            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            if (r_len <= 0) {
+                throw std::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
+            }
+            auto offset = col * ld_ + r_start;
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event symmetrize(const Queue& ctx, Uplo uplo) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event symmetrize(Uplo uplo) const {
+            return symmetrize(Queue(), uplo);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event hermitize(const Queue& ctx, Uplo uplo) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event hermitize(Uplo uplo) const {
+            return hermitize(Queue(), uplo);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event transpose(const Queue& ctx, bool conjugate = false) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event transpose(bool conjugate = false) const {
+            return transpose(Queue(), conjugate);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event triangularize(const Queue& ctx, Uplo uplo, Diag diag) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event triangularize(Uplo uplo, Diag diag) const {
+            return triangularize(Queue(), uplo, diag);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned int seed = 42) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random(bool hermitian = false, unsigned int seed = 42) const {
+            return fill_random(Queue(), hermitian, seed);
+        }
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Event fill_random_sparse_hermitian(const Queue& ctx,
+                                           float density,
+                                           unsigned int seed = 42,
+                                           typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                           bool shared_pattern = true) const;
+
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        Event fill_random_sparse_hermitian(float density,
+                                           unsigned int seed = 42,
+                                           typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                           bool shared_pattern = true) const {
+            return fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern);
+        }
+
+        Event fill(const Queue& ctx, T value) const;
+
+        Event fill(T value) const {
+            return fill(Queue(), value);
+        }
+
+        Event fill_zeros(const Queue& ctx) const {
+            return fill(ctx, detail::convert_to_fill_value<T>(0));
+        }
+
+        Event fill_zeros() const {
+            return fill_zeros(Queue());
+        }
+
+        Event fill_ones(const Queue& ctx) const {
+            return fill(ctx, detail::convert_to_fill_value<T>(1));
+        }
+
+        Event fill_ones() const {
+            return fill_ones(Queue());
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_identity(const Queue& ctx, T value = T(1)) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k = 0) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k = 0) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_diagonal(const Span<T>& diag_values, int64_t k = 0) const {
+            return fill_diagonal(Queue(), diag_values, k);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_diagonal(const Queue& ctx, const T& value) const;
+        
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_diagonal(const T& value) const {
+            return fill_diagonal(Queue(), value);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value = T(1), 
+                              T non_diagonal_value = T(0.5)) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_triangular(Uplo uplo, T diagonal_value = T(1), 
+                              T non_diagonal_value = T(0.5)) const {
+            return fill_triangular(Queue(), uplo, diagonal_value, non_diagonal_value);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_tridiag(const Queue& ctx, VectorView<T> sub_diag, 
+                            VectorView<T> diag, VectorView<T> super_diag) const {
+                                fill_diagonal(ctx, diag);
+                                fill_diagonal(ctx, sub_diag, -1);
+                                return fill_diagonal(ctx, super_diag, 1);
+                            }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_tridiag_toeplitz(const Queue& ctx, T diag = T(1), 
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_tridiag_toeplitz(T diag = T(1), 
+                                    T sub_diag = T(-0.5), T super_diag = T(0.5)) const {
+            return fill_tridiag_toeplitz(Queue(), diag, sub_diag, super_diag);
+        }
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_triangular_random(const Queue& ctx, Uplo uplo, 
+                                     Diag diag = Diag::Unit, 
+                                     unsigned int seed = 42) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_triangular_random(Uplo uplo, 
+                                     Diag diag = Diag::Unit,
+                                     unsigned int seed = 42) const {
+            return fill_triangular_random(Queue(), uplo, diag, seed);
+        }
+
+
+        // Create a new view into a single batch item
+        MatrixView<T, MType> batch_item(int batch_index) const;
+
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> with_active_dims(Span<int> active_rows, Span<int> active_cols) const {
+            detail::validate_dense_active_dims(rows_, cols_, batch_size_, active_rows, active_cols);
+            MatrixView<T, MType> out = *this;
+            out.active_rows_ = active_rows;
+            out.active_cols_ = active_cols;
+            return out;
+        }
+
+        static bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const MatrixView<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon());
+        static inline bool all_close(Queue& ctx, const Matrix<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a.view(), b.view(), tol);}
+        static inline bool all_close(Queue& ctx, const MatrixView<T, MType>& a, const Matrix<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a, b.view(), tol);}
+        static inline bool all_close(Queue& ctx, const Matrix<T, MType>& a, const MatrixView<T, MType>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {return all_close(ctx, a.view(), b, tol);}
+        
+        // Print the matrix view content to a stream
+        // Returns the ostream to allow chaining and use in operator<<
+        std::ostream& stream_formatted_to(std::ostream& os, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            std::ios_base::fmtflags original_flags = os.flags();
+            os << std::scientific << std::setprecision(4);
+
+            for (int b_idx = 0; b_idx < batch_size_; ++b_idx) {
+                if (batch_size_ > 1) {
+                    os << "Batch " << b_idx << ":\n";
+                }
+                // Assuming batch_item() returns a view with batch_size_ = 1 and correct data pointers
+                MatrixView<T, MType> current_item_view = this->batch_item(b_idx);
+
+                if constexpr (MType == MatrixFormat::Dense) {
+                    for (int r = 0; r < std::min(current_item_view.rows_, max_rows_to_print); ++r) {
+                        os << "  ";
+                        for (int c = 0; c < std::min(current_item_view.cols_, max_cols_to_print); ++c) {
+                            detail::print_with_width(os, current_item_view.at(r, c, 0), 13); // Supports non-streamable element types
+                        }
+                        if (current_item_view.cols_ > max_cols_to_print) {
+                            os << " ...";
+                        }
+                        os << "\n";
+                    }
+                    if (current_item_view.rows_ > max_rows_to_print) {
+                        os << "  ...\n";
+                    }
+                } else if constexpr (MType == MatrixFormat::CSR) {
+                    os << "CSR Matrix (rows: " << current_item_view.rows_ 
+                       << ", cols: " << current_item_view.cols_ 
+                       << ", nnz: " << current_item_view.nnz_ << ")\n";
+
+                    os << "  Values:      [";
+                    for (int i = 0; i < std::min(current_item_view.nnz_, max_elements_to_print_csr); ++i) {
+                        os << std::setw(13) << current_item_view.data()[i] << (i == std::min(current_item_view.nnz_, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (current_item_view.nnz_ > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+
+                    os << "  Row Offsets: [";
+                    // CSR row_offsets has size rows + 1
+                    int num_row_offsets = current_item_view.rows_ + 1;
+                    for (int i = 0; i < std::min(num_row_offsets, max_elements_to_print_csr); ++i) {
+                        os << std::setw(6) << current_item_view.row_offsets()[i] << (i == std::min(num_row_offsets, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (num_row_offsets > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+
+                    os << "  Col Indices: [";
+                    for (int i = 0; i < std::min(current_item_view.nnz_, max_elements_to_print_csr); ++i) {
+                        os << std::setw(6) << current_item_view.col_indices()[i] << (i == std::min(current_item_view.nnz_, max_elements_to_print_csr) - 1 ? "" : ", ");
+                    }
+                    if (current_item_view.nnz_ > max_elements_to_print_csr) os << " ...";
+                    os << " ]\n";
+                }
+                if (b_idx < batch_size_ - 1) {
+                    os << "\n"; // Separator between batches
+                }
+            }
+            os.flags(original_flags); // Reset stream flags
+            return os;
+        }
+
+        // Convenience print function
+        void print(std::ostream& os = std::cout, int max_rows_to_print = 10, int max_cols_to_print = 10, int max_elements_to_print_csr = 20) const {
+            stream_formatted_to(os, max_rows_to_print, max_cols_to_print, max_elements_to_print_csr);
+        }
+
+        // Build a KernelMatrixView (device POD) from this non-owning view
+        KernelMatrixView<T, MType> kernel_view() const noexcept {
+            KernelMatrixView<T, MType> kv;
+            kv.data_       = const_cast<T*>(data_.data());
+            kv.rows_       = rows_;
+            kv.cols_       = cols_;
+            kv.ld_         = ld_;
+            kv.stride_     = stride_;
+            kv.active_rows_ = active_rows_.empty() ? nullptr : active_rows_.data();
+            kv.active_cols_ = active_cols_.empty() ? nullptr : active_cols_.data();
+            kv.batch_size_ = batch_size_;
+            if constexpr (MType == MatrixFormat::CSR) {
+                kv.row_offsets_   = const_cast<int*>(row_offsets_.data());
+                kv.col_indices_   = const_cast<int*>(col_indices_.data());
+                kv.nnz_           = nnz_;
+                kv.matrix_stride_ = matrix_stride_;
+                kv.offset_stride_ = offset_stride_;
+            }
+            return kv;
+        }
+
+    private:
+        void init_data_ptr_array(Queue& ctx, Span<T*> target = {}) const;
+
+        // Data storage - non-owning spans
+        Span<T> data_;
+        
+        // Dense specific data
+        int ld_ = 0;          // Leading dimension
+        int stride_ = 0;      // Stride between matrices in a batch
+        Span<int> active_rows_;
+        Span<int> active_cols_;
+        
+        // For batched operations
+        Span<T*> data_ptrs_;  // View into array of matrix pointers for batched operations
+
+        // CSR specific data
+        Span<int> row_offsets_;   // Row offsets for CSR format
+        Span<int> col_indices_;   // Column indices for CSR format
+        int nnz_ = 0;             // Number of non-zeros
+        int matrix_stride_ = 0;   // Stride between value arrays in a batch
+        int offset_stride_ = 0;   // Stride between offset arrays in a batch
+        
+        // Backend handle
+        // Make mutable so it can be modified in const methods
+        mutable std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle_;
+    };
+
+    // Factory functions to create backend handles (implemented in src/backends/matrix_handle_impl.cc)
+    template <typename T, MatrixFormat MType>
+    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix);
+
+    template <typename T, MatrixFormat MType>
+    std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view);
+
+    // Vector type definitions - simplified versions of the matrix types
+    template <typename T = float>
+    class BackendVectorHandle; // Forward declaration with default parameter
+
+    // Vector class with batched support and stride between vectors
+    template <typename T>
+    struct Vector {
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+        using const_reference = const T&;
+
+            static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
+                if (size <= 0 || batch_size <= 0) return 0;
+                const int64_t max_index = int64_t(batch_size - 1) * int64_t(stride) + int64_t(size - 1) * int64_t(inc);
+                return static_cast<std::size_t>(max_index + 1);
+            }
+
+        Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
+        Vector(int size, int batch_size = 1, int stride = 0, int inc = 1)
+            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+        Vector(int size, T value, int batch_size = 1, int stride = 0, int inc = 1)
+            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size), value),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+
+        // Convenience vectors
+        static Vector<T> zeros(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            return Vector<T>(size, T(0), batch_size, stride, inc);
+        }
+        static Vector<T> ones(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            return Vector<T>(size, T(1), batch_size, stride, inc);
+        }
+        static Vector<T> random(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+            Vector<T> vec(size, batch_size, stride, inc);
+            std::mt19937 rng(42); // Mersenne Twister engine with fixed seed
+            std::uniform_real_distribution<float_t<T>> dist(0.0f, 1.0f);
+            for (int b = 0; b < batch_size; ++b) {
+                for (int i = 0; i < size; ++i) {
+                    vec(i, b) = static_cast<T>(dist(rng));
+                }
+            }
+            return vec;
+        }
+        static Vector<T> standard_basis(int size, int index, int batch_size = 1, int stride = 0) {
+            Vector<T> vec(size, T(0), batch_size, stride, 1);
+            for (int b = 0; b < batch_size; ++b) {
+                vec(index, b) = T(1);
+            }
+            return vec;
+        }
+
+        Span<T> data() const { return data_.to_span(); }
+
+        // Mirrors Matrix::view(). VectorView has an implicit converting
+        // constructor from Vector, which is enough when the parameter type is
+        // already concrete -- but not when T has to be *deduced* from it, since
+        // deduction does not consider user conversions. Entry points whose
+        // parameter is VectorView<T> therefore need this at the call site.
+        VectorView<T> view() const { return VectorView<T>(*this); }
+
+        // USM preparation helpers (safe to call on const vectors)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            return data_.to_span().set_access_device(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            return data_.to_span().prefetch(ctx);
+        }
+        T* data_ptr() const { return data_.data(); }
+        int size() const { return size_; }
+        int inc() const { return inc_; }
+        int stride() const { return stride_; }
+        int batch_size() const { return batch_size_; }
+
+        // Convert to a different scalar type
+        template <typename U>
+        Vector<U> astype() const;
+
+        // Access element at (i, batch)
+        T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
+        //const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
+
+        // Flat indexing (for backward compatibility)
+        T& operator[](int i) { return data_[i]; }
+
+        T& operator()(int i, int batch = 0) { return at(i, batch); }
+
+        // Get a view of a single batch
+        VectorView<T> batch_item(int batch_index) const {
+            const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
+        }
+
+        void print(std::ostream& os = std::cout, int max_elements = 10) const {
+            VectorView<T>(*this).stream_formatted_to(os, max_elements);
+        }
+
+        BackendVectorHandle<T>* operator->();
+        BackendVectorHandle<T>& operator*();
+        const BackendVectorHandle<T>* operator->() const;
+        const BackendVectorHandle<T>& operator*()  const;
+
+    private:
+        UnifiedVector<T> data_;
+        int size_ = 0;
+        int inc_ = 1;
+        int stride_ = 0;
+        int batch_size_ = 1;
+
+        //std::shared_ptr<BackendVectorHandle<T>> backend_handle_;
+    };
+
+    // VectorView class - non-owning view of a (possibly batched) vector with stride
+    template <typename T>
+    class VectorView {
+    public:
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+        using const_reference = const T&;
+
+        static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
+            if (size <= 0 || batch_size <= 0) return 0;
+            const int64_t max_index = int64_t(batch_size - 1) * int64_t(stride) + int64_t(size - 1) * int64_t(inc);
+            return static_cast<std::size_t>(max_index + 1);
+        }
+
+        VectorView() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
+        VectorView(Span<T> data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data.data(), required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {
+                assert(data.size() >= data_.size());
+            }
+        VectorView(UnifiedVector<T>& data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data.data(), required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {
+                assert(data.size() >= data_.size());
+            }
+        VectorView(T* data, int size, int batch_size = 1, int inc = 1, int stride = 0)
+            : data_(data, required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
+              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+
+        // Construct from Vector
+        VectorView(const Vector<T>& vec)
+            : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()) {}
+
+        // Copy and move
+        VectorView(const VectorView<T>&) = default;
+        VectorView& operator=(const VectorView<T>&) = default;
+        VectorView(VectorView<T>&&) noexcept = default;
+        VectorView& operator=(VectorView<T>&&) noexcept = default;
+
+        // Data access
+        Span<T> data() const { return data_; }
+        // USM preparation helpers (non-owning, safe to call on const views)
+        Event set_access_device(const Queue& ctx = Queue()) const {
+            return data_.set_access_device(ctx);
+        }
+
+        Event set_preferred_location(const Queue& ctx = Queue()) const {
+            return data_.set_preferred_location(ctx);
+        }
+
+        Event prefetch(const Queue& ctx = Queue()) const {
+            return data_.prefetch(ctx);
+        }
+        T* data_ptr() const { return data_.data(); }
+        int size() const { return size_; }
+        int inc() const { return inc_; }
+        int stride() const { return stride_; }
+        int batch_size() const { return batch_size_; }
+
+        // Convert to a different scalar type
+        template <typename U>
+        Vector<U> astype() const;
+
+        static Event copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src);
+
+        static bool all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()); 
+        static bool all_close(Queue& ctx, const Vector<T>& a, const Vector<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, VectorView<T>(a), VectorView<T>(b), tol);
+        }
+        static bool all_close(Queue& ctx, const VectorView<T>& a, const Vector<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, a, VectorView<T>(b), tol);
+        }
+        static bool all_close(Queue& ctx, const Vector<T>& a, const VectorView<T>& b, float_t<T> tol = std::numeric_limits<float_t<T>>::epsilon()) {
+            return all_close(ctx, VectorView<T>(a), b, tol);
+        }
+
+        // Access element at (i, batch)
+        T& at(int i, int batch = 0) const { 
+            assert(i < size_); assert(i >= 0);
+            assert(batch < batch_size_); assert(batch >= 0);
+            assert(i * inc_ + batch * stride_ < data_.size());
+                return data_[i * inc_ + batch * stride_]; }
+
+        T& operator[](int i) const { assert(i < size_); assert(i >= 0); assert(i * inc_ < data_.size()); return data_[i * inc_]; }
+
+        T& operator()(int i, int batch = 0) const {return at(i, batch);}
+
+        // Subview (single batch)
+        VectorView<T> batch_item(int batch_index) const {
+            // For a single batch, we need (size-1)*inc + 1 elements starting at batch_index * stride
+            const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
+            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
+        }
+
+        VectorView<T> operator()(Slice slice) const {
+            // Create a new view based on the slice
+            int64_t n;
+            if (slice.start == std::numeric_limits<int64_t>::min() && slice.end == std::numeric_limits<int64_t>::max()) {
+                n = size_;
+            } else if (slice.end == std::numeric_limits<int64_t>::max()) {
+                slice.start = slice.start < 0 ? size_ + slice.start : slice.start;
+                n = size_ - slice.start;
+            } else {
+                if (slice.start < 0) slice.start = size_ + slice.start;
+                if (slice.end < 0) slice.end = size_ + slice.end;
+                n = slice.end - slice.start;
+            }
+            if (n <= 0) {
+                assert("Invalid slice dimensions for VectorView encountered in operator()(Slice)" && false);
+            }
+            const auto required = required_span_length(static_cast<int>(n), inc_, stride_, batch_size_);
+            return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, required), n, batch_size_, inc_, stride_);
+        }
+
+        //Computes z = a*x .* b*y + c*z
+        template <typename BinaryOperatorOp = std::multiplies<T>>
+        static Event hadamard_product(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z, BinaryOperatorOp op = BinaryOperatorOp());
+
+        //Computes z = a*x + b*y + c*z
+        static Event add(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z) {
+            return hadamard_product(ctx, a, b, x, y, z, std::plus<T>());
+        }
+
+        //Computes result = x' * y
+        //Event dot(const Queue& ctx, const VectorView<T>& x, const VectorView<T>& y, T& result);
+
+        std::ostream& stream_formatted_to(std::ostream& os, int max_elements = 10, int max_cols_to_print = 10) const {
+            std::ios_base::fmtflags original_flags = os.flags();
+            os << std::scientific << std::setprecision(4);
+
+            for (int b_idx = 0; b_idx < batch_size_; ++b_idx) {
+                if (batch_size_ > 1) {
+                    os << "Batch " << b_idx << ":\n";
+                }
+                os << "  [";
+                for (int i = 0; i < std::min(size_, max_elements); ++i) {
+                    detail::print_with_width(os, at(i, b_idx), 13); // Supports non-streamable element types
+                }
+                if (size_ > max_elements) {
+                    os << " ...";
+                }
+                os << " ]\n";
+            }
+            os.flags(original_flags); // Reset stream flags
+            return os;
+        }
+
+        void print(std::ostream& os = std::cout, int max_elements = 10) const {
+            stream_formatted_to(os, max_elements);
+        }
+
+        BackendVectorHandle<T>* operator->();
+        BackendVectorHandle<T>& operator*();
+        const BackendVectorHandle<T>* operator->() const;
+        const BackendVectorHandle<T>& operator*() const;
+
+    private:
+        Span<T> data_;
+        int size_ = 0;
+        int inc_ = 1;
+        int stride_ = 0;
+        int batch_size_ = 1;
+        //std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
+    };
+
+    // ------------------------------------------------------------------
+    // Conversion helpers
+    // ------------------------------------------------------------------
+    template <typename T, MatrixFormat MType>
+    template <typename U>
+    Matrix<U, MType> Matrix<T, MType>::astype() const {
+        static_assert(MType == MatrixFormat::Dense, "Matrix::astype only supports dense matrices");
+        Matrix<U, MType> result(rows_, cols_, batch_size_, ld_, stride_);
+        auto src = data();
+        auto dst = result.data();
+        for (std::size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = static_cast<U>(src[i]);
+        }
+        return result;
+    }
+
+    template <typename T, MatrixFormat MType>
+    template <typename U>
+    Matrix<U, MType> MatrixView<T, MType>::astype() const {
+        static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
+        Matrix<U, MType> result(rows_, cols_, batch_size_);
+        // An elementwise type conversion cannot be a memcpy, so this stays a
+        // loop -- but a flat one over contiguous runs, not a triple-nested
+        // indexed one. It is deliberately not a device kernel: astype takes no
+        // Queue, and building one to convert (and then having to wait on it)
+        // would cost far more than the conversion. The destination is packed,
+        // so the whole buffer is one run whenever the source is packed too;
+        // otherwise each column is a run.
+        const T* src_ptr = data_.data();
+        U* dst_ptr = result.data().data();
+        const std::size_t src_stride = static_cast<std::size_t>(stride_);
+        const std::size_t packed = static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_);
+
+        if (ld_ == rows_ && src_stride == packed) {
+            const std::size_t n = packed * static_cast<std::size_t>(batch_size_);
+            for (std::size_t k = 0; k < n; ++k) dst_ptr[k] = static_cast<U>(src_ptr[k]);
+        } else {
+            for (int b = 0; b < batch_size_; ++b) {
+                for (int j = 0; j < cols_; ++j) {
+                    const T* src_col = src_ptr + static_cast<std::size_t>(b) * src_stride +
+                                       static_cast<std::size_t>(j) * static_cast<std::size_t>(ld_);
+                    U* dst_col = dst_ptr + static_cast<std::size_t>(b) * packed +
+                                 static_cast<std::size_t>(j) * static_cast<std::size_t>(rows_);
+                    for (int i = 0; i < rows_; ++i) dst_col[i] = static_cast<U>(src_col[i]);
+                }
+            }
+        }
+        return result;
+    }
+
+    template <typename T>
+    template <typename U>
+    Vector<U> Vector<T>::astype() const {
+        Vector<U> result(size_, batch_size_, stride_, inc_);
+        auto src = data();
+        auto dst = result.data();
+        for (std::size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = static_cast<U>(src[i]);
+        }
+        return result;
+    }
+
+    template <typename T>
+    template <typename U>
+    Vector<U> VectorView<T>::astype() const {
+        Vector<U> result(size_, batch_size_, stride_, inc_);
+        for (int b = 0; b < batch_size_; ++b) {
+            for (int i = 0; i < size_; ++i) {
+                result(i, b) = static_cast<U>((*this)(i, b));
+            }
+        }
+        return result;
+    }
+
+    // Helper utility to get effective dimensions accounting for transpose
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans) {
+        return (trans == Transpose::NoTrans) 
+               ? std::make_pair(mat.rows_, mat.cols_) 
+               : std::make_pair(mat.cols_, mat.rows_);
+    }
+
+    template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+    std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans, int batch_index) {
+        const int rows = mat.rows(batch_index);
+        const int cols = mat.cols(batch_index);
+        return (trans == Transpose::NoTrans)
+               ? std::make_pair(rows, cols)
+               : std::make_pair(cols, rows);
+    }
+
+    // Ostream operators for Matrix and MatrixView
+    template <typename T, MatrixFormat MType>
+    std::ostream& operator<<(std::ostream& os, const MatrixView<T, MType>& view) {
+        return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
+    }
+
+    template <typename T, MatrixFormat MType>
+    std::ostream& operator<<(std::ostream& os, const Matrix<T, MType>& matrix) {
+        os << matrix.view(); // Leverages MatrixView's operator<<
+        return os;
+    }
+
+    template <typename T>
+    std::ostream& operator<<(std::ostream& os, const VectorView<T>& view) {
+        return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
+    }
+
+    template <typename T>
+    std::ostream& operator<<(std::ostream& os, const Vector<T>& vec) {
+        os << VectorView(vec); // Leverages VectorView's operator<<
+        return os;
+    }
+
+    template <typename T, MatrixFormat MType>
+    Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
+
+    template <typename T>
+    Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
+
+} // namespace batchlas

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <blas/functions.hh>
-#include <blas/extra.hh>
-#include <blas/linalg.hh>
-#include <util/miniacc.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/miniacc.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
 

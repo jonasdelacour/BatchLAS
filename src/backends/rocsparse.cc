@@ -1,9 +1,9 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <complex>
 #include "backend_handle_impl.hh"
 

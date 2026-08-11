@@ -10,7 +10,9 @@ the point is that everything it needs must come out of the *install prefix*.
 consumer/
   CMakeLists.txt                     # the whole recipe, ~15 lines of it real
   main.cc                            # batched gemm + reference, layout documented
-  decoy_include/util/workspace.hh    # include-collision probe, see below
+  decoy_include/blas/enums.hh              # include-collision probe, see below
+  decoy_include/util/workspace.hh          #   "
+  decoy_include/internal/ormqr_blocked.hh  #   "
 ```
 
 `../consumer_test.sh` drives this from CTest: install to a temporary prefix,
@@ -86,19 +88,30 @@ by the library when it allocates, and are not required to equal `rows` and
 `rows * cols`. `main.cc` routes every access through one `at()` helper for
 exactly that reason.
 
-## The decoy header
+## The decoy headers
 
-`decoy_include/util/workspace.hh` is not a BatchLAS header and is not meant to
-compile. It stands in for an ordinary consumer that happens to have a header of
-its own by that name. BatchLAS's headers spell their cross-includes unprefixed
-(`#include <util/workspace.hh>`), and CMake orders a target's own include
-directories *before* anything an imported target propagates, so the consumer's
-file wins — inside BatchLAS's headers, with an error message naming files the
-consumer has never seen.
+`decoy_include/` holds three files — `blas/enums.hh`, `util/workspace.hh` and
+`internal/ormqr_blocked.hh` — none of which is a BatchLAS header and none of
+which is meant to compile. Each is a bare `#error` with its own sentinel. They
+stand in for an ordinary consumer that happens to own headers by those names,
+which are exactly the three top-level directories BatchLAS used to install into.
 
-`consumer_test.sh` builds the example a second time with
-`-DBATCHLAS_CONSUMER_DECOY=ON` and classifies the outcome: clean means the
-collision class is closed; the sentinel `BATCHLAS_DECOY_WORKSPACE_SHADOWED`
-means the known state (the install root is clean — that half *is* asserted
-hard — but the internal spellings are still unprefixed); anything else is a
-real regression and fails the test.
+The mechanism is CMake's include ordering: a target's own include directories
+come *before* anything an imported target propagates (imported targets propagate
+theirs as `-isystem`, searched last). So if any installed BatchLAS header still
+spelled a cross-include `#include <util/workspace.hh>`, it would get the
+consumer's file, and the error message would name files the consumer has never
+seen. Every one of the three names is on the real include chain reached from
+`<batchlas/blas/linalg.hh>`, so a regression in any of them fires.
+
+Since the public headers moved to `include/batchlas/` and are spelled
+`<batchlas/...>`, the decoy build must now succeed. `consumer_test.sh` builds
+the example a second time with `-DBATCHLAS_CONSUMER_DECOY=ON` and **fails** on
+anything but a clean build: a `BATCHLAS_DECOY_*_SHADOWED` sentinel in the log is
+reported as a regression, and any other failure means the probe stopped probing.
+
+That is the second half of the guarantee. The first half — that nothing is
+installed at `<prefix>/include/{blas,util,internal}` at all, plus the matching
+positive check that everything *is* at `<prefix>/include/batchlas/` — is
+asserted separately against the install tree. Both are needed: the include root
+was already clean back when every internal spelling was still unprefixed.

@@ -1,4 +1,4 @@
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
 #include "../math-helpers.hh"

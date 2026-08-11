@@ -1,10 +1,10 @@
 #pragma once
 #include <sycl/sycl.hpp>
-#include <util/mempool.hh>
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
 #include "queue.hh"
-#include <util/kernel-heuristics.hh>
+#include <batchlas/util/kernel-heuristics.hh>
 
 namespace batchlas {
 

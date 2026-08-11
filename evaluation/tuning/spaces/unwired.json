@@ -34,7 +34,7 @@
       "_comment": [
         "Blocked on: SteqrParams::cta_wg_size_multiplier (=1) and",
         "cta_shift_strategy (=Lapack) are plain C++ member initialisers in",
-        "include/blas/extensions.hh, and stedc's leaf solve takes them as they",
+        "include/batchlas/blas/extensions.hh, and stedc's leaf solve takes them as they",
         "come. Nothing reads a tuning constant.",
         "Worth doing: measured spreads are 12.2% for shift_kind and 3.1% for",
         "wg_multiplier, and a sweep picked wg_multiplier=2 over the shipped 1.",

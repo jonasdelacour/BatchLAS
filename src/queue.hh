@@ -1,5 +1,5 @@
 #pragma once
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>
 #include <sycl/sycl.hpp>
 
@@ -17,8 +17,14 @@
 #include <utility>
 #include <vector>
 
+// Quoted, and it has to stay quoted. src/util/ is a PRIVATE directory that is
+// never installed and is not on any -I line; it holds the only headers left in
+// the tree spelled `util/...`, reached exclusively by quoted relative includes.
+// The public tree moved to include/batchlas/util/ (spelled <batchlas/util/...>)
+// precisely so that no angle-form <util/...> exists anywhere. Do not add
+// -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
 #include "util/kernel-trace.hh"
-#include <util/env.hh>
+#include <batchlas/util/env.hh>
 
 // Inline definitions in this private header still have to reach consumers that
 // only ever see the declaration in the installed public header, so they must be

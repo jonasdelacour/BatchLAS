@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blas/matrix.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include "../queue.hh"
 #include "sytrd_sb2st_cta_instantiations.hh"

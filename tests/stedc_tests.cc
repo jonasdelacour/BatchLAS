@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include "test_utils.hh"
 #include "../src/queue.hh"
 #include "../src/extensions/stedc_levels_plan.hh"

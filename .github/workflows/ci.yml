@@ -76,3 +76,11 @@ jobs:
         # src/ is not installed, so `#include "../../src/queue.hh"` in a public
         # header is a compile error for every consumer and for nobody in-tree.
         run: python3 .github/ci/check_public_headers.py
+      - name: No unprefixed <blas/…>, <util/…> or <internal/…> include
+        # The public headers live under include/batchlas/ so that `batchlas` is
+        # the only name we claim in a consumer's include root. An installed
+        # header that spells its own include unprefixed hands that guarantee
+        # back: the consumer's same-named file is searched first and wins.
+        # The only other guard is consumer_package_tests, which is slow-labelled
+        # and needs a full install.
+        run: python3 .github/ci/check_no_unprefixed_includes.py

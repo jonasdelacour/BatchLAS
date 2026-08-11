@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <sycl/sycl.hpp>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 // Include the compatibility layer directly.
 #include "../src/extensions/sg_compat.hh"

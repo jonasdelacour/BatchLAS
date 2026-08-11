@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <blas/matrix.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/extensions.hh>
 #include "test_utils.hh"
 
 using namespace batchlas;

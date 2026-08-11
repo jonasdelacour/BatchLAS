@@ -23,10 +23,10 @@
 // form. Comparing against a second floating-point solve would put the reference
 // at the same error floor as the thing being measured.
 
-#include <blas/extensions.hh>
-#include <blas/extra.hh>
-#include <blas/functions.hh>
-#include <util/miniacc.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/util/miniacc.hh>
 
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"

@@ -1,7 +1,7 @@
-#include <blas/linalg-ops.hh>
-#include <blas/matrix.hh>
-#include <util/kernel-heuristics.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/linalg-ops.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/kernel-heuristics.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <complex>
 #include <stdexcept>

@@ -54,10 +54,10 @@ Three things that are easy to get wrong and are covered in full in
   across threads corrupts its workspace arena.
 
 See **[docs/cpp-api.md](docs/cpp-api.md)** for the data-layout and memory
-contract, the full conventions, the workspace-lifetime caveat on out-of-order
-queues, and a migration guide from the older `gemm<Backend::CUDA, float>(...)`
-spelling — which still compiles. A complete, buildable external consumer lives
-in [`examples/consumer/`](examples/consumer/).
+contract, the full conventions, and the workspace-lifetime caveat on
+out-of-order queues; **[docs/extending.md](docs/extending.md)** covers adding
+entry points to the library itself. A complete, buildable external consumer
+lives in [`examples/consumer/`](examples/consumer/).
 
 ## Performance
 
@@ -71,7 +71,7 @@ Two measurements that are committed in this repository, with their conditions,
 rather than a headline number:
 
 - **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (grid in
-  `include/blas/functions/syev.hh`, measured 2026-08-07, µs per matrix, median
+  `include/batchlas/blas/functions/syev.hh`, measured 2026-08-07, µs per matrix, median
   of 5, harness-default block size, one process on the device): at
   `n = 320, batch = 819` BatchLAS's blocked solver runs at 67.8 µs
   vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585` it is 195.3 vs
@@ -414,7 +414,7 @@ workaround; pass `-DCMAKE_CXX_COMPILER=` pointing at the same compiler.
 force SYCL flags onto your translation units. That is deliberate: the public
 BatchLAS headers keep `<sycl/sycl.hpp>` out on purpose, so a TU that only calls
 the documented API compiles without `-fsycl` and without paying for a device
-compilation pass. But if a TU of yours includes `<blas/device.hh>`, includes
+compilation pass. But if a TU of yours includes `<batchlas/blas/device.hh>`, includes
 `<sycl/sycl.hpp>`, or writes its own kernels, it needs the flags and you add them
 yourself:
 
@@ -451,6 +451,29 @@ Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib` for interactive use. For containers
 and CI the more robust fix is to drop a file in `/etc/ld.so.conf.d/` and run
 `ldconfig`, because the SYCL runtime also `dlopen`s its UR adapters by bare
 soname and those are not covered by any RPATH you could set on your binary.
+
+### Where the headers land
+
+Everything installs under `<prefix>/include/batchlas/`, plus the single umbrella
+file `<prefix>/include/batchlas.hh`. `batchlas` is the only name BatchLAS claims
+in your include root, and every public header is spelled `<batchlas/...>`:
+
+```cpp
+#include <batchlas.hh>                        // umbrella
+#include <batchlas/blas/linalg.hh>            // or reach in directly
+#include <batchlas/util/sycl-device-queue.hh>
+```
+
+BatchLAS installs nothing outside `<prefix>/include/batchlas/` and
+`<prefix>/include/batchlas.hh`, and `cmake --install` never removes files. If a
+`blas/`, `util/` or `internal/` directory in `<prefix>/include` is left over
+from an earlier BatchLAS install, it shadows the current headers. Check that it
+is ours before removing it — under a shared prefix such as `/usr/local` those
+names may belong to another package:
+
+```bash
+ls <prefix>/include/blas
+```
 
 ### What the package does and does not give you
 

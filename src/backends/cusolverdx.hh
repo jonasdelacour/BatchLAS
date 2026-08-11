@@ -2,8 +2,8 @@
 
 #include <cstddef>
 
-#include <blas/extensions.hh>
-#include <blas/functions/syev.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions/syev.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime_api.h>

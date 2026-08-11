@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include <complex>
 
 using namespace batchlas;
@@ -203,7 +203,7 @@ TEST(MatrixViewTest, ConstructFromCSRMatrix) {
     float values[2 * nnz] = {1, 2, 3, 4, 5, 10, 20, 30, 40, 50};
     int row_offsets[2 * (rows + 1)] = {0, 2, 3, 5, 0, 2, 3, 5};
     int col_indices[2 * nnz] = {0, 2, 1, 0, 2, 0, 2, 1, 0, 2};
-    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, nnz, rows, cols, nnz, rows + 1, batch);
+    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, batch);
     auto view = mat.view();
     EXPECT_EQ(view.rows_, rows);
     EXPECT_EQ(view.cols_, cols);
@@ -219,7 +219,7 @@ TEST(MatrixViewTest, CSRBatchItemView) {
     float values[2 * nnz] = {1, 2, 3, 10, 20, 30};
     int row_offsets[2 * (rows + 1)] = {0, 1, 3, 0, 2, 3};
     int col_indices[2 * nnz] = {0, 2, 1, 1, 0, 2};
-    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, nnz, rows, cols, nnz, rows + 1, batch);
+    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, batch);
     auto view = mat.view();
     for (int b = 0; b < batch; ++b) {
         auto item = view.batch_item(b);
@@ -237,7 +237,7 @@ TEST(MatrixViewTest, CSRAccessors) {
     float values[nnz] = {1.5f, 2.5f};
     int row_offsets[rows + 1] = {0, 1, 2};
     int col_indices[nnz] = {0, 1};
-    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, nnz, rows, cols, nnz, rows + 1, 1);
+    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, 1);
     auto view = mat.view();
     EXPECT_EQ(view.nnz(), nnz);
     EXPECT_EQ(view.matrix_stride(), nnz);
@@ -252,6 +252,6 @@ TEST(MatrixViewTest, CSRSubmatrixViewThrows) {
     float values[nnz] = {1, 2};
     int row_offsets[rows + 1] = {0, 1, 2};
     int col_indices[nnz] = {0, 1};
-    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, nnz, rows, cols, nnz, rows + 1, 1);
+    Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, 1);
     EXPECT_THROW(mat.view(1, 1), std::runtime_error);
 }

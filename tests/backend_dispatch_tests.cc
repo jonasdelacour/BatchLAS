@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <cmath>
 #include <sstream>
@@ -48,7 +48,7 @@ TEST(BackendDispatch, AutoResolvesToACompiledBackendAndIsStable) {
 // Streaming an enum has to work from a TU shaped like this one -- both header
 // families included, `using namespace batchlas;` at the top -- which is how
 // every in-tree TU and the documented consumer spelling are written. The three
-// enums in <util/sycl-device-queue.hh> live in the global namespace and get
+// enums in <batchlas/util/sycl-device-queue.hh> live in the global namespace and get
 // their own operator<< there; batchlas' generic enum operator<< is a viable
 // candidate for them too (its `to_string(e)` constraint is satisfied by ADL),
 // so this compiles only as long as the global overloads stay strictly more

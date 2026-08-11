@@ -1,7 +1,7 @@
 #include "init.hh"
 #include "support.hh"
 
-#include <blas/dispatch/context.hh>
+#include <batchlas/blas/dispatch/context.hh>
 
 namespace batchlas::python {
 

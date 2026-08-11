@@ -1,5 +1,5 @@
-#include <blas/extra.hh>
-#include <blas/functions/syev.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/functions/syev.hh>
 #include <cstddef>
 #include <stdexcept>
 #include <type_traits>

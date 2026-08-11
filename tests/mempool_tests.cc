@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include <util/mempool.hh>
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <vector>
 #include <complex>
 #include <memory>

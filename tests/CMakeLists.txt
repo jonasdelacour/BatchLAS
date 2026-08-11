@@ -144,14 +144,22 @@ set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
+#
+# A test that does NOT dominate must not be in here: `-LE slow` is the iteration
+# run, and everything listed is invisible to it. iluk_tests (2.5 s) sat here long
+# enough for an API-breaking regression to survive a `-LE slow` verification.
 set(BATCHLAS_SLOW_TESTS
-    stedc_tests            # heaviest: dense reference solves at n=512/1024
-    steqr_tests            # ~135 s, almost all in the NETLIB instantiations
-    sytrd_sb2st_tests      # ~70 s, launch-latency bound bulge chase
-    sytrd_sb2st_hh_tests   # 48-combo (n, kd) cross product
-    syevx_tests
-    iluk_tests
-    gesvd_tests)
+    stedc_tests            # 27 s: dense reference solves at n=512/1024
+    steqr_tests            # 13 s here with NETLIB compiled in and nothing skipped,
+                           # against a ~135 s figure recorded earlier on this box --
+                           # kept until the discrepancy is understood
+    sytrd_sb2st_tests      # 69 s, launch-latency bound bulge chase
+    gesvd_tests)           # 1.8 s here, but 37 of its 92 cases skip in this build
+                           # config; not timed in a configuration that runs them
+# Dropped after timing (serial, this build, all cases running -- none skipped):
+#   iluk_tests             2.5 s, 17 tests
+#   syevx_tests            2.7 s, 102 tests
+#   sytrd_sb2st_hh_tests   5.8 s, 9 tests
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -220,6 +228,13 @@ function(batchlas_add_test_target test_name)
     if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
        AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
         target_link_libraries(${test_name} PRIVATE CUDA::cudart)
+    endif()
+    # options_api_tests reads options.hh back to check that no backend-deducing
+    # overload was added without its pointer check -- a rule no runtime test can
+    # enforce for an entry point that does not exist yet.
+    if(test_name STREQUAL "options_api_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_OPTIONS_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/blas/options.hh")
     endif()
 
     add_test(NAME ${test_name} COMMAND ${test_name})

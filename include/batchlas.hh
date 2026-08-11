@@ -1,6 +1,6 @@
 #ifndef BATCHLAS_HH
 #define BATCHLAS_HH
 
-#include "blas/linalg.hh"
+#include <batchlas/blas/linalg.hh>
 
 #endif
