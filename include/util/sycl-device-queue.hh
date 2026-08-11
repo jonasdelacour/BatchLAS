@@ -329,6 +329,29 @@ struct Queue{
     // counterpart to the BATCHLAS_HAS_*_BACKEND macros.
     static bool backend_available(batchlas::Backend backend);
 
+    // Whether `ptr` is reachable from the kernels this queue submits.
+    //
+    // A MatrixView/Span takes a bare pointer and cannot check where it came
+    // from, so passing ordinary host memory (std::vector, new, malloc) to a GPU
+    // queue used to reach the device as a wild address: CUDA_ERROR_ILLEGAL_ADDRESS,
+    // and then SIGABRT during runtime teardown that no catch block can stop.
+    // This answers the question up front instead.
+    //
+    // True for any USM allocation reachable from this queue's context -- device,
+    // shared and host -- and, on a host/CPU device, for ordinary host memory too,
+    // since there the two are the same thing. False for a null pointer only when
+    // the device cannot reach it.
+    //
+    // Costs one USM query (~70ns measured), so it is affordable per call but not
+    // per element. Defined out of line: this header deliberately does not include
+    // <sycl/sycl.hpp>.
+    bool is_device_accessible(const void* ptr) const;
+
+    // is_device_accessible, but throws std::invalid_argument naming the argument
+    // and what to do about it. `what` should name the parameter at the call site
+    // ("gemm: A"), because the whole point is to say which one is wrong.
+    void require_device_accessible(const void* ptr, const char* what) const;
+
     // The backend-native stream this queue submits on, as an opaque pointer:
     // a CUstream (the same thing as cudaStream_t) when the queue runs on the
     // CUDA backend, a hipStream_t on HIP. static_cast it back to that type.

@@ -68,19 +68,36 @@ zero-copy alternative on `gemm`.
 
 **Every pointer you hand to `MatrixView` must be device-accessible for the
 backend the `Queue` dispatches to.** The constructor takes a bare `T*` and cannot
-check this. Getting it wrong is the nastiest trap in the API:
+check this at construction — but the entry points check it at the call, so
+getting it wrong is a thrown exception rather than a dead process:
 
 ```cpp
 std::vector<float> host(n * n * batch);          // compiles fine
 MatrixView<float, MatrixFormat::Dense> A(host.data(), n, n);
-gemm(ctx, A, A, A, {});                          // CUDA_ERROR_ILLEGAL_ADDRESS
+gemm(ctx, A, A, A, {});                          // throws std::invalid_argument
 ```
 
-On a CUDA queue that aborts the process. The thrown exception *is* catchable and
-`main` can return normally — and then the runtime raises `SIGABRT` during
-teardown, which nothing you write can save you from. Worse, the same code is
-*correct* on the NETLIB (host) backend, so a CPU prototype passes and the GPU run
-dies.
+```
+BatchLAS: gemm: argument 1 points to memory that is not reachable from this
+Queue's device (NVIDIA GeForce RTX 4090).
+It looks like ordinary host memory -- a std::vector, new[] or malloc.
+...
+Use memory the device can reach:
+  - let Matrix<T, MatrixFormat::Dense> own it (it allocates USM shared, ...
+```
+
+Until this was enforced it was the nastiest trap in the API: the pointer reached
+the device as a wild address, and the `CUDA_ERROR_ILLEGAL_ADDRESS` that followed
+was catchable only in the sense that `main` could return — the runtime then
+raised `SIGABRT` during teardown, which nothing you write can save you from. And
+the same code is *correct* on the NETLIB (host) backend, so a CPU prototype
+passed and the GPU run died.
+
+The check is one USM query per pointer argument (~70 ns measured), which is noise
+against a kernel launch. `Queue::is_device_accessible(ptr)` asks the same question
+without throwing, and `BATCHLAS_SKIP_POINTER_CHECKS=1` turns it off for a hot loop
+that has already validated its pointers. On a host/CPU device ordinary host memory
+*is* what the kernels read, so nothing is rejected there.
 
 Allocations that work zero-copy, all verified on the CUDA backend:
 
@@ -110,10 +127,15 @@ float c00 = C(0, 0, 0);                          // readable after the wait
 ```
 
 There is also a copying constructor, `Matrix(const T* data, rows, cols, ld,
-stride, batch)`, which is the natural "adopt my existing buffer" entry point.
-Give it explicit, consistent arguments — for packed host data that means
-`ld == rows` and `stride == ld * cols`. Exotic layouts through this constructor
-are thinly tested; when in doubt, use the loop above.
+stride, batch)`, which is the natural "adopt my existing buffer" entry point. It
+reads the source in the layout you describe and owns a copy in its own: a padded
+`ld`, an explicit `stride` larger than `ld * cols`, and the defaulted `stride`
+with `batch > 1` all do what they say, and bad shapes throw
+`std::invalid_argument` rather than reading past the end.
+`MatrixDenseTest.ConstructionFrom*` in `tests/matrix_tests.cc` covers those
+cases. Prefer the `Span<const T>` overload where you can — it knows the source
+length, so a shape that would over-read is a thrown error rather than a
+correct-looking answer.
 
 `MatrixView` never owns anything. There is no adopting owner: to take ownership
 of an existing allocation you copy.
@@ -518,24 +540,39 @@ fixed, an empty option struct must have its type named:
 
 ```cpp
 potrf<B>(ctx, A, PotrfOptions{}, my_workspace);   // correct
-potrf<B>(ctx, A, {}, my_workspace);               // WRONG: factorises Upper
+potrf<B>(ctx, A, {}, my_workspace);               // no longer compiles
 ```
 
 `potrf`'s option overload takes `(ctx, A, const PotrfOptions&, Span<std::byte>)`
 and the positional one takes `(ctx, A, Uplo, Span<std::byte>)` — same arity, and
-`{}` converts to both. Overload resolution picks the positional one, so `{}`
-means `Uplo{}`; since `Uplo` is declared `{Upper, Lower}`, that is **Upper**,
-while `PotrfOptions{}.uplo` is **Lower**. The call silently factorises the other
-triangle and returns a wrong answer with no diagnostic.
+`{}` converts to both. It is not a tie: `{}` reaches an enum by an *exact match*
+and a class type only by a user-defined conversion, so the positional overload
+won silently. `{}` meant `Uplo{}`, and since `Uplo` is declared `{Upper, Lower}`
+that is **Upper**, while `PotrfOptions{}.uplo` is **Lower** — the call factorised
+the other triangle and returned a wrong answer with no diagnostic. It bit
+`ortho`'s Cholesky path, where it surfaced only as LOBPCG failing to converge,
+several layers from the call.
 
-This bit `ortho`'s Cholesky path, where it showed up only as LOBPCG failing to
-converge — several layers away from the call. `potrf` is the only entry point
-with this collision today; every other option overload differs from its
-positional twin in arity or in an argument type. Naming the type costs nothing
-and is immune, so do it everywhere.
+A third overload, deleted and taking a dedicated *enum* type
+(`detail::EmptyBracesAreAmbiguous`), now sits at the same exact-match rank, so the
+bare-`{}` spelling is ill-formed and the compiler names all three candidates:
+
+```
+error: call of overloaded 'potrf(...)' is ambiguous
+note: candidate: potrf(Queue&, const MA&, const PotrfOptions&, Span<std::byte>)
+note: candidate: potrf(Queue&, const MA&, Uplo, Span<std::byte>)
+note: candidate: potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, ...) (deleted)
+```
+
+Neither working spelling converts to that type, so both still resolve exactly as
+before. Naming the option type is still the habit worth having everywhere —
+`potrf` was the only entry point with this collision, and the trap overload only
+closes the one that existed.
 
 `OptionsApi.NamedEmptyOptionsSelectTheOptionOverload` in
-`tests/options_api_tests.cc` enforces this.
+`tests/options_api_tests.cc` checks the two spellings still mean what they say,
+and two `static_assert`s beside it check the trap type stays unreachable from
+both.
 
 ### An empty workspace is a workspace
 

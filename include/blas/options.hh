@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
+#include <concepts>
+#include <initializer_list>
+#include <string>
 
 #include <blas/enums.hh>
 #include <blas/matrix.hh>
@@ -33,6 +37,40 @@
 // something concrete to initialise. An option struct in a deduced position would
 // not compile.
 namespace batchlas {
+
+namespace detail {
+
+// Named-argument counterpart to require_pack_accessible (blas/queue-dispatch.hh,
+// where the shared machinery lives). The option-struct overloads know their
+// parameter names, so they can say "gemm: A" where the variadic dispatch
+// overload can only say "gemm: argument 2".
+template <typename... Args>
+inline void require_args_accessible(const Queue& ctx, const char* fn,
+                                    const char* const* names, const Args&... args) {
+    if (!pointer_checks_enabled()) return;
+    int i = 0;
+    (void)std::initializer_list<int>{
+        (require_arg_accessible(ctx, args, std::string(fn) + ": " + names[i++]), 0)...};
+}
+
+}  // namespace detail
+
+// Check the pointer arguments of an entry point. The stringised names make the
+// error say which argument is wrong, which is the entire value of the check.
+#define BATCHLAS_CHECK_ARGS(CTX, FN, ...)                                        \
+    do {                                                                         \
+        static const char* const _bl_names[] = {BATCHLAS_ARG_NAMES(__VA_ARGS__)}; \
+        ::batchlas::detail::require_args_accessible((CTX), FN, _bl_names, __VA_ARGS__); \
+    } while (0)
+
+#define BATCHLAS_ARG_NAMES_1(a) #a
+#define BATCHLAS_ARG_NAMES_2(a, b) #a, #b
+#define BATCHLAS_ARG_NAMES_3(a, b, c) #a, #b, #c
+#define BATCHLAS_ARG_NAMES_4(a, b, c, d) #a, #b, #c, #d
+#define BATCHLAS_ARG_NAMES_PICK(_1, _2, _3, _4, NAME, ...) NAME
+#define BATCHLAS_ARG_NAMES(...)                                                  \
+    BATCHLAS_ARG_NAMES_PICK(__VA_ARGS__, BATCHLAS_ARG_NAMES_4, BATCHLAS_ARG_NAMES_3, \
+                            BATCHLAS_ARG_NAMES_2, BATCHLAS_ARG_NAMES_1)(__VA_ARGS__)
 
 // ---- dense BLAS ------------------------------------------------------------
 
@@ -218,6 +256,7 @@ inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmO
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "gemm", A, B, C);
     return with_backend(ctx, [&](auto Back) { return gemm<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -231,6 +270,7 @@ inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorV
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
                   const GemvOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "gemv", A, x, y);
     return with_backend(ctx, [&](auto Back) { return gemv<Back.value>(ctx, A, x, y, opts); });
 }
 
@@ -244,6 +284,7 @@ inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmO
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "symm", A, B, C);
     return with_backend(ctx, [&](auto Back) { return symm<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -259,6 +300,7 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
     requires ComplexScalar<T>
 inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "hemm", A, B, C);
     return with_backend(ctx, [&](auto Back) { return hemm<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -274,6 +316,7 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
     requires ComplexScalar<T>
 inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "herk", A, C);
     return with_backend(ctx, [&](auto Back) { return herk<Back.value>(ctx, A, C, opts); });
 }
 
@@ -291,6 +334,7 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
     requires ComplexScalar<T>
 inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
                    const Her2kOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "her2k", A, B, C);
     return with_backend(ctx, [&](auto Back) { return her2k<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -304,6 +348,7 @@ inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& op
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "syrk", A, C);
     return with_backend(ctx, [&](auto Back) { return syrk<Back.value>(ctx, A, C, opts); });
 }
 
@@ -319,6 +364,7 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
 inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
                    const Syr2kOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "syr2k", A, B, C);
     return with_backend(ctx, [&](auto Back) { return syr2k<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -333,6 +379,7 @@ inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmO
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "trmm", A, B, C);
     return with_backend(ctx, [&](auto Back) { return trmm<Back.value>(ctx, A, B, C, opts); });
 }
 
@@ -346,6 +393,7 @@ inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& op
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
+    BATCHLAS_CHECK_ARGS(ctx, "trsm", A, B);
     return with_backend(ctx, [&](auto Back) { return trsm<Back.value>(ctx, A, B, opts); });
 }
 
@@ -398,13 +446,42 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts) {
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
+    BATCHLAS_CHECK_ARGS(ctx, "potrf", A, ws);
     return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts, ws); });
 }
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts = {}) {
+    BATCHLAS_CHECK_ARGS(ctx, "potrf", A);
     return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts); });
 }
+
+namespace detail {
+// `potrf` is the one entry point whose option overload and positional overload
+// have the same arity and both accept `{}`:
+//
+//     potrf(ctx, A, PotrfOptions{}, ws);   // uplo = Lower
+//     potrf(ctx, A, Uplo::Lower,    ws);
+//     potrf(ctx, A, {},             ws);   // <-- used to mean Uplo{} == Upper
+//
+// `{}` converts to an enum by an exact match but to a class type only by a
+// user-defined conversion, so the positional overload won silently and the call
+// factorised the opposite triangle -- no diagnostic, wrong numbers. (That is how
+// it reached ortho's Cholesky path, where it surfaced only as LOBPCG failing to
+// converge.)
+//
+// Giving the trap its own *enum* parameter type puts a third candidate at the
+// same exact-match rank, so the bare-`{}` call is ill-formed (ambiguous) and
+// names all three candidates. Both spellings above still resolve exactly as
+// before: neither `PotrfOptions{}` nor `Uplo::Lower` converts to this type.
+enum class EmptyBracesAreAmbiguous {};
+}  // namespace detail
+
+template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>) = delete;
+
+template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
+Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
 // getrf, getri, geqrf and orgqr have no options to carry, so their only new
 // spelling is the arena-backed one: drop the workspace and it is leased for you.
@@ -420,6 +497,7 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
+    BATCHLAS_CHECK_ARGS(ctx, "getrf", A, pivots);
     return with_backend(ctx, [&](auto Back) { return getrf<Back.value>(ctx, A, pivots); });
 }
 
@@ -452,6 +530,7 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
                    const GetrsOptions& opts = {}) {
+    BATCHLAS_CHECK_ARGS(ctx, "getrs", A, B_, pivots);
     return with_backend(ctx,
                         [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts); });
 }
@@ -467,6 +546,7 @@ inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots) {
+    BATCHLAS_CHECK_ARGS(ctx, "getri", A, Ainv, pivots);
     return with_backend(ctx, [&](auto Back) { return getri<Back.value>(ctx, A, Ainv, pivots); });
 }
 
@@ -479,6 +559,7 @@ inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
+    BATCHLAS_CHECK_ARGS(ctx, "geqrf", A, tau);
     return with_backend(ctx, [&](auto Back) { return geqrf<Back.value>(ctx, A, tau); });
 }
 
@@ -491,6 +572,7 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
+    BATCHLAS_CHECK_ARGS(ctx, "orgqr", A, tau);
     return with_backend(ctx, [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
 }
 
@@ -512,12 +594,14 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts, Span<std::byte> ws) {
+    BATCHLAS_CHECK_ARGS(ctx, "syev", A, W, ws);
     return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts, ws); });
 }
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts = {}) {
+    BATCHLAS_CHECK_ARGS(ctx, "syev", A, W);
     return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
 }
 

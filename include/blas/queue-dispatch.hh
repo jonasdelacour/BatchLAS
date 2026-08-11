@@ -59,6 +59,64 @@ inline auto with_backend(Queue& ctx, F&& f) {
 }
 
 namespace detail {
+
+// ---- the USM contract, enforced -------------------------------------------
+//
+// A MatrixView/Span takes a bare pointer and cannot check where the memory came
+// from. Handing ordinary host memory (std::vector, new, malloc) to a GPU queue
+// used to reach the device as a wild address: CUDA_ERROR_ILLEGAL_ADDRESS, and
+// then SIGABRT from inside the runtime during teardown, which no catch block can
+// stop -- while the identical code was correct on the host backend, so a CPU
+// prototype passed and the GPU run died. These helpers turn that into a thrown
+// std::invalid_argument that names the offending argument.
+//
+// One USM query per pointer argument (~70ns measured), which is noise against a
+// kernel launch. BATCHLAS_SKIP_POINTER_CHECKS=1 bypasses it.
+
+inline bool pointer_checks_enabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("BATCHLAS_SKIP_POINTER_CHECKS");
+        return !(v && *v && *v != '0');
+    }();
+    return enabled;
+}
+
+// Matrix/MatrixView spell it data_ptr(); Span/UnifiedVector spell it data().
+template <typename A>
+concept HasDataPtr = requires(const A& a) { { a.data_ptr() } -> std::convertible_to<const void*>; };
+template <typename A>
+concept HasData = requires(const A& a) {
+    { a.data() } -> std::convertible_to<const void*>;
+    { a.size() } -> std::convertible_to<size_t>;
+};
+
+template <typename A>
+inline void require_arg_accessible(const Queue& ctx, const A& arg, const std::string& what) {
+    if constexpr (HasDataPtr<std::remove_cvref_t<A>>) {
+        ctx.require_device_accessible(static_cast<const void*>(arg.data_ptr()), what.c_str());
+    } else if constexpr (HasData<std::remove_cvref_t<A>>) {
+        // An empty span is legitimate: BumpAllocator sizing passes hand out empty
+        // spans by design, so only a non-empty one carries a pointer to check.
+        if (arg.size() != 0) {
+            ctx.require_device_accessible(static_cast<const void*>(arg.data()), what.c_str());
+        }
+    }
+    // Anything else (option structs, scalars, enums) carries no pointer.
+}
+
+// Positional labelling, for the dispatch macro: it forwards an unnamed pack, so
+// the best it can say is which argument position was wrong.
+template <typename... Args>
+inline void require_pack_accessible(const Queue& ctx, const char* fn, const Args&... args) {
+    if (!pointer_checks_enabled()) return;
+    int pos = 0;
+    (void)std::initializer_list<int>{
+        (++pos,
+         require_arg_accessible(ctx, args,
+                                std::string(fn) + ": argument " + std::to_string(pos)),
+         0)...};
+}
+
 // A backend that is definitely compiled in, used only to ask "would the
 // positional call be well-formed?". Any compiled backend answers that question
 // identically -- the entry points are declared once and instantiated per
@@ -109,6 +167,7 @@ inline constexpr Backend kProbeBackend =
                                                     std::forward<Args>(probe_args)...); \
         }                                                                       \
     inline auto NAME(Queue& ctx, Args&&... args) {                              \
+        ::batchlas::detail::require_pack_accessible(ctx, #NAME, args...);       \
         return ::batchlas::with_backend(ctx, [&](auto Back) {                   \
             return NAME<Back.value>(ctx, std::forward<Args>(args)...);          \
         });                                                                     \

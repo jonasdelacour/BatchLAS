@@ -423,3 +423,78 @@ TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
     EXPECT_TRUE(differs) << "Lower and Upper potrf are indistinguishable here, so this "
                             "test could not detect the wrong triangle being used";
 }
+
+// A bare `{}` in potrf's 4-argument form used to select the positional overload
+// -- Uplo{} == Upper -- and silently factorise the wrong triangle. A deleted
+// overload taking a dedicated enum type now puts a third candidate at the same
+// exact-match rank, so the call is ambiguous and fails to compile.
+//
+// The negative is checked by static_assert rather than by a compile-fail
+// fixture: overload resolution on `{}` cannot be probed with a requires-clause,
+// because a braced-init-list is not an expression that can be deduced. What can
+// be checked is that the trap type exists and that neither legitimate spelling
+// converts to it, which is the property that keeps the fix from breaking callers.
+static_assert(!std::is_convertible_v<PotrfOptions, detail::EmptyBracesAreAmbiguous>,
+              "PotrfOptions must not convert to the trap type, or the named "
+              "spelling would become ambiguous too");
+static_assert(!std::is_convertible_v<Uplo, detail::EmptyBracesAreAmbiguous>,
+              "Uplo must not convert to the trap type, or the positional "
+              "spelling would become ambiguous too");
+
+// The USM contract used to be documented and unenforced: handing ordinary host
+// memory to a GPU queue reached the device as a wild address and aborted the
+// process from inside the SYCL runtime during teardown, where no catch block
+// could help -- while the identical code was correct on the host backend.
+TEST(OptionsApi, HostPointerToDeviceQueueThrowsInsteadOfAborting) {
+    Queue q;
+    if (q.device().type == DeviceType::CPU) {
+        GTEST_SKIP() << "host memory is legitimately device-accessible on a CPU device";
+    }
+
+    const int n = 4;
+    std::vector<float> host(n * n, 1.0f);
+    MatrixView<float, MatrixFormat::Dense> A(host.data(), n, n);
+
+    EXPECT_FALSE(q.is_device_accessible(host.data()));
+    EXPECT_THROW(gemm(q, A, A, A, GemmOptions<float>{}), std::invalid_argument);
+
+    // The message has to name the entry point and pin the argument down, or it
+    // sends the reader hunting. Which of the two labellings appears depends on
+    // which overload wins: the variadic dispatch overload forwards an unnamed
+    // pack ("argument 1"), the option-struct overload knows the name ("A").
+    try {
+        gemm(q, A, A, A, GemmOptions<float>{});
+        FAIL() << "expected the pointer check to throw";
+    } catch (const std::invalid_argument& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("gemm"), std::string::npos) << msg;
+        EXPECT_TRUE(msg.find("argument 1") != std::string::npos ||
+                    msg.find("gemm: A") != std::string::npos) << msg;
+        // and it must say what to do about it, not just what went wrong
+        EXPECT_NE(msg.find("malloc_shared"), std::string::npos) << msg;
+    }
+}
+
+// The check must not reject the allocations that genuinely work, or it would
+// trade a crash for a false alarm.
+TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
+    Queue q;
+    const int n = 4;
+
+    Matrix<float, MatrixFormat::Dense> owned(n, n, 1);
+    EXPECT_TRUE(q.is_device_accessible(owned.view().data_ptr()));
+    EXPECT_FALSE(q.is_device_accessible(nullptr));
+
+    // And a real call through the checked path still runs.
+    Matrix<float, MatrixFormat::Dense> B(n, n, 1), C(n, n, 1);
+    auto a = owned.view(), b = B.view(), c = C.view();
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            a.data_ptr()[j * a.ld() + i] = (i == j) ? 2.0f : 0.0f;
+            b.data_ptr()[j * b.ld() + i] = (i == j) ? 3.0f : 0.0f;
+            c.data_ptr()[j * c.ld() + i] = 0.0f;
+        }
+    EXPECT_NO_THROW(gemm(q, a, b, c, GemmOptions<float>{}));
+    q.wait();
+    EXPECT_NEAR(c.data_ptr()[0], 6.0f, 1e-5f);
+}
