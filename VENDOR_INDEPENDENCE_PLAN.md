@@ -155,25 +155,79 @@ double: `max_dim <= 512`.
 - oneDPL is a hard `FATAL_ERROR` dependency (`BatchLASDependencies.cmake:258`). It is
   header-only and is not a BLAS, so it does not violate the goal, but it should be noted in
   any "no dependencies" claim. Five files use it, all for `dpl::random` / `dpl::algorithm`.
-- Three *parallel, incompatible* dispatch mechanisms exist: `Provider` (only `syev`, `gesvd`,
-  `ormqr`), `BATCHLAS_GEMM_VARIANT`, and `BATCHLAS_{SYMM,SYRK,SYR2K,TRMM}_VARIANT`. Unifying
-  them is a prerequisite for being able to *state*, let alone enforce, vendor independence.
+- **Five** parallel, non-communicating dispatch axes exist, not three:
+
+  | # | Mechanism | Granularity | Bound at |
+  |---|---|---|---|
+  | 1 | `enum class Backend` (template parameter `B`) | whole library | compile time, chosen at runtime by `Queue::backend()` |
+  | 2 | `Provider` + `DispatchPolicy` | 3 ops only (`syev`, `gesvd`, `ormqr`) | runtime, per call |
+  | 3 | `BATCHLAS_GEMM_VARIANT` | `gemm` | runtime, `getenv` per call |
+  | 4 | `BATCHLAS_{SYMM,SYRK,SYR2K,TRMM}_VARIANT` | 4 ops | runtime, `getenv` per call |
+  | 5 | ad-hoc per-op knobs — `BATCHLAS_ORTHO_GRAM`, `BATCHLAS_ORMQR_IMPL`, `BATCHLAS_SYEVX_ALGORITHM`, `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` | one site each | runtime |
+
+  None of them share a vocabulary. Unifying them is a prerequisite for being able to
+  *state*, let alone enforce, vendor independence.
+
+- **`Backend` carries four distinct meanings**, and only the first is what the name says:
+  1. *Which device / SYCL runtime* — `queue-impl.cc:92-107`, the only place a device becomes
+     a `Backend`. Note it maps device vendor Intel → `Backend::MKL`, i.e. a hardware property
+     selecting a math library.
+  2. *Which vendor math library* — `linalg-impl.hh:876-880` keys the cuBLAS/cuSPARSE/cuSOLVER
+     handle triple off it.
+  3. *Hardware errata* — `steqr.cc:21-30` disables the CTA path for `Backend::ROCM` because
+     chunked sub-group ops give wrong eigenvalues on gfx1200. That is a statement about one
+     GPU model, not about a backend.
+  4. *Measurement provenance* — `syev.hh:778-788` gates a routing grid on `Backend::CUDA`
+     with the comment that CUDA "is the only backend the grid above was measured on".
+
+  Meanings 3 and 4 are the ones that make a mechanical refactor dangerous: they look like
+  backend logic and are not, so moving them to a new axis silently changes behaviour.
+
+- **The second axis already exists and is simply unwired.** `enums.hh:102-113` declares
+  `enum class BackendLibrary { CUBLAS, CUSPARSE, CUSOLVER, ROCBLAS, ROCSPARSE, ROCSOLVER,
+  MAGMA, MKL, CBLAS, LAPACKE }` — exactly the vendor-library axis this plan needs. It is used
+  only inside `linalg-impl.hh` for handle/scalar conversion. **The `Backend → BackendLibrary`
+  mapping exists only in comments, never in code.**
+
+- Inside `cublas.cc`, every `if constexpr (Back == Backend::CUDA)` guard (`:162, :267, :530,
+  :761, :873, :996`) is tautologically true — the file is instantiated only for
+  `Backend::CUDA` (`cublas.cc:1771`). Those guards are documentation, not selection.
 
 ---
 
 ## 3. Target architecture
 
-### 3.1 `Backend::SYCL` becomes a real, always-present backend
+### 3.1 Do **not** add `Backend::SYCL`
 
-Add `BATCHLAS_HAS_SYCL_BACKEND`, unconditionally true (SYCL is already mandatory —
-`BatchLASOptions.cmake` prints "SYCL support is mandatory for BatchLAS"). Give
-`with_backend` a `case Backend::SYCL`, and instantiate every entry point for it from a new
-`src/backends/sycl/` tree that links against nothing but SYCL and the existing device-level
-`group_blas` primitives.
+*(This section reverses the plan's first draft. The correction is the point.)*
 
-This is the honest expression of the goal: `Backend::SYCL` is the backend that always
-works. Queue AUTO resolution keeps preferring a vendor backend where one exists (for now);
-flipping that preference is Milestone 2, not Milestone 1.
+The first draft proposed making `Backend::SYCL` a real backend. That is wrong, and it is
+wrong in exactly the way §2 Class D describes: it would express "no vendor library is
+installed" as "we are on a different device". On an NVIDIA GPU with no cuBLAS, the device
+family is still CUDA — that is what the SYCL runtime is targeting, what the queue submits
+to, and what the errata in `steqr.cc:21-30` are keyed on. A build with no vendor library
+must not change the answer to "what am I running on".
+
+Instead:
+
+- **`Backend` narrows to its meaning (1)**: which device / SYCL runtime family. It keeps its
+  current spellings so no call site churns.
+- **Native implementations are instantiated for every `Backend`.** They are portable SYCL;
+  they run wherever the queue runs. This is what makes `Backend::SYCL` unnecessary — there is
+  no backend on which the native path is unavailable.
+- **`BATCHLAS_HAS_<X>_BACKEND` is decoupled from "the vendor library was found".** Today
+  these are the same condition: `BatchLASDependencies.cmake` sets `BATCHLAS_HAS_CUDA_BACKEND
+  TRUE` when `CUBLAS_LIBRARY` is found. After the split, "can dispatch a CUDA queue" depends
+  only on there being a CUDA SYCL target, and separate `BATCHLAS_HAS_CUBLAS` /
+  `BATCHLAS_HAS_CUSOLVER` / `BATCHLAS_HAS_CUSPARSE` record the libraries.
+
+This removes an entire work item: `with_backend` needs no new case, `Queue::backend_available`
+keeps its meaning, and `backend_dispatch_tests.cc:72` — which asserts `Backend::SYCL` is
+unavailable — stays true and unmodified.
+
+The vendor axis gets the enum that already exists for it, `BackendLibrary` (`enums.hh:102-113`),
+whose `Backend → BackendLibrary` mapping is currently comments-only. Wiring that mapping in
+code is the actual second axis, not a new `Backend` enumerator.
 
 ### 3.2 One dispatch mechanism
 
@@ -183,14 +237,30 @@ Extend `blas::dispatch::Provider` to cover every op, and add:
 enum class Provider {
     Auto,
     Vendor,
-    BatchLAS_SYCL,      // NEW: the portable host-level kernel
-    BatchLAS_CTA,
+    BatchLAS,           // NEW: this op's native implementation, algorithm chosen by the op.
+                        // Deliberately NOT "BatchLAS_SYCL": every BatchLAS provider is SYCL,
+                        // so the suffix carries no information and collides with the
+                        // Backend axis.
+    BatchLAS_CTA,       // algorithm-qualified spellings, for ops that have several
     BatchLAS_Blocked,
     BatchLAS_TwoStage,
     BatchLAS_Jacobi,
     Netlib,
 };
 ```
+
+`Provider` still mixes origin with algorithm, which is not ideal — but the origin question is
+the one the vendor-independence gate has to answer, and it can be answered by a predicate
+rather than by splitting the enum:
+
+```cpp
+inline constexpr bool is_vendor(Provider p) {
+    return p == Provider::Vendor || p == Provider::Netlib;
+}
+```
+
+Expressing the gate as `is_vendor(...)` rather than by enumerating names means adding a
+future algorithm spelling cannot silently escape it.
 
 Fold `BATCHLAS_GEMM_VARIANT` and the four `BATCHLAS_*_VARIANT` knobs into
 `BATCHLAS_<OP>_PROVIDER`, keeping the old spellings as deprecated aliases (they appear in
