@@ -273,6 +273,15 @@ C.view().symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
 Zeroing `C` first (`Matrix::Zeros`, `view().fill_zeros(ctx)`) makes the other
 half defined, not symmetric — mirror it as well.
 
+**`gemm` handles a heterogeneous batch natively.** When the items of a batch
+carry differing `active_rows`/`active_cols`, `gemm` detects that and routes to
+the heterogeneous path itself, on every backend — there is no separate entry
+point to reach for, and there has never been a `gemm` that could not do this.
+(A `gemm_heterogeneous` alias used to exist in the C++ headers; it forwarded to
+`gemm` with an unchanged argument list and has been removed. The Python
+`gemm_heterogeneous` remains, because it does something `gemm` does not: it
+accepts a list of differently-shaped arrays.)
+
 `symm`, `syrk` and `syr2k` are constrained to **real** `T` and do not instantiate
 for `std::complex`; `hemm`, `herk` and `her2k` are constrained to **complex** `T`
 and do not instantiate for real. `gemm`, `gemv`, `trmm` and `trsm` take both.
@@ -398,9 +407,12 @@ that cannot serve the one you ask for says so at compile time.
   });
   ```
 
-- Entry points whose template parameters cannot be deduced from their arguments —
-  `tridiagonal_solver_buffer_size`, whose arguments are all scalars — keep the
-  explicit `f<Backend, T>(...)` form.
+- Entry points whose template parameters cannot be deduced from their arguments
+  keep the explicit `f<Backend, T>(...)` form. There are two kinds:
+  `tridiagonal_solver_buffer_size`, whose arguments are all scalars; and the six
+  `random_*_with_log10_cond_metric` generators, whose scalar type appears only as
+  `float_t<T>` — an alias template, so a non-deduced context — and in the return
+  type. Spell them `random_with_log10_cond_metric<Backend::CUDA, float>(ctx, …)`.
 
 When you pass an empty option struct *together with* an explicit workspace, name
 the type: `potrf(ctx, A.view(), PotrfOptions{}, ws)`.
@@ -863,8 +875,11 @@ if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
 ```
 
 This applies to the whole surface, extensions included: `ortho`, `syevx`,
-`lanczos`, `steqr`, `stedc`, the `sytrd_*` and `syev_*` family and the rest all
-take their backend from the queue.
+`lanczos`, `steqr`, `stedc`, the `sytrd_*` and `syev_*` family, `cond` and
+`cond_buffer_size` all take their backend from the queue. The exception is the
+handful of entry points whose remaining template parameters are not deducible
+from their arguments, listed under "Which spelling each entry point takes"
+above — they have no queue-deducing overload and must name the backend.
 
 ### Getting the compile-time backend
 
