@@ -329,7 +329,7 @@ linchpin; WP3–WP7 are the genuinely new numerics.
 
 *No kernels. Pure enabling work.*
 
-1. Add `Provider::BatchLAS_SYCL`; widen `DispatchPolicy::order`.
+1. Add `Provider::BatchLAS` and the `is_vendor()` predicate; widen `DispatchPolicy::order`.
 2. Give `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `hemm`, `syrk`, `herk`, `syr2k`, `her2k`,
    `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `spmm` a `choose_*_provider`
    following the `choose_ormqr_provider` pattern (`ormqr.hh:161`).
@@ -351,11 +351,29 @@ single `kProviderCount` constant rather than bumping four literals.
 
 Move `symm_custom_dispatch`, `syrk_custom_dispatch`, `syr2k_custom_dispatch`,
 `trmm_custom_dispatch`, `triangular_expand.hh`, and the `*_triangular_tiles.hh` /
-`syrk_gram_tiles.hh` family from `src/backends/` to `src/sycl/level3/`. Retarget the
-terminal GEMM from `gemm_cublasdx(...)` to `sycl_gemm::gemm_custom(...)`. Instantiate for
-`Backend::SYCL` and for `Backend::ROCM`.
+`syrk_gram_tiles.hh` family from `src/backends/` to `src/sycl/level3/`, and instantiate them
+for every `Backend` rather than only CUDA.
 
-Two things to preserve carefully:
+**The terminal GEMM is a design decision, not a rename — this is why WP1 is not mechanical.**
+The first draft said "retarget `gemm_cublasdx(...)` to `sycl_gemm::gemm_custom(...)`". That is
+wrong in both directions:
+
+- `gemm_cublasdx(...)` is not a cuBLASDx call in this build. MathDx is not found
+  (`configure`: *"MathDx package not found; cuBLASDx/cuSolverDx wrappers will remain
+  disabled"*), so `cublasdx_gemm_variant_available()` is false and every path falls through to
+  `gemm_vendor_cuda_raw(...)` (`gemm_cublasdx_dispatch.cc:300-305,348`). The expansions
+  currently terminate in **raw cuBLAS**.
+- Hardcoding `sycl_gemm::gemm_custom(...)` instead would be a genuine regression. That
+  function is the *unrouted* native kernel; its fast 128×128 path is float-NN-square-aligned
+  only, so symm/trmm would lose cuBLAS for every shape outside that envelope even on a machine
+  that has cuBLAS installed.
+
+The correct target is the **public, already-routing entry point** `gemm<Back, T>(...)`
+(`cublas.cc:158-179`), which selects cuBLASDx → heterogeneous-vendor → native SYCL → vendor in
+that order. Calling it means the expansions inherit whatever WP0 decides, per shape, with no
+duplicated routing logic and no hardcoded vendor assumption.
+
+Three things to preserve carefully:
 
 - The measured crossovers. `expand+gemm` loses to a per-batch vendor loop for
   `batch <= 2 && n <= 128` on symm/hemm; trmm wins everywhere because `cublas?trmm` has a
@@ -367,10 +385,20 @@ Two things to preserve carefully:
   tempting 8× "fix" was the wrong-answer one and the guarding test could not fail by
   construction. Re-check the test actually discriminates before touching that file.
 
+A fourth item, small but blocking: `cublasdx_dispatch_common.hh` includes
+`<cuda_runtime_api.h>` (line 6) purely so that `cuda_stream_from_queue` can name
+`cudaStream_t`. The other five helpers in it — `ceil_div`, `parse_cublasdx_variant_request`,
+`is_gpu_queue`, `should_use_cublasdx`, `throw_forced_cublasdx_unavailable` — are portable and
+are what `triangular_expand.hh` actually needs. Split those into a backend-neutral header;
+that is the only genuine CUDA coupling in the whole family. (The `*_tiles.hh` kernels
+reference CUDA nowhere but in a `BATCHLAS_KERNEL_TRACE_SCOPE` string literal.)
+
 **Deliverable:** symm/hemm/herk/her2k/syrk/syr2k/trmm available with zero vendor libraries,
 and available on ROCm for the first time.
 
-**Effort:** medium, mostly mechanical. **Risk:** low-medium.
+**Effort:** medium. **Risk:** medium — the terminal-GEMM retarget above is a behaviour
+change on a path with measured crossovers, not a code move. **Depends on WP0**, because the
+routing it should defer to is what WP0 defines.
 
 ### WP2 — GEMM: close the envelope
 
