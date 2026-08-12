@@ -154,6 +154,35 @@ TEST(RouteVocabulary, LegacyGemmVariantSyclSelectsRegisterTiled) {
         << "a diagnostic must be able to quote the spelling the user typed";
 }
 
+TEST(RouteVocabulary, LegacyGemmNativeMeansRawCudaNotBatchLAS) {
+    // THE TRAP. BATCHLAS_GEMM_VARIANT=native is gemm_variant.hh's alias for
+    // cuda-native / direct-cuda -- the RAW CUDA path. GemmVariantRequest::Native
+    // is consumed purely as an exclusion (both gemm_use_sycl_custom and
+    // gemm_use_cublasdx_custom return false for it), so the call lands in
+    // gemm_vendor_impl. The same word means the opposite thing in the canonical
+    // vocabulary, where "native" is BatchLAS's own kernel.
+    //
+    // Routing it through the canonical parser would silently flip GEMM from
+    // vendor to native for anyone who had set it. Caught by the route
+    // equivalence diff; pinned here so it cannot come back.
+    for (const char* spelling : {"native", "cuda-native", "direct-cuda"}) {
+        const auto legacy = parse_legacy_route_value(Op::gemm, spelling);
+        ASSERT_TRUE(legacy.has_value()) << spelling;
+        EXPECT_TRUE(is_vendor(*legacy))
+            << "legacy GEMM '" << spelling << "' means the raw CUDA path, i.e. vendor";
+    }
+
+    // The canonical spelling is unaffected: there, native means native.
+    const auto canonical = parse_route_value("native");
+    ASSERT_TRUE(canonical.has_value());
+    EXPECT_TRUE(is_native(*canonical));
+
+    // And the collision is GEMM-specific -- no other op had that alias.
+    const auto other = parse_legacy_route_value(Op::syev, "native");
+    ASSERT_TRUE(other.has_value());
+    EXPECT_TRUE(is_native(*other));
+}
+
 TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
     ClearRouteEnv clear(Op::trmm);
     ScopedEnv set("BATCHLAS_TRMM_VARIANT", "vendor");

@@ -127,6 +127,30 @@ inline Route legacy_unset_default(Op op) {
     }
 }
 
+// Legacy values whose meaning does NOT match the canonical vocabulary.
+//
+// THE TRAP: `BATCHLAS_GEMM_VARIANT=native` does not mean "BatchLAS's own
+// kernel". It is gemm_variant.hh's alias for `cuda-native` / `direct-cuda` --
+// the raw CUDA path -- and GemmVariantRequest::Native is consumed only as an
+// EXCLUSION: both gemm_use_sycl_custom and gemm_use_cublasdx_custom return
+// false for it, so the call falls through to gemm_vendor_impl. In the canonical
+// vocabulary that is Origin::Vendor.
+//
+// So the same word means opposite things in the two vocabularies. Mapping it
+// through the generic parser would flip GEMM from vendor to native for anyone
+// who had set it -- silently, and only for that one spelling. Caught by
+// tests/route_gemm_equivalence_tests.cc; do not "simplify" this away.
+inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw) {
+    const std::string v = route_lowercase(std::string(raw));
+
+    if (op == Op::gemm) {
+        if (v == "native" || v == "cuda-native" || v == "direct-cuda") {
+            return Route{Origin::Vendor, Algorithm::Direct};
+        }
+    }
+    return parse_route_value(v);
+}
+
 struct ParsedRouteEnv {
     Route route{};
     RouteRequestSource source{};
@@ -157,7 +181,9 @@ inline ParsedRouteEnv parse_route_env(Op op) {
         const std::string key(legacy);
         if (const char* raw = std::getenv(key.c_str()); raw && *raw) {
             out.source = {key, raw, true};
-            if (const auto r = parse_route_value(raw)) {
+            // The LEGACY parser, not the canonical one -- see the note on
+            // parse_legacy_route_value: "native" means opposite things.
+            if (const auto r = parse_legacy_route_value(op, raw)) {
                 out.route = *r;
                 out.found = true;
             } else {
