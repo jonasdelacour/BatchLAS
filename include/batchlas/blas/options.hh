@@ -19,6 +19,15 @@
 //     gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
 //     syev(ctx, A, W, {.jobz = JobType::EigenVectors});
 //
+// Structs here are named *Options and belong to this convenience layer: the
+// backend comes from the Queue, T is deduced from the matrices, the struct
+// carries every non-matrix argument, and the workspace may be omitted. The
+// *Params structs in blas/extensions.hh and blas/functions/iluk.hh are a
+// different thing -- ordinary arguments to entry points that have no
+// convenience layer. The suffix does not tell you where the struct sits in the
+// argument list; see docs/cpp-api.md, "*Options and *Params are two different
+// things", for the table.
+//
 // rather than
 //
 //     gemm<Backend::CUDA, float>(ctx, A, B, C, 2.0f, 0.0f, Transpose::Trans,

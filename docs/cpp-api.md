@@ -316,6 +316,32 @@ These take a workspace. Leave it out and it is leased from the queue's arena; se
   workspaces — take `Span<T>`. `UnifiedVector<T>`, the owning USM array,
   converts implicitly; `to_span()` is explicit. A `Vector<T>` is not a `Span`.
 
+The same rule extends to the extension surface (`steqr`, `stebz`, `stein`,
+`stedc`, `lanczos`, `ritz_values`): a parameter takes `VectorView<T>` when it is
+one logical vector *per batch item* and so needs `inc`/`stride`/`batch_size`, and
+`Span<T>` when it is a flat array with one entry per item or per matrix and no
+stride freedom. `stebz` shows both in one call — `d`, `e` and `w` are
+`VectorView<T>` (strided, per item), while `m`, the per-item eigenvalue count, is
+`Span<int32_t>`. The two are deliberately not interconvertible: a `VectorView`
+demoted to a `Span` would drop the stride and read the wrong elements rather than
+fail to compile.
+
+What to write at the call site, by owning type:
+
+| you hold | parameter is `Span<T>` | parameter is `VectorView<T>` |
+| --- | --- | --- |
+| `UnifiedVector<T>` | pass it directly (implicit), or `.to_span()` | `VectorView<T>(v, size, batch, Inc{i}, Stride{s})` |
+| `Vector<T>` | `.data()` — the whole allocation, so only when `inc == 1` and it is packed | `.view()`, always |
+| raw pointer | `Span<T>(p, n)` | `VectorView<T>(p, size, batch, Inc{i}, Stride{s})` |
+
+`Vector<T>::view()` is required whenever `T` has to be *deduced* from the
+argument, which is every templated entry point: the implicit
+`VectorView(const Vector<T>&)` conversion exists but template argument deduction
+never considers user-defined conversions. Several entry points also ship an
+owning-`Vector` forwarding overload so the bare `Vector` works — `stebz`,
+`stein`, `steqr`, `steqr_cta` and `stedc` all do — but `.view()` is the spelling
+that works everywhere.
+
 `pivots` is `int64_t`, `tau` is `T`, and `W` is the real counterpart of `T`
 (`float` for `std::complex<float>`).
 
@@ -329,15 +355,24 @@ Vector<float> x(n, /*batch_size=*/batch), y(m, batch);   // owning USM vectors
 gemv(ctx, A.view(), x.view(), y.view(), {.alpha = 1.0f});
 ```
 
-**`Vector` and `VectorView` take `inc` and `stride` in opposite orders.** It is
-`Vector<T>(size, batch_size, stride, inc)` and
-`VectorView<T>(ptr, size, batch_size, inc, stride)`. Both parameters are `int`
-and both default — `inc` to 1, `stride` to `size * inc` — so a pair passed in
-the other order compiles and reads the wrong elements. Read the argument order
-off the constructor you are calling, every time.
+**`Vector` names `inc` and `stride`; `VectorView` still takes them positionally,
+in the opposite order.** Write `Vector<T>(size, batch_size, Stride{s}, Inc{i})`.
+The bare-int spellings `Vector<T>(size, batch_size, stride, inc)` and
+`Vector<T>(size, batch_size, stride)` are `= delete`d and no longer compile.
+`VectorView<T>(ptr, size, batch_size, inc, stride)` keeps its positional form —
+138 call sites use it and all of them are correct — and gains
+`VectorView<T>(ptr, size, batch_size, Inc{i}, Stride{s})` alongside it. The tags
+exist because the two orders are otherwise indistinguishable: both parameters are
+`int`, both default, and `(inc = n, stride = 1)` fits exactly the same buffer as
+`(inc = 1, stride = n)`, so a pair passed in the other order used to compile and
+read the wrong elements with no diagnostic. Prefer the tagged spelling on both
+types. `Stride`, `Inc`, `Ld` and `BatchSize` live in `batchlas/blas/matrix.hh`
+next to `NonZeros`; like `NonZeros` they are explicit in and do not decay back to
+`int`.
 
-`Vector<T>::zeros(size, batch_size, stride, inc)`, `::ones(...)` and
-`::standard_basis(size, index, batch_size, stride)` build one directly.
+`Vector<T>::zeros(size, batch_size, Stride{s}, Inc{i})`, `::ones(...)`,
+`::random(...)` and `::standard_basis(size, index, batch_size, Stride{s})` build
+one directly; their bare-int forms are deleted the same way.
 
 ## Options are structs with defaults
 
@@ -384,6 +419,46 @@ and `trans` everywhere else.
 type"; the other values are `F32`, `F64`, `F16`, `BF16` and `TF32`, and a backend
 that cannot serve the one you ask for says so at compile time.
 
+### `*Options` and `*Params` are two different things
+
+Two suffixes appear on argument structs and they are not interchangeable.
+
+`*Options` structs live in `batchlas/blas/options.hh` and belong to the
+convenience layer: the backend comes from the `Queue`, `T` is deduced from the
+matrices, the struct carries every non-matrix argument, and — for the LAPACK
+entry points — the workspace may be omitted. `gemm`, `gemv`, `symm`, `hemm`,
+`herk`, `her2k`, `syrk`, `syr2k`, `trmm`, `trsm`, `potrf`, `getrs`, `syev`,
+`ormqr` and `gesvd` have one, and `ortho`'s lives in `extensions.hh`.
+
+`*Params` structs live in `batchlas/blas/extensions.hh` and
+`batchlas/blas/functions/iluk.hh`. They are ordinary arguments to entry points
+that have no convenience layer: you still name the backend
+(`syevx<Backend::CUDA, float>`) and you still pass a workspace.
+
+The suffix alone does not tell you where the struct sits in the argument list,
+so read the declaration. The last two rows are why:
+
+| struct | entry points | where it sits |
+| --- | --- | --- |
+| `SyevxParams<T>` | `syevx`, `syevx_buffer_size`, `syevx_resolve_range` | last, after `workspace`, `jobz`, `V` |
+| `LanczosParams<T>` | `lanczos`, `lanczos_buffer_size` | last |
+| `StebzParams<T>` | `stebz`, `stebz_buffer_size` | last, after `ws` |
+| `SteinParams<T>` | `stein` | last |
+| `SteqrParams<T>` | `steqr`, `steqr_cta` | **second to last** — `eigvects` follows |
+| `StedcParams<T>` | `stedc`, `stedc_buffer_size` | **second to last** — `eigvects` follows |
+| `JacobiParams<T>` | `syev_jacobi_cta` and its `_buffer_size` | last |
+| `GesvdjParams<T>` | `gesvdj_cta` and its `_buffer_size` | last |
+| `SytrdBandReductionParams` | `sytrd_band_reduction` | **replaces** the `int32_t block_size` argument |
+| `ILUKParams<T>` | `iluk_factorize`, `iluk_buffer_size` | the only non-matrix argument — behaves like an `*Options` struct |
+
+The structs were deliberately not renamed to make this visible in the name. The
+rule a rename would have encoded — "`*Options` replaces the positional
+arguments, `*Params` is extra tuning appended after the workspace" — is false for
+four of the ten above: `ILUKParams` and `SytrdBandReductionParams` play the
+`*Options` role exactly, and `SteqrParams` and `StedcParams` are not last.
+Renaming on a rule that does not hold would have moved the inaccuracy from the
+docs into the type names, where it is harder to correct.
+
 ### Which spelling each entry point takes
 
 - The dense BLAS calls — `gemm`, `gemv`, `symm`, `hemm`, `herk`, `her2k`, `syrk`,
@@ -413,6 +488,17 @@ that cannot serve the one you ask for says so at compile time.
   `random_*_with_log10_cond_metric` generators, whose scalar type appears only as
   `float_t<T>` — an alias template, so a non-deduced context — and in the return
   type. Spell them `random_with_log10_cond_metric<Backend::CUDA, float>(ctx, …)`.
+
+- The sizing calls whose only `T`-bearing argument is an option struct —
+  `stebz_buffer_size`, `stein_buffer_size`, and `stedc_buffer_size` — take that
+  struct as a REQUIRED argument, with no default, for exactly this reason: a
+  default would make `stebz_buffer_size(ctx, n, batch)` look available while `T`
+  had nowhere to come from, and the diagnostic is not a deduction error pointing
+  at the declaration but "no matching function" from the queue-deducing wrapper,
+  which probes the call in its requires-clause and silently drops itself when the
+  substitution fails. Pass `StebzParams<float>{}` for the defaults and the call
+  deduces both the backend and `T`:
+  `stebz_buffer_size(ctx, n, batch, StebzParams<float>{})`.
 
 When you pass an empty option struct *together with* an explicit workspace, name
 the type: `potrf(ctx, A.view(), PotrfOptions{}, ws)`.
@@ -452,12 +538,32 @@ and in `MatrixView(data, rows, cols, ld, stride, batch)`, and the resolution is
 deterministic: `Matrix(rows, cols, batch)` allocates exactly `rows * cols * batch`
 elements with `ld() == rows()` and `stride() == rows() * cols()`. Nothing pads.
 
-**The indices are `int`.** `rows`, `cols`, `ld`, `stride` and `batch_size` are
-`int`, and element access evaluates `b * stride + j * ld + i` in `int`
-arithmetic, so the largest index a matrix addresses —
-`(batch_size - 1) * stride + (cols - 1) * ld + rows - 1` — must stay below
-2³¹ (about 2.1·10⁹ elements, 8 GB of `float`). Past that the index overflows
-silently. Split the batch across several matrices to go further.
+**The shape fields are `int`; the addresses are not.** `rows`, `cols`, `ld`,
+`stride` and `batch_size` are `int`, but element access evaluates
+`int64_t(b) * stride + j * ld + i`, so the batch term does not overflow. It used
+to: a 512×512 `float` matrix has `stride == 262144`, and the old all-`int`
+product wrapped at `b == 8192`, a batch size this library is built for. What
+remains `int` is `j * ld + i`, the offset *within* one batch item, which can only
+overflow on a single matrix above 2³¹ elements (8 GB of `float`) — more than the
+library can allocate anyway. `KernelMatrixView::operator()` and `::batch_item`,
+`Matrix::operator()`, `MatrixView::at` and `::batch_item`, `Vector::at` and
+`VectorView::at` are all widened the same way, and the debug asserts that guard
+them now compare `int64_t` against `int64_t` rather than an already-wrapped `int`
+against a `size_t`.
+
+`MatrixView`'s constructor validates what it safely can.
+`MatrixView(data, rows, cols, ld, stride, batch_size)` throws
+`std::invalid_argument` on a negative `rows`, `cols`, `ld`, `stride` or
+`batch_size`, and on a resolved `ld` smaller than `rows`. That last check is the
+one that matters: the batch count is the *third* argument on `Matrix` and the
+*sixth* here, so a caller who learned the order from `Matrix A(n, n, batch)`
+writes `MatrixView<float> V(p, n, n, batch)`, which means `ld = batch`,
+`stride = batch * n`, `batch_size = 1`. That used to be accepted silently and
+produced plausible-looking wrong numbers; it now throws, and the message names
+the spelling you meant. Two things it deliberately does *not* reject: a null
+`data` pointer or a zero dimension, because a shape-only view is the standard
+idiom for a workspace-size query; and `stride < ld * cols`, which the owning
+`Matrix` constructor does reject but which some existing views rely on.
 
 **`stride = 0` is the packed default, not cuBLAS's broadcast.** BatchLAS has no
 broadcast operand: every operand carries a full batch, and unequal batch sizes
@@ -627,8 +733,16 @@ B.view().fill_zeros(ctx);
 `fill_triangular`, `fill_tridiag`, `fill_tridiag_toeplitz`, `fill_random` and
 `fill_triangular_random` are in `batchlas/blas/matrix.hh`, alongside
 `fill_random_sparse_hermitian` for CSR. Most have a `(const Queue&, ...)` form
-and a form that builds a queue of its own; `fill_identity` and `fill_tridiag`
-take a queue.
+and a form that builds a queue of its own; `fill_identity`, `fill_tridiag`,
+`fill_zeros` and `fill_ones` take a queue and nothing else. The queue-less
+`fill_zeros()` / `fill_ones()` forwarders are gone, along with the `= Queue()`
+defaults on `set_access_device`, `set_preferred_location` and `prefetch` on
+`Matrix`, `MatrixView`, `Vector` and `VectorView`. A default-constructed `Queue`
+is not a handle to a shared queue: it builds a fresh `QueueImpl` on
+`Device::default_device()`, so those spellings targeted the wrong device on a
+multi-GPU box and carried a throwaway workspace arena that nothing could reuse.
+The remaining queue-less `fill_*` forwarders have the same caveat — pass your own
+queue.
 
 Two more `MatrixView` helpers work on a matrix that already holds one triangle —
 the shape `syrk`, `herk`, `syr2k`, `her2k` and the `uplo`-reading factorisations
@@ -780,12 +894,41 @@ Matrix<float, MatrixFormat::CSR> S(values, row_offsets, col_indices,
 
 `MatrixView` mirrors both.
 
+`NonZeros{}` is a **capacity**, not a count. `nnz()` returns it, and
+`convert_to<MatrixFormat::CSR>()` sizes a whole batch by its *largest* item, so on
+a heterogeneous batch — which is the normal result of that conversion — `nnz()`
+over-counts every smaller item, and `for (int k = 0; k < S.nnz(); ++k)` walks past
+that item's row range into slots the conversion never wrote. Three accessors, on
+`Matrix`, `MatrixView` and `KernelMatrixView` alike:
+
+- **`nnz()`** — the per-item stride of the batch. Unchanged, and what the vendor
+  SpMM descriptors want: `cusparseCreateCsr` and `rocsparse_create_csr_descr` are
+  handed one number for the whole strided batch, and the capacity is the correct
+  one there.
+- **`nnz(b)`** — the non-zeros batch item `b` actually stores, read from that
+  item's row offsets. Requires the kernel that filled the offsets to have
+  completed. On a `MatrixView` over `sycl::malloc_device` memory the host cannot
+  read the offsets, so use the `KernelMatrixView` overload inside a kernel instead.
+- **`nnz_capacity()`** — the slots that were allocated per item. Equal to `nnz()`
+  for both allocating constructors, but the from-data constructor lets
+  `matrix_stride` exceed the declared count, and it is `matrix_stride` that sizes
+  the buffers.
+
 ## What gets thrown
+
+The split is by *cause*, not by site: `std::invalid_argument` for anything
+determined by the caller's arguments — shapes, `ld`, workspace size, pointer
+reachability — and `std::runtime_error` only for environment and backend
+failures, such as a backend that is not compiled into this build or a vendor
+route with no implementation for the requested arguments. Code that used to
+catch `std::runtime_error` on a shape mismatch must now catch
+`std::invalid_argument`; through the Python bindings the same paths changed from
+`RuntimeError` to `ValueError`.
 
 | exception | thrown for |
 | --- | --- |
-| `std::invalid_argument` | a pointer that is not reachable from the queue's device (from the queue-dispatching entry points); `Matrix`/`MatrixView` construction and slicing — null data, non-positive dimensions, an `ld` that is neither `0` nor at least `rows`, too short a source span, a `to_column_major` row pitch that does not fit or a defaulted one on a matrix that is not packed; shape errors from `gesvd` and the extension routines |
-| `std::runtime_error` | shape and batch-size mismatches from the dense BLAS backends (`"GEMM: incompatible matrix dimensions"`, `"SYMM: batch size mismatch (A=…, B=…, C=…)"`); a backend that is not compiled into this build; a `Queue` used from a thread other than its owner; a raw-pointer view with no `data_ptrs` array |
+| `std::invalid_argument` | everything the caller controls: a pointer that is not reachable from the queue's device (from the queue-dispatching entry points); shape and batch-size mismatches from the dense BLAS backends (`"GEMM: incompatible matrix dimensions"`, `"SYMM: batch size mismatch (A=…, B=…, C=…)"`) and `trsm`'s shape, `lda` and `ldb` checks; the LAPACK-style shape preconditions (`"getrf: A must be square, got 100x50"`, `"getrs: A.rows() (8) must equal B.rows() (4)"`, `"geqrf: tau holds 4 elements, needs at least 16"`); a workspace or output span too short for the chosen provider; `Matrix`/`MatrixView` construction and slicing — null data, non-positive dimensions, an `ld` that is neither `0` nor at least `rows`, too short a source span, a `to_column_major` row pitch that does not fit or a defaulted one on a matrix that is not packed; shape errors from `gesvd` and the extension routines |
+| `std::runtime_error` | environment and backend failures only: a backend that is not compiled into this build; a route with no implementation for the requested arguments (`"BATCHLAS_TRMM_VARIANT=cublasdx only supports float"`, `gesvd`'s vendor route on thin singular vectors); a `Queue` used from a thread other than its owner; a raw-pointer view with no `data_ptrs` array |
 | `std::out_of_range` | `V.at(i, j, b)` / `V(i, j, b)` outside the view |
 
 Catch `std::exception` at the boundary; the message names the routine and the
@@ -797,10 +940,27 @@ Errors that the device reports asynchronously surface at
 The backend that runs the call validates the BLAS-2 and BLAS-3 shapes: `gemm`
 checks every batch item, `symm`, `hemm`, `herk`, `her2k`, `syrk`, `syr2k` and
 `trmm` check shapes and batch sizes, and `trsm` checks shapes, `lda` and `ldb`.
-The LAPACK-style calls — `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`,
-`syev` — and `trsm`'s batch sizes reach the vendor call as written, so hold to
-the shapes in *What the operations compute*: `potrf`'s operand square, `getrs`'s
-`B` at the same batch size as its `A`, and so on.
+The queue-dispatching LAPACK-style calls — `potrf`, `getrf`, `getrs`, `getri`,
+`geqrf`, `orgqr`, `syev` written without an explicit `<Backend>` — check their
+shapes host-side before any device work, and throw `std::invalid_argument` on a
+mismatch. `potrf`, `getrf`, `getri` and `syev` require a square `A`; `getrs`
+additionally requires `A.rows() == B.rows()` and a matching batch size, and
+`getri` the same of `Ainv`. The output spans must be long enough: `pivots` at
+least `A.rows() * batch_size`, `tau` at least
+`min(A.rows(), A.cols()) * batch_size`, `W` at least `A.rows() * batch_size`.
+Oversized spans are fine — the test is `>=`, so slicing one arena across several
+calls still works. `geqrf` and `orgqr` deliberately have no squareness check:
+rectangular `A` is the point.
+
+This matters most for `getrf`. A rectangular `A` used to reach the vendor call as
+written, and the backends did not agree about what that meant — the netlib path
+factorised an `A.rows()` × `A.rows()` block and read and wrote past the end of a
+tall `A`'s allocation, cuBLAS's batched `getrf` takes one dimension and is
+square-only by construction, and rocSOLVER genuinely handled the rectangular
+case. Now all three reject it the same way.
+
+The `f<Backend::CUDA>(ctx, …)` spelling is the library's own inner-loop form and
+skips these checks by design, so the cost stays off the hot path.
 
 **No factorisation reports per-item numerical status.** `potrf`, `getrf` and
 `geqrf` have no `info` argument and no status output. A batch item that is not
