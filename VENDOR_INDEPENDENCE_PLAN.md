@@ -91,6 +91,27 @@ That logic is portable — it is workspace management plus a batched GEMM — bu
   prior investigation the cuBLASDx header is never actually defined in this build, so every
   "cublasdx" route is silently its fallback.
 
+One asymmetry worth knowing before scheduling WP1 against WP2. Unlike GEMM, these four are
+**already the default where their heuristics fire**: `parse_cublasdx_variant_request`
+(`cublasdx_dispatch_common.hh:22-30`) returns `auto_variant` when its env var is unset, and
+`syrk_route_request` (`syrk_custom_dispatch.cc:45-48`) likewise returns `SyrkRoute::Auto`.
+So `syrk`'s triangular-tile and gram-tile kernels, and the symm/hemm/trmm expansions, are
+exercised in production today. Only GEMM is vendor-by-default. That makes WP1 a relocation
+of *already-trusted* code, and it means the genuine default-vendor gap is WP2.
+
+Type coverage splits in two here, and the split matters:
+
+- `triangular_expand.hh` — the expand-then-gemm machinery behind symm/hemm/trmm — **is**
+  templated on `T` (`triangular_expand.hh:85,163`) and serves every scalar type. This is the
+  part with the measured 6.7–8.8×.
+- The **tile-masked kernels** and their routing — `syrk_triangular_tiles.hh`,
+  `syrk_gram_tiles.hh`, `trmm_triangular_tiles.hh`, `syr2k_triangular_tiles.hh` and all four
+  `*_custom_dispatch.hh` — are declared on `MatrixView<float, ...>` and are **float-only**.
+  Double and complex `syrk`/`syr2k`/`trmm` therefore reach the vendor regardless.
+
+WP1 relocates both; extending the tile kernels to the other three scalar types is a separate
+item, and it inherits WP2's register-budget problem for wide scalars.
+
 Consequence: on ROCm, `symm`, `hemm`, `herk` and `her2k` **do not exist at all** —
 `rocblas.cc` instantiates only `gemm`, `gemv`, `trsm`, `syrk`, `syr2k`, `trmm`. The Class B
 work is therefore not merely a vendor-independence item; it is the fix for a backend that is
