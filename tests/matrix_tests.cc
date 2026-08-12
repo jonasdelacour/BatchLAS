@@ -346,6 +346,84 @@ TEST(MatrixDenseTest, ConstructionFromDataDefaultStridePaddedBatched) {
     }
 }
 
+// clone() allocated a packed rows * cols * batch buffer and then flat-copied
+// data_, whose length is stride_ * batch_size_. For any padded matrix the copy
+// was longer than the destination -- a heap write past the end -- and the
+// clone's ld_/stride_ then described a buffer that was never allocated. The
+// size assertions below fail deterministically without the fix; the value
+// assertions cover the reads that followed.
+TEST(MatrixDenseTest, ClonePreservesPaddedLeadingDimension) {
+    constexpr int rows = 4, cols = 3, ld = 8, batch = 2;
+    std::vector<float> src(ld * cols * batch, -1.0f);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                src[b * ld * cols + j * ld + i] = static_cast<float>(b * 100 + j * 10 + i);
+            }
+        }
+    }
+
+    Matrix<float, MatrixFormat::Dense> mat(src.data(), rows, cols, ld, 0, batch);
+    ASSERT_EQ(mat.data().size(), static_cast<size_t>(ld) * cols * batch);
+
+    auto copy = mat.clone();
+    EXPECT_EQ(copy.ld(), ld);
+    EXPECT_EQ(copy.stride(), ld * cols);
+    // The clone must own as many elements as it claims, or the copy above ran past it.
+    EXPECT_EQ(copy.data().size(), mat.data().size());
+
+    auto view = copy.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_EQ(view(i, j, b), static_cast<float>(b * 100 + j * 10 + i));
+            }
+        }
+    }
+}
+
+// Same defect reached through the allocating constructor, which additionally
+// allows a stride with gaps between batch items (stride > ld * cols).
+TEST(MatrixDenseTest, ClonePreservesGappedBatchStride) {
+    constexpr int rows = 3, cols = 2, ld = 5, stride = 16, batch = 3;
+    Matrix<float, MatrixFormat::Dense> mat(rows, cols, batch, ld, stride);
+    ASSERT_EQ(mat.data().size(), static_cast<size_t>(stride) * batch);
+
+    auto fill = mat.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                fill(i, j, b) = static_cast<float>(b * 100 + j * 10 + i);
+            }
+        }
+    }
+
+    auto copy = mat.clone();
+    EXPECT_EQ(copy.ld(), ld);
+    EXPECT_EQ(copy.stride(), stride);
+    EXPECT_EQ(copy.data().size(), mat.data().size());
+
+    auto view = copy.view();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < cols; ++j) {
+            for (int i = 0; i < rows; ++i) {
+                EXPECT_EQ(view(i, j, b), static_cast<float>(b * 100 + j * 10 + i));
+            }
+        }
+    }
+}
+
+// A default-initialised MatrixView (as opposed to a value-initialised one) left
+// rows_/cols_/batch_size_ indeterminate, which queue-dispatch.hh's USM check
+// reads through addresses_no_elements() to decide whether a null data pointer is
+// legal. They are zero-initialised now, so an empty view reports an empty shape.
+TEST(MatrixDenseTest, DefaultInitialisedViewHasAZeroShape) {
+    MatrixView<float, MatrixFormat::Dense> view;
+    EXPECT_EQ(view.rows(), 0);
+    EXPECT_EQ(view.cols(), 0);
+    EXPECT_EQ(view.batch_size(), 0);
+}
+
 TEST(MatrixDenseTest, ConstructionFromDataThrowsOnBadShape) {
     using DenseMatrix = Matrix<float, MatrixFormat::Dense>;
     std::vector<float> src(16, 1.0f);

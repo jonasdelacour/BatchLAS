@@ -532,10 +532,19 @@ namespace batchlas {
                     // it is what the copies below need room for.
                     return Matrix<T, MType>(rows_, cols_, NonZeros{matrix_stride_}, batch_size_);
                 } else {
-                    return Matrix<T, MType>(rows_, cols_, batch_size_);
+                    // The clone has to be allocated in *this* matrix's layout, not a
+                    // packed one: the copy below is a flat std::copy of data_, whose
+                    // length is stride_ * batch_size_. Allocating (rows_, cols_,
+                    // batch_size_) gives a packed rows_ * cols_ * batch_size_ buffer,
+                    // so any padded matrix (ld_ > rows_, or a stride_ with gaps between
+                    // batch items) overran the destination -- a heap write past the end.
+                    // Passing ld_ and stride_ makes the two extents equal by
+                    // construction, which is also what makes the result.ld_/result.stride_
+                    // assignment below describe the buffer that is actually there.
+                    return Matrix<T, MType>(rows_, cols_, batch_size_, ld_, stride_);
                 }
             }();
-            
+
             // Copy main data
             std::copy(data_.begin(), data_.end(), result.data_.begin());
             
@@ -851,9 +860,19 @@ namespace batchlas {
 
         // Access single matrix in batch (returns view for a single matrix)
         MatrixView<T, MType> operator[](int i) const;
-        
+
         // Common data members
-        int rows_, cols_, batch_size_;
+        //
+        // Initialized, unlike the bare declaration this used to be. MatrixView has a
+        // defaulted default constructor (above), so `MatrixView<T, Dense> V;` -- the
+        // ordinary spelling for an optional output operand, and already used ~17 times
+        // under src/extensions/ -- left these three indeterminate. That was harmless
+        // until queue-dispatch.hh's USM check began reading them through
+        // addresses_no_elements() to decide whether a null data pointer is legal;
+        // garbage extents make it take the wrong branch and throw "The pointer is null."
+        // on a valid call. ld_ and stride_ below have always carried initializers; these
+        // were the outliers.
+        int rows_ = 0, cols_ = 0, batch_size_ = 0;
 
         // Data access
         Span<T> data() const { return data_; }
