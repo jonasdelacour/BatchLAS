@@ -3,6 +3,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas
 {
@@ -55,9 +56,29 @@ namespace batchlas
         return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type, conds, workspace);
     }
 
+    // Workspace size for the `cond` overload above.
+    //
+    // This used to be declared as a non-template function hardwired to float,
+    // while the only definition (src/extra/cond.cc) was a template -- so the
+    // symbol the header promised did not exist and any caller got an undefined
+    // reference. The declaration now matches the definition.
+    //
+    // Instantiated for T in {float, double} with MF == MatrixFormat::Dense only
+    // (see COND_INSTANTIATE in src/extra/cond.cc). Complex `cond` is not
+    // implemented, so any other T or MF is a link error rather than a compile
+    // error; the Python binding reports it as not-implemented instead.
+    template <Backend B, typename T, MatrixFormat MF>
     size_t cond_buffer_size(Queue &ctx,
-                            const MatrixView<float, MatrixFormat::Dense> &A,
+                            const MatrixView<T, MF> &A,
                             const NormType norm_type);
+
+    // Forwarding overload (owning A)
+    template <Backend B, typename T, MatrixFormat MF>
+    inline size_t cond_buffer_size(Queue &ctx,
+                            const Matrix<T, MF> &A,
+                            const NormType norm_type) {
+        return cond_buffer_size<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
+    }
 
     //Convenience function which allocates memory internally
     template <Backend B, typename T, MatrixFormat MF>
@@ -198,5 +219,22 @@ namespace batchlas
                             const Matrix<T, MF> &A) {
         return transpose<T,MF>(ctx, MatrixView<T,MF>(A));
     }
+
+    // Backend-deducing overloads: `f(ctx, ...)` takes its backend from the
+    // queue. See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+    //
+    // `norm` and `transpose` above are not Backend-templated, so they need no
+    // dispatch overload -- they already work as written.
+    //
+    // The six random_*_with_log10_cond_metric generators are deliberately
+    // absent. Their scalar type appears only as `float_t<T>` -- an alias
+    // template, hence a non-deduced context -- and in the return type, so `T`
+    // cannot be deduced from the arguments. The macro's requires-clause would
+    // never be satisfied and it would expand to nothing at all, which reads as
+    // if the generators were dispatchable when they are not. They keep the
+    // explicit f<Backend, T>(...) spelling, for the same reason
+    // tridiagonal_solver_buffer_size does.
+    BATCHLAS_DISPATCH_ON_QUEUE(cond)
+    BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)
 
 }

@@ -32,11 +32,15 @@ namespace batchlas {
     Event potrf(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Uplo uplo,
-                Span<std::byte> workspace) {
+                Span<std::byte> workspace,
+                Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        auto info = pool.allocate<int>(ctx, A.batch_size());
+        // rocSOLVER's info is a per-item device array with LAPACK semantics; it
+        // used to be pool scratch nothing read (issue #73). A caller span, when
+        // supplied, replaces the scratch -- so the workspace size is unchanged.
+        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         if (A.batch_size() == 1) {
             call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf, rocsolver_dpotrf, rocsolver_cpotrf, rocsolver_zpotrf,
                 handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), info.data());
@@ -188,11 +192,13 @@ namespace batchlas {
     Event getrf(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
-                Span<std::byte> workspace) {
+                Span<std::byte> workspace,
+                Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        auto info = pool.allocate<int>(ctx, A.batch_size());
+        // See potrf above (issue #73).
+        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ipiv = pivots.as_span<int>();
         if (A.batch_size() == 1) {
             call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf, rocsolver_dgetrf,
@@ -271,11 +277,13 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
-                Span<std::byte> workspace) {
+                Span<std::byte> workspace,
+                Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        auto info = pool.allocate<int>(ctx, A.batch_size());
+        // See potrf above (issue #73).
+        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ipiv = pivots.as_span<int>();
         if (A.data_ptr() != C.data_ptr()) {
             ctx->memcpy(C.data_ptr(), A.data_ptr(), sizeof(T) * static_cast<size_t>(A.stride()) * A.batch_size());
@@ -381,7 +389,7 @@ namespace batchlas {
     template size_t backend::gesvd_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, SvdVectors, SvdVectors);
 
     #define POTRF_INSTANTIATE(fp) \
-    template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>);
+    template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>, Span<int32_t>);
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t potrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo);
     #define SYEV_INSTANTIATE(fp) \
@@ -409,7 +417,7 @@ namespace batchlas {
     #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t orgqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
     #define GETRF_INSTANTIATE(fp) \
-    template Event getrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>);
+    template Event getrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>, Span<int32_t>);
     #define GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t getrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
     #define GETRS_INSTANTIATE(fp) \
@@ -417,7 +425,7 @@ namespace batchlas {
     #define GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t getrs_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Transpose);
     #define GETRI_INSTANTIATE(fp) \
-    template Event getri<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>);
+    template Event getri<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>, Span<int32_t>);
     #define GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t getri_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
 

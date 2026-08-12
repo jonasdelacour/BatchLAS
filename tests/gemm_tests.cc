@@ -462,7 +462,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
         gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = ScalarType(1), .beta = ScalarType(0)});
     }
 
-    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
+    gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -563,7 +563,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
         gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = alpha, .beta = beta});
     }
 
-    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
+    gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -642,13 +642,13 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmForcedCuBLASDxVariant) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn");
-        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+        gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 

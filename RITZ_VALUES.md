@@ -46,7 +46,7 @@ Vector<float> ritz_vals(k, batch);
 auto ritz_vals_view = ritz_vals.view();
 
 // Compute required workspace size
-size_t workspace_size = ritz_values_workspace<Backend::SYCL, float, MatrixFormat::CSR>(
+size_t workspace_size = ritz_values_buffer_size<Backend::SYCL, float, MatrixFormat::CSR>(
     *ctx, A_view, V_view, ritz_vals_view);
 
 // Allocate workspace
@@ -73,7 +73,7 @@ for (int i = 0; i < k; ++i) {
 Matrix<float, MatrixFormat::Dense> A_dense(n, n, batch);
 // ... initialize A_dense ...
 
-size_t workspace_size = ritz_values_workspace<Backend::SYCL, float, MatrixFormat::Dense>(
+size_t workspace_size = ritz_values_buffer_size<Backend::SYCL, float, MatrixFormat::Dense>(
     *ctx, A_dense.view(), V.view(), ritz_vals.view());
 UnifiedVector<std::byte> workspace(workspace_size);
 
@@ -94,7 +94,7 @@ Vector<float> ritz_vals(k, batch);
 // Initialize matrices for each batch...
 
 // Compute Ritz values for all batches
-size_t workspace_size = ritz_values_workspace<Backend::SYCL, float, MatrixFormat::Dense>(
+size_t workspace_size = ritz_values_buffer_size<Backend::SYCL, float, MatrixFormat::Dense>(
     *ctx, A.view(), V.view(), ritz_vals.view());
 UnifiedVector<std::byte> workspace(workspace_size);
 
@@ -138,7 +138,7 @@ Event ritz_values(Queue& ctx,
 ### Workspace Computation
 ```cpp
 template <Backend B, typename T, MatrixFormat MFormat>
-size_t ritz_values_workspace(Queue& ctx,
+size_t ritz_values_buffer_size(Queue& ctx,
                              const MatrixView<T, MFormat>& A,
                              const MatrixView<T, MatrixFormat::Dense>& V,
                              const VectorView<typename base_type<T>::type>& ritz_vals);
@@ -150,7 +150,7 @@ size_t ritz_values_workspace(Queue& ctx,
 - **A**: Input matrix (can be sparse CSR or dense format)
 - **V**: Trial vectors stored as a dense matrix (columns are trial eigenvectors)
 - **ritz_vals**: Output vector to store computed Ritz values
-- **workspace**: Pre-allocated workspace buffer (size from `ritz_values_workspace`)
+- **workspace**: Pre-allocated workspace buffer (size from `ritz_values_buffer_size`)
 
 ## Supported Types
 
@@ -164,4 +164,4 @@ size_t ritz_values_workspace(Queue& ctx,
 - For complex types, the function uses conjugate transpose in the computation
 - The trial vectors in V do not need to be normalized; normalization is handled internally
 - For best results, trial vectors should be orthogonal or nearly orthogonal
-- Workspace memory is automatically managed using the `ritz_values_workspace` function
+- Workspace memory is automatically managed using the `ritz_values_buffer_size` function

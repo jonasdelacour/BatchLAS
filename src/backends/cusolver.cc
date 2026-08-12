@@ -42,18 +42,19 @@ namespace batchlas {
     Event potrf(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
-                    Span<std::byte> workspace) {        
+                    Span<std::byte> workspace,
+                    Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto Lwork = potrf_buffer_size<B>(ctx, descrA, uplo) - BumpAllocator::allocation_size<int>(ctx, 1);
         if (descrA.batch_size() == 1) {
             auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
-            auto info = pool.allocate<int>(ctx, 1);
+            auto info = detail::info_target(ctx, pool, info_out, 1);
             auto status = call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
                 handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
         } else {
-            auto info = pool.allocate<int>(ctx, descrA.batch_size());
+            auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
                 handle, uplo, descrA.rows(), descrA.data_ptrs(ctx).data(), descrA.ld(), info.data(), descrA.batch_size());
         }
@@ -492,7 +493,8 @@ namespace batchlas {
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo, \
-        Span<std::byte>);
+        Span<std::byte>, \
+        Span<int32_t>);
     
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t potrf_buffer_size<Backend::CUDA, fp>( \

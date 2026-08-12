@@ -43,8 +43,12 @@ static void BM_STEQR(minibench::State& state) {
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;
 
-    Vector<T> diags = Vector<T>::random(n, batch, transpose ? 1 : n, transpose ? batch : 1);
-    Vector<T> off_diags = Vector<T>::random(n - 1, batch, transpose ? 1 : n - 1, transpose ? batch : 1);
+    Vector<T> diags = Vector<T>::random(n, batch,
+                                        Stride(static_cast<int>(transpose ? 1 : n)),
+                                        Inc(static_cast<int>(transpose ? batch : 1)));
+    Vector<T> off_diags = Vector<T>::random(n - 1, batch,
+                                            Stride(static_cast<int>(transpose ? 1 : n - 1)),
+                                            Inc(static_cast<int>(transpose ? batch : 1)));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);

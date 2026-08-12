@@ -24,7 +24,7 @@ namespace batchlas {
 
     //Forward declare VectorView with default parameter
     template <typename T = float>
-    struct VectorView;
+    class VectorView;
 
     // Forward declare the backend handle - implementation will be in src/ folder
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
@@ -39,6 +39,56 @@ namespace batchlas {
         constexpr operator int() const = delete;   // no silent decay back to int
     };
     static_assert(std::is_trivially_copyable_v<NonZeros>, "NonZeros must stay trivially copyable");
+
+    // The same treatment for the layout parameters that a positional int list cannot
+    // keep straight. Two concrete confusions motivated these:
+    //
+    //   Vector(size, batch_size, stride, inc)  vs  VectorView(data, size, batch_size, inc, stride)
+    //       -- positions 3 and 4 are swapped between the owning type and its view, both
+    //          are plain int, and the view's only check (a span-length assert) cannot
+    //          tell the two readings apart, because (inc = n, stride = 1) and
+    //          (inc = 1, stride = n) fit in exactly the same buffer. Transliterating one
+    //          into the other therefore reads every element from the wrong address and
+    //          reports nothing. src/sort.hh writes both spellings twenty lines apart.
+    //
+    //   Matrix(rows, cols, batch_size, ld, stride)  vs  MatrixView(p, rows, cols, ld, stride, batch_size)
+    //       -- the batch count is third in one and sixth in the other, so
+    //          `MatrixView<float> V(p, n, n, batch)` compiles and means ld = batch.
+    //
+    // `operator int() const = delete` is the load-bearing part: without it the tag
+    // decays back into the ambiguity it exists to remove.
+    //
+    // Inc and Stride are live on Vector (see below). Ld and BatchSize are declared here
+    // so that the tagged MatrixView spelling, which has to rewrite ~148 call sites and is
+    // therefore a change of its own, does not have to reopen this block to add a second
+    // `Stride` under a different name.
+    struct Inc {
+        int value;
+        explicit constexpr Inc(int v = 1) : value(v) {}
+        constexpr operator int() const = delete;
+    };
+    static_assert(std::is_trivially_copyable_v<Inc>, "Inc must stay trivially copyable");
+
+    struct Stride {
+        int value;
+        explicit constexpr Stride(int v = 0) : value(v) {}
+        constexpr operator int() const = delete;
+    };
+    static_assert(std::is_trivially_copyable_v<Stride>, "Stride must stay trivially copyable");
+
+    struct Ld {
+        int value;
+        explicit constexpr Ld(int v = 0) : value(v) {}
+        constexpr operator int() const = delete;
+    };
+    static_assert(std::is_trivially_copyable_v<Ld>, "Ld must stay trivially copyable");
+
+    struct BatchSize {
+        int value;
+        explicit constexpr BatchSize(int v = 1) : value(v) {}
+        constexpr operator int() const = delete;
+    };
+    static_assert(std::is_trivially_copyable_v<BatchSize>, "BatchSize must stay trivially copyable");
 
     struct SliceEnd {};
     struct Slice { //Default Slice selects entire matrix
@@ -86,8 +136,22 @@ namespace batchlas {
             assert(i < rows_); assert(i >= 0);
             assert(j < cols_); assert(j >= 0);
             assert(b < batch_size_); assert(b >= 0);
-            assert(b * stride_ + j * ld_ + i < batch_size_ * stride_);
-            return data_[b * stride_ + j * ld_ + i]; }
+            // Both sides in int64_t. The old form compared two already-overflowed ints
+            // (a 512x512 float batch has stride 262144, so b * stride_ wraps at b = 8192,
+            // a batch size this library is built for), and it was additionally false for
+            // every access whenever stride_ was 0 -- which the 3-argument spelling of the
+            // constructor below used to produce. The `stride_ > 0` fallback keeps that
+            // case meaningful for views built by hand with the batch packed.
+            assert(static_cast<int64_t>(b) * stride_ + static_cast<int64_t>(j) * ld_ + i <
+                   static_cast<int64_t>(batch_size_) *
+                       (stride_ > 0 ? static_cast<int64_t>(stride_)
+                                    : static_cast<int64_t>(ld_) * cols_));
+            // Only the batch term is widened: b and stride_ are loop-invariant in every
+            // hot kernel here, so this is one 64-bit imad the compiler hoists, while
+            // j * ld_ + i can only overflow on a single matrix above 2^31 elements (8 GB
+            // for float), which the library cannot allocate. Span::operator[] takes a
+            // size_t, so the index was already being sign-extended to 64 bits anyway.
+            return data_[static_cast<int64_t>(b) * stride_ + j * ld_ + i]; }
 
         // CSR coefficient lookup (returns zero if absent)
         template <MatrixFormat MF = MType>
@@ -108,15 +172,19 @@ namespace batchlas {
             KernelMatrixView out = *this;
             if (b < 0 || b >= batch_size_) { out.rows_ = out.cols_ = 0; return out; }
             if constexpr (MType == MatrixFormat::Dense) {
-                out.data_ += b * stride_;
+                // int64_t for the same reason as operator() above, and this one matters
+                // more: batch_item is how most kernels reach their batch slice, and an
+                // overflowed int product here poisons a raw pointer rather than a single
+                // element index.
+                out.data_ += static_cast<int64_t>(b) * stride_;
                 out.rows_ = active_rows_ ? active_rows_[b] : rows_;
                 out.cols_ = active_cols_ ? active_cols_[b] : cols_;
                 out.active_rows_ = nullptr;
                 out.active_cols_ = nullptr;
             } else if constexpr (MType == MatrixFormat::CSR) {
-                out.data_        += b * matrix_stride_;
-                out.row_offsets_ += b * offset_stride_;
-                out.col_indices_ += b * matrix_stride_; // assumes same stride
+                out.data_        += static_cast<int64_t>(b) * matrix_stride_;
+                out.row_offsets_ += static_cast<int64_t>(b) * offset_stride_;
+                out.col_indices_ += static_cast<int64_t>(b) * matrix_stride_; // assumes same stride
             }
             out.batch_size_ = 1;
             return out;
@@ -131,6 +199,14 @@ namespace batchlas {
         inline auto ld() const { return ld_; }
         inline auto stride() const { return stride_; }
         inline auto nnz() const { return nnz_; }
+        // Non-zeros actually stored by one batch item, read from that item's row offsets.
+        // nnz() above is the per-item *capacity*: convert_to<CSR> sizes a heterogeneous
+        // batch by its largest item, so nnz() over-counts every smaller one. This overload
+        // is always safe here -- a KernelMatrixView runs where its pointers live.
+        inline auto nnz(int b) const {
+            const auto base = static_cast<int64_t>(b) * offset_stride_;
+            return row_offsets_[base + rows_] - row_offsets_[base];
+        }
         inline bool is_heterogeneous() const { return active_rows_ || active_cols_; }
         
         // Dense slicing operators (host-side; mirror MatrixView logic)
@@ -157,11 +233,18 @@ namespace batchlas {
 
         // Dense-shaped; constrained so a CSR kernel view cannot be built from it with the
         // CSR fields left null. CSR kernel views come from Matrix/MatrixView::kernel_view().
+        // stride_ resolves against the *resolved* ld, not the raw parameter. Written as
+        // `ld * cols` this produced stride_ = 0 for the three-argument spelling
+        // (ld defaulted to 0), which is live in src/extensions/steqr_legacy.cc; the
+        // resulting view addressed correctly only because batch_size is 1 there, but the
+        // element-access assert compares against batch_size_ * stride_ and so fired on
+        // every access in an assert-enabled build. MatrixView's equivalent constructor in
+        // src/matrix.cc has always resolved it this way.
         template <MatrixFormat MF = MType>
             requires DenseMatrixFormat<MF>
         KernelMatrixView(T* data, int rows, int cols, int ld = 0, int stride = 0, int batch_size = 1)
             : data_(data), rows_(rows), cols_(cols), batch_size_(batch_size),
-              ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld * cols) {}
+              ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : (ld > 0 ? ld : rows) * cols) {}
     };
 
     // (Slice already defined earlier)
@@ -596,13 +679,15 @@ namespace batchlas {
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         U& operator()(int row, int col, int batch) {
-            return data_.at(batch * stride_ + col * ld_ + row);
+            // The batch term in int64_t; see KernelMatrixView::operator() for why only
+            // that term. Span::at takes a size_t, so the wider index converts cleanly.
+            return data_.at(static_cast<int64_t>(batch) * stride_ + col * ld_ + row);
         }
 
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         const U& operator()(int row, int col, int batch) const {
-            return data_.at(batch * stride_ + col * ld_ + row);
+            return data_.at(static_cast<int64_t>(batch) * stride_ + col * ld_ + row);
         }
 
         // Methods to initialize backend
@@ -622,7 +707,17 @@ namespace batchlas {
 
         // Data access - provides non-owning view of the data
         // USM preparation helpers (non-owning, safe to call on const objects)
-        Event set_access_device(const Queue& ctx = Queue()) const {
+        //
+        // The Queue is mandatory, and deliberately so. These used to default to
+        // `Queue()`, which is not a handle to a shared queue: Queue's default
+        // constructor builds a brand-new QueueImpl on Device::default_device() every
+        // call (src/util/queue-impl.cc). So `A.set_access_device()` set the USM hint to
+        // the *default* device even when the caller's work runs on another one -- wrong
+        // on any multi-GPU box -- and the throwaway Queue carries its own workspace
+        // arena, so nothing allocated through it was ever reused. Do not re-add the
+        // default; the signature is the only place a caller can be told which device
+        // the hint lands on.
+        Event set_access_device(const Queue& ctx) const {
             if constexpr (MType == MatrixFormat::CSR) {
                 (void)row_offsets_.to_span().set_access_device(ctx);
                 (void)col_indices_.to_span().set_access_device(ctx);
@@ -630,7 +725,7 @@ namespace batchlas {
             return data_.to_span().set_access_device(ctx);
         }
 
-        Event prefetch(const Queue& ctx = Queue()) const {
+        Event prefetch(const Queue& ctx) const {
             if constexpr (MType == MatrixFormat::CSR) {
                 (void)row_offsets_.to_span().prefetch(ctx);
                 (void)col_indices_.to_span().prefetch(ctx);
@@ -727,9 +822,37 @@ namespace batchlas {
             requires CsrMatrixFormat<M>
         Span<int> col_indices() const { return col_indices_.to_span(); }
 
+        // The slots allocated per batch item -- what NonZeros{} asked for at
+        // construction, and what this has always returned. It is a capacity, not a count:
+        // convert_to<MatrixFormat::CSR> sizes the whole batch by its LARGEST item
+        // (src/matrix.cc), so on a heterogeneous batch this over-counts every smaller
+        // item and `for (int k = 0; k < S.nnz(); ++k)` walks off the end of that item's
+        // row range into slots the conversion never wrote. Its meaning is deliberately
+        // left alone: the vendor SpMM descriptors in src/backends/backend_handle_impl.hh
+        // hand this number to cusparseCreateCsr / rocsparse_create_csr_descr for a whole
+        // strided batch, where the capacity is the correct value and a per-item count
+        // would describe the batch short with no error.
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
         int nnz() const { return nnz_; }
+
+        // The slots that were actually allocated per item. Equal to nnz() for both
+        // allocating paths, but the from-data constructor lets matrix_stride exceed the
+        // declared count, and it is matrix_stride that sizes the buffers.
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz_capacity() const { return matrix_stride_; }
+
+        // Non-zeros actually stored by batch item `batch_index`, derived from that item's
+        // row offsets. Requires whatever kernel filled the offsets to have completed.
+        // Safe on an owning Matrix: row_offsets_ is USM shared and host-readable.
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz(int batch_index) const {
+            const std::size_t base = static_cast<std::size_t>(batch_index) *
+                                     static_cast<std::size_t>(offset_stride_);
+            return row_offsets_[base + static_cast<std::size_t>(rows_)] - row_offsets_[base];
+        }
 
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
@@ -738,7 +861,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
         int offset_stride() const { return offset_stride_; }
-        
+
         // Backend handle access
         std::shared_ptr<BackendMatrixHandle<T, MType>> backend_handle() const { 
             return backend_handle_; 
@@ -876,8 +999,10 @@ namespace batchlas {
 
         // Data access
         Span<T> data() const { return data_; }
-        // USM preparation helpers (non-owning, safe to call on const views)
-        Event set_access_device(const Queue& ctx = Queue()) const {
+        // USM preparation helpers (non-owning, safe to call on const views).
+        // The Queue is mandatory; see the note on Matrix::set_access_device for why the
+        // `= Queue()` default was a device-placement bug rather than a convenience.
+        Event set_access_device(const Queue& ctx) const {
             if constexpr (MType == MatrixFormat::CSR) {
                 (void)row_offsets_.set_access_device(ctx);
                 (void)col_indices_.set_access_device(ctx);
@@ -885,7 +1010,7 @@ namespace batchlas {
             return data_.set_access_device(ctx);
         }
 
-        Event prefetch(const Queue& ctx = Queue()) const {
+        Event prefetch(const Queue& ctx) const {
             if constexpr (MType == MatrixFormat::CSR) {
                 (void)row_offsets_.prefetch(ctx);
                 (void)col_indices_.prefetch(ctx);
@@ -943,9 +1068,26 @@ namespace batchlas {
             requires CsrMatrixFormat<M>
         Span<int> col_indices() const { return col_indices_; }
 
+        // Per-item capacity, not a per-item count -- see the note on Matrix::nnz().
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
         int nnz() const { return nnz_; }
+
+        // The slots actually allocated per item; see the note on Matrix::nnz_capacity().
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz_capacity() const { return matrix_stride_; }
+
+        // Non-zeros actually stored by batch item `batch_index`. Only valid when the row
+        // offsets are host-reachable. A MatrixView built over sycl::malloc_device memory
+        // is not; use KernelMatrixView::nnz(b) inside a kernel instead.
+        template <MatrixFormat M = MType>
+            requires CsrMatrixFormat<M>
+        int nnz(int batch_index) const {
+            const std::size_t base = static_cast<std::size_t>(batch_index) *
+                                     static_cast<std::size_t>(offset_stride_);
+            return row_offsets_[base + static_cast<std::size_t>(rows_)] - row_offsets_[base];
+        }
 
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
@@ -1099,20 +1241,18 @@ namespace batchlas {
             return fill(Queue(), value);
         }
 
+        // The queue-less fill_zeros()/fill_ones() forwarders are gone. They spelled
+        // `fill_zeros(Queue())`, and a default-constructed Queue is a brand-new QueueImpl
+        // on Device::default_device() (src/util/queue-impl.cc) -- so the fill ran on a
+        // different device from the caller's queue, built and tore down a SYCL queue per
+        // call, and carried its own workspace arena that nothing could reuse. Neither had
+        // a single caller in the repository. Pass the queue you are working on.
         Event fill_zeros(const Queue& ctx) const {
             return fill(ctx, detail::convert_to_fill_value<T>(0));
         }
 
-        Event fill_zeros() const {
-            return fill_zeros(Queue());
-        }
-
         Event fill_ones(const Queue& ctx) const {
             return fill(ctx, detail::convert_to_fill_value<T>(1));
-        }
-
-        Event fill_ones() const {
-            return fill_ones(Queue());
         }
 
         template <MatrixFormat M = MType>
@@ -1351,21 +1491,46 @@ namespace batchlas {
             }
 
         Vector() : data_(), size_(0), inc_(1), stride_(0), batch_size_(1) {}
-        Vector(int size, int batch_size = 1, int stride = 0, int inc = 1)
-            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
-              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
-        Vector(int size, T value, int batch_size = 1, int stride = 0, int inc = 1)
-            : data_(required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size), value),
-              size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
+
+        // stride and inc carry tag types rather than being the third and fourth ints in
+        // a row. VectorView takes the same two values in the OPPOSITE order
+        // (data, size, batch_size, inc, stride), and both readings fit the same buffer,
+        // so transliterating a Vector spelling into a VectorView one -- which src/sort.hh
+        // does, twenty lines apart -- silently read every element from the wrong address.
+        // Neither the compiler nor VectorView's span-length assert could see it.
+        //
+        // The deleted bare-int overloads below are the other half of the fix: the old
+        // spelling `Vector<T>(n, batch, n, 1)` is now a compile error rather than a
+        // reinterpretation, so there is nothing left in the codebase to transliterate
+        // FROM. Vector was the cheap side to change -- six 4-argument call sites against
+        // VectorView's 138 -- which is why the view keeps its positional constructors and
+        // merely gains tagged ones alongside them.
+        Vector(int size, int batch_size = 1, Stride stride = Stride{0}, Inc inc = Inc{1})
+            : data_(required_span_length(size, inc.value, (stride.value > 0 ? stride.value : size * inc.value), batch_size)),
+              size_(size), inc_(inc.value), stride_(stride.value > 0 ? stride.value : size * inc.value), batch_size_(batch_size) {}
+        Vector(int size, T value, int batch_size = 1, Stride stride = Stride{0}, Inc inc = Inc{1})
+            : data_(required_span_length(size, inc.value, (stride.value > 0 ? stride.value : size * inc.value), batch_size), value),
+              size_(size), inc_(inc.value), stride_(stride.value > 0 ? stride.value : size * inc.value), batch_size_(batch_size) {}
+
+        Vector(int size, int batch_size, int stride, int inc) = delete;
+        Vector(int size, T value, int batch_size, int stride, int inc) = delete;
+        // The three-int spelling has to be deleted too, and for a nastier reason: with it
+        // gone from the tagged constructor, `Vector<float>(n, batch, stride)` would still
+        // have compiled -- by picking the (size, value, batch_size) overload and
+        // converting `batch` to a float element value. Deleting it turns that into a
+        // compile error. The cost is that Vector<int> loses its (size, value, batch)
+        // spelling to ambiguity; nothing in the repository uses it (the one integral
+        // vector, benchmarks/permuted_copy_benchmark.cc, goes through zeros()).
+        Vector(int size, int batch_size, int stride) = delete;
 
         // Convenience vectors
-        static Vector<T> zeros(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+        static Vector<T> zeros(int size, int batch_size = 1, Stride stride = Stride{0}, Inc inc = Inc{1}) {
             return Vector<T>(size, T(0), batch_size, stride, inc);
         }
-        static Vector<T> ones(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+        static Vector<T> ones(int size, int batch_size = 1, Stride stride = Stride{0}, Inc inc = Inc{1}) {
             return Vector<T>(size, T(1), batch_size, stride, inc);
         }
-        static Vector<T> random(int size, int batch_size = 1, int stride = 0, int inc = 1) {
+        static Vector<T> random(int size, int batch_size = 1, Stride stride = Stride{0}, Inc inc = Inc{1}) {
             Vector<T> vec(size, batch_size, stride, inc);
             std::mt19937 rng(42); // Mersenne Twister engine with fixed seed
             std::uniform_real_distribution<float_t<T>> dist(0.0f, 1.0f);
@@ -1376,13 +1541,25 @@ namespace batchlas {
             }
             return vec;
         }
-        static Vector<T> standard_basis(int size, int index, int batch_size = 1, int stride = 0) {
-            Vector<T> vec(size, T(0), batch_size, stride, 1);
+        static Vector<T> standard_basis(int size, int index, int batch_size = 1, Stride stride = Stride{0}) {
+            Vector<T> vec(size, T(0), batch_size, stride, Inc{1});
             for (int b = 0; b < batch_size; ++b) {
                 vec(index, b) = T(1);
             }
             return vec;
         }
+
+        // The bare-int spellings of the above, deleted so that the old argument order is
+        // a compile error rather than a reinterpretation. standard_basis's third argument
+        // really is batch_size, so standard_basis(size, index, batch) stays legal; only
+        // its fourth position needs the tag.
+        static Vector<T> zeros(int size, int batch_size, int stride, int inc) = delete;
+        static Vector<T> ones(int size, int batch_size, int stride, int inc) = delete;
+        static Vector<T> random(int size, int batch_size, int stride, int inc) = delete;
+        static Vector<T> zeros(int size, int batch_size, int stride) = delete;
+        static Vector<T> ones(int size, int batch_size, int stride) = delete;
+        static Vector<T> random(int size, int batch_size, int stride) = delete;
+        static Vector<T> standard_basis(int size, int index, int batch_size, int stride) = delete;
 
         Span<T> data() const { return data_.to_span(); }
 
@@ -1393,12 +1570,13 @@ namespace batchlas {
         // parameter is VectorView<T> therefore need this at the call site.
         VectorView<T> view() const { return VectorView<T>(*this); }
 
-        // USM preparation helpers (safe to call on const vectors)
-        Event set_access_device(const Queue& ctx = Queue()) const {
+        // USM preparation helpers (safe to call on const vectors).
+        // The Queue is mandatory; see the note on Matrix::set_access_device.
+        Event set_access_device(const Queue& ctx) const {
             return data_.to_span().set_access_device(ctx);
         }
 
-        Event prefetch(const Queue& ctx = Queue()) const {
+        Event prefetch(const Queue& ctx) const {
             return data_.to_span().prefetch(ctx);
         }
         T* data_ptr() const { return data_.data(); }
@@ -1411,8 +1589,9 @@ namespace batchlas {
         template <typename U>
         Vector<U> astype() const;
 
-        // Access element at (i, batch)
-        T& at(int i, int batch = 0) { return data_[i * inc_ + batch * stride_]; }
+        // Access element at (i, batch). The batch term is int64_t: batch * stride_ in int
+        // wraps well inside the batch sizes this library targets, and the wrap is UB.
+        T& at(int i, int batch = 0) { return data_[i * inc_ + static_cast<int64_t>(batch) * stride_]; }
         //const T& at(int i, int batch = 0) const { return data_[i * inc_ + batch * stride_]; }
 
         // Flat indexing (for backward compatibility)
@@ -1423,7 +1602,7 @@ namespace batchlas {
         // Get a view of a single batch
         VectorView<T> batch_item(int batch_index) const {
             const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
+            return VectorView<T>(Span<T>(data_.data() + static_cast<int64_t>(batch_index) * stride_, single_batch_length), size_, 1, inc_, 0);
         }
 
         void print(std::ostream& os = std::cout, int max_elements = 10) const {
@@ -1475,6 +1654,21 @@ namespace batchlas {
             : data_(data, required_span_length(size, inc, (stride > 0 ? stride : size * inc), batch_size)),
               size_(size), inc_(inc), stride_(stride > 0 ? stride : size * inc), batch_size_(batch_size) {}
 
+        // Tagged spellings, for new code. The positional ones above take inc before
+        // stride while Vector's constructor takes stride before inc, and both readings
+        // fit the same buffer, so the span-length assert cannot tell them apart -- see
+        // the Inc/Stride declarations at the top of this header. These are additive: the
+        // 138 in-repo positional constructions are all correct as written, and deleting
+        // the positional form would have to rewrite every one of them in the same commit,
+        // which is a change of its own. Vector's side of the mismatch is what carries the
+        // compile-time guarantee; here the tag is available rather than enforced.
+        VectorView(Span<T> data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
+            : VectorView(data, size, batch_size, inc.value, stride.value) {}
+        VectorView(UnifiedVector<T>& data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
+            : VectorView(data, size, batch_size, inc.value, stride.value) {}
+        VectorView(T* data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
+            : VectorView(data, size, batch_size, inc.value, stride.value) {}
+
         // Construct from Vector
         VectorView(const Vector<T>& vec)
             : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()) {}
@@ -1487,16 +1681,17 @@ namespace batchlas {
 
         // Data access
         Span<T> data() const { return data_; }
-        // USM preparation helpers (non-owning, safe to call on const views)
-        Event set_access_device(const Queue& ctx = Queue()) const {
+        // USM preparation helpers (non-owning, safe to call on const views).
+        // The Queue is mandatory; see the note on Matrix::set_access_device.
+        Event set_access_device(const Queue& ctx) const {
             return data_.set_access_device(ctx);
         }
 
-        Event set_preferred_location(const Queue& ctx = Queue()) const {
+        Event set_preferred_location(const Queue& ctx) const {
             return data_.set_preferred_location(ctx);
         }
 
-        Event prefetch(const Queue& ctx = Queue()) const {
+        Event prefetch(const Queue& ctx) const {
             return data_.prefetch(ctx);
         }
         T* data_ptr() const { return data_.data(); }
@@ -1523,13 +1718,18 @@ namespace batchlas {
         }
 
         // Access element at (i, batch)
-        T& at(int i, int batch = 0) const { 
+        T& at(int i, int batch = 0) const {
             assert(i < size_); assert(i >= 0);
             assert(batch < batch_size_); assert(batch >= 0);
-            assert(i * inc_ + batch * stride_ < data_.size());
-                return data_[i * inc_ + batch * stride_]; }
+            // Both sides int64_t. The old assert built the index in int (so it compared
+            // an already-wrapped value) and then converted it to the size_t returned by
+            // Span::size(), which turns a negative index into an enormous positive one
+            // and makes the check pass exactly when it should fail.
+            assert(static_cast<int64_t>(i) * inc_ + static_cast<int64_t>(batch) * stride_ <
+                   static_cast<int64_t>(data_.size()));
+                return data_[static_cast<int64_t>(i) * inc_ + static_cast<int64_t>(batch) * stride_]; }
 
-        T& operator[](int i) const { assert(i < size_); assert(i >= 0); assert(i * inc_ < data_.size()); return data_[i * inc_]; }
+        T& operator[](int i) const { assert(i < size_); assert(i >= 0); assert(static_cast<int64_t>(i) * inc_ < static_cast<int64_t>(data_.size())); return data_[static_cast<int64_t>(i) * inc_]; }
 
         T& operator()(int i, int batch = 0) const {return at(i, batch);}
 
@@ -1537,7 +1737,7 @@ namespace batchlas {
         VectorView<T> batch_item(int batch_index) const {
             // For a single batch, we need (size-1)*inc + 1 elements starting at batch_index * stride
             const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
-            return VectorView<T>(Span<T>(data_.data() + batch_index * stride_, single_batch_length), size_, 1, inc_, 0);
+            return VectorView<T>(Span<T>(data_.data() + static_cast<int64_t>(batch_index) * stride_, single_batch_length), size_, 1, inc_, 0);
         }
 
         VectorView<T> operator()(Slice slice) const {
@@ -1664,7 +1864,7 @@ namespace batchlas {
     template <typename T>
     template <typename U>
     Vector<U> Vector<T>::astype() const {
-        Vector<U> result(size_, batch_size_, stride_, inc_);
+        Vector<U> result(size_, batch_size_, Stride{stride_}, Inc{inc_});
         auto src = data();
         auto dst = result.data();
         for (std::size_t i = 0; i < dst.size(); ++i) {
@@ -1676,7 +1876,7 @@ namespace batchlas {
     template <typename T>
     template <typename U>
     Vector<U> VectorView<T>::astype() const {
-        Vector<U> result(size_, batch_size_, stride_, inc_);
+        Vector<U> result(size_, batch_size_, Stride{stride_}, Inc{inc_});
         for (int b = 0; b < batch_size_; ++b) {
             for (int i = 0; i < size_; ++i) {
                 result(i, b) = static_cast<U>((*this)(i, b));

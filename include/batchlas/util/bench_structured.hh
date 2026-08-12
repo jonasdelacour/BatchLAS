@@ -98,7 +98,9 @@ struct ManagedInputs {
 
     template <typename T>
     ManagedInputs& pristine(std::shared_ptr<batchlas::Vector<T>> v) {
-        auto v0 = std::make_shared<batchlas::Vector<T>>(v->size(), v->batch_size(), v->stride(), v->inc());
+        auto v0 = std::make_shared<batchlas::Vector<T>>(v->size(), v->batch_size(),
+                                                        batchlas::Stride{v->stride()},
+                                                        batchlas::Inc{v->inc()});
         auto queue = q;
 
         init_once.emplace_back([queue, v, v0]() mutable {

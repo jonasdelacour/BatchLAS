@@ -300,7 +300,7 @@ Event syev_two_stage(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stedc_eigvecs");
-        const size_t stedc_ws_bytes = stedc_workspace_size<B, Real>(ctx,
+        const size_t stedc_ws_bytes = stedc_buffer_size<B, Real>(ctx,
                                                                      static_cast<std::size_t>(n),
                                                                      static_cast<std::size_t>(batch),
                                                                      JobType::EigenVectors,
@@ -498,7 +498,7 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
                                            uplo,
                                            kd,
                                            sb2st_block_size);
-    bytes += stedc_workspace_size<B, Real>(ctx,
+    bytes += stedc_buffer_size<B, Real>(ctx,
                                            static_cast<std::size_t>(n),
                                            static_cast<std::size_t>(batch),
                                            want_eigvecs ? JobType::EigenVectors : JobType::NoEigenVectors,

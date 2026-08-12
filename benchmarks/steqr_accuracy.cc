@@ -315,7 +315,7 @@ int run_accuracy(const Options& opt) {
         }
         if (run_stedc) {
             UnifiedVector<std::byte> ws(
-                stedc_workspace_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, StedcParams<Real>{}));
+                stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, StedcParams<Real>{}));
             stedc<B, Real>(*q, d, e, eigs_stedc, ws.to_span(), JobType::EigenVectors, StedcParams<Real>{}, eigvects);
         }
         q->wait();

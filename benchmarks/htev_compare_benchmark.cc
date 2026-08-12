@@ -90,7 +90,7 @@ static void BM_HTEV_STEDC(minibench::State& state) {
     auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
     auto eigvects  = Matrix<T>::Identity(static_cast<int>(n), static_cast<int>(batch));
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size(*q, n, batch, jobz, params));
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*q, n, batch, jobz, params));
 
     // stedc has a non-standard calling convention; use a capturing lambda and
     // omit the leading Queue& parameter (the adapter will call k(xs...) form).

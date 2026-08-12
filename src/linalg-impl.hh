@@ -666,6 +666,59 @@ namespace batchlas{
         }
     }
 
+    // Same dispatch, but hands back what the routine returned.
+    //
+    // A sibling rather than a change of return type on call_backend_nh above:
+    // that one is also used for the CBLAS calls (cblas_sgemm and friends), which
+    // return void, and `return void_expr;` is fine but `auto` deduced from four
+    // different branches is not -- one of them being void makes the whole thing
+    // ill-formed the moment a caller tries to use the result. Keeping the two
+    // apart means the void users cannot be broken by a change made for LAPACKE.
+    //
+    // The reason this exists at all: every LAPACKE routine reports failure only
+    // through its return value, and netlib's potrf/getrf/getri discarded it, so
+    // a singular batch item was indistinguishable from a factorised one (issue
+    // #73). See src/backends/netlib_lapack.cc.
+    template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+    auto call_backend_nh_r(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
+        if constexpr (std::is_same_v<T,float>) {
+            return std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
+        } else if constexpr (std::is_same_v<T,double>) {
+            return std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
+        } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+            return std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
+        } else {
+            return std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));
+        }
+    }
+
+    namespace detail {
+
+    // Where a factorisation should write its per-item LAPACK status.
+    //
+    // Every backend already allocates this array because the vendor call demands
+    // somewhere to write; before issue #73 it was pool scratch that nobody read.
+    // Now the caller may supply it: their span is USM, so the vendor writes it in
+    // place and there is no copy back.
+    //
+    // An empty (or too-short) caller span falls back to the pool, which is what
+    // preserves today's behaviour exactly for the ~all call sites that pass
+    // nothing. Note the direction: supplying a span only ever *removes* a pool
+    // draw, never adds one, so *_buffer_size stays correct in both modes -- a
+    // workspace sized without `info` is never too small for a call made with it.
+    //
+    // Short spans are silently ignored here rather than rejected; the public
+    // deducing overloads reject them up front (detail::require_info_span in
+    // blas/options.hh), and this layer is the library's own inner-loop spelling,
+    // which must not pay a throw path per call.
+    inline Span<int32_t> info_target(Queue& ctx, BumpAllocator& pool,
+                                     Span<int32_t> info_out, size_t count) {
+        if (info_out.size() >= count) return info_out;
+        return pool.allocate<int32_t>(ctx, count);
+    }
+
+    }  // namespace detail
+
 
     // Variadic template for converting multiple enums
 /*     template <Backend B, typename... Args>
