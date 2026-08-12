@@ -4,9 +4,45 @@
 rocBLAS, rocSOLVER, rocSPARSE, MKL or netlib LAPACK present — while still *using* any of
 them when they are available and genuinely faster.
 
-**Status of this document:** design-only. Nothing here is implemented. Every factual claim
-about the current tree was read out of the source on `main` at `aa827f5` and is cited by
-file and line so it can be re-checked rather than believed.
+Every factual claim about the tree was read out of the source and is cited by file and line
+so it can be re-checked rather than believed. Several claims in the first draft turned out
+to be wrong; each has been corrected in place with the correction called out, rather than
+quietly edited.
+
+## Status
+
+**Companion specifications** (each the output of a multi-agent design pass with adversarial
+critique, and each superseding the sketch in §5 of this document):
+
+| Document | Covers | Agents |
+|---|---|---|
+| `WP0_DISPATCH_SPEC.md` | the dispatch axes, the vendor gate, the coverage instrument | 14 |
+| `WP3_TRSM_SPEC.md` | native batched `trsm` | 19 (shared) |
+| `WP4_POTRF_SPEC.md` | native batched `potrf` | 19 (shared) |
+
+**Implemented and verified** (each step built clean and passed the tests named):
+
+| Step | What | Verification |
+|---|---|---|
+| WP1 prep | `route_common.hh` split out of the CUDA-only `cublasdx_dispatch_common.hh` | `triangular_expand.hh` + the four `*_tiles.hh` compile at `-fsycl-targets=spir64_x86_64`, with a negative control |
+| WP1 prep | missing `<complex>` in `triangular_tiles.hh` | same standalone compile |
+| WP0 S1 | per-library probes, `BATCHLAS_HAS_<LIB>` in the generated header | configure clean; build exit 0; 7/7 smoke |
+| WP0 S2a | vendor *includes* keyed on library, not family | `-DBATCHLAS_ENABLE_CUBLAS=OFF` ⇒ 0 cuBLAS/cuSOLVER includes, vs 2 in the normal build |
+| WP0 S3 | each vendor TU gated on the library it calls | identical 17-TU object set to baseline; `gemm`/`symm`/`syrk`/`trmm`/`backend_dispatch` tests pass |
+
+The milestone those four steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
+`BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
+CUDA math libraries**, a state the old scheme could not express at all. It does not yet
+*link*, and cannot until the public op definitions leave the vendor TUs (`WP0_DISPATCH_SPEC.md`
+step S5).
+
+**Not implemented:** WP0 steps S2b and S4–S8, the rest of WP1, and all of WP2–WP4.
+Two cautions for whoever continues. First, S5 must move each op's definition atomically
+across every vendor TU, and `rocblas.cc`/`rocsolver.cc`/`rocsparse.cc` **cannot be compiled
+on this machine** — that is the WP0 spec's own top-ranked risk. Second, S4's split of
+`gemm_use_sycl_custom` into env-read / `supports` / `preferred` is specified exactly in that
+document because getting it wrong silently changes the default route of the hottest op; its
+acceptance test is a diff of the *chosen route*, not the timing.
 
 ---
 
