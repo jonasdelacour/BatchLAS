@@ -1,0 +1,96 @@
+CAND=cublas RESULT lib=cublas dtype=double m=256 n=256 k=256 batch=512 beta=0 ms=14.1343 tflops=1.215
+CAND=cublas RESULT lib=cublas dtype=double m=256 n=256 k=256 batch=512 beta=1 ms=13.9122 tflops=1.235
+CAND=cublas RESULT lib=cublas dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 ms=1.4051 tflops=48.909
+CAND=cublas RESULT lib=cublas dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 ms=1.5284 tflops=44.963
+CAND=cublas RESULT lib=cublas dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 ms=55.3174 tflops=1.242
+CAND=cublas RESULT lib=cublas dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 ms=55.5121 tflops=1.238
+CAND=cublas RESULT lib=cublas dtype=float m=256 n=256 k=256 batch=512 beta=0 ms=0.4461 tflops=38.515
+CAND=cublas RESULT lib=cublas dtype=float m=256 n=256 k=256 batch=512 beta=1 ms=0.5819 tflops=29.524
+CAND=cublas RESULT lib=cublas dtype=double m=512 n=512 k=512 batch=128 beta=0 ms=27.8973 tflops=1.232
+CAND=cublas RESULT lib=cublas dtype=double m=512 n=512 k=512 batch=128 beta=1 ms=27.5846 tflops=1.246
+CAND=cublas RESULT lib=cublas dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 ms=2.9012 tflops=47.373
+CAND=cublas RESULT lib=cublas dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 ms=2.8012 tflops=49.064
+CAND=cublas RESULT lib=cublas dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 ms=110.4759 tflops=1.244
+CAND=cublas RESULT lib=cublas dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 ms=110.6888 tflops=1.242
+CAND=cublas RESULT lib=cublas dtype=float m=512 n=512 k=512 batch=128 beta=0 ms=0.6704 tflops=51.251
+CAND=cublas RESULT lib=cublas dtype=float m=512 n=512 k=512 batch=128 beta=1 ms=0.7742 tflops=44.379
+CAND=cublas RESULT lib=cublas dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 ms=55.1206 tflops=1.247
+CAND=cublas RESULT lib=cublas dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 ms=55.1902 tflops=1.245
+CAND=cublas RESULT lib=cublas dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 ms=5.5833 tflops=49.232
+CAND=cublas RESULT lib=cublas dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 ms=5.8546 tflops=46.951
+CAND=cublas RESULT lib=cublas dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 ms=220.5901 tflops=1.246
+CAND=cublas RESULT lib=cublas dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 ms=220.8176 tflops=1.245
+CAND=cublas RESULT lib=cublas dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 ms=1.3078 tflops=52.546
+CAND=cublas RESULT lib=cublas dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 ms=1.4003 tflops=49.075
+CAND=128x128-t8x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=0 tile=128x128x8_t8x4 ms=12.6870 tflops=1.354 maxrelerr=4.769e-16
+CAND=128x128-t8x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=1 tile=128x128x8_t8x4 ms=12.7230 tflops=1.350 maxrelerr=4.287e-16
+CAND=128x128-t8x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 tile=128x128x8_t8x4 ms=1.4208 tflops=48.367 maxrelerr=3.375e-07
+CAND=128x128-t8x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 tile=128x128x8_t8x4 ms=1.6011 tflops=42.919 maxrelerr=3.210e-07
+CAND=128x128-t8x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 tile=128x64x8_t8x4 ms=49.4063 tflops=1.391 maxrelerr=8.301e-16
+CAND=128x128-t8x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 tile=128x64x8_t8x4 ms=49.4608 tflops=1.389 maxrelerr=8.475e-16
+CAND=128x128-t8x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=0 tile=128x128x8_t8x4 ms=0.6926 tflops=24.804 maxrelerr=3.200e-07
+CAND=128x128-t8x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=1 tile=128x128x8_t8x4 ms=0.8029 tflops=21.397 maxrelerr=2.589e-07
+CAND=128x128-t8x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=0 tile=128x128x8_t8x4 ms=24.8405 tflops=1.383 maxrelerr=4.769e-16
+CAND=128x128-t8x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=1 tile=128x128x8_t8x4 ms=25.1153 tflops=1.368 maxrelerr=4.287e-16
+CAND=128x128-t8x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 tile=128x128x8_t8x4 ms=2.6851 tflops=51.186 maxrelerr=3.375e-07
+CAND=128x128-t8x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 tile=128x128x8_t8x4 ms=2.8416 tflops=48.368 maxrelerr=3.210e-07
+CAND=128x128-t8x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=98.4332 tflops=1.396 maxrelerr=8.301e-16
+CAND=128x128-t8x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=98.5779 tflops=1.394 maxrelerr=8.475e-16
+CAND=128x128-t8x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=0 tile=128x128x8_t8x4 ms=1.1837 tflops=29.027 maxrelerr=3.200e-07
+CAND=128x128-t8x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=1 tile=128x128x8_t8x4 ms=1.2827 tflops=26.788 maxrelerr=2.589e-07
+CAND=128x128-t8x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x128x8_t8x4 ms=49.5636 tflops=1.386 maxrelerr=4.769e-16
+CAND=128x128-t8x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x128x8_t8x4 ms=49.6831 tflops=1.383 maxrelerr=4.287e-16
+CAND=128x128-t8x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x128x8_t8x4 ms=5.2776 tflops=52.084 maxrelerr=3.375e-07
+CAND=128x128-t8x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x128x8_t8x4 ms=5.4473 tflops=50.462 maxrelerr=3.210e-07
+CAND=128x128-t8x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x64x8_t8x4 ms=196.5832 tflops=1.398 maxrelerr=8.301e-16
+CAND=128x128-t8x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x64x8_t8x4 ms=196.6888 tflops=1.398 maxrelerr=8.475e-16
+CAND=128x128-t8x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x128x8_t8x4 ms=2.2655 tflops=30.334 maxrelerr=3.200e-07
+CAND=128x128-t8x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x128x8_t8x4 ms=2.3423 tflops=29.338 maxrelerr=2.589e-07
+CAND=128x64-t8x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=0 tile=128x64x8_t8x4 ms=13.3525 tflops=1.287 maxrelerr=3.438892e-16
+CAND=128x64-t8x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=1 tile=128x64x8_t8x4 ms=13.1638 tflops=1.305 maxrelerr=3.001375e-16
+CAND=128x64-t8x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 tile=128x64x8_t8x4 ms=1.5908 tflops=43.198 maxrelerr=3.533017e-07
+CAND=128x64-t8x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 tile=128x64x8_t8x4 ms=1.6491 tflops=41.670 maxrelerr=2.605264e-07
+CAND=128x64-t8x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 tile=128x64x8_t8x4 ms=50.0194 tflops=1.374 maxrelerr=5.850889e-16
+CAND=128x64-t8x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 tile=128x64x8_t8x4 ms=50.0848 tflops=1.372 maxrelerr=4.511026e-16
+CAND=128x64-t8x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=0 tile=128x64x8_t8x4 ms=0.5554 tflops=30.932 maxrelerr=1.644871e-07
+CAND=128x64-t8x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=1 tile=128x64x8_t8x4 ms=0.6519 tflops=26.352 maxrelerr=1.616877e-07
+CAND=128x64-t8x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=26.2612 tflops=1.308 maxrelerr=3.438892e-16
+CAND=128x64-t8x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=26.4194 tflops=1.301 maxrelerr=3.001375e-16
+CAND=128x64-t8x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=3.0058 tflops=45.725 maxrelerr=3.533017e-07
+CAND=128x64-t8x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=3.0391 tflops=45.223 maxrelerr=2.605264e-07
+CAND=128x64-t8x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=99.4645 tflops=1.382 maxrelerr=5.850889e-16
+CAND=128x64-t8x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=99.6031 tflops=1.380 maxrelerr=4.511026e-16
+CAND=128x64-t8x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=0.8788 tflops=39.099 maxrelerr=1.644871e-07
+CAND=128x64-t8x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=0.9075 tflops=37.861 maxrelerr=1.616877e-07
+CAND=128x64-t8x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x64x8_t8x4 ms=52.0553 tflops=1.320 maxrelerr=3.438892e-16
+CAND=128x64-t8x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x64x8_t8x4 ms=52.2250 tflops=1.316 maxrelerr=3.001375e-16
+CAND=128x64-t8x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x64x8_t8x4 ms=5.9298 tflops=46.355 maxrelerr=3.533017e-07
+CAND=128x64-t8x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x64x8_t8x4 ms=5.9542 tflops=46.165 maxrelerr=2.605264e-07
+CAND=128x64-t8x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x64x8_t8x4 ms=197.9628 tflops=1.389 maxrelerr=5.850889e-16
+CAND=128x64-t8x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x64x8_t8x4 ms=198.8606 tflops=1.382 maxrelerr=4.511026e-16
+CAND=128x64-t8x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x64x8_t8x4 ms=1.7558 tflops=39.139 maxrelerr=1.644871e-07
+CAND=128x64-t8x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x64x8_t8x4 ms=1.7916 tflops=38.357 maxrelerr=1.616877e-07
+CAND=64x64-k16-t4x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=0 tile=64x64x16_t4x4/fast ms=12.8924 tflops=1.333 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=double m=256 n=256 k=256 batch=512 beta=1 tile=64x64x16_t4x4/fast ms=12.9513 tflops=1.327 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 tile=64x64x16_t4x4/fast ms=1.3883 tflops=49.498 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 tile=64x64x16_t4x4/fast ms=1.4148 tflops=48.571 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 tile=64x64x16_t4x4/fast ms=49.5628 tflops=1.387 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 tile=64x64x16_t4x4/fast ms=49.6606 tflops=1.384 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=0 tile=64x64x16_t4x4/fast ms=0.4752 tflops=36.151 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=256 n=256 k=256 batch=512 beta=1 tile=64x64x16_t4x4/fast ms=0.5799 tflops=29.627 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=0 tile=64x64x16_t4x4/fast ms=24.3210 tflops=1.413 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=double m=512 n=512 k=512 batch=128 beta=1 tile=64x64x16_t4x4/fast ms=24.5047 tflops=1.402 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 tile=64x64x16_t4x4/fast ms=2.8725 tflops=47.846 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 tile=64x64x16_t4x4/fast ms=2.7617 tflops=49.766 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 tile=64x64x16_t4x4/fast ms=98.8103 tflops=1.391 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 tile=64x64x16_t4x4/fast ms=98.8362 tflops=1.391 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=0 tile=64x64x16_t4x4/fast ms=0.9281 tflops=37.021 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=512 n=512 k=512 batch=128 beta=1 tile=64x64x16_t4x4/fast ms=0.9364 tflops=36.693 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x16_t4x4/fast ms=48.5735 tflops=1.415 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x16_t4x4/fast ms=48.5501 tflops=1.415 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x16_t4x4/fast ms=5.7224 tflops=48.035 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x16_t4x4/fast ms=5.6659 tflops=48.515 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x16_t4x4/fast ms=196.8977 tflops=1.396 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x16_t4x4/fast ms=196.9293 tflops=1.396 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x16_t4x4/fast ms=1.8505 tflops=37.135 maxrelerr=-1.000e+00
+CAND=64x64-k16-t4x4 RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x16_t4x4/fast ms=1.8562 tflops=37.022 maxrelerr=-1.000e+00

@@ -1,0 +1,82 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIdELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIdELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 246 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 87.379 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIdELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIdELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 246 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 88.906 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIdELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIdELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 234 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 68.009 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIdELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIdELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 234 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 69.081 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIdLb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIdLb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 27.682 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIdLb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIdLb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 28.146 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIdLb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIdLb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 20.923 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIdLb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIdLb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 19.928 ms
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIfELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIfELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 63.610 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIfELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIfELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 67.624 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIfELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIfELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 59.555 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelISt7complexIfELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelISt7complexIfELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 440 bytes cmem[0]
+ptxas info    : Compile time = 56.546 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIfLb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIfLb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 63 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 24.210 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIfLb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIfLb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 63 registers, used 1 barriers, 440 bytes cmem[0]
+ptxas info    : Compile time = 23.684 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIfLb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIfLb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 66 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 18.267 ms
+ptxas info    : Compiling entry function '_ZTS14WideGemmKernelIfLb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS14WideGemmKernelIfLb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 66 registers, used 1 barriers, 432 bytes cmem[0]
+ptxas info    : Compile time = 17.618 ms

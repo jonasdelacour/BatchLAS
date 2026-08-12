@@ -1,0 +1,1 @@
+clang++: warning: option '-fsycl-dump-device-code=devcode' is deprecated and will be removed in a future release, use '-save-offload-code=devcode' instead [-Wdeprecated]

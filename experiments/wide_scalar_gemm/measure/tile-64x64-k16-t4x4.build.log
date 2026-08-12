@@ -1,0 +1,82 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb0EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb0EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 134 registers, used 1 barriers, 492 bytes cmem[0]
+ptxas info    : Compile time = 67.429 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb0EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb0EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 134 registers, used 1 barriers, 480 bytes cmem[0]
+ptxas info    : Compile time = 66.750 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb1EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb1EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 132 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 57.189 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb1EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIdEELb1EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 132 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 57.204 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb1EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb1EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 56.591 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb1EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb1EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 51.984 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIfLb1EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIfLb1EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 56 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 14.565 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIfLb1EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIfLb1EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 56 registers, used 1 barriers, 440 bytes cmem[0]
+ptxas info    : Compile time = 14.375 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIdLb0EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIdLb0EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 21.589 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIdLb0EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIdLb0EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 23.000 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIdLb1EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIdLb1EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 76 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 18.934 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIdLb1EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIdLb1EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 76 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 20.656 ms
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb0EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb0EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 56.264 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb0EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelINS_2CxIfEELb0EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 55.311 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIfLb0EEE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIfLb0EEE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 18.467 ms
+ptxas info    : Compiling entry function '_ZTSN3wsg20WideScalarGemmKernelIfLb0EEE' for 'sm_89'
+ptxas info    : Function properties for _ZTSN3wsg20WideScalarGemmKernelIfLb0EEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 18.318 ms

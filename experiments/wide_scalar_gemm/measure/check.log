@@ -1,0 +1,216 @@
+### tile-128x128-k8-t8x4 dtype=double beta=0
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=2, shared=16384 B, register budget=128/thread
+  per k-step: 6 vector shared loads : 32 MACs (= 32 FFMA-equivalent, ratio 5.33:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=3.534e-16
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0) path=fast  relerr=3.331e-16
+  check fast/arg    256x 128x  64 batch 2 beta=(0,0) path=fast  relerr=4.769e-16
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0) path=predicated  relerr=2.723e-16
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=2.630e-16
+verification OK (maxrelerr 4.769e-16 <= 1.000e-12)
+RESULT dtype=double m=512 n=512 k=512 batch=64 beta=0 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=4.769e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=double beta=0
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=2 elems (16 bytes)  smem/wg=12288 bytes
+# check aligned(fast=1) 3.439e-16   ragged(fast=0) 2.770e-16   tol 1.0e-12 -> PASS
+RESULT dtype=double m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=3.438892e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=double beta=0
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=0.000e+00 | 70x53x37 b2 (pred) relerr=0.000e+00
+RESULT dtype=double m=0 n=0 k=0 batch=0 beta=0 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=0.000e+00
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=cfloat beta=0
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=2, shared=16384 B, register budget=128/thread
+  per k-step: 6 vector shared loads : 32 MACs (= 128 FFMA-equivalent, ratio 21.33:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=3.210e-07
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0.375) path=fast  relerr=3.165e-07
+  check fast/arg    256x 128x  64 batch 2 beta=(0,0) path=fast  relerr=3.375e-07
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0.375) path=predicated  relerr=1.870e-07
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=1.731e-07
+verification OK (maxrelerr 3.375e-07 <= 5.000e-05)
+RESULT dtype=cfloat m=512 n=512 k=512 batch=64 beta=0 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=3.375e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=cfloat beta=0
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=2 elems (16 bytes)  smem/wg=12288 bytes
+# check aligned(fast=1) 2.533e-07   ragged(fast=0) 3.533e-07   tol 1.0e-05 -> PASS
+RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=3.533017e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=cfloat beta=0
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=2.903e-07 | 70x53x37 b2 (pred) relerr=3.087e-07
+RESULT dtype=cfloat m=0 n=0 k=0 batch=0 beta=0 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=3.087e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=cdouble beta=0
+device: NVIDIA GeForce RTX 4090
+tile 128x64x8_t8x4: macro 128x64x8, thread tile 8x4 (32 accumulators), 256 threads, VecLen=1, shared=24576 B, register budget=256/thread
+  per k-step: 12 vector shared loads : 32 MACs (= 128 FFMA-equivalent, ratio 10.67:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=7.417e-16
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0.375) path=fast  relerr=8.301e-16
+  check fast/arg    256x 128x  64 batch 2 beta=(0,0) path=fast  relerr=8.236e-16
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0.375) path=predicated  relerr=5.070e-16
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=4.356e-16
+verification OK (maxrelerr 8.301e-16 <= 1.000e-12)
+RESULT dtype=cdouble m=512 n=512 k=512 batch=64 beta=0 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=8.301e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=cdouble beta=0
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=1 elems (16 bytes)  smem/wg=24576 bytes
+# check aligned(fast=1) 4.862e-16   ragged(fast=0) 5.851e-16   tol 1.0e-12 -> PASS
+RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=5.850889e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=cdouble beta=0
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=0.000e+00 | 70x53x37 b2 (pred) relerr=0.000e+00
+RESULT dtype=cdouble m=0 n=0 k=0 batch=0 beta=0 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=0.000e+00
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=float beta=0
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=4, shared=8192 B, register budget=128/thread
+  per k-step: 3 vector shared loads : 32 MACs (= 32 FFMA-equivalent, ratio 10.67:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=2.372e-07
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0) path=fast  relerr=2.235e-07
+  check fast/arg    256x 128x  64 batch 2 beta=(0,0) path=fast  relerr=3.200e-07
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0) path=predicated  relerr=1.462e-07
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=1.412e-07
+verification OK (maxrelerr 3.200e-07 <= 5.000e-05)
+RESULT dtype=float m=512 n=512 k=512 batch=64 beta=0 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=3.200e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=float beta=0
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=4 elems (16 bytes)  smem/wg=6144 bytes
+# check aligned(fast=1) 1.645e-07   ragged(fast=0) 1.477e-07   tol 1.0e-05 -> PASS
+RESULT dtype=float m=512 n=512 k=512 batch=128 beta=0 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=1.644871e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=float beta=0
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=2.116e-07 | 70x53x37 b2 (pred) relerr=2.093e-07
+RESULT dtype=float m=0 n=0 k=0 batch=0 beta=0 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=2.116e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=double beta=1
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=2, shared=16384 B, register budget=128/thread
+  per k-step: 6 vector shared loads : 32 MACs (= 32 FFMA-equivalent, ratio 5.33:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=3.534e-16
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0) path=fast  relerr=3.331e-16
+  check fast/arg    256x 128x  64 batch 2 beta=(1,0) path=fast  relerr=4.287e-16
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0) path=predicated  relerr=2.723e-16
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=2.630e-16
+verification OK (maxrelerr 4.287e-16 <= 1.000e-12)
+RESULT dtype=double m=512 n=512 k=512 batch=64 beta=1 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=4.287e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=double beta=1
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=2 elems (16 bytes)  smem/wg=12288 bytes
+# check aligned(fast=1) 3.001e-16   ragged(fast=0) 2.882e-16   tol 1.0e-12 -> PASS
+RESULT dtype=double m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=3.001375e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=double beta=1
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=0.000e+00 | 70x53x37 b2 (pred) relerr=0.000e+00
+RESULT dtype=double m=0 n=0 k=0 batch=0 beta=1 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=0.000e+00
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=cfloat beta=1
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=2, shared=16384 B, register budget=128/thread
+  per k-step: 6 vector shared loads : 32 MACs (= 128 FFMA-equivalent, ratio 21.33:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=3.210e-07
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0.375) path=fast  relerr=3.165e-07
+  check fast/arg    256x 128x  64 batch 2 beta=(1,0.5) path=fast  relerr=3.035e-07
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0.375) path=predicated  relerr=1.870e-07
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=1.731e-07
+verification OK (maxrelerr 3.210e-07 <= 5.000e-05)
+RESULT dtype=cfloat m=512 n=512 k=512 batch=64 beta=1 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=3.210e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=cfloat beta=1
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=2 elems (16 bytes)  smem/wg=12288 bytes
+# check aligned(fast=1) 2.441e-07   ragged(fast=0) 2.605e-07   tol 1.0e-05 -> PASS
+RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=2.605264e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=cfloat beta=1
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=3.194e-07 | 70x53x37 b2 (pred) relerr=2.896e-07
+RESULT dtype=cfloat m=0 n=0 k=0 batch=0 beta=1 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=3.194e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=cdouble beta=1
+device: NVIDIA GeForce RTX 4090
+tile 128x64x8_t8x4: macro 128x64x8, thread tile 8x4 (32 accumulators), 256 threads, VecLen=1, shared=24576 B, register budget=256/thread
+  per k-step: 12 vector shared loads : 32 MACs (= 128 FFMA-equivalent, ratio 10.67:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=7.417e-16
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0.375) path=fast  relerr=8.301e-16
+  check fast/arg    256x 128x  64 batch 2 beta=(1,0.5) path=fast  relerr=8.475e-16
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0.375) path=predicated  relerr=5.070e-16
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=4.356e-16
+verification OK (maxrelerr 8.475e-16 <= 1.000e-12)
+RESULT dtype=cdouble m=512 n=512 k=512 batch=64 beta=1 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=8.475e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=cdouble beta=1
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=1 elems (16 bytes)  smem/wg=24576 bytes
+# check aligned(fast=1) 4.492e-16   ragged(fast=0) 4.511e-16   tol 1.0e-12 -> PASS
+RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=4.511026e-16
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=cdouble beta=1
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=0.000e+00 | 70x53x37 b2 (pred) relerr=0.000e+00
+RESULT dtype=cdouble m=0 n=0 k=0 batch=0 beta=1 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=0.000e+00
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 2565 MHz at start)
+   (exit 0)
+### tile-128x128-k8-t8x4 dtype=float beta=1
+device: NVIDIA GeForce RTX 4090
+tile 128x128x8_t8x4: macro 128x128x8, thread tile 8x4 (32 accumulators), 512 threads, VecLen=4, shared=8192 B, register budget=128/thread
+  per k-step: 3 vector shared loads : 32 MACs (= 32 FFMA-equivalent, ratio 10.67:1)
+verifying...
+  check fast/b0     128x 128x  32 batch 3 beta=(0,0) path=fast  relerr=2.372e-07
+  check fast/b1     128x 128x  32 batch 3 beta=(0.75,0) path=fast  relerr=2.235e-07
+  check fast/arg    256x 128x  64 batch 2 beta=(1,0) path=fast  relerr=2.589e-07
+  check ragged      100x  70x  13 batch 2 beta=(0.75,0) path=predicated  relerr=1.462e-07
+  check ragged/b0   129x 257x   9 batch 1 beta=(0,0) path=predicated  relerr=1.412e-07
+verification OK (maxrelerr 2.589e-07 <= 5.000e-05)
+RESULT dtype=float m=512 n=512 k=512 batch=64 beta=1 tile=128x128x8_t8x4 ms=nan tflops=nan maxrelerr=2.589e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-128x64-k8-t8x4 dtype=float beta=1
+# device: NVIDIA GeForce RTX 4090
+# tile 128x64x8_t8x4  vec_len=4 elems (16 bytes)  smem/wg=6144 bytes
+# check aligned(fast=1) 1.617e-07   ragged(fast=0) 1.401e-07   tol 1.0e-05 -> PASS
+RESULT dtype=float m=512 n=512 k=512 batch=128 beta=1 tile=128x64x8_t8x4 ms=nan tflops=nan maxrelerr=1.616877e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)
+### tile-64x64-k16-t4x4 dtype=float beta=1
+device: NVIDIA GeForce RTX 4090
+check: 128x128x32 b3 (fast) relerr=1.791e-07 | 70x53x37 b2 (pred) relerr=1.963e-07
+RESULT dtype=float m=0 n=0 k=0 batch=0 beta=1 tile=64x64x16_t4x4 ms=0 tflops=0 maxrelerr=1.963e-07
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)
+   (exit 0)

@@ -1,0 +1,482 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 138 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 63.966 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 138 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 62.838 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 34.112 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 34.521 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 216 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 68.374 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 216 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 69.330 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE_with_offset
+    536 bytes stack frame, 3256 bytes spill stores, 2936 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 536 bytes cumulative stack size, 484 bytes cmem[0]
+ptxas info    : Compile time = 208.376 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE
+    536 bytes stack frame, 3256 bytes spill stores, 2936 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 536 bytes cumulative stack size, 472 bytes cmem[0]
+ptxas info    : Compile time = 208.340 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 59.870 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 63.468 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 35.797 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 34.499 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 69.447 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 68.867 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset
+    656 bytes stack frame, 3244 bytes spill stores, 2916 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 656 bytes cumulative stack size, 484 bytes cmem[0]
+ptxas info    : Compile time = 208.118 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE
+    656 bytes stack frame, 3244 bytes spill stores, 2916 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 656 bytes cumulative stack size, 472 bytes cmem[0]
+ptxas info    : Compile time = 206.692 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 140 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 56.318 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 140 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 57.823 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 31.896 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 31.493 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 226 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 64.332 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 226 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 66.053 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE_with_offset
+    560 bytes stack frame, 3304 bytes spill stores, 2968 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 560 bytes cumulative stack size, 476 bytes cmem[0]
+ptxas info    : Compile time = 232.024 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE
+    560 bytes stack frame, 3304 bytes spill stores, 2968 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 560 bytes cumulative stack size, 464 bytes cmem[0]
+ptxas info    : Compile time = 236.321 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 59.726 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 130 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 57.771 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 138 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 35.336 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 138 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 35.012 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 208 registers, used 1 barriers, 476 bytes cmem[0]
+ptxas info    : Compile time = 70.493 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 208 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 71.369 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset
+    680 bytes stack frame, 3444 bytes spill stores, 3076 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 680 bytes cumulative stack size, 476 bytes cmem[0]
+ptxas info    : Compile time = 292.387 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIdE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE
+    680 bytes stack frame, 3444 bytes spill stores, 3076 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 680 bytes cumulative stack size, 464 bytes cmem[0]
+ptxas info    : Compile time = 298.102 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 22.707 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 22.110 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 14.284 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 14.295 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 24.071 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 24.006 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 47.976 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 46.879 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 20.505 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 19.886 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 12.735 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 11.996 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 20.476 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 21.340 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 208 registers, used 1 barriers, 460 bytes cmem[0]
+ptxas info    : Compile time = 43.772 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelId7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 208 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 43.145 ms
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 56.813 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 55.636 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 31.587 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 33.057 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 61.541 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 69.314 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 212 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 173.212 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 212 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 169.000 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 54.774 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 54.161 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 32.304 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 31.951 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 127 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 64.321 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 127 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 65.978 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 249 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 177.291 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 249 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 183.652 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 79 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 48.785 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 79 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 49.451 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 28.049 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 80 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 27.546 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 54.995 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 126 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 59.940 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 150.993 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb0EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 210 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 151.498 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 79 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 49.240 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 79 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 48.772 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 26.646 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 26.870 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 56.269 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 122 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 56.258 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 247 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 161.497 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelISt7complexIfE7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 247 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 160.707 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 18.034 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 18.215 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 39 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 13.737 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 39 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 13.711 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 64 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 23.681 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 64 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 23.871 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 117 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 46.465 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb1ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 117 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 46.291 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 14.920 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi16ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 436 bytes cmem[0]
+ptxas info    : Compile time = 14.570 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 10.452 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi64ELi64ELi8ELi4ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 55 registers, used 1 barriers, 436 bytes cmem[0]
+ptxas info    : Compile time = 10.005 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 64 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 16.901 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi4EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 64 registers, used 1 barriers, 436 bytes cmem[0]
+ptxas info    : Compile time = 17.430 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 117 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 33.607 ms
+ptxas info    : Compiling entry function '_ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS15SplitGemmKernelIf7TileCfgILi128ELi128ELi8ELi8ELi8EELb0ELb1EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 117 registers, used 1 barriers, 436 bytes cmem[0]
+ptxas info    : Compile time = 33.446 ms
