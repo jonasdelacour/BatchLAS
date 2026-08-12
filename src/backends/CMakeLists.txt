@@ -6,44 +6,101 @@ set(BACKEND_HOST_SOURCES)
 set(BACKEND_CUDA_SOURCES)
 set(BACKEND_ROCM_SOURCES)
 
-if(BATCHLAS_HAS_HOST_BACKEND)
+# WP0 S3: gate each vendor translation unit on ITS OWN library, not on the
+# device family. netlib_lapack.cc calls LAPACKE and CBLAS, so it belongs to
+# those libraries; cublas.cc calls cuBLAS; cusolver.cc calls cuSOLVER; and so
+# on. Under the old family gate, "there is a CUDA device" compiled all four
+# NVIDIA TUs whether or not their libraries existed -- which is why cuSOLVER and
+# cuSPARSE were linked without ever being probed (S1).
+#
+# On a full-vendor box every condition below is true and the source lists are
+# unchanged, so this step is bit-identical here. Turning a library off does not
+# yet produce a LINKABLE build: the public op definitions still live inside
+# these vendor TUs (e.g. gemm<Back,T> at cublas.cc:1568-1580), so dropping a TU
+# drops those definitions too. Moving them into a vendor-independent facade is
+# S5, and the no-vendor build links at S6.
+if(BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS)
     list(APPEND BACKEND_HOST_SOURCES
         netlib_lapack.cc
     )
 endif()
 
-if(BATCHLAS_HAS_MKL_BACKEND)
+# mkl.cc has never been compiled -- this block has been commented out for its
+# whole history -- while Backend::MKL is still reachable in with_backend() and
+# still instantiated by several extension TUs. Wiring an enum value to nothing
+# is precisely the defect this work package exists to remove; the spec's S5
+# deletes Backend::MKL outright rather than pretending it is a backend.
+if(BATCHLAS_HAS_ONEMKL)
     #list(APPEND BACKEND_SOURCES
     #    mkl.cc
     #)
 endif()
 
-if(BATCHLAS_HAS_CUDA_BACKEND)
+if(BATCHLAS_HAS_CUBLAS)
+    list(APPEND BACKEND_CUDA_SOURCES cublas.cc)
+endif()
+if(BATCHLAS_HAS_CUSOLVER)
+    list(APPEND BACKEND_CUDA_SOURCES cusolver.cc)
+endif()
+if(BATCHLAS_HAS_CUSPARSE)
+    list(APPEND BACKEND_CUDA_SOURCES cusparse.cc)
+endif()
+
+# The cuBLASDx/cuSolverDx wrapper TUs are gated on cuBLAS/cuSOLVER, NOT on
+# BATCHLAS_HAS_CUBLASDX.
+#
+# That looks wrong and is deliberate. These files are compiled TODAY on this
+# machine even though MathDx is absent and BATCHLAS_ENABLE_CUBLASDX_WRAPPER is
+# OFF: each one carries its own internal #if and, with MathDx missing, still
+# emits the fallback definitions that gemm_cublasdx_dispatch.cc and the four
+# *_custom_dispatch.cc TUs call. Gating them on BATCHLAS_HAS_CUBLASDX (which is
+# 0 here) therefore does not remove dead code -- it removes symbols that live
+# callers reference, and the link fails. Verified against the baseline build
+# log, which shows all five .cu TUs compiling with MathDx absent.
+#
+# Making these genuinely optional means first routing their callers' terminal
+# GEMM through the public entry point; that is WP1, not S3.
+if(BATCHLAS_HAS_CUBLAS)
     list(APPEND BACKEND_CUDA_SOURCES
-        cublas.cc
         gemm_cublasdx.cu
-        gemm_cublasdx_dispatch.cc
         symm_cublasdx_fused.cu
-        symm_custom_dispatch.cc
         syrk_cublasdx_fused.cu
-        syrk_custom_dispatch.cc
         syr2k_cublasdx_fused.cu
-        syr2k_custom_dispatch.cc
         trmm_cublasdx_fused.cu
-        trmm_custom_dispatch.cc
-        cusparse.cc
-        cusolver.cc
+    )
+endif()
+if(BATCHLAS_HAS_CUSOLVER)
+    list(APPEND BACKEND_CUDA_SOURCES
         cusolverdx.cc
         cusolverdx_kernels.cu
     )
 endif()
 
-if(BATCHLAS_HAS_ROCM_BACKEND)
-    list(APPEND BACKEND_ROCM_SOURCES
-        rocblas.cc
-        rocsparse.cc
-        rocsolver.cc
+# These four are the portable expand-then-gemm / tile-masked level-3 routes, and
+# the dispatch shims that pick between them and the vendor. They are SYCL, not
+# CUDA -- see the standalone-compile check on triangular_expand.hh and the
+# *_tiles.hh family -- but they still call *_vendor_cuda_raw and the cuBLASDx
+# entry points, so they cannot leave the CUDA object library until that terminal
+# call is routed through the public gemm entry point (WP1). Keep them with
+# cuBLAS for now, which is the library they actually depend on.
+if(BATCHLAS_HAS_CUBLAS)
+    list(APPEND BACKEND_CUDA_SOURCES
+        gemm_cublasdx_dispatch.cc
+        symm_custom_dispatch.cc
+        syrk_custom_dispatch.cc
+        syr2k_custom_dispatch.cc
+        trmm_custom_dispatch.cc
     )
+endif()
+
+if(BATCHLAS_HAS_ROCBLAS)
+    list(APPEND BACKEND_ROCM_SOURCES rocblas.cc)
+endif()
+if(BATCHLAS_HAS_ROCSOLVER)
+    list(APPEND BACKEND_ROCM_SOURCES rocsolver.cc)
+endif()
+if(BATCHLAS_HAS_ROCSPARSE)
+    list(APPEND BACKEND_ROCM_SOURCES rocsparse.cc)
 endif()
 
 target_sources(batchlas_backends_obj PRIVATE ${BACKEND_COMMON_SOURCES} ${BACKEND_HOST_SOURCES})
