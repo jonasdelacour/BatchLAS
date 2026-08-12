@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
 #include <iostream>
@@ -124,9 +124,9 @@ TEST_F(LanczosTestBase, LanczosTest) {
         csr_values.data(),
         csr_row_offsets.data(),
         csr_col_indices.data(),
-        total_nnz,
         rows,
         rows,
+        NonZeros{total_nnz},
         total_nnz,
         rows+1,
         batch_size);

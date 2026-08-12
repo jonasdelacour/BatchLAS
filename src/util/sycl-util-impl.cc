@@ -5,9 +5,9 @@
 #include <limits>
 #include <cstdint>
 #include <complex>
-#include <util/sycl-span.hh>
-#include <util/sycl-vector.hh>
-#include <util/reference-wrapper.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/reference-wrapper.hh>
 #include "../queue.hh"
 
 #ifndef DEVICE_CAST

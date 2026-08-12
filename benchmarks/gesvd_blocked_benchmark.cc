@@ -1,7 +1,7 @@
-#include <util/minibench.hh>
+#include <batchlas/util/minibench.hh>
 
-#include <blas/enums.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/extensions.hh>
 
 #include "bench_utils.hh"
 

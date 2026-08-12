@@ -17,15 +17,15 @@
 //      MRRR, and it costs O(n*k^2) only within clusters.
 
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 

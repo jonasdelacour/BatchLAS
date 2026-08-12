@@ -1,8 +1,8 @@
 #pragma once
 
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas::sycl_gemm {
 

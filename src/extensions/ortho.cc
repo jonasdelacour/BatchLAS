@@ -1,16 +1,16 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
-#include <util/sycl-local-accessor-helpers.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <numeric>
 #include <cstdlib>
 #include <string>
 #include <algorithm>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
 #include "../util/template-instantiations.hh"

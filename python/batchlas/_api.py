@@ -1699,7 +1699,7 @@ def random_hermitian_tridiagonal_with_log10_cond_metric(**kwargs):
 
 # --- elementwise arithmetic -------------------------------------------------
 #
-# These wrap batchlas::linalg (see include/blas/linalg-ops.hh). Unlike the
+# These wrap batchlas::linalg (see include/batchlas/blas/linalg-ops.hh). Unlike the
 # BLAS/LAPACK entry points they take no `backend`: they are SYCL kernels, not
 # vendor-library calls, so there is nothing for a backend to select. `device`
 # still applies and picks where the arithmetic runs.

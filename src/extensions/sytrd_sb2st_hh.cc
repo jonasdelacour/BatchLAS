@@ -3,10 +3,10 @@
 // rationale and for the schedule, which is validated in
 // playground/sb2st_hh_sequential.py.
 
-#include <blas/extensions.hh>
-#include <blas/matrix.hh>
-#include <util/env.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -754,7 +754,7 @@ namespace {
 // and would re-open the geometry question from scratch.
 //
 // internal::is_complex rather than the base_type/is_same_v dance used in
-// include/blas/functions/syev.hh: that idiom exists because is_complex is not
+// include/batchlas/blas/functions/syev.hh: that idiom exists because is_complex is not
 // visible from a public header, and here it is (math-helpers.hh, used by
 // conj_if above).
 template <typename T>

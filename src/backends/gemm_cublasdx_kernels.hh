@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blas/enums.hh>
+#include <batchlas/blas/enums.hh>
 
 #include <cuda_runtime_api.h>
 

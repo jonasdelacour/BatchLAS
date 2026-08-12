@@ -1,5 +1,5 @@
-#include <blas/extensions.hh>
-#include <util/miniacc.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/util/miniacc.hh>
 
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"

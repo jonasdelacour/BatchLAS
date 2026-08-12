@@ -1,6 +1,6 @@
-#include <util/minibench.hh>
-#include <blas/linalg.hh>
-#include <internal/ormqr_blocked.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/internal/ormqr_blocked.hh>
 
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>

@@ -3,7 +3,7 @@
 #include "math-helpers.hh"
 #include "queue.hh"
 
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <algorithm>
 #include <cstddef>

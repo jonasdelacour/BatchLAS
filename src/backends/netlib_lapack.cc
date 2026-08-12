@@ -1,19 +1,26 @@
-#include "../../include/blas/linalg.hh"
+#include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
+#include <batchlas/backend_config.h>
 #include <complex>
 #include <utility>
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
 #include <lapack.h>
-#include <blas/linalg.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/mempool.hh>
 
-#include <blas/functions/ormqr.hh>
-#include <blas/functions/syev.hh>
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/dispatch/op.hh>
 
 #include "gemm_variant.hh"
 #include "../util/template-instantiations.hh"
@@ -21,8 +28,178 @@
 namespace batchlas{
 
     namespace detail {
-    template <typename F>
+
+    // ---------------------------------------------------------------------
+    // Host BLAS double-precision health check.
+    //
+    // Some OpenBLAS builds ship a CPU-dispatch kernel that computes dgemm
+    // wrongly on the machine auto-detection picks it for; the known case is
+    // OpenBLAS 0.3.20's "Cooperlake" kernel on recent Intel parts, off by
+    // O(1)-O(100) at some sizes while sgemm is fine. Everything layered on top
+    // silently inherits the garbage.
+    //
+    // cmake/BatchLASBlasHealthCheck.cmake detects this at configure time and
+    // records the OPENBLAS_CORETYPE value that repairs it, but a configure-time
+    // answer is stale by construction: an install tree is routinely consumed on
+    // a machine other than the one that built it. So the recorded value is
+    // compiled in as BATCHLAS_REQUIRED_OPENBLAS_CORETYPE and we re-run a cheap
+    // version of the same probe here, once, on first double-precision use.
+    //
+    // Deliberately no setenv(): OpenBLAS reads OPENBLAS_CORETYPE in its library
+    // constructor, which has already run by the time any BatchLAS code
+    // executes, so setting it from here would look like it worked and change
+    // nothing. Only the environment of the process before it starts can fix it.
+    // ---------------------------------------------------------------------
+
+#ifndef BATCHLAS_REQUIRED_OPENBLAS_CORETYPE
+#define BATCHLAS_REQUIRED_OPENBLAS_CORETYPE ""
+#endif
+
+    struct HostBlasDoubleHealth {
+        bool ok = true;
+        int bad_size = 0;
+        double worst_error = 0.0;
+    };
+
+    // off | warn (default) | error
+    inline const char* host_blas_health_mode() {
+        const char* mode = std::getenv("BATCHLAS_BLAS_HEALTH");
+        return mode ? mode : "warn";
+    }
+
+    // Port of the configure-time probe in cmake/BatchLASBlasHealthCheck.cmake.
+    // The naive reference is evaluated on a strided sample of C (at most 32x32
+    // entries per size) so the whole thing costs a few milliseconds: a broken
+    // kernel is wrong by O(1)+ across the result, not in one isolated entry.
+    // Sizes are the ones that expose the known defect (n=64 and n=256 happen to
+    // be correct there, so a single small size proves nothing).
+    inline HostBlasDoubleHealth probe_host_dgemm() {
+        HostBlasDoubleHealth health;
+        static const int sizes[] = {128, 200, 512};
+        for (int n : sizes) {
+            const size_t nn = static_cast<size_t>(n) * static_cast<size_t>(n);
+            std::vector<double> a(nn), b(nn), c(nn, 0.0);
+            for (int col = 0; col < n; ++col) {
+                for (int row = 0; row < n; ++row) {
+                    a[row + static_cast<size_t>(col) * n] = std::sin(0.5 * (row + 1) * (col + 1));
+                    b[row + static_cast<size_t>(col) * n] = std::cos(0.25 * (row + 1) * (col + 2));
+                }
+            }
+
+            call_backend_nh<double, BackendLibrary::CBLAS>(
+                cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
+                Layout::ColMajor, Transpose::NoTrans, Transpose::NoTrans,
+                n, n, n,
+                1.0,
+                a.data(), n,
+                b.data(), n,
+                0.0,
+                c.data(), n);
+
+            const int step = std::max(1, n / 32);
+            double worst = 0.0;
+            for (int col = 0; col < n; col += step) {
+                for (int row = 0; row < n; row += step) {
+                    double want = 0.0;
+                    for (int i = 0; i < n; ++i) {
+                        want += a[row + static_cast<size_t>(i) * n] * b[i + static_cast<size_t>(col) * n];
+                    }
+                    const double diff = std::abs(want - c[row + static_cast<size_t>(col) * n]);
+                    if (diff > worst) worst = diff;
+                }
+            }
+            // Rounding differences are ~1e-13 here; a broken kernel is off by O(1)+.
+            if (worst > 1e-6) {
+                health.ok = false;
+                health.bad_size = n;
+                health.worst_error = worst;
+                return health;
+            }
+        }
+        return health;
+    }
+
+    inline const HostBlasDoubleHealth& host_blas_double_health() {
+        static const HostBlasDoubleHealth health = [] {
+            if (std::strcmp(host_blas_health_mode(), "off") == 0) {
+                return HostBlasDoubleHealth{};
+            }
+            return probe_host_dgemm();
+        }();
+        return health;
+    }
+
+    inline std::string host_blas_double_health_message(const HostBlasDoubleHealth& health) {
+        const std::string required = BATCHLAS_REQUIRED_OPENBLAS_CORETYPE;
+        const char* current_env = std::getenv("OPENBLAS_CORETYPE");
+        const std::string current = current_env ? current_env : "";
+
+        std::string msg =
+            "BatchLAS: the host BLAS computes dgemm INCORRECTLY on this machine.\n"
+            "  probe: max abs error " + std::to_string(health.worst_error) +
+            " at n=" + std::to_string(health.bad_size) + " (rounding alone is ~1e-13)\n"
+            "  OPENBLAS_CORETYPE is currently " +
+            (current.empty() ? std::string("unset") : ("\"" + current + "\"")) + "\n";
+
+        if (!required.empty()) {
+            msg += "  this build detected that OPENBLAS_CORETYPE=" + required + " repairs it\n";
+        }
+        msg += "Double-precision results from the host/NETLIB backend cannot be trusted.\n"
+               "OpenBLAS reads OPENBLAS_CORETYPE in its library constructor, before main(),\n"
+               "so it must be set in the environment before the process starts - BatchLAS\n"
+               "cannot set it for you.\n";
+
+        if (!required.empty() && required != current) {
+            msg += "    export OPENBLAS_CORETYPE=" + required + "\n";
+        } else if (!required.empty()) {
+            msg += "OPENBLAS_CORETYPE=" + required + " is already set and dgemm is still wrong: "
+                   "this host BLAS is unusable for double precision, upgrade or replace it.\n";
+        } else {
+            msg += "No working value was recorded at build time. Try, in order:\n"
+                   "    export OPENBLAS_CORETYPE=SKYLAKEX   (then HASWELL, SANDYBRIDGE, NEHALEM, PRESCOTT)\n";
+        }
+        msg += "Set BATCHLAS_BLAS_HEALTH=error to turn this into an exception, "
+               "or BATCHLAS_BLAS_HEALTH=off to skip the check.\n";
+        return msg;
+    }
+
+    inline void check_host_blas_double_health() {
+        const HostBlasDoubleHealth& health = host_blas_double_health();
+        if (health.ok) return;
+
+        const std::string msg = host_blas_double_health_message(health);
+        if (std::strcmp(host_blas_health_mode(), "error") == 0) {
+            throw std::runtime_error(msg);
+        }
+        // Warn once, loudly.
+        static const bool warned = [&] {
+            std::fputs("\n============================================================\n", stderr);
+            std::fputs(msg.c_str(), stderr);
+            std::fputs("============================================================\n\n", stderr);
+            std::fflush(stderr);
+            return true;
+        }();
+        static_cast<void>(warned);
+    }
+
+    // No-op for anything that is not double precision: a broken dgemm kernel
+    // does not make single precision wrong, and a float-only user should not be
+    // told to change their environment.
+    template <typename T>
+    inline void host_blas_double_guard() {
+        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
+            check_host_blas_double_health();
+        }
+    }
+
+    // T is the element type of the operation, used only for the double-precision
+    // health check above; it defaults to void (check skipped) so untyped callers
+    // keep compiling.
+    template <typename T = void, typename F>
     Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
+        if constexpr (!std::is_void_v<T>) {
+            host_blas_double_guard<T>();
+        }
         ctx.wait();
         f();
         try {
@@ -51,6 +228,8 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = B;
         auto C_view = C;
+        // No double-precision guard here: the CSR path below is hand-written and
+        // never calls into the host BLAS, so a broken dgemm cannot affect it.
         return detail::submit_host_task(ctx, "netlib.spmm", [=] {
             if constexpr (MFormat == MatrixFormat::CSR) {
                 int batch = A_view.batch_size();
@@ -119,7 +298,7 @@ namespace batchlas{
         auto A_view = descrA;
         auto B_view = descrB;
         auto C_view = descrC;
-        return detail::submit_host_task(ctx, "netlib.gemm", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
             if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
                 throw std::runtime_error("GEMM: incompatible matrix dimensions");
             }
@@ -181,7 +360,7 @@ namespace batchlas{
         auto A_view = A;
         auto X_view = X;
         auto Y_view = Y;
-        return detail::submit_host_task(ctx, "netlib.gemv", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.gemv", [=] {
             const int m = A_view.rows();
             const int n = A_view.cols();
             if (A_view.batch_size() > 1) {
@@ -233,7 +412,7 @@ namespace batchlas{
         T alpha) {
         auto A_view = descrA;
         auto B_view = descrB;
-        return detail::submit_host_task(ctx, "netlib.trsm", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
             const int m = B_view.rows();
             const int n = B_view.cols();
             constexpr bool is_complex = std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
@@ -341,7 +520,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.symm", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
             if (A_view.rows() != A_view.cols()) {
                 throw std::runtime_error("SYMM: A must be square");
             }
@@ -408,7 +587,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.hemm", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
             if (A_view.rows() != A_view.cols()) {
                 throw std::runtime_error("HEMM: A must be square");
             }
@@ -462,7 +641,7 @@ namespace batchlas{
                Transpose transA) {
         auto A_view = A;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.herk", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
             if (C_view.rows() != C_view.cols()) {
                 throw std::runtime_error("HERK: C must be square");
             }
@@ -521,7 +700,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.her2k", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
             if (C_view.rows() != C_view.cols()) {
                 throw std::runtime_error("HER2K: C must be square");
             }
@@ -579,7 +758,7 @@ namespace batchlas{
                Transpose transA) {
         auto A_view = A;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.syrk", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
             if (C_view.rows() != C_view.cols()) {
                 throw std::runtime_error("SYRK: C must be square");
             }
@@ -641,7 +820,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.syr2k", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
             if (C_view.rows() != C_view.cols()) {
                 throw std::runtime_error("SYR2K: C must be square");
             }
@@ -711,7 +890,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task(ctx, "netlib.trmm", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
             if (A_view.rows() != A_view.cols()) {
                 throw std::runtime_error("TRMM: A must be square");
             }
@@ -768,7 +947,7 @@ namespace batchlas{
                     Span<std::byte> workspace) {
         static_cast<void>(workspace);
         auto A_view = descrA;
-        return detail::submit_host_task(ctx, "netlib.potrf", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.potrf", [=] {
             if (A_view.batch_size() == 1) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
@@ -797,7 +976,7 @@ namespace batchlas{
         auto A_view = descrA;
         auto eig = eigenvalues;
         return op_external("lapacke.syev", [&, A_view, eig, jobtype, uplo] {
-            return detail::submit_host_task(ctx, "lapacke.syev", [=] {
+            return detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
                 if (A_view.batch_size() == 1) {
                     call_backend_nh<T, BackendLibrary::LAPACKE>(
                         LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
@@ -829,7 +1008,7 @@ namespace batchlas{
         return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
     }
 
-    // Moved verbatim from include/blas/functions/gesvd.hh, which used to *define*
+    // Moved verbatim from include/batchlas/blas/functions/gesvd.hh, which used to *define*
     // the primary template (and therefore made a cuSOLVER definition a
     // redefinition error). Semantics are unchanged, including the synchronous
     // ctx.wait() -- LAPACKE ?gesvd needs A on the host and this path is the
@@ -844,6 +1023,11 @@ namespace batchlas{
                        SvdVectors jobvh,
                        Span<std::byte> workspace) {
         static_cast<void>(workspace);
+
+        // This path calls LAPACKE directly rather than going through
+        // submit_host_task, so it has to run the double-precision health check
+        // itself; otherwise a broken host dgemm is silent here.
+        detail::host_blas_double_guard<T>();
 
         if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
             throw std::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
@@ -983,7 +1167,7 @@ namespace batchlas{
         });
         Event conv_event(std::move(conv_impl));
         ctx.enqueue(conv_event);
-        return detail::submit_host_task(ctx, "netlib.getrs", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.getrs", [=] {
             int nrhs = B_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
@@ -1025,7 +1209,7 @@ namespace batchlas{
         const int batch = A_view.batch_size();
         auto piv_i32 = pool.allocate<int>(ctx, n * batch);
 
-        Event getrf_event = detail::submit_host_task(ctx, "netlib.getrf", [=] {
+        Event getrf_event = detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
             for (int i = 0; i < batch; ++i) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
@@ -1073,7 +1257,7 @@ namespace batchlas{
         const int n = A_view.rows();
         const int batch = A_view.batch_size();
         auto piv_i32 = pool.allocate<int>(ctx, n * batch);
-        return detail::submit_host_task(ctx, "netlib.getri", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
             auto piv_in = piv.as_span<int64_t>();
             for (int b = 0; b < batch; ++b) {
                 auto Ab = A_view[b];
@@ -1110,7 +1294,7 @@ namespace batchlas{
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
-        return detail::submit_host_task(ctx, "netlib.geqrf", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.geqrf", [=] {
             int m = A_view.rows();
             int n = A_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
@@ -1144,7 +1328,7 @@ namespace batchlas{
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
-        return detail::submit_host_task(ctx, "netlib.orgqr", [=] {
+        return detail::submit_host_task<T>(ctx, "netlib.orgqr", [=] {
             int m = A_view.rows();
             int n = A_view.cols();
             int k = std::min(m, n);
@@ -1186,7 +1370,7 @@ namespace batchlas{
         auto C_view = C;
         auto tau_view = tau;
         return op_external("lapacke.ormqr_vendor", [&, A_view, C_view, tau_view, side, trans] {
-            return detail::submit_host_task(ctx, "lapacke.ormqr_vendor", [=] {
+            return detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
                 static_cast<void>(workspace);
                 int m = C_view.rows();
                 int n = C_view.cols();
@@ -1242,7 +1426,7 @@ namespace batchlas{
 
 
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/blas/functions/*.hh), so changing one is a single
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 

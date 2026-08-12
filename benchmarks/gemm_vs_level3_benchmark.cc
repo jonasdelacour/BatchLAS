@@ -18,10 +18,10 @@
 //
 // Run one family at a time with --name Gram / Trailing / TW.
 
-#include <util/minibench.hh>
-#include <util/bench_structured.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/util/bench_structured.hh>
 
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
 #include "bench_utils.hh"
 

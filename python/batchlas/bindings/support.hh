@@ -6,9 +6,9 @@
 
 #include <batchlas.hh>
 #include <batchlas/backend_config.h>
-#include <blas/extra.hh>
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
 
 #include <algorithm>
 #include <array>
@@ -861,7 +861,7 @@ SparseMatrixT<T> sparse_matrix_from_csr_objects_t(const std::vector<py::object>&
         payloads.push_back(std::move(payload));
     }
 
-    SparseMatrixT<T> matrix(rows, cols, max_nnz, static_cast<int>(items.size()));
+    SparseMatrixT<T> matrix(rows, cols, NonZeros{max_nnz}, static_cast<int>(items.size()));
     std::fill(matrix.data().begin(), matrix.data().end(), T(0));
     std::fill(matrix.col_indices().begin(), matrix.col_indices().end(), 0);
     std::fill(matrix.row_offsets().begin(), matrix.row_offsets().end(), 0);

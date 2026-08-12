@@ -1,7 +1,7 @@
-#include <blas/linalg.hh>
-#include <blas/extra.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/extra.hh>
 #include "accuracy_utils.hh"
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
 

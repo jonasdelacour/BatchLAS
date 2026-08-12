@@ -1,15 +1,15 @@
-//#include "../../include/blas/linalg.hh"
+//#include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
-#include <blas/functions/syev.hh>
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/dispatch/op.hh>
 
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {

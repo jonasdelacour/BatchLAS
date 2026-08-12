@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include <blas/extra.hh>
-#include <blas/matrix.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-vector.hh>
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-vector.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
 #include <cmath>

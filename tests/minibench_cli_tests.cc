@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <util/minibench.hh>
-#include <blas/enums.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/enums.hh>
 #include <batchlas/backend_config.h>
 #include "../benchmarks/bench_utils.hh"
 

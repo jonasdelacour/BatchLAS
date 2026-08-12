@@ -6,7 +6,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include <util/sycl-vector.hh>
+#include <batchlas/util/sycl-vector.hh>
 
 namespace batchlas::sycl_gemm {
 

@@ -1,6 +1,6 @@
-#include <util/minibench.hh>
-#include <blas/linalg.hh>
-#include <blas/extra.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/extra.hh>
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
 

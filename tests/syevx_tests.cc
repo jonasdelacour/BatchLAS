@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <blas/matrix.hh>
-#include <blas/extensions.hh>
-#include <blas/extra.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include "test_utils.hh"
 #include <tuple>
 #include <cstdlib>
@@ -142,13 +142,13 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
     UnifiedVector<float> W_syev(n * batch, 0);
 
     auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size(
-        *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params));
+        *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params));
     ctx ->wait();
     auto syev_workspace = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<test_utils::gpu_backend>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower));
 
     syevx(
-        *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr, 1, 1, 1), params);
+        *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
 #if BATCHLAS_HAS_HOST_BACKEND
     backend::syev_vendor<Backend::NETLIB>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
@@ -177,9 +177,9 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     MatrixView<float, MatrixFormat::CSR> A_view(csr_values.data(),
                                                 csr_row_offsets.data(),
                                                 csr_col_indices.data(),
-                                                total_nnz,
                                                 rows,
                                                 rows,
+                                                NonZeros{total_nnz},
                                                 total_nnz,
                                                 rows + 1,
                                                 batch_size);
@@ -193,12 +193,12 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     params.relative_tolerance = 1e-6f;
 
     size_t buffer_size = syevx_buffer_size(
-        *ctx, A_view, W_data, neig, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
+        *ctx, A_view, W_data, neig, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
 
     UnifiedVector<std::byte> workspace(buffer_size);
 
     syevx(
-        *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView((float*)nullptr,1,1,1), params);
+        *ctx, A_view, W_data, neig, workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
 
     ctx->wait();
 
@@ -354,9 +354,9 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     // shift-inverted operator), not the CSR view: the two can select different
     // algorithms and therefore different workspace requirements.
     UnifiedVector<std::byte> workspace(syevx_buffer_size(
-        *ctx, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params));
+        *ctx, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params));
 
-    syevx(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView((std::complex<double>*)nullptr, 1, 1, 1), params);
+    syevx(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params);
         ctx->wait();
 
     for (int i = 0; i < neig; ++i) {

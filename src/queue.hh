@@ -1,5 +1,6 @@
 #pragma once
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/sycl_interop.hh>
 #include <sycl/sycl.hpp>
 
 #include <cassert>
@@ -11,11 +12,61 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+// Quoted, and it has to stay quoted. src/util/ is a PRIVATE directory that is
+// never installed and is not on any -I line; it holds the only headers left in
+// the tree spelled `util/...`, reached exclusively by quoted relative includes.
+// The public tree moved to include/batchlas/util/ (spelled <batchlas/util/...>)
+// precisely so that no angle-form <util/...> exists anywhere. Do not add
+// -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
 #include "util/kernel-trace.hh"
-#include <util/env.hh>
+#include <batchlas/util/env.hh>
+
+// Inline definitions in this private header still have to reach consumers that
+// only ever see the declaration in the installed public header, so they must be
+// emitted into libbatchlas rather than dropped as unreferenced. `used` does that;
+// plain `inline` does not (verified: nothing in-tree calls them, so without this
+// the symbol is absent from every object file). Not applied in the SYCL device
+// pass, which has no business emitting host-only queue plumbing.
+#ifdef __SYCL_DEVICE_ONLY__
+#define BATCHLAS_QUEUE_EXPORTED_INLINE inline
+#else
+#define BATCHLAS_QUEUE_EXPORTED_INLINE [[gnu::used]] inline
+#endif
+
+// A Queue is single-threaded by contract; the reasoning is on struct Queue in
+// util/sycl-device-queue.hh. This is the whole enforcement: record the thread that
+// built the queue, and compare against it on the paths that mutate state shared
+// across a queue's calls. The check is a TLS load and a word compare, on paths
+// that are about to talk to a device driver.
+//
+// Deliberately not a mutex. The arena below is a bump allocator whose cursor
+// rewinds on release, so serialising the calls would still interleave two threads'
+// leases within one block and still corrupt them -- a lock would hide the design
+// constraint rather than satisfy it.
+[[noreturn]] inline void batchlas_throw_queue_wrong_thread(const char* what) {
+    throw std::runtime_error(
+        std::string("BatchLAS: ") + what +
+        " was called from a thread other than the one that owns this Queue. A Queue is "
+        "single-threaded: its workspace arena and its cached last event are unsynchronised, and "
+        "sharing one across threads corrupts them. Use one Queue per thread (queues for the same "
+        "device share a SYCL context, so they still see each other's memory), or transfer this one "
+        "with Queue::attach_to_current_thread() while no other thread is using it.");
+}
+
+struct QueueThreadOwner {
+    std::thread::id owner_ = std::this_thread::get_id();
+
+    void check(const char* what) const {
+        if (std::this_thread::get_id() != owner_) batchlas_throw_queue_wrong_thread(what);
+    }
+
+    void rebind() { owner_ = std::this_thread::get_id(); }
+};
 
 inline bool batchlas_queue_profiling_enabled() {
     // Keep profiling opt-in to avoid overhead in non-benchmark runs.
@@ -47,6 +98,14 @@ struct WorkspaceArena {
     std::vector<Block> blocks_;
     size_t cur_block_ = 0;   // block currently being carved from
     size_t cur_offset_ = 0;  // bytes used within it
+
+    // Records the thread that constructed the owning QueueImpl, since the arena is
+    // a member of it. Checked where bytes are handed out and where blocks are
+    // freed -- see acquire() and trim(). Not checked in release(): every release
+    // comes from a lease, every lease comes from an acquire that was already
+    // checked, and ~WorkspaceLease is noexcept, so a throw there would terminate
+    // instead of diagnosing.
+    QueueThreadOwner owner_;
 
     // Matches BumpAllocator's alignment rule so that a lease can be handed
     // straight to one without the pool having to realign it first.
@@ -107,6 +166,7 @@ struct WorkspaceArena {
     }
 
     Loan acquire(sycl::queue& q, size_t bytes) {
+        owner_.check("Queue::workspace()");
         const size_t align = alignment_for(q.get_device());
         const size_t want = (bytes + align - 1) & ~(align - 1);
 
@@ -191,6 +251,7 @@ struct WorkspaceArena {
     // USM out from under work still in flight is a use-after-free that usually
     // only shows up under load.
     bool trim(sycl::queue& q) {
+        owner_.check("Queue::trim_workspace()");
         if (has_outstanding_loans()) return false;
         if (blocks_.empty()) return true;
         q.wait();
@@ -254,9 +315,53 @@ struct QueueImpl : public sycl::queue{
 
     // Tracks the last event submitted to this queue via the wrappers below.
     // Used to implement a cheap get_event() for in-order queues.
-    mutable std::optional<sycl::event> last_event_;
+    //
+    // A guarded holder rather than a bare std::optional<sycl::event> because the
+    // unsynchronised optional is a race in its own right, independent of the
+    // arena: two threads submitting on one Queue tear it and abort inside the SYCL
+    // runtime with UR_RESULT_ERROR_INVALID_EVENT, even when both callers supply
+    // their own workspace and the arena is never touched. Putting the check on the
+    // member means every path that reads or writes it is covered -- the submit
+    // wrappers here, and Queue::enqueue/get_event/create_event_after_external_work
+    // in util/queue-impl.cc -- without each one having to remember to ask.
+    //
+    // The interface is the subset of std::optional those callers use, so their
+    // spellings are unchanged.
+    class LastEvent {
+    public:
+        LastEvent& operator=(sycl::event e) {
+            owner_.check("A submission to this Queue");
+            value_ = std::move(e);
+            return *this;
+        }
+
+        bool has_value() const {
+            owner_.check("Queue::get_event()");
+            return value_.has_value();
+        }
+
+        const sycl::event& operator*() const {
+            owner_.check("Queue::get_event()");
+            return *value_;
+        }
+
+        void rebind_owner() { owner_.rebind(); }
+
+    private:
+        std::optional<sycl::event> value_;
+        QueueThreadOwner owner_;
+    };
+
+    mutable LastEvent last_event_;
 
     WorkspaceArena arena_;
+
+    // See Queue::attach_to_current_thread. The two guarded members each carry
+    // their own recorded owner, so a transfer has to move both.
+    void rebind_thread_owner() {
+        arena_.owner_.rebind();
+        last_event_.rebind_owner();
+    }
 
     static const sycl::context& shared_context(Device dev) {
         static std::mutex m;
@@ -413,3 +518,61 @@ struct EventImpl : public sycl::event{
 
     EventImpl(sycl::event&& event) : sycl::event(event) {}
 };
+
+// ---------------------------------------------------------------------------
+// The public entry points that need QueueImpl/EventImpl to be complete types.
+// Declared in util/sycl-device-queue.hh and batchlas/sycl_interop.hh, which
+// consumers get; defined here, because this is the only place those types are
+// defined. See BATCHLAS_QUEUE_EXPORTED_INLINE at the top for why they carry that
+// spelling instead of plain `inline`.
+// ---------------------------------------------------------------------------
+
+BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
+    // A lease released on the new thread would rewind an arena the old thread is
+    // still carving from, which is the corruption this guard exists to stop.
+    if (impl_->arena_.has_outstanding_loans()) {
+        throw std::runtime_error(
+            "Queue::attach_to_current_thread: a workspace lease is still outstanding. Release every "
+            "lease before transferring the queue to another thread.");
+    }
+    impl_->rebind_thread_owner();
+}
+
+BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
+    switch (impl_->get_backend()) {
+#if SYCL_EXT_ONEAPI_BACKEND_CUDA
+        case sycl::backend::ext_oneapi_cuda:
+            // CUstream, i.e. cudaStream_t.
+            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_cuda>(*impl_));
+#endif
+#if SYCL_EXT_ONEAPI_BACKEND_HIP
+        case sycl::backend::ext_oneapi_hip:
+            // HIPstream, i.e. hipStream_t.
+            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_hip>(*impl_));
+#endif
+        default:
+            // Every other backend deliberately returns nullptr rather than
+            // something the caller cannot treat as an unowned stream pointer:
+            // Level Zero's queue interop is a variant of two handle types, OpenCL's
+            // retains the handle and makes the caller release it, and the host
+            // backend has no stream at all. See the declaration.
+            return nullptr;
+    }
+}
+
+namespace batchlas {
+
+BATCHLAS_QUEUE_EXPORTED_INLINE sycl::queue& sycl_queue(const Queue& ctx) { return *ctx.impl_; }
+
+BATCHLAS_QUEUE_EXPORTED_INLINE sycl::event sycl_event(const Event& event) {
+    // A default-constructed Event has no EventImpl; a default sycl::event is
+    // already complete, so ordering against it is a no-op rather than a crash.
+    if (!event.impl_) return sycl::event{};
+    return static_cast<const sycl::event&>(*event.impl_);
+}
+
+BATCHLAS_QUEUE_EXPORTED_INLINE Event event_from_sycl(sycl::event event) {
+    return Event(EventImpl(std::move(event)));
+}
+
+}  // namespace batchlas

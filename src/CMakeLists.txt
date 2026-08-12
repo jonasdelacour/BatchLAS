@@ -79,6 +79,10 @@ function(batchlas_configure_component target)
         PUBLIC
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
             $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
+            # Every public header lives under include/batchlas/ in the source
+            # tree and installs to <prefix>/include/batchlas/, so the only name
+            # BatchLAS claims in a consumer's include root is `batchlas`.
+            # The include root itself is therefore what we export.
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     target_compile_features(${target} PUBLIC cxx_std_20)
@@ -199,8 +203,16 @@ endif()
 set(BATCHLAS_LINK_LIBRARIES)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
+    # PRIVATE: these are absolute -dev symlink paths
+    # (/usr/lib/x86_64-linux-gnu/liblapacke.so). PUBLIC put them verbatim into
+    # the exported BatchLAS::batchlas_backends interface, so a consumer on a
+    # runtime-only image failed with "No rule to make target
+    # '.../liblapacke.so'" - a message that never mentions BatchLAS.
+    # libbatchlas_backends.so already records DT_NEEDED on liblapacke.so.3 and
+    # libblas.so.3, and no public header calls LAPACKE or includes <lapacke.h>,
+    # so a consumer needs neither the headers nor the -dev package.
     target_link_libraries(batchlas_backends
-        PUBLIC
+        PRIVATE
         ${BATCHLAS_NETLIB_LINK_LIBRARIES}
     )
 endif()
@@ -230,11 +242,18 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
         target_compile_options(batchlas_backends_cuda_obj PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
     endif()
 
-    target_link_libraries(batchlas_backends_cuda PUBLIC ${BATCHLAS_CUDA_LINK_LIBRARIES})
+    # PRIVATE: PUBLIC exported CUDA::cudart/cublas/cusolver/cusparse into the
+    # package interface, which forced find_dependency(CUDAToolkit REQUIRED) on
+    # every consumer - including CPU-only teammates who cannot resolve it.
+    # libbatchlas_backends_cuda.so already records DT_NEEDED on libcudart.so.13
+    # et al, and no public header includes a CUDA header.
+    target_link_libraries(batchlas_backends_cuda PRIVATE ${BATCHLAS_CUDA_LINK_LIBRARIES})
 endif()
 
 if(BATCHLAS_HAS_ROCM_BACKEND)
-    target_link_libraries(batchlas_backends_rocm PUBLIC ${BATCHLAS_ROCM_LINK_LIBRARIES})
+    # PRIVATE for the same reason as the netlib and CUDA links above: these are
+    # absolute paths under ${ROCM_PATH} and must not ride out on the export.
+    target_link_libraries(batchlas_backends_rocm PRIVATE ${BATCHLAS_ROCM_LINK_LIBRARIES})
 endif()
 
 #if(BATCHLAS_HAS_MKL_BACKEND)
@@ -248,6 +267,8 @@ target_include_directories(batchlas
     INTERFACE
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
+        # Must stay in lockstep with batchlas_configure_component() above and
+        # with INCLUDES DESTINATION in cmake/BatchLASPackaging.cmake.
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(batchlas INTERFACE cxx_std_20)
@@ -256,6 +277,20 @@ target_link_libraries(batchlas
         batchlas_sycl_options
         ${BATCHLAS_COMPONENT_TARGETS}
 )
+
+# The component .so files reference each other's symbols but record no
+# DT_NEEDED on one another: their symbol graph has 14 cycles, which CMake
+# refuses to express (cyclic dependencies are only allowed among static
+# libraries). A toolchain defaulting to -Wl,--as-needed therefore drops
+# libraries the link genuinely needs, and the documented
+# `target_link_libraries(app PRIVATE BatchLAS::batchlas)` recipe fails with
+# "undefined reference to batchlas::sycl_gemm::gemm_custom<float>(...)".
+# This is the documented mitigation until the .so merge lands; it keeps every
+# component on the link line. Linker options precede link libraries in CMake's
+# link rule, so it covers all of them.
+if(UNIX AND NOT APPLE)
+    target_link_options(batchlas INTERFACE "-Wl,--no-as-needed")
+endif()
 
 add_custom_target(batchlas_components DEPENDS ${BATCHLAS_COMPONENT_TARGETS})
 

@@ -25,7 +25,7 @@ Component labels, one per binary (see `CMakeLists.txt`):
 
 Run `ctest -L <component>` for the subsystem you touched. **If you changed
 shared low-level code** — `Queue`, `Matrix`/`MatrixView`, the memory pool,
-`sg_compat`, anything under `include/util` — a component label is not enough;
+`sg_compat`, anything under `include/batchlas/util` — a component label is not enough;
 run the full suite.
 
 The `slow` label marks the binaries that dominate wall-clock. `ctest -LE slow`

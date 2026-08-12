@@ -1,13 +1,15 @@
 #include <gtest/gtest.h>
-#include <util/mempool.hh>
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <vector>
 #include <complex>
 #include <memory>
 #include <cstring>
 #include <algorithm>
+#include <thread>
+#include <stdexcept>
 
 class BumpAllocatorTest : public ::testing::Test {
 protected:
@@ -1094,4 +1096,45 @@ TEST_F(BumpAllocatorTest, ManySmallAllocations) {
         EXPECT_TRUE(reinterpret_cast<char*>(spans[i].data()) >= 
                     reinterpret_cast<char*>(spans[i-1].data()) + spans[i-1].size() * sizeof(int));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Queue thread-affinity guard.
+//
+// A Queue owns an unsynchronised bump arena and a cached last-event; sharing
+// one across threads used to corrupt both silently. The contract is now
+// enforced with a thread-id compare, and these two tests are what keep it
+// enforced. See docs/cpp-api.md "Synchronisation and threading".
+// ---------------------------------------------------------------------------
+TEST(QueueThreadAffinityTest, WorkspaceFromAnotherThreadThrows) {
+    Queue q;
+    bool threw = false;
+    std::thread t([&] {
+        try {
+            (void)q.workspace(1024);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+    });
+    t.join();
+    EXPECT_TRUE(threw) << "Queue::workspace() from a foreign thread must throw";
+}
+
+TEST(QueueThreadAffinityTest, AttachToCurrentThreadTransfersOwnership) {
+    Queue q;
+    bool ok = false;
+    std::thread t([&] {
+        q.attach_to_current_thread();
+        try {
+            auto lease = q.workspace(1024);
+            ok = lease.span().size() >= 1024;
+        } catch (const std::runtime_error&) {
+            ok = false;
+        }
+    });
+    t.join();
+    // The queue now belongs to a thread that has exited; re-take it so the
+    // destructor on this thread does not trip the guard.
+    q.attach_to_current_thread();
+    EXPECT_TRUE(ok) << "attach_to_current_thread() must hand the Queue over";
 }

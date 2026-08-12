@@ -1,15 +1,15 @@
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <algorithm>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
-#include <blas/functions/syev.hh>
-#include <blas/functions/ormqr.hh>
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/blas/dispatch/op.hh>
 
 namespace batchlas {
 
@@ -346,7 +346,7 @@ namespace batchlas {
     }
 
     // gesvd has no rocSOLVER binding yet. This stub exists because
-    // include/blas/functions/gesvd.hh is now declaration-only (it used to define a
+    // include/batchlas/blas/functions/gesvd.hh is now declaration-only (it used to define a
     // generic throwing template, which is what blocked a cuSOLVER implementation).
     // Without a definition here a ROCM build fails to link rather than failing at
     // the call, so the throw is preserved deliberately.

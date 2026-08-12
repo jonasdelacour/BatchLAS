@@ -1,8 +1,8 @@
-#include <util/minibench.hh>
-#include <blas/linalg.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/linalg.hh>
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include "../src/math-helpers.hh"
 
 using namespace batchlas;

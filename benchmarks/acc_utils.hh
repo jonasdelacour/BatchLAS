@@ -1,8 +1,8 @@
 #pragma once
 
 #include <batchlas/backend_config.h>
-#include <blas/enums.hh>
-#include <util/miniacc.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/util/miniacc.hh>
 
 #include <complex>
 

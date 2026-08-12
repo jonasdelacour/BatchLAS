@@ -1,4 +1,4 @@
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include "../math-helpers.hh"
 
 namespace batchlas {

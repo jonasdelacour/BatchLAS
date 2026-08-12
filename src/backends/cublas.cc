@@ -1,18 +1,18 @@
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
-//#include "../../include/blas/linalg.hh"
+//#include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
-#include <internal/ormqr_blocked.hh>
+#include <batchlas/internal/ormqr_blocked.hh>
 
 #include <algorithm>
 #include <cstdlib>
 #include <string>
-#include <blas/functions.hh>
-#include <blas/functions/ormqr.hh>
-#include <blas/dispatch/op.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/blas/dispatch/op.hh>
 #include <complex>
 
 #include "gemm_cublasdx_dispatch.hh"
@@ -1756,7 +1756,7 @@ namespace batchlas {
 
     // Template instantiations for cuBLAS functions (MatrixView version)
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/blas/functions/*.hh), so changing one is a single
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::CUDA
 

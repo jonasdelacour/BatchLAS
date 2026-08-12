@@ -1,11 +1,11 @@
-#include <blas/matrix.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
-#include <util/group-invoke.hh>
+#include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
-#include <util/sycl-local-accessor-helpers.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"

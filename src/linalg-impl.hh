@@ -1,8 +1,8 @@
 #pragma once
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include "queue.hh"
 #include <sycl/sycl.hpp>
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 #include <execution>
 #include <type_traits>
 #include <memory>
@@ -41,7 +41,7 @@
     #include <oneapi/mkl/spblas.hpp>
 #endif
 
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
 
 namespace batchlas{

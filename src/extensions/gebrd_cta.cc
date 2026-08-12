@@ -1,6 +1,6 @@
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include <util/group-invoke.hh>
+#include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 
 #include "../math-helpers.hh"

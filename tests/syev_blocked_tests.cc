@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
 
-#include <blas/enums.hh>
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-span.hh>
-#include <util/sycl-vector.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
 

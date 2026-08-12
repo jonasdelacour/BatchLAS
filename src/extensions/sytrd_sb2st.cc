@@ -1,6 +1,6 @@
-#include <blas/extensions.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <sycl/sycl.hpp>
 

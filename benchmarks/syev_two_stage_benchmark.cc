@@ -4,9 +4,9 @@
 // model (stage-1 and Q2 favour large kd, stage-2 favours small) can be measured
 // directly rather than inferred.
 
-#include <util/minibench.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
 #include "bench_utils.hh"
 
 #include <cstdlib>

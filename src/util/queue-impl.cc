@@ -1,6 +1,6 @@
 #include "../queue.hh"
 #include <batchlas/backend_config.h>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
@@ -76,7 +76,9 @@ bool Queue::backend_available(batchlas::Backend backend) {
 
 void Queue::set_backend(batchlas::Backend backend) {
     if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
-        throw std::runtime_error("Queue::set_backend: backend is not compiled into this build of BatchLAS.");
+        throw std::runtime_error(
+            std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
+            " is not compiled into this build of BatchLAS.");
     }
     backend_ = backend;
     resolved_backend_ = batchlas::Backend::AUTO;  // re-resolve on next query
@@ -139,14 +141,45 @@ batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
     return batchlas::WorkspaceLease(this, loan.ptr, loan.bytes, loan.block, loan.offset, loan.seq);
 }
 
+bool Queue::is_device_accessible(const void* ptr) const {
+    if (ptr == nullptr) return false;
+    // On a host/CPU device, ordinary host memory is exactly what the kernels
+    // read, so a non-USM pointer is correct there and must not be rejected.
+    if (impl_->get_device().is_cpu()) return true;
+    return sycl::get_pointer_type(ptr, impl_->get_context()) != sycl::usm::alloc::unknown;
+}
+
+void Queue::require_device_accessible(const void* ptr, const char* what) const {
+    if (is_device_accessible(ptr)) return;
+
+    std::string msg = std::string("BatchLAS: ") + what +
+        " points to memory that is not reachable from this Queue's device (" +
+        impl_->get_device().get_info<sycl::info::device::name>() + ").\n";
+    if (ptr == nullptr) {
+        msg += "The pointer is null.\n";
+    } else {
+        msg += "It looks like ordinary host memory -- a std::vector, new[] or malloc.\n"
+               "A MatrixView/Span takes a bare pointer and cannot check this at\n"
+               "construction, and reaching the device with it would abort the process\n"
+               "inside the runtime rather than throw.\n";
+    }
+    msg += "Use memory the device can reach:\n"
+           "  - let Matrix<T, MatrixFormat::Dense> own it (it allocates USM shared,\n"
+           "    which you can still fill and read directly from the host), or\n"
+           "  - allocate with sycl::malloc_device/malloc_shared/malloc_host, or\n"
+           "    cudaMalloc/cudaMallocManaged on CUDA.\n"
+           "See 'Where the memory has to live: the USM contract' in docs/cpp-api.md.";
+    throw std::invalid_argument(msg);
+}
+
 size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
 
 bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
 
 namespace batchlas {
 
-Span<std::byte> WorkspaceLease::span() const { return Span<std::byte>(ptr_, size_); }
-WorkspaceLease::operator Span<std::byte>() const { return span(); }
+Span<std::byte> WorkspaceLease::span() const & { return Span<std::byte>(ptr_, size_); }
+WorkspaceLease::operator Span<std::byte>() const & { return span(); }
 
 void WorkspaceLease::release() noexcept { release_(/*diagnose_out_of_order=*/true); }
 

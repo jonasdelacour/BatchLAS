@@ -2,11 +2,12 @@
 #include <batchlas/backend_config.h>
 #include <tuple>
 #include <gtest/gtest.h>
-#include <blas/enums.hh>
+#include <batchlas/blas/enums.hh>
 #include <complex>
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 #include <algorithm>
 #include <iostream>
 
@@ -17,15 +18,11 @@ template <class Tuple> struct tuple_to_types;
 template <class... Ts>
 struct tuple_to_types<std::tuple<Ts...>> { using type = ::testing::Types<Ts...>; };
 
-// Backend name lookup for error messages
-inline const char* backend_to_string(batchlas::Backend backend) {
-    switch (backend) {
-        case batchlas::Backend::CUDA: return "CUDA";
-        case batchlas::Backend::ROCM: return "ROCM";
-        case batchlas::Backend::MKL: return "MKL";
-        case batchlas::Backend::NETLIB: return "NETLIB";
-        default: return "UNKNOWN";
-    }
+// Backend name lookup for error messages. Forwards to the public printer in
+// <batchlas/blas/enums.hh>; the hand-rolled switch this replaces rendered AUTO, MAGMA
+// and SYCL as "UNKNOWN".
+inline std::string_view backend_to_string(batchlas::Backend backend) {
+    return batchlas::to_string(backend);
 }
 
 // Runtime filtering support with error handling

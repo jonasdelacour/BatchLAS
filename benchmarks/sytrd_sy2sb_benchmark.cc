@@ -1,6 +1,6 @@
-#include <util/minibench.hh>
-#include <blas/extensions.hh>
-#include <blas/matrix.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include "bench_utils.hh"
 

@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <complex>
 
-#include <blas/device.hh>
-#include <blas/matrix.hh>
+#include <batchlas/blas/device.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include "bench_utils.hh"
 

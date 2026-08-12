@@ -2,7 +2,7 @@
 
 #include "gemm_cublasdx_kernels.hh"
 
-#include <blas/enums.hh>
+#include <batchlas/blas/enums.hh>
 
 #include <cuda_runtime_api.h>
 

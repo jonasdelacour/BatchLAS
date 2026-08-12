@@ -1,5 +1,5 @@
-#include <util/minibench.hh>
-#include <blas/extensions.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/extensions.hh>
 
 #include "bench_utils.hh"
 

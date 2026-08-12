@@ -1,12 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
-#include <blas/functions.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <cmath>
+#include <sstream>
 #include <vector>
 
 using namespace batchlas;
@@ -42,6 +43,21 @@ TEST(BackendDispatch, AutoResolvesToACompiledBackendAndIsStable) {
     EXPECT_NE(b, Backend::AUTO) << "backend() must never hand back the request";
     EXPECT_TRUE(Queue::backend_available(b));
     EXPECT_EQ(q.backend(), b) << "resolution must be stable across queries";
+}
+
+// Streaming an enum has to work from a TU shaped like this one -- both header
+// families included, `using namespace batchlas;` at the top -- which is how
+// every in-tree TU and the documented consumer spelling are written. The three
+// enums in <batchlas/util/sycl-device-queue.hh> live in the global namespace and get
+// their own operator<< there; batchlas' generic enum operator<< is a viable
+// candidate for them too (its `to_string(e)` constraint is satisfied by ADL),
+// so this compiles only as long as the global overloads stay strictly more
+// specialised. It is a compile-time test wearing an assertion.
+TEST(BackendDispatch, EnumsStreamFromInsideTheNamespace) {
+    std::ostringstream os;
+    os << Vendor::NVIDIA << ' ' << DeviceType::GPU << ' ' << Policy::SYNC << ' '
+       << Backend::CUDA << ' ' << Uplo::Lower;
+    EXPECT_EQ(os.str(), "NVIDIA GPU SYNC CUDA Lower");
 }
 
 TEST(BackendDispatch, AvailabilityMatchesBuildConfiguration) {
@@ -216,4 +232,40 @@ TEST(BackendDispatch, DefaultArgumentsSurviveForwarding) {
     for (int i = 0; i < n * n; ++i) {
         ASSERT_FLOAT_EQ(C_short.view().data_ptr()[i], C_full.view().data_ptr()[i]) << "at " << i;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Interop surface. This is the only TU in the tree that includes
+// <batchlas/sycl_interop.hh>, which is deliberately unreachable from
+// <batchlas.hh>; compiling it here is half the point, since a header nothing
+// includes is a header nothing notices breaking. The include sits at the bottom
+// rather than the top so the rest of the file keeps proving that the public API
+// needs no SYCL types. See docs/cpp-api.md "Interop with CUDA and with your own
+// SYCL".
+// ---------------------------------------------------------------------------
+#include <batchlas/sycl_interop.hh>
+
+TEST(InteropTest, NativeHandleMatchesBackend) {
+    Queue q;
+    if (q.device().type == DeviceType::GPU && q.backend() == Backend::CUDA) {
+        EXPECT_NE(q.native_handle(), nullptr) << "a CUDA Queue must expose its CUstream";
+    }
+    // A CPU queue has no native stream to hand out.
+    Queue cpu(Device("cpu"));
+    EXPECT_EQ(cpu.native_handle(), nullptr);
+}
+
+TEST(InteropTest, EventRoundTripsThroughSycl) {
+    Queue q;
+    q.wait();
+    sycl::event se = batchlas::sycl_event(q.get_event());
+    Event back = batchlas::event_from_sycl(se);
+    q.enqueue(back);
+    EXPECT_NO_THROW(q.wait());
+}
+
+TEST(InteropTest, SyclQueueIsTheSameQueue) {
+    Queue q;
+    sycl::queue& sq = batchlas::sycl_queue(q);
+    EXPECT_EQ(&sq, &batchlas::sycl_queue(q));
 }

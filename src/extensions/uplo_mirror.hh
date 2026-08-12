@@ -12,7 +12,7 @@
 // identical eigenvalues and eigenvectors. Cost is O(n^2 * batch) against the solve's
 // O(n^3 * batch), i.e. below noise at every size where routing matters.
 //
-// In-place is safe here: `syev` documents A as overwritten (include/blas/functions/syev.hh),
+// In-place is safe here: `syev` documents A as overwritten (include/batchlas/blas/functions/syev.hh),
 // and the Lower path destroys A during the reduction regardless. The diagonal is left alone;
 // for complex input its imaginary part is not forced to zero, matching what the Lower path
 // already assumes of a Hermitian input.
@@ -23,8 +23,8 @@
 // syev_two_stage.cc produced "definition with same mangled name" ODR errors.
 #pragma once
 
-#include <blas/matrix.hh>
-#include <util/sycl-device-queue.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas {
 

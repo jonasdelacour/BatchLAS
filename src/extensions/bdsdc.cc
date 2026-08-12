@@ -65,10 +65,10 @@
 // columns that are already final. Those vectors are arbitrary anyway: any
 // orthonormal completion satisfies B = U S V^T to within 2*sigma <= 2*tol.
 
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"

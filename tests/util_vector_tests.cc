@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 
 TEST(UnifiedVectorTest, DefaultConstruction) {
     UnifiedVector<int> vec;

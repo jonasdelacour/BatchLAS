@@ -22,7 +22,7 @@
 // disagree sharply. See the note above kSyevxSubsetMinN.
 
 #include "../linalg-impl.hh"
-#include <util/sycl-span.hh>
+#include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -32,7 +32,7 @@
 #include <mutex>
 #include <string>
 #include <stdexcept>
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
 
@@ -59,7 +59,7 @@ namespace {
 // the same reason DirectSubset is slow there, and the two comparing "evenly" at
 // batch 1 was two starved kernels, not a fair fight.
 //
-// With that fixed (see syev_prefer_vendor in include/blas/functions/syev.hh),
+// With that fixed (see syev_prefer_vendor in include/batchlas/blas/functions/syev.hh),
 // Direct got up to 15.4x faster and the thresholds below had to be re-measured
 // against it. What survives:
 //

@@ -1,5 +1,5 @@
 #include <algorithm>
-#include <blas/extensions.hh>
+#include <batchlas/blas/extensions.hh>
 #include "steqr_internal.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"

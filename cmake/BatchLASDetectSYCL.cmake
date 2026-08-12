@@ -119,7 +119,12 @@ function(detect_sycl_gpu_architectures)
     set(_has_nvidia_gpu FALSE)
     set(_has_amd_gpu FALSE)
     set(_has_intel_gpu FALSE)
-    set(_cuda_enabled "${BATCHLAS_ENABLE_CUDA}")
+    # BATCHLAS_ENABLE_CUDA_MODE is AUTO|ON|OFF (normalised in BatchLASOptions.cmake).
+    if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON")
+        set(_cuda_enabled ON)
+    else()
+        set(_cuda_enabled OFF)
+    endif()
     set(_cuda_path "")
 
     if(SYCL_LS_BASIC_OUTPUT MATCHES "\\[cuda:gpu\\]")
@@ -162,9 +167,25 @@ function(detect_sycl_gpu_architectures)
         message(STATUS "No specific GPU architectures detected, using default JIT compilation")
     endif()
 
+    if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON" AND NOT _has_nvidia_gpu)
+        message(FATAL_ERROR
+            "BATCHLAS_ENABLE_CUDA=ON but the SYCL runtime exposes no CUDA device: "
+            "sycl-ls (${SYCL_LS}) printed no '[cuda:gpu]' entry. Building anyway would "
+            "silently target ${BATCHLAS_NVIDIA_ARCH} and produce a library whose kernels "
+            "cannot be found at run time. Use a DPC++ with a CUDA backend (oneAPI + the "
+            "Codeplay oneAPI-for-NVIDIA plugin, or an intel/llvm built with --cuda), or "
+            "configure with -DBATCHLAS_ENABLE_CUDA=AUTO or =OFF.")
+    endif()
+
+    # The NVPTX codegen flags below are keyed on the *hardware*, not on the CUDA
+    # backend option: sycl-ls-detected nvidia_gpu_sm_* targets land in
+    # -fsycl-targets regardless, and those need --cuda-path to compile.
+    # BATCHLAS_ENABLE_CUDA only governs the cuBLAS/cuSOLVER backend.
     if(_has_nvidia_gpu)
         message(STATUS "Adding NVIDIA-specific flags")
-        set(_cuda_enabled ON)
+        if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "AUTO")
+            set(_cuda_enabled ON)
+        endif()
 
         find_package(CUDAToolkit QUIET)
         if(CUDAToolkit_FOUND AND CUDAToolkit_BIN_DIR)
@@ -207,7 +228,9 @@ function(detect_sycl_gpu_architectures)
         list(APPEND _compile_options -fsycl-dead-args-optimization)
     endif()
 
-    set(BATCHLAS_ENABLE_CUDA "${_cuda_enabled}" PARENT_SCOPE)
+    # Deliberately a *derived* variable: writing BATCHLAS_ENABLE_CUDA here would
+    # shadow the cache entry and make the documented option unreadable.
+    set(BATCHLAS_CUDA_ENABLED "${_cuda_enabled}" PARENT_SCOPE)
     set(BATCHLAS_CUDA_PATH "${_cuda_path}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_NVIDIA_GPU "${_has_nvidia_gpu}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_AMD_GPU "${_has_amd_gpu}" PARENT_SCOPE)
@@ -434,7 +457,7 @@ if(BATCHLAS_ENABLE_ROCM)
     message(STATUS "Compiling for AMD architecture: ${_AMD_ARCH}")
 endif()
 
-if(BATCHLAS_ENABLE_CUDA)
+if(BATCHLAS_CUDA_ENABLED)
     set(_NVIDIA_ARCH "nvidia_gpu_${BATCHLAS_NVIDIA_ARCH}")
     message(STATUS "Detected NVIDIA architecture: ${DETECTED_NVIDIA_ARCH}")
     if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm_50")
@@ -496,34 +519,27 @@ if(BATCHLAS_NATIVE_CPU_DISABLE_VECZ)
     endif()
 endif()
 
-if(BATCHLAS_ENABLE_CUDA)
-    set(_batchlas_apply_cuda_ftz_flag ${BATCHLAS_DISABLE_CUDA_FTZ})
-    if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda" AND BATCHLAS_DISABLE_CUDA_FTZ)
-        message(WARNING "dpcpp-cuda: ignoring BATCHLAS_DISABLE_CUDA_FTZ because --ftz=false can fail CUDA JIT program builds")
-        set(_batchlas_apply_cuda_ftz_flag OFF)
-    endif()
-
-    if(_batchlas_apply_cuda_ftz_flag)
+if(BATCHLAS_CUDA_ENABLED)
+    if(BATCHLAS_DISABLE_CUDA_FTZ)
+        # Only the -Xsycl-target-backend half. The '-Xcuda-ptxas --ftz=false'
+        # pair that used to follow is a hard build failure on CUDA >= 12.8
+        # ("ptxas fatal : Unknown option '-ftz'"), which is why this whole block
+        # used to be skipped for one hardcoded compiler path.
         message(STATUS "Disabling FTZ for CUDA device code (link-time device compilation)")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
             -Xsycl-target-backend=nvptx64-nvidia-cuda
             --ftz=false
-            -Xcuda-ptxas
-            --ftz=false
         )
     endif()
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-        if(CMAKE_CXX_COMPILER MATCHES "/opt/dpcpp-cuda")
-            message(WARNING "dpcpp-cuda: skipping --generate-line-info because it can fail CUDA JIT program builds")
-        else()
-            message(STATUS "Enabling line info for CUDA device code")
-            list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-                -Xsycl-target-backend=nvptx64-nvidia-cuda
-                --generate-line-info
-                -Xcuda-ptxas
-                -w
-            )
-        endif()
+    if(BATCHLAS_CUDA_DEVICE_LINE_INFO
+       AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
+        message(STATUS "Enabling line info for CUDA device code")
+        list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
+            -Xsycl-target-backend=nvptx64-nvidia-cuda
+            --generate-line-info
+            -Xcuda-ptxas
+            -w
+        )
     endif()
     if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
         message(STATUS "Preserving CUDA/SYCL CUDA intermediates for device-code inspection")
@@ -537,27 +553,54 @@ if(BATCHLAS_ENABLE_CUDA)
     endif()
 endif()
 
+# Every option below is wrapped in $<BUILD_INTERFACE:...>.
+#
+# batchlas_sycl_options is part of the installed export set (BatchLAS::batchlas
+# links it), so without the wrapper the exported package forced this machine's
+# entire SYCL device-codegen line onto every consumer translation unit:
+# -fsycl -fsycl-unnamed-lambda -fsycl-dead-args-optimization -Xclang=-mllvm
+# --cuda-path=/usr/local/cuda-13.2 -fsycl-targets=nvidia_gpu_sm_89,native_cpu.
+# A consumer using GCC died on "unrecognized command-line option '-fsycl'"; a
+# consumer picking its own -fsycl-targets had it silently overridden. None of it
+# is needed - the public header surface is deliberately SYCL-free.
+#
+# In-tree targets (src/, tests/, benchmarks/, python/) consume the *build*
+# interface and are completely unaffected.
+#
+# Commas are escaped as $<COMMA> because a bare comma inside a generator
+# expression separates parameters (-fsycl-targets=a,b is the one that matters).
+function(batchlas_build_interface_option out_var opt)
+    string(REPLACE "," "$<COMMA>" _escaped "${opt}")
+    set(${out_var} "${_escaped}" PARENT_SCOPE)
+endfunction()
+
 foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_CXX_OPTIONS BATCHLAS_SYCL_EXTRA_CXX_OPTIONS)
-    target_compile_options(batchlas_sycl_options INTERFACE $<$<COMPILE_LANGUAGE:CXX>:${_opt}>)
-    target_compile_options(batchlas_sycl_no_cpu_options INTERFACE $<$<COMPILE_LANGUAGE:CXX>:${_opt}>)
+    batchlas_build_interface_option(_opt_esc "${_opt}")
+    target_compile_options(batchlas_sycl_options INTERFACE
+        "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_opt_esc}>>")
+    target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
+        "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_opt_esc}>>")
 endforeach()
 
 foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_LINK_OPTIONS BATCHLAS_SYCL_EXTRA_LINK_OPTIONS)
-    target_link_options(batchlas_sycl_options INTERFACE "${_opt}")
+    batchlas_build_interface_option(_opt_esc "${_opt}")
+    target_link_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:${_opt_esc}>")
 endforeach()
 
 if(BATCHLAS_SYCL_TARGETS_STRING)
+    batchlas_build_interface_option(_targets_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}")
     target_compile_options(batchlas_sycl_options INTERFACE
-        $<$<COMPILE_LANGUAGE:CXX>:-fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}>
+        "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_targets_esc}>>"
     )
     target_link_options(batchlas_sycl_options INTERFACE
-        -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}
+        "$<BUILD_INTERFACE:${_targets_esc}>"
     )
 endif()
 
 if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
+    batchlas_build_interface_option(_targets_no_cpu_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}")
     target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
-        $<$<COMPILE_LANGUAGE:CXX>:-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}>
+        "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_targets_no_cpu_esc}>>"
     )
 endif()
 

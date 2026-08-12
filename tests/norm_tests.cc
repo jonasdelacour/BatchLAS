@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-vector.hh>
-#include <util/sycl-span.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
 #include <complex>
 #include <cmath>
 #include <vector>
 #include <chrono>
-#include <blas/extra.hh>
+#include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
 
 using namespace batchlas;

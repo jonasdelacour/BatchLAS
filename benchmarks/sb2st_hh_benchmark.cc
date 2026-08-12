@@ -1,9 +1,9 @@
 // Splits the Householder stage-2 cost: the chase (sytrd_sb2st_hh) versus the
 // Q2 back-transform (unmqr_hb2st), so it is clear which one to optimise.
 
-#include <util/minibench.hh>
-#include <blas/functions.hh>
-#include <blas/extensions.hh>
+#include <batchlas/util/minibench.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
 #include "bench_utils.hh"
 
 #include "../src/extensions/sytrd_sb2st_hh.hh"

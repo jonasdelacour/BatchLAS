@@ -1,7 +1,7 @@
-#include <blas/extensions.hh>
-#include <blas/functions.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"

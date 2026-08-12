@@ -16,6 +16,13 @@
 #   3. publishes the result in BATCHLAS_OPENBLAS_CORETYPE so the build can put it
 #      in the environment of anything it launches (see tests/CMakeLists.txt), and
 #   4. tells the user the exact export line needed for their own binaries.
+#
+# BATCHLAS_OPENBLAS_CORETYPE is also compiled into batchlas/backend_config.h as
+# BATCHLAS_REQUIRED_OPENBLAS_CORETYPE (see cmake/backend_config.h.in), because a
+# configure-time answer is stale by construction: an install tree is routinely
+# consumed on a machine other than the one that built it. The host/NETLIB
+# backend re-runs a cheap version of this probe on first double-precision use
+# (src/backends/netlib_lapack.cc) and reports the export line from there.
 
 option(BATCHLAS_CHECK_BLAS_HEALTH "Verify at configure time that the host BLAS computes dgemm correctly" ON)
 
@@ -120,9 +127,21 @@ function(batchlas_check_blas_health blas_libraries)
     endif()
     if(BATCHLAS_BLAS_HEALTH_CHECKED)
         # Already resolved in an earlier configure. Re-state an active workaround
-        # so it does not silently disappear from view.
+        # at the same severity as the first time: a STATUS line here meant the
+        # person building saw the warning once, on the very first configure, and
+        # never again.
         if(NOT BATCHLAS_OPENBLAS_CORETYPE STREQUAL "")
-            message(STATUS "BLAS health check: host BLAS needs OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE} (cached); ctest sets it automatically")
+            message(WARNING
+                "The host BLAS computes dgemm INCORRECTLY with its auto-detected kernel "
+                "(cached result of an earlier configure). OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE} "
+                "is needed for correct double precision and is set automatically for "
+                "tests run through ctest.\n"
+                "Anything you launch yourself needs it too:\n"
+                "    export OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}\n"
+                "or source ${PROJECT_BINARY_DIR}/batchlas-env.sh. The value is also "
+                "compiled into batchlas/backend_config.h, and the host backend re-checks "
+                "it at runtime on first double-precision use. Delete "
+                "BATCHLAS_OPENBLAS_CORETYPE from the cache to force a fresh probe.")
         endif()
         return()
     endif()
@@ -206,7 +225,7 @@ function(batchlas_check_blas_health blas_libraries)
         "for all tests run through ctest.\n"
         "Anything you launch yourself needs it too:\n"
         "    export OPENBLAS_CORETYPE=${_working}\n"
-        "or source the generated ${CMAKE_BINARY_DIR}/batchlas-env.sh. "
+        "or source the generated ${PROJECT_BINARY_DIR}/batchlas-env.sh. "
         "The real fix is a newer OpenBLAS; re-run CMake afterwards and this "
         "workaround will disappear (delete BATCHLAS_OPENBLAS_CORETYPE from the "
         "cache to force a fresh probe).")
@@ -216,18 +235,18 @@ endfunction()
 # workaround. Always generated so the path is stable; it is a no-op when healthy.
 function(batchlas_write_env_script)
     if(NOT BATCHLAS_OPENBLAS_CORETYPE STREQUAL "")
-        file(WRITE "${CMAKE_BINARY_DIR}/batchlas-env.sh"
+        file(WRITE "${PROJECT_BINARY_DIR}/batchlas-env.sh"
              "# Works around a broken host BLAS kernel detected at configure time.\n"
              "export OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}\n")
     elseif(BATCHLAS_BLAS_HEALTH_STATUS STREQUAL "OK")
-        file(WRITE "${CMAKE_BINARY_DIR}/batchlas-env.sh"
+        file(WRITE "${PROJECT_BINARY_DIR}/batchlas-env.sh"
              "# Host BLAS dgemm was verified correct at configure time; nothing to set.\n")
     elseif(BATCHLAS_BLAS_HEALTH_STATUS STREQUAL "BROKEN")
-        file(WRITE "${CMAKE_BINARY_DIR}/batchlas-env.sh"
+        file(WRITE "${PROJECT_BINARY_DIR}/batchlas-env.sh"
              "# WARNING: host BLAS dgemm is wrong and no OPENBLAS_CORETYPE fixed it.\n"
              "# Double-precision host-backend results cannot be trusted.\n")
     else()
-        file(WRITE "${CMAKE_BINARY_DIR}/batchlas-env.sh"
+        file(WRITE "${PROJECT_BINARY_DIR}/batchlas-env.sh"
              "# Host BLAS was not health-checked; nothing to set.\n")
     endif()
 endfunction()

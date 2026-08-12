@@ -3,8 +3,8 @@
 #include <batchlas/backend_config.h>
 
 // This header is intentionally benchmark-local and should stay lightweight.
-// The structured-benchmark implementation lives in `include/util/*`.
-#include <util/minibench_structured.hh>
+// The structured-benchmark implementation lives in `include/batchlas/util/*`.
+#include <batchlas/util/minibench_structured.hh>
 
 #include <complex>
 

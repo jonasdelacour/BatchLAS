@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
-#include <blas/linalg.hh>
-#include <util/sycl-device-queue.hh>
-#include <util/sycl-vector.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-vector.hh>
 
 #if BATCHLAS_HAS_HOST_BACKEND
 #include <lapacke.h>

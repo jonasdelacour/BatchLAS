@@ -1,6 +1,6 @@
 #include <batchlas/backend_config.h>
-#include <blas/linalg.hh>
-#include <util/miniacc.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/util/miniacc.hh>
 
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"

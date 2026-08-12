@@ -4,9 +4,9 @@
 #include "../queue.hh"
 #include "cublasdx_dispatch_common.hh"
 
-#include <blas/enums.hh>
-#include <blas/matrix.hh>
-#include <util/mempool.hh>
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <algorithm>
 #include <cstddef>

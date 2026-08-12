@@ -1,6 +1,6 @@
 #pragma once
 
-#include <blas/matrix.hh>
+#include <batchlas/blas/matrix.hh>
 #include "../linalg-impl.hh"
 
 #if BATCHLAS_HAS_CUDA_BACKEND

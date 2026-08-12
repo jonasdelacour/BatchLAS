@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <blas/extensions.hh>
-#include <blas/linalg.hh>
-#include <blas/matrix.hh>
-#include <util/env.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 
 #include "../queue.hh"
 

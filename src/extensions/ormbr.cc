@@ -1,9 +1,9 @@
-#include <blas/extensions.hh>
-#include <blas/linalg.hh>
-#include <internal/ormbr.hh>
-#include <internal/ormqr_blocked.hh>
+#include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/internal/ormbr.hh>
+#include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/backend_config.h>
-#include <util/mempool.hh>
+#include <batchlas/util/mempool.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"

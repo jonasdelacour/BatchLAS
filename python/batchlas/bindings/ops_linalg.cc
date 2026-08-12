@@ -1,7 +1,7 @@
 #include "init.hh"
 #include "support.hh"
 
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 
 // Bindings for the batchlas::linalg convenience layer (P5).
 //

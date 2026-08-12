@@ -1,7 +1,8 @@
-#include <blas/linalg.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
 #include "../util/template-instantiations.hh"
+#include "symmetric_product_fold.hh"
 
 #include <stdexcept>
 
@@ -37,12 +38,24 @@ Event syrk(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha,
            T beta,
-           Uplo,
+           Uplo uplo,
            Transpose transA) {
     validate_syrk_arguments(A, C, transA);
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    return gemm<Ba>(ctx, A, A, C, {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB});
+
+    // This used to be a single gemm straight into C, with `uplo` an unnamed
+    // parameter: it wrote *both* triangles of C and so silently overwrote the
+    // half SYRK does not own. The product is computed into scratch and only the
+    // named triangle is folded back. See symmetric_product_fold.hh.
+    auto product = Matrix<T, MatrixFormat::Dense>::Zeros(C.rows(), C.cols(), C.batch_size());
+    auto product_view = product.view();
+    gemm<Ba>(ctx, A, A, product_view,
+             {.alpha = alpha, .beta = T(0), .transA = transA, .transB = transB}).wait();
+
+    auto folded = detail::fold_symmetric_product_into_triangle<T>(ctx, C, product_view, beta, uplo);
+    folded.wait();  // the scratch product dies with this scope
+    return folded;
 }
 
 #define SYRK_INSTANTIATE(back, fp) \
