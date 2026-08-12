@@ -22,6 +22,10 @@
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
+    // cuComplex / cuDoubleComplex are CUDA *runtime* types, used by the
+    // pointer-cast helpers below. They used to arrive transitively through
+    // cublas_v2.h, which made those helpers silently depend on cuBLAS.
+    #include <cuComplex.h>
 #endif
 #if BATCHLAS_HAS_CUBLAS
     #include <cublas_v2.h>
@@ -99,7 +103,7 @@ namespace batchlas{
     // Individual enum conversions for CUDA backend
     template<BackendLibrary B>
     constexpr auto enum_convert(Side side) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasSideMode_t>(
                 side == Side::Left ? CUBLAS_SIDE_LEFT : CUBLAS_SIDE_RIGHT
@@ -134,7 +138,7 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(JobType job) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUSOLVER
         if constexpr (B == BackendLibrary::CUSOLVER) {
             return static_cast<cusolverEigMode_t>(
                 job == JobType::EigenVectors ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR
@@ -165,7 +169,7 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Diag diag) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS) {
             return static_cast<cublasDiagType_t>(
                 diag == Diag::NonUnit ? CUBLAS_DIAG_NON_UNIT : CUBLAS_DIAG_UNIT
@@ -200,7 +204,7 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Layout layout) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUSPARSE
         if constexpr (B == BackendLibrary::CUSPARSE) {
             return static_cast<cusparseOrder_t>(
                 layout == Layout::RowMajor ? CUSPARSE_ORDER_ROW : CUSPARSE_ORDER_COL
@@ -235,12 +239,15 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Uplo uplo) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             return static_cast<cublasFillMode_t>(
                 uplo == Uplo::Upper ? CUBLAS_FILL_MODE_UPPER : CUBLAS_FILL_MODE_LOWER
             );
-        } else if constexpr (B == BackendLibrary::CUSPARSE) {
+        } else
+#endif
+#if BATCHLAS_HAS_CUSPARSE
+        if constexpr (B == BackendLibrary::CUSPARSE) {
             return static_cast<cusparseFillMode_t>(
                 uplo == Uplo::Upper ? CUSPARSE_FILL_MODE_UPPER : CUSPARSE_FILL_MODE_LOWER
             );
@@ -276,14 +283,17 @@ namespace batchlas{
 
     template<BackendLibrary B>
     constexpr auto enum_convert(Transpose trans) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
             switch (trans) {
                 case Transpose::NoTrans: return static_cast<cublasOperation_t>(CUBLAS_OP_N);
                 case Transpose::Trans: return static_cast<cublasOperation_t>(CUBLAS_OP_T);
                 case Transpose::ConjTrans: return static_cast<cublasOperation_t>(CUBLAS_OP_C);
             }
-        } else if constexpr (B == BackendLibrary::CUSPARSE) {
+        } else
+#endif
+#if BATCHLAS_HAS_CUSPARSE
+        if constexpr (B == BackendLibrary::CUSPARSE) {
             switch (trans) {
                 case Transpose::NoTrans: return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_NON_TRANSPOSE);
                 case Transpose::Trans: return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_TRANSPOSE);
@@ -331,7 +341,7 @@ namespace batchlas{
 
     template<BackendLibrary B, typename T>
     constexpr auto enum_convert(ComputePrecision precision) {
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
             using BaseType = typename base_type<T>::type;
             
@@ -605,21 +615,25 @@ namespace batchlas{
         return std::make_tuple(detail::convert_arg<B>(std::forward<Args>(args))...);
     }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUBLAS
     inline auto check_status(cublasStatus_t status) {
         if (status != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("CUBLAS error: " + std::to_string(status));
         }
         return status;
     }
+#endif
 
+#if BATCHLAS_HAS_CUSPARSE
     inline auto check_status(cusparseStatus_t status) {
         if (status != CUSPARSE_STATUS_SUCCESS) {
             throw std::runtime_error("CUSPARSE error: " + std::to_string(status));
         }
         return status;
     }
+#endif
 
+#if BATCHLAS_HAS_CUSOLVER
     inline auto check_status(cusolverStatus_t status) {
         if (status != CUSOLVER_STATUS_SUCCESS) {
             throw std::runtime_error("CUSOLVER error: " + std::to_string(status));
@@ -886,12 +900,19 @@ namespace batchlas{
         };
 #endif
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// These two are keyed on the LIBRARIES, not the device family: cublasComputeType_t
+// comes from cublas_v2.h, and the handle triple needs cuBLAS, cuSPARSE and
+// cuSOLVER all three. Under BATCHLAS_HAS_CUDA_BACKEND alone -- which after S1/S2
+// can be true with any of those absent -- naming those types does not compile.
+#if BATCHLAS_HAS_CUBLAS
 
         template <typename T>
         struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
             static constexpr cublasComputeType_t type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_64F;
         };
+#endif
+
+#if BATCHLAS_HAS_CUBLAS && BATCHLAS_HAS_CUSPARSE && BATCHLAS_HAS_CUSOLVER
 
         template <>
         struct LinalgHandle<Backend::CUDA> {
@@ -963,6 +984,18 @@ namespace batchlas{
                 cusparseSetStream(sparse_handle_, stream);
                 cusolverDnSetStream(solver_handle_, stream);
             }
+        };
+#elif BATCHLAS_HAS_CUDA_BACKEND
+        // A CUDA device with one or more of its math libraries absent. There are
+        // no vendor handles to own, but the type must still be COMPLETE: a
+        // *native* translation unit declares one. src/extensions/ortho.cc:104
+        // has `static LinalgHandle<B> handle;` with B deduced from the queue, and
+        // the primary template is declared without a definition
+        // (linalg-impl.hh:79), so leaving this out makes an ortho build fail on
+        // an incomplete type -- in a file that calls no vendor code at all.
+        template <>
+        struct LinalgHandle<Backend::CUDA> {
+            void setStream(const Queue&) {}
         };
 #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
