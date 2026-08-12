@@ -331,7 +331,58 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     linalg::subtract_into(ctx, A, B, C);
     linalg::multiply_into(ctx, A, B, C);
     linalg::divide_into(ctx, A, B, C);
+
+    // "The linalg convenience layer" -- the rest of the layer
+    [[maybe_unused]] auto svd_result = linalg::svd(ctx, A);
+    [[maybe_unused]] auto lu_result = linalg::lu(ctx, A);
+    [[maybe_unused]] auto inverse = linalg::inv(ctx, A);
+    [[maybe_unused]] auto transposed = linalg::transpose(ctx, A);
+    [[maybe_unused]] auto norms = linalg::norm(ctx, A);
+    [[maybe_unused]] auto conds = linalg::cond(ctx, A);
+    [[maybe_unused]] auto upper = linalg::triu(ctx, A);
+    [[maybe_unused]] auto strict_lower = linalg::tril(ctx, A, -1);
+    linalg::matmul(ctx, A, B, {.alpha = 2.0f});
 }
+
+// What the layer must NOT accept. Each of these is spelled as a concept rather
+// than a bare `!requires(...)` in the static_assert: a requires-expression only
+// swallows errors that come from template substitution, so an ill-formed call
+// written with concrete types in a non-template context is a hard error and the
+// guard would fail to compile instead of passing.
+template <typename T>
+concept MatmulOptionsHasBeta = requires(linalg::MatmulOptions<T> o) { o.beta; };
+
+template <typename T>
+concept HasLinalgTranspose = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    linalg::transpose(ctx, A);
+};
+
+template <typename T>
+concept HasLinalgCond = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    linalg::cond(ctx, A);
+};
+
+template <typename T>
+concept MatmulTakesOptionList = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    linalg::matmul(ctx, A, A, {.alpha = T(2)});
+};
+
+// matmul allocates its result, so beta has no meaning: it used to be spellable
+// through GemmOptions and silently discarded.
+static_assert(!MatmulOptionsHasBeta<float>,
+              "MatmulOptions must not carry a beta: matmul allocates its result");
+static_assert(MatmulTakesOptionList<float>,
+              "matmul must still accept a designated-initialiser option list");
+
+// transpose and cond are constrained to real scalars because the entry points
+// behind them are instantiated for real scalars only. Without the constraint
+// these calls would compile and fail at link time.
+static_assert(HasLinalgTranspose<float> && HasLinalgTranspose<double>);
+static_assert(!HasLinalgTranspose<std::complex<float>>,
+              "complex transpose must be rejected: transpose_impl does not conjugate");
+static_assert(HasLinalgCond<float> && HasLinalgCond<double>);
+static_assert(!HasLinalgCond<std::complex<float>>,
+              "complex cond must be rejected: there is no complex instantiation behind it");
 
 }  // namespace
 
@@ -442,6 +493,10 @@ TEST(LinalgLayer, ValueReturningWrappersLeaveInputsAlone) {
     auto L = linalg::cholesky(q, A.view());
     auto w = linalg::eigvalsh(q, A.view());
     auto e = linalg::eigh(q, A.view());
+    auto s = linalg::svd(q, A.view());
+    auto f = linalg::lu(q, A.view());
+    auto Ai = linalg::inv(q, A.view());
+    auto up = linalg::triu(q, A.view());
     q.wait();
 
     size_t k = 0;
@@ -530,4 +585,204 @@ TEST(LinalgLayer, RepeatedCallsDoNotGrowTheArena) {
         q.wait();
     }
     EXPECT_EQ(q.workspace_capacity(), settled);
+}
+
+// alpha is matmul's only scalar knob now that beta is gone, and nothing else
+// exercises it.
+TEST(LinalgLayer, MatmulAlphaScalesTheProduct) {
+    Queue q;
+    const int n = 4, batch = 2;
+    auto A = from_fn(n, n, batch, [](int i, int j, int b) { return float(1 + i + 2 * j + b); });
+    auto B = from_fn(n, n, batch, [](int i, int j, int) { return float(j - i + 3); });
+
+    auto plain = linalg::matmul(q, A.view(), B.view());
+    auto scaled_product = linalg::matmul(q, A.view(), B.view(), {.alpha = 2.0f});
+    auto transposed = linalg::matmul(q, A.view(), B.view(), {.transA = Transpose::Trans});
+    q.wait();
+
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                ASSERT_NEAR(at(scaled_product.view(), i, j, b),
+                            2.0f * at(plain.view(), i, j, b), 1e-3f)
+                    << "alpha at (" << i << "," << j << ") batch " << b;
+                float acc = 0.0f;
+                for (int k = 0; k < n; ++k) acc += at(A.view(), k, i, b) * at(B.view(), k, j, b);
+                ASSERT_NEAR(at(transposed.view(), i, j, b), acc, 1e-3f)
+                    << "transA at (" << i << "," << j << ") batch " << b;
+            }
+}
+
+// triu/tril mask an existing matrix; fill_triangular generates one. The k
+// offsets follow NumPy, and the negative-k case is the one an unsigned diagonal
+// difference would get wrong.
+TEST(LinalgLayer, TriuTrilMaskAnExistingMatrix) {
+    Queue q;
+    const int rows = 5, cols = 7, batch = 2;  // rectangular, so row/col are not interchangeable
+    auto A = from_fn(rows, cols, batch,
+                     [](int i, int j, int b) { return float(1 + i + 10 * j + 100 * b); });
+
+    auto u0 = linalg::triu(q, A.view());
+    auto u2 = linalg::triu(q, A.view(), 2);
+    auto l0 = linalg::tril(q, A.view());
+    auto lm1 = linalg::tril(q, A.view(), -1);
+    q.wait();
+
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) {
+                const float a = at(A.view(), i, j, b);
+                const int d = j - i;
+                ASSERT_FLOAT_EQ(at(u0.view(), i, j, b), d >= 0 ? a : 0.0f) << "triu " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(u2.view(), i, j, b), d >= 2 ? a : 0.0f) << "triu2 " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(l0.view(), i, j, b), d <= 0 ? a : 0.0f) << "tril " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(lm1.view(), i, j, b), d <= -1 ? a : 0.0f) << "tril-1 " << i << "," << j;
+            }
+
+    // Aliasing: the documented in-place spelling.
+    linalg::triangular_mask_into<float>(q, A.view(), A.view(), Uplo::Upper, 0);
+    q.wait();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                ASSERT_FLOAT_EQ(at(A.view(), i, j, b), at(u0.view(), i, j, b))
+                    << "in place " << i << "," << j;
+}
+
+TEST(LinalgLayer, TriangularMaskRejectsMismatchedShapes) {
+    Queue q;
+    auto A = from_fn(4, 4, 1, [](int, int, int) { return 1.0f; });
+    auto C = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
+    EXPECT_THROW(linalg::triangular_mask_into<float>(q, A.view(), C.view(), Uplo::Upper, 0),
+                 std::invalid_argument);
+}
+
+TEST(LinalgLayer, InvReproducesTheIdentity) {
+    Queue q;
+    const int n = 8, batch = 2;
+    auto A = spd(n, batch);
+    auto Ai = linalg::inv(q, A.view());
+    q.wait();
+    auto I = linalg::matmul(q, A.view(), Ai.view());
+    q.wait();
+
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                ASSERT_NEAR(at(I.view(), i, j, b), i == j ? 1.0f : 0.0f, 1e-3f)
+                    << "A A^-1 at (" << i << "," << j << ") batch " << b;
+}
+
+TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
+    Queue q;
+    const int rows = 3, cols = 5, batch = 2;
+    auto A = from_fn(rows, cols, batch,
+                     [](int i, int j, int b) { return float(1 + i + 7 * j + 50 * b); });
+    auto At = linalg::transpose(q, A.view());
+    q.wait();
+
+    ASSERT_EQ(At.view().rows(), cols);
+    ASSERT_EQ(At.view().cols(), rows);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                ASSERT_FLOAT_EQ(at(At.view(), j, i, b), at(A.view(), i, j, b));
+}
+
+// norm returns one value per batch item. Unlike the rest of the layer it has
+// already waited by the time it returns.
+TEST(LinalgLayer, NormMatchesTheHostFrobeniusNorm) {
+    Queue q;
+    const int rows = 4, cols = 3, batch = 3;
+    auto A = from_fn(rows, cols, batch, [](int i, int j, int b) { return float(i - 2 * j + b); });
+    auto n = linalg::norm(q, A.view());
+
+    ASSERT_EQ(n.size(), size_t(batch));
+    for (int b = 0; b < batch; ++b) {
+        double acc = 0.0;
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) {
+                const double v = at(A.view(), i, j, b);
+                acc += v * v;
+            }
+        ASSERT_NEAR(n[b], float(std::sqrt(acc)), 1e-3f) << "batch " << b;
+    }
+}
+
+// cond on a diagonal matrix has a closed form: the Frobenius condition number is
+// ||A||_F ||A^-1||_F, and both factors are exact for a diagonal.
+TEST(LinalgLayer, CondMatchesTheDiagonalReference) {
+    Queue q;
+    const int n = 4, batch = 2;
+    const float d[n] = {1.0f, 2.0f, 4.0f, 8.0f};
+    auto A = from_fn(n, n, batch, [&](int i, int j, int) { return i == j ? d[i] : 0.0f; });
+    auto k = linalg::cond(q, A.view());
+
+    double a2 = 0.0, ai2 = 0.0;
+    for (int i = 0; i < n; ++i) {
+        a2 += double(d[i]) * d[i];
+        ai2 += 1.0 / (double(d[i]) * d[i]);
+    }
+    const float expected = float(std::sqrt(a2) * std::sqrt(ai2));
+    ASSERT_EQ(k.size(), size_t(batch));
+    for (int b = 0; b < batch; ++b) ASSERT_NEAR(k[b], expected, 1e-2f) << "batch " << b;
+}
+
+// The factors and the pivots are checked together, by solving with them: the
+// pivot convention (base, and whether the entries are interchanges or a
+// permutation) is a backend detail this layer does not promise.
+TEST(LinalgLayer, LuFactorsAndPivotsSolveTheSystem) {
+    Queue q;
+    const int n = 8, nrhs = 2, batch = 2;
+    auto A = spd(n, batch);
+    auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + b); });
+
+    auto f = linalg::lu(q, A.view());
+    ASSERT_EQ(f.pivots.size(), size_t(n) * size_t(batch));
+
+    Matrix<float, MatrixFormat::Dense> X(n, nrhs, batch);
+    MatrixView<float, MatrixFormat::Dense>::copy(q, X.view(), B.view());
+    getrs(q, f.factors.view(), X.view(), f.pivots.to_span());
+    q.wait();
+
+    auto AX = linalg::matmul(q, A.view(), X.view());
+    q.wait();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = 0; i < n; ++i)
+                ASSERT_NEAR(at(AX.view(), i, j, b), at(B.view(), i, j, b), 1e-2f)
+                    << "A X != B at (" << i << "," << j << ") batch " << b;
+}
+
+// U diag(S) Vh == A, on a square well-conditioned input.
+TEST(LinalgLayer, SvdReconstructsInput) {
+    Queue q;
+    const int n = 6, batch = 2;
+    auto A = spd(n, batch);
+
+    auto s = linalg::svd(q, A.view());
+    q.wait();
+
+    ASSERT_EQ(s.U.view().rows(), n);
+    ASSERT_EQ(s.U.view().cols(), n);
+    ASSERT_EQ(s.Vh.view().rows(), n);
+    ASSERT_EQ(s.Vh.view().cols(), n);
+    ASSERT_EQ(s.values.size(), size_t(n) * size_t(batch));
+
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                float acc = 0.0f;
+                for (int k = 0; k < n; ++k)
+                    acc += at(s.U.view(), i, k, b) * s.values[b * n + k] *
+                           at(s.Vh.view(), k, j, b);
+                ASSERT_NEAR(acc, at(A.view(), i, j, b), 1e-2f)
+                    << "U S Vh != A at (" << i << "," << j << ") batch " << b;
+            }
+}
+
+TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
+    Queue q;
+    auto A = spd(4, 1);
+    EXPECT_THROW(linalg::svd(q, A.view(), SvdVectors::None), std::invalid_argument);
 }

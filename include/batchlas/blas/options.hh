@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <concepts>
 #include <initializer_list>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -78,9 +79,12 @@ inline void require_args_accessible(const Queue& ctx, const char* fn,
 #define BATCHLAS_ARG_NAMES_2(a, b) #a, #b
 #define BATCHLAS_ARG_NAMES_3(a, b, c) #a, #b, #c
 #define BATCHLAS_ARG_NAMES_4(a, b, c, d) #a, #b, #c, #d
-#define BATCHLAS_ARG_NAMES_PICK(_1, _2, _3, _4, NAME, ...) NAME
+#define BATCHLAS_ARG_NAMES_5(a, b, c, d, e) #a, #b, #c, #d, #e
+#define BATCHLAS_ARG_NAMES_6(a, b, c, d, e, f) #a, #b, #c, #d, #e, #f
+#define BATCHLAS_ARG_NAMES_PICK(_1, _2, _3, _4, _5, _6, NAME, ...) NAME
 #define BATCHLAS_ARG_NAMES(...)                                                  \
-    BATCHLAS_ARG_NAMES_PICK(__VA_ARGS__, BATCHLAS_ARG_NAMES_4, BATCHLAS_ARG_NAMES_3, \
+    BATCHLAS_ARG_NAMES_PICK(__VA_ARGS__, BATCHLAS_ARG_NAMES_6, BATCHLAS_ARG_NAMES_5, \
+                            BATCHLAS_ARG_NAMES_4, BATCHLAS_ARG_NAMES_3,          \
                             BATCHLAS_ARG_NAMES_2, BATCHLAS_ARG_NAMES_1)(__VA_ARGS__)
 
 namespace detail {
@@ -707,6 +711,149 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
     detail::require_span_at_least("syev", "W", W.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
+}
+
+// ---- ormqr and gesvd -------------------------------------------------------
+//
+// These two were the last dense entry points without an option-struct spelling,
+// and the reason given was that their positional forms do not end in the
+// workspace -- ormqr's `workspace` is followed by a defaulted block-size hint --
+// so the arena form could not simply drop the last argument.
+//
+// That reason does not apply: an option overload is a NEW overload and is under
+// no obligation to mirror the positional parameter order. getrs has been doing
+// exactly this since the option layer landed (its positional form takes
+// `(A, B, transA, pivots, ws)` while its option form takes
+// `(A, B, pivots, opts, ws)`), so nothing here moves an existing parameter and
+// no existing call site changes. The hint that blocked the "just drop the last
+// argument" reading becomes a field of OrmqrOptions instead.
+
+struct OrmqrOptions {
+    Side side = Side::Left;
+    Transpose trans = Transpose::NoTrans;
+    // 0 means "let the tuning table pick the WY panel width"; see the block-size
+    // selection in src/extensions/ormqr_blocked.cc. It is an option field rather
+    // than a trailing default argument because the arena spelling has no
+    // trailing position left to put it in.
+    int32_t block_size_hint = 0;
+};
+
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
+                   const OrmqrOptions& opts, Span<std::byte> ws) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return ormqr<B, T>(ctx, V(A), V(C), opts.side, opts.trans, tau, ws, opts.block_size_hint);
+}
+
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
+                   const OrmqrOptions& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    // The sizing query must be given the same options the call gets: the hint
+    // selects the panel width, and the panel width is what the workspace is
+    // sized for, so sizing with the default hint and running with another would
+    // under-size the buffer.
+    auto lease = ctx.workspace(ormqr_buffer_size<B, T>(ctx, V(A), V(C), opts.side, opts.trans,
+                                                       tau, opts.block_size_hint));
+    return ormqr<B, T>(ctx, V(A), V(C), opts.side, opts.trans, tau, lease.span(),
+                       opts.block_size_hint);
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
+                   const OrmqrOptions& opts, Span<std::byte> ws) {
+    BATCHLAS_CHECK_ARGS(ctx, "ormqr", A, C, tau, ws);
+    detail::require_same_batch("ormqr", "A", A, "C", C);
+    detail::require_span_at_least("ormqr", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
+    return with_backend(ctx, [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts, ws); });
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
+                   const OrmqrOptions& opts = {}) {
+    BATCHLAS_CHECK_ARGS(ctx, "ormqr", A, C, tau);
+    // Both mirror validate_ormqr_dims (src/extensions/ormqr_blocked.cc): the
+    // reflector count is min(A.rows(), A.cols()) per problem and every path
+    // indexes tau at that stride, so a short tau is read out of bounds.
+    detail::require_same_batch("ormqr", "A", A, "C", C);
+    detail::require_span_at_least("ormqr", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
+    return with_backend(ctx, [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts); });
+}
+
+struct GesvdOptions {
+    SvdVectors jobu = SvdVectors::All;
+    SvdVectors jobvh = SvdVectors::All;
+    // Engaged selects the Hermitian entry point (blas/functions/gesvd.hh), which
+    // is a different overload rather than a different argument value -- hence
+    // std::optional and not a plain Uplo with a "not Hermitian" sentinel.
+    std::optional<Uplo> hermitian_uplo = std::nullopt;
+};
+
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
+          detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
+inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
+                   const MU& U, const MV& Vh, const GesvdOptions& opts, Span<std::byte> ws) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    return opts.hermitian_uplo
+               ? gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh,
+                             *opts.hermitian_uplo, ws)
+               : gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh, ws);
+}
+
+template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
+          detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
+inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
+                   const MU& U, const MV& Vh, const GesvdOptions& opts) {
+    using V = BATCHLAS_DENSE_VIEW(T);
+    // The Hermitian and general branches choose providers independently and can
+    // therefore need different amounts of scratch, so the size query has to take
+    // the same branch as the call below it.
+    const size_t bytes =
+        opts.hermitian_uplo
+            ? gesvd_buffer_size<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu,
+                                      opts.jobvh, *opts.hermitian_uplo)
+            : gesvd_buffer_size<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu,
+                                      opts.jobvh);
+    auto lease = ctx.workspace(bytes);
+    return opts.hermitian_uplo
+               ? gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh,
+                             *opts.hermitian_uplo, lease.span())
+               : gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh,
+                             lease.span());
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MU, detail::DenseMatrixLike MV,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
+                   const MU& U, const MV& Vh, const GesvdOptions& opts, Span<std::byte> ws) {
+    BATCHLAS_CHECK_ARGS(ctx, "gesvd", A, singular_values, U, Vh, ws);
+    if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
+    detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
+    return with_backend(
+        ctx, [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts, ws); });
+}
+
+template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MU, detail::DenseMatrixLike MV,
+          typename T = detail::dense_scalar_t<MA>>
+inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
+                   const MU& U, const MV& Vh, const GesvdOptions& opts = {}) {
+    BATCHLAS_CHECK_ARGS(ctx, "gesvd", A, singular_values, U, Vh);
+    // Only A is shape-checked. U and Vh are deliberately left alone: a
+    // default-constructed view is how this API spells "I asked for no vectors on
+    // this side", so any check relating their extents to A's would reject the
+    // documented SvdVectors::None call.
+    if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
+    detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
+    return with_backend(
+        ctx, [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts); });
 }
 
 #undef BATCHLAS_DENSE_VIEW

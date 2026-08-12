@@ -2640,4 +2640,243 @@ BATCHLAS_DISPATCH_ON_QUEUE(inv)
 BATCHLAS_DISPATCH_ON_QUEUE(inv_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)
 
+// ---- ortho: option-struct and arena-backed spellings -----------------------
+//
+// Same layer as blas/options.hh -- an option struct plus a workspace-omitting
+// overload that leases from the queue's arena -- but it has to live HERE rather
+// than there. blas/linalg.hh includes blas/functions.hh (which ends by including
+// blas/options.hh) BEFORE it includes this header, so at the point options.hh is
+// parsed the name `ortho` is not yet declared and `ortho<B, T>(...)` in a
+// function body would not even parse as a template-id. Going the other way and
+// including options.hh from here is worse: this header is pulled in from
+// blas/functions/gesvd.hh, i.e. part-way through functions.hh's include list, so
+// options.hh's body would be parsed before potrf.hh/syev.hh had declared the
+// entry points it forwards to.
+//
+// Consequence of the split: none of options.hh's helpers are available here.
+// `detail::DenseMatrixLike`, `dense_scalar_t` and the BATCHLAS_DENSE_VIEW macro
+// (which options.hh #undefs) are all out of reach, so the MatrixView and Matrix
+// spellings are written out separately, exactly as the positional ortho
+// declarations above already do.
+//
+// The lease is released when the call returns. On an out-of-order Queue that
+// drains the device first, so the arena spelling is synchronous where the
+// span-taking spelling is not; see blas/options.hh and util/workspace.hh.
+
+struct OrthoOptions {
+    Transpose transA = Transpose::NoTrans;
+    OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;
+};
+
+struct OrthoAgainstOptions {
+    Transpose transA = Transpose::NoTrans;
+    Transpose transM = Transpose::NoTrans;
+    OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;
+    size_t iterations = 2;
+};
+
+// ---- in-place orthogonalisation --------------------------------------------
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<B, T>(ctx, A, opts.transA, workspace, opts.algorithm);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts) {
+    // Sized with the same algorithm the call runs: Chol2, SVQB and the Householder
+    // path need different amounts of scratch, so a size query taken with the
+    // default would under-size every non-default request.
+    auto lease = ctx.workspace(ortho_buffer_size<B, T>(ctx, A, opts.transA, opts.algorithm));
+    return ortho<B, T>(ctx, A, opts.transA, lease.span(), opts.algorithm);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts, workspace);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts) {
+    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts);
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts,
+        Span<std::byte> workspace) {
+    if (detail::pointer_checks_enabled()) {
+        detail::require_arg_accessible(ctx, A, "ortho: A");
+        detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
+    }
+    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts, workspace); });
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts = {}) {
+    if (detail::pointer_checks_enabled()) detail::require_arg_accessible(ctx, A, "ortho: A");
+    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts); });
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts, workspace);
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const OrthoOptions& opts = {}) {
+    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts);
+}
+
+namespace detail {
+// The bare-`{}` trap, in the one place ortho has it. `ortho(ctx, A, {}, ws)` is
+// four arguments, which matches BOTH the positional overload
+// `(ctx, A, Transpose, ws, algo = Chol2)` and the option overload
+// `(ctx, A, OrthoOptions, ws)`. `{}` is an exact match for a scoped enum but
+// only a user-defined conversion to a class type, so the positional overload
+// wins silently -- the caller writes what looks like "defaults" and gets
+// `Transpose{}` with no diagnostic.
+//
+// Today `Transpose{}` is NoTrans and `OrthoAlgorithm{}` is Chol2, so the two
+// readings happen to agree and the trap is dormant; it arms itself the moment
+// either enum gains a new first enumerator or either OrthoOptions default
+// changes. That is exactly how the same trap reached potrf's Cholesky path
+// (blas/options.hh, detail::EmptyBracesAreAmbiguous) and surfaced only as LOBPCG
+// failing to converge.
+//
+// A third candidate at the same exact-match rank makes the bare-`{}` call
+// ambiguous instead of silently wrong, and the diagnostic names all three. This
+// is a distinct type from options.hh's EmptyBracesAreAmbiguous only because that
+// one is not visible here; it does the same job. Neither `OrthoOptions{}` nor
+// `Transpose::NoTrans` converts to it, so every spelled-out call still resolves
+// exactly as before.
+enum class OrthoEmptyBracesAreAmbiguous {};
+}  // namespace detail
+
+template <Backend B, typename T>
+Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
+
+template <Backend B, typename T>
+Event ortho(Queue&, const Matrix<T, MatrixFormat::Dense>&,
+            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
+
+template <typename T>
+Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
+
+template <typename T>
+Event ortho(Queue&, const Matrix<T, MatrixFormat::Dense>&,
+            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
+
+// ---- orthogonalisation against an external metric ---------------------------
+//
+// No `{}` guard is needed on this family: the positional metric form needs at
+// least six arguments (ctx, A, M, transA, transM, ws) while the option forms
+// take four and five, so no argument list can reach both.
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<B, T>(ctx, A, M, opts.transA, opts.transM, workspace, opts.algorithm,
+                       opts.iterations);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts) {
+    auto lease = ctx.workspace(ortho_buffer_size<B, T>(ctx, A, M, opts.transA, opts.transM,
+                                                       opts.algorithm, opts.iterations));
+    return ortho<B, T>(ctx, A, M, opts.transA, opts.transM, lease.span(), opts.algorithm,
+                       opts.iterations);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const Matrix<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
+                       MatrixView<T, MatrixFormat::Dense>(M), opts, workspace);
+}
+
+template <Backend B, typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const Matrix<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts) {
+    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
+                       MatrixView<T, MatrixFormat::Dense>(M), opts);
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts,
+        Span<std::byte> workspace) {
+    if (detail::pointer_checks_enabled()) {
+        detail::require_arg_accessible(ctx, A, "ortho: A");
+        detail::require_arg_accessible(ctx, M, "ortho: M");
+        detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
+    }
+    return with_backend(ctx,
+                        [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts, workspace); });
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts = {}) {
+    if (detail::pointer_checks_enabled()) {
+        detail::require_arg_accessible(ctx, A, "ortho: A");
+        detail::require_arg_accessible(ctx, M, "ortho: M");
+    }
+    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts); });
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const Matrix<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts,
+        Span<std::byte> workspace) {
+    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
+                    MatrixView<T, MatrixFormat::Dense>(M), opts, workspace);
+}
+
+template <typename T>
+inline Event ortho(Queue& ctx,
+        const Matrix<T, MatrixFormat::Dense>& A,
+        const Matrix<T, MatrixFormat::Dense>& M,
+        const OrthoAgainstOptions& opts = {}) {
+    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
+                    MatrixView<T, MatrixFormat::Dense>(M), opts);
+}
+
 }  // namespace batchlas
