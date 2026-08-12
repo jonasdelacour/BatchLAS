@@ -219,7 +219,7 @@ inline Event ormqr_dispatch(Queue& ctx,
     }
 
     if (workspace.size() < need_ws) {
-        throw std::runtime_error("ormqr: insufficient workspace for chosen provider");
+        throw std::invalid_argument("ormqr: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it

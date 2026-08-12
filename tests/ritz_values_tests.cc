@@ -69,7 +69,7 @@ TYPED_TEST(RitzValuesTest, DiagonalMatrix) {
     Vector<RealType> ritz_vals(k, batch);
     
     // Compute workspace size and allocate
-    size_t workspace_size = ritz_values_workspace<BackendType, ScalarType, MatrixFormat::Dense>(
+    size_t workspace_size = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals);
     UnifiedVector<std::byte> workspace(workspace_size);
     
@@ -129,7 +129,7 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     Vector<RealType> ritz_vals(k, batch);
     
     // Compute workspace size and allocate
-    size_t workspace_size = ritz_values_workspace<BackendType, ScalarType, MatrixFormat::Dense>(
+    size_t workspace_size = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals);
     UnifiedVector<std::byte> workspace(workspace_size);
     

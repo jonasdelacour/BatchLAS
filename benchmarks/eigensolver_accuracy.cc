@@ -485,7 +485,7 @@ int run_accuracy(const Options& opt) {
                     params.leaf_steqr_params = steqr_params;
                     
                     UnifiedVector<std::byte> ws(
-                        stedc_workspace_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
+                        stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
                     stedc<B, Real>(*q,
                                    d_work,
                                    e_work,

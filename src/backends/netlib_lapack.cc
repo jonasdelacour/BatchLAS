@@ -405,11 +405,11 @@ namespace batchlas{
     Event trsm(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         const MatrixView<T, MatrixFormat::Dense>& descrB,
+        T alpha,
         Side side,
         Uplo uplo,
         Transpose transA,
-        Diag diag,
-        T alpha) {
+        Diag diag) {
         auto A_view = descrA;
         auto B_view = descrB;
         return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {

@@ -232,8 +232,8 @@ TEST(OptionsApi, Blas3OptionsMatchPositional) {
         auto Bp = filled(n, batch, 0.6f);
         auto Tri = spd(n, batch);
         trsm(q, Tri.view(), Bo.view(), {.alpha = 1.0f, .diag = Diag::NonUnit});
-        trsm(q, Tri.view(), Bp.view(), Side::Left, Uplo::Lower, Transpose::NoTrans,
-             Diag::NonUnit, 1.0f);
+        trsm(q, Tri.view(), Bp.view(), 1.0f, Side::Left, Uplo::Lower, Transpose::NoTrans,
+             Diag::NonUnit);
         q.wait();
         expect_same(Bo.view(), Bp.view(), n, batch, "trsm");
     }

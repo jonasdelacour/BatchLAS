@@ -119,8 +119,8 @@ arithmetic for both scalar types, so the saving is identical for `float` and `cf
 | `:244` | complex | `stedc<B, Real>(..., internal_jobz, ..., z_view)` |
 | `:340` | real | same constant |
 | `:345` | real | `stedc<B, T>(..., internal_jobz, ..., z_view)` |
-| `:450` | complex | `stedc_workspace_size<B, Real>(..., JobType::EigenVectors, ...)` |
-| `:478` | real | `stedc_workspace_size<B, T>(..., JobType::EigenVectors, ...)` |
+| `:450` | complex | `stedc_buffer_size<B, Real>(..., JobType::EigenVectors, ...)` |
+| `:478` | real | `stedc_buffer_size<B, T>(..., JobType::EigenVectors, ...)` |
 
 The comment at `:236` explains the constant: *"The current STEDC implementation relies on
 eigenvectors during recursion/merge, so we always run it in EigenVectors mode."* That is

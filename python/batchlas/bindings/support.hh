@@ -1039,7 +1039,10 @@ template <typename T>
 py::object sparse_matrix_to_python_t(const SparseMatrixT<T>& matrix) {
     py::module_ scipy_sparse = py::module_::import("scipy.sparse");
     auto make_one = [&](int batch) -> py::object {
-        const int nnz = matrix.row_offsets()[static_cast<std::size_t>(batch * matrix.offset_stride() + matrix.rows())];
+        // Not matrix.nnz(): that is the per-item capacity, sized by the batch maximum,
+        // and this batch is heterogeneous by construction. nnz(batch) is the same row
+        // offset read this line used to spell by hand.
+        const int nnz = matrix.nnz(batch);
         py::array_t<T> data({nnz});
         py::array_t<int> indices({nnz});
         py::array_t<int> indptr({matrix.rows() + 1});

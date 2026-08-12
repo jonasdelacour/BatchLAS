@@ -1,9 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <concepts>
 #include <initializer_list>
+#include <stdexcept>
 #include <string>
 
 #include <batchlas/blas/enums.hh>
@@ -71,6 +73,66 @@ inline void require_args_accessible(const Queue& ctx, const char* fn,
 #define BATCHLAS_ARG_NAMES(...)                                                  \
     BATCHLAS_ARG_NAMES_PICK(__VA_ARGS__, BATCHLAS_ARG_NAMES_4, BATCHLAS_ARG_NAMES_3, \
                             BATCHLAS_ARG_NAMES_2, BATCHLAS_ARG_NAMES_1)(__VA_ARGS__)
+
+namespace detail {
+
+// Shape preconditions for the LAPACK-style entry points.
+//
+// The dense BLAS backends have always validated shapes (see the SYMM/HERK/TRMM
+// checks in src/backends/cublas.cc); the LAPACK-style calls did not, and reached
+// the vendor call exactly as written. That gap was not merely untidy, it was a
+// memory-safety hole: netlib getrf reads `n = A.rows()` and then factorises an
+// n x n block (src/backends/netlib_lapack.cc), so a 100x50 A -- a buffer of 5000
+// elements -- was factorised as 100x100 and columns 50..99 were read and written
+// past the end of the allocation. cuBLAS's batched getrf takes a single
+// dimension and is square-only by construction, while rocSOLVER's does pass both
+// rows and cols and genuinely handles rectangular input, so the three backends
+// silently disagreed about what a rectangular A even meant. Pinning the contract
+// host-side is what makes them agree.
+//
+// These throw std::invalid_argument, not std::runtime_error: everything they
+// test is determined entirely by the caller's arguments. std::runtime_error is
+// reserved for environment and backend failures.
+//
+// They are deliberately attached only to the backend-DEDUCING overloads. The
+// `template <Backend B, ...>` spellings are the library's own inner-loop calls
+// (src/extensions/ortho.cc, inv.cc, syevx_*.cc), which are already shape-correct
+// by construction and must not pay a host-side branch per iteration.
+template <typename MV>
+inline void require_square(const char* fn, const char* name, const MV& A) {
+    if (A.rows() != A.cols())
+        throw std::invalid_argument(std::string(fn) + ": " + name +
+            " must be square, got " + std::to_string(A.rows()) + "x" + std::to_string(A.cols()));
+}
+
+template <typename MA, typename MB>
+inline void require_same_rows(const char* fn, const char* an, const MA& A,
+                              const char* bn, const MB& B) {
+    if (A.rows() != B.rows())
+        throw std::invalid_argument(std::string(fn) + ": " + an + ".rows() (" +
+            std::to_string(A.rows()) + ") must equal " + bn + ".rows() (" +
+            std::to_string(B.rows()) + ")");
+}
+
+template <typename MA, typename MB>
+inline void require_same_batch(const char* fn, const char* an, const MA& A,
+                               const char* bn, const MB& B) {
+    if (A.batch_size() != B.batch_size())
+        throw std::invalid_argument(std::string(fn) + ": " + an + " and " + bn +
+            " must have the same batch size (" + std::to_string(A.batch_size()) + " vs " +
+            std::to_string(B.batch_size()) + ")");
+}
+
+// `>=`, not `==`: an oversized output buffer is a legitimate thing to pass (a
+// caller slicing one big pivot/tau arena across several calls), and rejecting it
+// would break working code for no safety gain.
+inline void require_span_at_least(const char* fn, const char* name, size_t have, size_t need) {
+    if (have < need)
+        throw std::invalid_argument(std::string(fn) + ": " + name + " holds " +
+            std::to_string(have) + " elements, needs at least " + std::to_string(need));
+}
+
+}  // namespace detail
 
 // ---- dense BLAS ------------------------------------------------------------
 
@@ -384,7 +446,7 @@ template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
-    return trsm<Back, T>(ctx, V(A), V(B), opts.side, opts.uplo, opts.trans, opts.diag, opts.alpha);
+    return trsm<Back, T>(ctx, V(A), V(B), opts.alpha, opts.side, opts.uplo, opts.trans, opts.diag);
 }
 
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
@@ -444,12 +506,14 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts) {
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
     BATCHLAS_CHECK_ARGS(ctx, "potrf", A, ws);
+    detail::require_square("potrf", "A", A);
     return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts, ws); });
 }
 
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "potrf", A);
+    detail::require_square("potrf", "A", A);
     return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts); });
 }
 
@@ -495,6 +559,9 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots) {
     BATCHLAS_CHECK_ARGS(ctx, "getrf", A, pivots);
+    detail::require_square("getrf", "A", A);
+    detail::require_span_at_least("getrf", "pivots", pivots.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return getrf<Back.value>(ctx, A, pivots); });
 }
 
@@ -520,6 +587,11 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
 inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
                    const GetrsOptions& opts, Span<std::byte> ws) {
     BATCHLAS_CHECK_ARGS(ctx, "getrs", A, B_, pivots, ws);
+    detail::require_square("getrs", "A", A);
+    detail::require_same_rows("getrs", "A", A, "B", B_);
+    detail::require_same_batch("getrs", "A", A, "B", B_);
+    detail::require_span_at_least("getrs", "pivots", pivots.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(
         ctx, [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts, ws); });
 }
@@ -529,6 +601,11 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
 inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
                    const GetrsOptions& opts = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "getrs", A, B_, pivots);
+    detail::require_square("getrs", "A", A);
+    detail::require_same_rows("getrs", "A", A, "B", B_);
+    detail::require_same_batch("getrs", "A", A, "B", B_);
+    detail::require_span_at_least("getrs", "pivots", pivots.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx,
                         [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts); });
 }
@@ -545,6 +622,12 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots) {
     BATCHLAS_CHECK_ARGS(ctx, "getri", A, Ainv, pivots);
+    detail::require_square("getri", "A", A);
+    detail::require_square("getri", "Ainv", Ainv);
+    detail::require_same_rows("getri", "A", A, "Ainv", Ainv);
+    detail::require_same_batch("getri", "A", A, "Ainv", Ainv);
+    detail::require_span_at_least("getri", "pivots", pivots.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return getri<Back.value>(ctx, A, Ainv, pivots); });
 }
 
@@ -558,6 +641,12 @@ inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
     BATCHLAS_CHECK_ARGS(ctx, "geqrf", A, tau);
+    // No squareness check: rectangular A is the entire point of geqrf, and the
+    // library's own panel factorisations (src/extensions/sytrd_sy2sb.cc,
+    // band_reduction.cc) pass tall panels. What is fixed is the tau stride --
+    // every backend indexes `tau.data() + i * min(m, n)`.
+    detail::require_span_at_least("geqrf", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return geqrf<Back.value>(ctx, A, tau); });
 }
 
@@ -571,6 +660,8 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
     BATCHLAS_CHECK_ARGS(ctx, "orgqr", A, tau);
+    detail::require_span_at_least("orgqr", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
 }
 
@@ -593,6 +684,9 @@ template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts, Span<std::byte> ws) {
     BATCHLAS_CHECK_ARGS(ctx, "syev", A, W, ws);
+    detail::require_square("syev", "A", A);
+    detail::require_span_at_least("syev", "W", W.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts, ws); });
 }
 
@@ -600,6 +694,9 @@ template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "syev", A, W);
+    detail::require_square("syev", "A", A);
+    detail::require_span_at_least("syev", "W", W.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
 }
 

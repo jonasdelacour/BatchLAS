@@ -373,15 +373,25 @@ namespace batchlas {
      * @param m Per-item count, at least `A.batch_size()` entries. Device-writable.
      *
      * OVERLOAD-RESOLUTION INVARIANT, do not break it: these forms are
-     * unambiguous against the `m`-less ones above because parameter 5 of this
-     * form (`size_t neigs`) and parameter 5 of the `m`-less form
-     * (`Span<std::byte>` / `JobType`) are mutually non-convertible. It is NOT
-     * because `Span<int32_t>` and `size_t` differ in position 4 -- `Span` has a
-     * non-explicit `Span(T&)` constructor, so `Span<int32_t>` IS implicitly
-     * constructible from an `int32_t` lvalue and position 4 alone does not
-     * discriminate. Never let this form's parameter k+1 be a type the `m`-less
-     * form's parameter k+1 converts to, and never spell a bare `{}` in argument
-     * positions 4-6 (it is an identity conversion to both, hence ambiguous).
+     * unambiguous against the `m`-less ones above because their argument lists
+     * diverge into MUTUALLY NON-CONVERTIBLE types at two independent positions
+     * (counting `ctx` as position 1):
+     *
+     *   position 4:  `Span<int32_t> m`   vs  `size_t neigs`
+     *   position 5:  `size_t neigs`      vs  `Span<std::byte> workspace`
+     *
+     * Position 4 discriminates because `Span`'s scalar constructor is `explicit`
+     * (`util/sycl-span.hh`), so an integer lvalue does not silently become a
+     * one-element `Span`; position 5 discriminates independently of it. Keep it
+     * that way: never let this form's parameter k+1 be a type the `m`-less
+     * form's parameter k+1 converts to. In particular, if `Span(T&)` were ever
+     * made implicit again, position 4 would stop discriminating and position 5
+     * would be the only thing left holding these overloads apart.
+     *
+     * And never spell a bare `{}` in argument positions 4-6. An empty
+     * braced-init-list is an identity conversion to `size_t`, to `Span<...>`
+     * (non-explicit default ctor) and to `JobType` alike, so it defeats every
+     * discriminator at once and the call is ambiguous.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx(Queue& ctx,
@@ -971,6 +981,17 @@ namespace batchlas {
         return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
     }
 
+    // Vector-typed parameters in the tridiagonal group below (`stebz`, `stein`,
+    // `steqr`, `steqr_cta`, `stedc`) follow one rule, and the mixture inside a
+    // single `stebz` signature is that rule applied, not an oversight:
+    // `VectorView<T>` for anything that is one vector per batch item -- `d`, `e`,
+    // `w`, eigenvalues -- because those carry `inc`/`stride`/`batch_size` and the
+    // kernels read all four; `Span<...>` for flat arrays with one entry per batch
+    // item and no stride freedom (`m`, `counts`) and for byte workspaces. The two
+    // are not interconvertible in either direction without naming a size, which is
+    // deliberate: a `VectorView` demoted to a `Span` would silently drop the stride
+    // and read the wrong elements rather than fail to compile. See docs/cpp-api.md.
+
     /**
      * @brief How a subset of the spectrum is selected.
      */
@@ -1029,12 +1050,21 @@ namespace batchlas {
 
     /**
      * @brief Required workspace size, in bytes, for `stebz`.
+     *
+     * `params` is REQUIRED, not defaulted, on purpose: it is the only argument
+     * carrying `T`, so defaulting it would make `stebz_buffer_size(ctx, n, batch)`
+     * look available while `T` had nowhere to come from. What the caller actually
+     * got was not a deduction diagnostic pointing here but "no matching function"
+     * from the queue-deducing dispatch wrapper, whose requires-clause probes this
+     * call and silently drops the overload when the substitution fails. Pass
+     * `StebzParams<T>{}` for the defaults; with `params` present, both the backend
+     * and `T` deduce: `stebz_buffer_size(ctx, n, batch, params)`.
      */
     template <Backend B, typename T>
     size_t stebz_buffer_size(Queue& ctx,
                              size_t n,
                              size_t batch_size,
-                             StebzParams<T> params = StebzParams<T>());
+                             StebzParams<T> params);
 
     // Forwarding overload taking owning Vectors.
     template <Backend B, typename T>
@@ -1146,6 +1176,52 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 SteinParams<T> params = SteinParams<T>());
 
+    // Forwarding overloads taking owning Vectors, one per primary above. `stebz`,
+    // `steqr`, `steqr_cta` and `stedc` all ship these and `stein` was the only
+    // member of the group without them, so a caller holding owning `Vector`s had to
+    // spell `.view()` on exactly one call in an otherwise uniform sequence.
+    //
+    // These cannot collide with the primaries: template argument deduction does not
+    // consider the implicit `VectorView(const Vector<T>&)` conversion, so a `Vector`
+    // argument makes the primaries non-deducible and a `VectorView` argument makes
+    // these non-deducible. Exactly one set is ever viable. The two overloads here
+    // are held apart from each other by parameter 6 (`MatrixView` vs
+    // `Span<const int32_t>`), the same discriminator the primaries already rely on
+    // -- so the warning above about spelling a bare `{}` at `counts` (use
+    // `stein_all_counts`) applies to these identically.
+    template <Backend B, typename T>
+    inline Event stein(Queue& ctx,
+                       const Vector<T>& d,
+                       const Vector<T>& e,
+                       const Vector<T>& w,
+                       size_t k,
+                       const MatrixView<T, MatrixFormat::Dense>& Z,
+                       const Span<std::byte>& ws,
+                       SteinParams<T> params = SteinParams<T>()) {
+        return stein<B, T>(ctx,
+                           static_cast<VectorView<T>>(d),
+                           static_cast<VectorView<T>>(e),
+                           static_cast<VectorView<T>>(w),
+                           k, Z, ws, params);
+    }
+
+    template <Backend B, typename T>
+    inline Event stein(Queue& ctx,
+                       const Vector<T>& d,
+                       const Vector<T>& e,
+                       const Vector<T>& w,
+                       size_t k,
+                       Span<const int32_t> counts,
+                       const MatrixView<T, MatrixFormat::Dense>& Z,
+                       const Span<std::byte>& ws,
+                       SteinParams<T> params = SteinParams<T>()) {
+        return stein<B, T>(ctx,
+                           static_cast<VectorView<T>>(d),
+                           static_cast<VectorView<T>>(e),
+                           static_cast<VectorView<T>>(w),
+                           k, counts, Z, ws, params);
+    }
+
     /**
      * @brief Required workspace size, in bytes, for `stein`.
      *
@@ -1153,13 +1229,22 @@ namespace batchlas {
      * per-item `counts`: every scratch array is indexed by `(batch, column)` over
      * the full `n * k * batch_size` grid whether or not a column is used. So the
      * `counts` overload needs no separate sizing entry point.
+     *
+     * `params` is REQUIRED, not defaulted, on purpose: it is the only argument
+     * carrying `T`, so defaulting it would make `stein_buffer_size(ctx, n, k, batch)`
+     * look available while `T` had nowhere to come from. What the caller actually
+     * got was not a deduction diagnostic pointing here but "no matching function"
+     * from the queue-deducing dispatch wrapper, whose requires-clause probes this
+     * call and silently drops the overload when the substitution fails. Pass
+     * `SteinParams<T>{}` for the defaults; with `params` present, both the backend
+     * and `T` deduce: `stein_buffer_size(ctx, n, k, batch, params)`.
      */
     template <Backend B, typename T>
     size_t stein_buffer_size(Queue& ctx,
                              size_t n,
                              size_t k,
                              size_t batch_size,
-                             SteinParams<T> params = SteinParams<T>());
+                             SteinParams<T> params);
 
     enum class SteqrShiftStrategy {
         // LAPACK-style implicit shift (stable formulation used by dsteqr-style iterations).
@@ -2268,7 +2353,18 @@ namespace batchlas {
     }
 
     template <Backend B, typename T>
-    size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
+    size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
+
+    // Deprecated spelling, kept so an out-of-tree caller gets a warning and not a
+    // link error. Every other sizing entry point in this header is `*_buffer_size`
+    // -- ~30 of them -- and docs/cpp-api.md states that as a rule ("sized by the
+    // matching `*_buffer_size`"), which this one name silently falsified. The
+    // forwarder is `inline` and needs no explicit instantiation.
+    template <Backend B, typename T>
+    [[deprecated("renamed to stedc_buffer_size")]]
+    inline size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params) {
+        return stedc_buffer_size<B, T>(ctx, n, batch_size, jobz, params);
+    }
 
 
     /**
@@ -2309,7 +2405,7 @@ namespace batchlas {
         using float_type = typename base_type<T>::type;
         size_t nRitz = V.cols();
         Vector<float_type> ritz_vals(nRitz, V.batch_size());
-        size_t workspace_size = ritz_values_workspace<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
+        size_t workspace_size = ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
         UnifiedVector<std::byte> workspace(workspace_size);
         ctx.wait();
         ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
@@ -2335,18 +2431,39 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, MatrixFormat MFormat>
-    size_t ritz_values_workspace(Queue& ctx,
+    size_t ritz_values_buffer_size(Queue& ctx,
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals);
 
     // Forwarding overload (owning A, V, and ritz_vals)
     template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t ritz_values_workspace(Queue& ctx,
+    inline size_t ritz_values_buffer_size(Queue& ctx,
                                        const Matrix<T, MFormat>& A,
                                        const Matrix<T, MatrixFormat::Dense>& V,
                                        const Vector<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_workspace<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
+        return ritz_values_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
+    }
+
+    // Deprecated spellings, one per overload above. See the note on
+    // `stedc_workspace_size`: the `*_buffer_size` suffix is the convention every
+    // other sizing entry point follows, and these two were the only holdouts.
+    template <Backend B, typename T, MatrixFormat MFormat>
+    [[deprecated("renamed to ritz_values_buffer_size")]]
+    inline size_t ritz_values_workspace(Queue& ctx,
+                                        const MatrixView<T, MFormat>& A,
+                                        const MatrixView<T, MatrixFormat::Dense>& V,
+                                        const VectorView<typename base_type<T>::type>& ritz_vals) {
+        return ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, ritz_vals);
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    [[deprecated("renamed to ritz_values_buffer_size")]]
+    inline size_t ritz_values_workspace(Queue& ctx,
+                                        const Matrix<T, MFormat>& A,
+                                        const Matrix<T, MatrixFormat::Dense>& V,
+                                        const Vector<typename base_type<T>::type>& ritz_vals) {
+        return ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, ritz_vals);
     }
 
     /**
@@ -2491,9 +2608,34 @@ BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvdj_cta_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ormqx_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(stedc)
-BATCHLAS_DISPATCH_ON_QUEUE(stedc_workspace_size)
+BATCHLAS_DISPATCH_ON_QUEUE(stedc_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ritz_values)
-BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_workspace)
+BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_buffer_size)
+
+// Queue-deducing forms of the two deprecated spellings, hand-written rather than
+// registered with BATCHLAS_DISPATCH_ON_QUEUE: the macro takes only a name and has
+// nowhere to put the [[deprecated]] attribute, so going through it would leave the
+// queue-deducing spelling silently un-deprecated while the explicit-backend one
+// warned. These forward to the queue-deducing `*_buffer_size` overloads defined
+// just above, so the pointer checks and backend switch still happen exactly once.
+template <typename... Args>
+    requires requires(Queue& probe_ctx, Args&&... probe_args) {
+        stedc_buffer_size<::batchlas::detail::kProbeBackend>(probe_ctx, std::forward<Args>(probe_args)...);
+    }
+[[deprecated("renamed to stedc_buffer_size")]]
+inline auto stedc_workspace_size(Queue& ctx, Args&&... args) {
+    return stedc_buffer_size(ctx, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+    requires requires(Queue& probe_ctx, Args&&... probe_args) {
+        ritz_values_buffer_size<::batchlas::detail::kProbeBackend>(probe_ctx, std::forward<Args>(probe_args)...);
+    }
+[[deprecated("renamed to ritz_values_buffer_size")]]
+inline auto ritz_values_workspace(Queue& ctx, Args&&... args) {
+    return ritz_values_buffer_size(ctx, std::forward<Args>(args)...);
+}
+
 BATCHLAS_DISPATCH_ON_QUEUE(inv)
 BATCHLAS_DISPATCH_ON_QUEUE(inv_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)

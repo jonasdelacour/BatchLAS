@@ -114,8 +114,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         Vector<float> x(n, /*batch_size=*/batch), y(m, batch);
         gemv(ctx, A, x.view(), y.view(), {.alpha = 1.0f});
 
-        // The inc/stride argument orders are opposite, and the document says so.
-        [[maybe_unused]] Vector<float> v(n, /*batch_size=*/batch, /*stride=*/n, /*inc=*/1);
+        // The inc/stride argument orders are opposite. Vector now names both with tag
+        // types, so the two spellings can no longer be transliterated into each other.
+        [[maybe_unused]] Vector<float> v(n, /*batch_size=*/batch, Stride{n}, Inc{1});
         [[maybe_unused]] VectorView<float> vv(x.view().data_ptr(), n, /*batch_size=*/batch,
                                               /*inc=*/1, /*stride=*/n);
         [[maybe_unused]] auto vz = Vector<float>::zeros(n, batch);

@@ -283,7 +283,7 @@ DenseMatrix dense_trsm_impl(const DenseMatrix& a_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::trsm<B, T>(queue, a.view(), out.view(), side, uplo, trans_a, diag, alpha);
+        batchlas::trsm<B, T>(queue, a.view(), out.view(), alpha, side, uplo, trans_a, diag);
     });
     queue.wait();
     return wrap_dense(std::move(out));

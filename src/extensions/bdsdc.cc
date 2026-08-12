@@ -143,7 +143,7 @@ BdsdcWorkspace<T> bdsdc_layout(Queue& ctx,
                                               static_cast<int64_t>(N) * static_cast<int64_t>(N), batch);
 
     ws.stedc_ws = pool.allocate<std::byte>(
-        ctx, stedc_workspace_size<B, T>(ctx, static_cast<size_t>(N), nb, JobType::EigenVectors,
+        ctx, stedc_buffer_size<B, T>(ctx, static_cast<size_t>(N), nb, JobType::EigenVectors,
                                         bdsdc_stedc_params<T>()));
     return ws;
 }

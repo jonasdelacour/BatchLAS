@@ -67,7 +67,7 @@ namespace batchlas {
                                          Transpose transB,
                                          ComputePrecision precision) {
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::runtime_error("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
+            throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
         }
 
         bool launched = false;
@@ -117,7 +117,7 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::runtime_error("GEMM: incompatible matrix dimensions");
+            throw std::invalid_argument("GEMM: incompatible matrix dimensions");
         }
 
         auto [m, k] = get_effective_dims(A, transA);
@@ -191,10 +191,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("SYMM: A must be square");
+            throw std::invalid_argument("SYMM: A must be square");
         }
         if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "SYMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", B=" + std::to_string(B.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
@@ -204,7 +204,7 @@ namespace batchlas {
         const int n = C.cols();
         const int expected_a = side == Side::Left ? B.rows() : B.cols();
         if (A.rows() != expected_a || B.rows() != m || B.cols() != n) {
-            throw std::runtime_error("SYMM: incompatible matrix dimensions");
+            throw std::invalid_argument("SYMM: incompatible matrix dimensions");
         }
 
         const auto side_cublas = enum_convert<BackendLibrary::CUBLAS>(side);
@@ -293,10 +293,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("HEMM: A must be square");
+            throw std::invalid_argument("HEMM: A must be square");
         }
         if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "HEMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", B=" + std::to_string(B.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
@@ -308,7 +308,7 @@ namespace batchlas {
         // on the left and n x n on the right.
         const int k = side == Side::Left ? m : n;
         if (A.rows() != k || B.rows() != m || B.cols() != n) {
-            throw std::runtime_error("HEMM: incompatible matrix dimensions");
+            throw std::invalid_argument("HEMM: incompatible matrix dimensions");
         }
 
         // Unlike cublas?trmm, cublas?hemm is quick enough that a per-batch loop
@@ -499,10 +499,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("HERK: C must be square");
+            throw std::invalid_argument("HERK: C must be square");
         }
         if (A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "HERK: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
         }
@@ -510,7 +510,7 @@ namespace batchlas {
         // rather than Hermitian; that operation is syrk's, and BLAS does not
         // spell it here.
         if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-            throw std::runtime_error("HERK: transA must be NoTrans or ConjTrans");
+            throw std::invalid_argument("HERK: transA must be NoTrans or ConjTrans");
         }
 
         const int n = C.rows();
@@ -518,7 +518,7 @@ namespace batchlas {
         const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
         const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
         if (expected_n != n || k <= 0) {
-            throw std::runtime_error("HERK: incompatible matrix dimensions");
+            throw std::invalid_argument("HERK: incompatible matrix dimensions");
         }
 
         // The same single-tile Gram kernel as syrk, with the ^H conjugating
@@ -605,16 +605,16 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("HER2K: C must be square");
+            throw std::invalid_argument("HER2K: C must be square");
         }
         if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "HER2K: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", B=" + std::to_string(B.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
         }
         if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-            throw std::runtime_error("HER2K: transA must be NoTrans or ConjTrans");
+            throw std::invalid_argument("HER2K: transA must be NoTrans or ConjTrans");
         }
 
         const int n = C.rows();
@@ -625,7 +625,7 @@ namespace batchlas {
         const int b_n = no_trans ? B.rows() : B.cols();
         const int b_k = no_trans ? B.cols() : B.rows();
         if (expected_n != n || b_n != n || b_k != k || k <= 0) {
-            throw std::runtime_error("HER2K: incompatible matrix dimensions");
+            throw std::invalid_argument("HER2K: incompatible matrix dimensions");
         }
 
         const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
@@ -692,10 +692,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("SYRK: C must be square");
+            throw std::invalid_argument("SYRK: C must be square");
         }
         if (A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "SYRK: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
         }
@@ -704,7 +704,7 @@ namespace batchlas {
         const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
         const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
         if (expected_n != n || k <= 0) {
-            throw std::runtime_error("SYRK: incompatible matrix dimensions");
+            throw std::invalid_argument("SYRK: incompatible matrix dimensions");
         }
 
         const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
@@ -795,10 +795,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("SYR2K: C must be square");
+            throw std::invalid_argument("SYR2K: C must be square");
         }
         if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "SYR2K: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", B=" + std::to_string(B.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
@@ -810,7 +810,7 @@ namespace batchlas {
         const int expected_b_n = transA == Transpose::NoTrans ? B.rows() : B.cols();
         const int b_k = transA == Transpose::NoTrans ? B.cols() : B.rows();
         if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-            throw std::runtime_error("SYR2K: incompatible matrix dimensions");
+            throw std::invalid_argument("SYR2K: incompatible matrix dimensions");
         }
 
         const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
@@ -902,10 +902,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("TRMM: A must be square");
+            throw std::invalid_argument("TRMM: A must be square");
         }
         if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error(
+            throw std::invalid_argument(
                 "TRMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
                 ", B=" + std::to_string(B.batch_size()) +
                 ", C=" + std::to_string(C.batch_size()) + ")");
@@ -917,7 +917,7 @@ namespace batchlas {
         // on the left and n x n on the right.
         const int k = side == Side::Left ? m : n;
         if (A.rows() != k || B.rows() != m || B.cols() != n) {
-            throw std::runtime_error("TRMM: incompatible matrix dimensions");
+            throw std::invalid_argument("TRMM: incompatible matrix dimensions");
         }
 
         // One expansion plus one strided-batched GEMM beats the per-batch
@@ -1586,11 +1586,11 @@ namespace batchlas {
     Event trsm(Queue& ctx,
                const MatrixView<T,MatrixFormat::Dense>& A,
                const MatrixView<T,MatrixFormat::Dense>& B,
+               T alpha,
                Side side,
                Uplo uplo,
                Transpose transA,
-               Diag diag,
-               T alpha) {
+               Diag diag) {
         return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
     }
 

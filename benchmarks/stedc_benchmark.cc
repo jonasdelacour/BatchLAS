@@ -63,7 +63,7 @@ static void BM_STEDC(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto eigvals = Vector<T>::zeros(n, batch);
     auto eigvects = Matrix<T>::Identity(n, batch);
-    UnifiedVector<std::byte> ws(stedc_workspace_size(*q, n, batch, jobz, params));
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*q, n, batch, jobz, params));
 
     auto kernel = [q](auto& diags,
                             auto& off_diags,
