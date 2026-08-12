@@ -153,6 +153,42 @@ set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
 set(BATCHLAS_HAS_CPU_TARGET FALSE)
 set(BATCHLAS_ENABLE_SYCL ON)
 
+# ---------------------------------------------------------------------------
+# Vendor math libraries -- the third dispatch axis (WP0 step S1).
+#
+# These are deliberately SEPARATE from the BATCHLAS_HAS_<FAMILY>_BACKEND flags
+# above. A device family says which SYCL target a queue runs on; a library flag
+# says whether somebody else's math code is available to call. Today those two
+# questions share one answer -- BatchLASDependencies.cmake sets
+# BATCHLAS_HAS_CUDA_BACKEND from whether it found cuBLAS -- which is why an
+# NVIDIA box without cuBLAS currently has no CUDA backend at all, rather than a
+# CUDA backend with no vendor provider.
+#
+# S1 only DECLARES the axis and probes it. Nothing in C++ reads these macros
+# yet and the family flags keep their existing derivation, so this step is
+# bit-identical; the decoupling itself is S2/S3.
+option(BATCHLAS_ENABLE_VENDOR_BLAS
+    "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib, MathDx)"
+    ON)
+
+# CUBLASDX/CUSOLVERDX are counted as vendor: they are third-party NVIDIA source
+# shipped in the MathDx package, they exist only for NVIDIA, and so they can
+# never be the portable path. A vendor-independence measurement that let them
+# through would be measuring the wrong thing.
+set(BATCHLAS_VENDOR_LIBRARIES
+    CUBLAS CUSOLVER CUSPARSE CUBLASDX CUSOLVERDX
+    ROCBLAS ROCSOLVER ROCSPARSE
+    LAPACKE CBLAS ONEMKL)
+
+foreach(_batchlas_lib ${BATCHLAS_VENDOR_LIBRARIES})
+    option(BATCHLAS_ENABLE_${_batchlas_lib}
+        "Allow BatchLAS to use ${_batchlas_lib} when it is present"
+        ${BATCHLAS_ENABLE_VENDOR_BLAS})
+    # Set by the probes in BatchLASDependencies.cmake; "found AND allowed".
+    set(BATCHLAS_HAS_${_batchlas_lib} FALSE)
+endforeach()
+unset(_batchlas_lib)
+
 message(STATUS "SYCL support is mandatory for BatchLAS")
 
 add_library(batchlas_build_options INTERFACE)

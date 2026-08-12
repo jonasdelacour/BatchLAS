@@ -14,6 +14,36 @@
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
 
+// ---------------------------------------------------------------------------
+// Vendor math libraries present -- the third dispatch axis (WP0 step S1).
+//
+// Separate from the family flags above on purpose. A family flag says which
+// SYCL device a queue can target; these say whether somebody else's math code
+// is available to call. They are currently only INFORMATIONAL: no C++ reads
+// them yet, and the family flags keep their old derivation, so this step does
+// not change any behaviour. What they enable is asking "is cuSOLVER here?"
+// without that being the same question as "is there a CUDA backend?".
+//
+// CUBLASDX/CUSOLVERDX count as vendor: third-party NVIDIA source, NVIDIA-only,
+// so never the portable path.
+#cmakedefine01 BATCHLAS_HAS_CUBLAS
+#cmakedefine01 BATCHLAS_HAS_CUSOLVER
+#cmakedefine01 BATCHLAS_HAS_CUSPARSE
+#cmakedefine01 BATCHLAS_HAS_CUBLASDX
+#cmakedefine01 BATCHLAS_HAS_CUSOLVERDX
+#cmakedefine01 BATCHLAS_HAS_ROCBLAS
+#cmakedefine01 BATCHLAS_HAS_ROCSOLVER
+#cmakedefine01 BATCHLAS_HAS_ROCSPARSE
+#cmakedefine01 BATCHLAS_HAS_LAPACKE
+#cmakedefine01 BATCHLAS_HAS_CBLAS
+#cmakedefine01 BATCHLAS_HAS_ONEMKL
+
+#if BATCHLAS_HAS_CUBLAS || BATCHLAS_HAS_ROCBLAS || BATCHLAS_HAS_ONEMKL || BATCHLAS_HAS_LAPACKE
+  #define BATCHLAS_HAS_ANY_VENDOR 1
+#else
+  #define BATCHLAS_HAS_ANY_VENDOR 0
+#endif
+
 // OPENBLAS_CORETYPE value that the configure-time BLAS health check found to be
 // required for the host BLAS to compute dgemm correctly (see
 // cmake/BatchLASBlasHealthCheck.cmake). Empty when nothing was needed or the
