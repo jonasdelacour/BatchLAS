@@ -7,19 +7,40 @@
 #include <type_traits>
 #include <memory>
 
+// WP0 S2: these includes are keyed on the LIBRARY axis, not the device family.
+//
+// They used to be guarded by BATCHLAS_HAS_<FAMILY>_BACKEND, which conflated two
+// questions: "can a queue target this device family" and "is this vendor's math
+// library installed". A CUDA SYCL device with no CUDA math libraries is a
+// perfectly coherent configuration -- it is exactly the configuration vendor
+// independence is aiming at -- but under the old guard it would still have tried
+// to include <cublas_v2.h>.
+//
+// cuda_runtime.h is deliberately kept on the family flag: it is the CUDA
+// *runtime*, needed for streams and device queries by anything targeting an
+// NVIDIA device, and it is not a math library.
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
+#endif
+#if BATCHLAS_HAS_CUBLAS
     #include <cublas_v2.h>
+#endif
+#if BATCHLAS_HAS_CUSPARSE
     #include <cusparse.h>
+#endif
+#if BATCHLAS_HAS_CUSOLVER
     #include <cusolverDn.h>
 #endif
 
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_LAPACKE
     #include <lapacke.h>
-    #if !BATCHLAS_HAS_MKL_BACKEND
-        #include <cblas.h>
-    #endif // !BATCHLAS_HAS_MKL_BACKEND
+#endif
+// "oneMKL supplies cblas.h" is a statement about the LIBRARY, which is what
+// BATCHLAS_HAS_ONEMKL now says; the old spelling used the MKL device-family
+// flag to mean it.
+#if BATCHLAS_HAS_CBLAS && !BATCHLAS_HAS_ONEMKL
+    #include <cblas.h>
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
