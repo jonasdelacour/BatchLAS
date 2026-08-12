@@ -1505,13 +1505,17 @@ namespace batchlas {
     Event getrf_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
         Span<int64_t> pivots,
-        Span<std::byte> work_space) {
+        Span<std::byte> work_space,
+        Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
-            auto info = pool.allocate<int>(ctx, batch_size);
+            // cuBLAS's infoArray is a genuine per-item device array with LAPACK
+            // semantics (0 = ok, >0 = the column where U went exactly singular).
+            // It used to be pool scratch that nothing ever read.
+            auto info = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
                 handle, n,
@@ -1530,13 +1534,17 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& A,
         const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
         Span<int64_t> pivots,
-        Span<std::byte> work_space) {
+        Span<std::byte> work_space,
+        Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
-            auto info_arr = pool.allocate<int>(ctx, batch_size);
+            // Same story as getrf_vendor: cuBLAS writes a per-item infoArray
+            // (>0 = U(i,i) is exactly zero, so this item has no inverse) and the
+            // result was thrown away, leaving the caller a matrix of infinities.
+            auto info_arr = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
             call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
                 handle, n,
@@ -1729,8 +1737,9 @@ namespace batchlas {
     Event getrf(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
-                Span<std::byte> work_space) {
-        return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space);
+                Span<std::byte> work_space,
+                Span<int32_t> info) {
+        return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space, info);
     }
 
     template <Backend B, typename T>
@@ -1744,8 +1753,9 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
-                Span<std::byte> work_space) {
-        return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space);
+                Span<std::byte> work_space,
+                Span<int32_t> info) {
+        return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space, info);
     }
 
     template <Backend B, typename T>

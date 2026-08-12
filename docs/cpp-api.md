@@ -962,14 +962,44 @@ case. Now all three reject it the same way.
 The `f<Backend::CUDA>(ctx, …)` spelling is the library's own inner-loop form and
 skips these checks by design, so the cost stays off the hot path.
 
-**No factorisation reports per-item numerical status.** `potrf`, `getrf` and
-`geqrf` have no `info` argument and no status output. A batch item that is not
-positive definite, or one whose pivot is zero to working precision, produces
-numbers rather than an exception: `linalg::solve` on a near-singular `A` returns
-a plausible-looking result, and `potrf` on an indefinite one returns a triangle
-of garbage. Nothing in the table above fires. Where the inputs are not known to
-be well-conditioned, check afterwards — compute the residual `‖A·X − B‖`, or
-scan the factor's diagonal for zeros and NaNs — and decide per batch item.
+**Factorisation status is opt-in, and only `potrf`, `getrf` and `getri` have
+it.** Each takes an optional `Span<int32_t> info`, one entry per batch item, with
+LAPACK's convention: `0` means the item factorised, and a positive value names
+the leading minor (`potrf`) or the zero pivot (`getrf`, `getri`) at which it
+failed. It is a field on `PotrfOptions` and a trailing parameter on
+`getrf`/`getri`:
+
+```cpp
+UnifiedVector<int32_t> info(batch);
+potrf(ctx, A.view(), {.uplo = Uplo::Lower, .info = info.to_span()});
+getrf(ctx, A.view(), pivots.to_span(), info.to_span());
+ctx.wait();
+if (info[37] != 0) { /* item 37 is rank-deficient; everything downstream is noise */ }
+```
+
+Leave `info` out — that is the default — and nothing is reported, exactly as
+before. The span has to be device-accessible USM; the vendor writes it in place,
+so asking for status costs no extra allocation and does not change the workspace
+size. A non-empty span shorter than `batch_size` is rejected with
+`std::invalid_argument` rather than partially filled, because the failure would
+otherwise be silent: the backend falls back to its own scratch and the caller
+reads whatever was already in the buffer, most often zeros — "every item
+factorised" — on precisely the batch it was trying to diagnose.
+
+`geqrf` and `orgqr` have no equivalent and will not get one. Householder QR has
+no numerical failure mode, so LAPACK's `geqrf` info is only ever `0` or an
+illegal-argument code; cuBLAS's `geqrfBatched` takes a single *host* scalar
+rather than a per-item device array (it spells the per-item form `devInfoArray`,
+as on `gelsBatched`); and rocSOLVER's `geqrf` has no info parameter at all. A
+per-item `geqrf` info would be all zeros by construction.
+
+`syev`, `gesvd` and the solve-style calls (`getrs`, `linalg::solve`) still report
+nothing. A batch item whose pivot is zero to working precision produces numbers
+rather than an exception: `linalg::solve` on a near-singular `A` returns a
+plausible-looking result and nothing in the table above fires. Where the inputs
+are not known to be well-conditioned, check afterwards — compute the residual
+`‖A·X − B‖`, or scan the factor's diagonal for zeros and NaNs — and decide per
+batch item.
 
 ## Synchronisation and threading
 
