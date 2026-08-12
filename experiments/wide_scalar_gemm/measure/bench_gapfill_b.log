@@ -1,0 +1,48 @@
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=256 n=256 k=256 batch=512 beta=0 ms=13.0729 tflops=1.3142
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=256 n=256 k=256 batch=512 beta=1 ms=13.2950 tflops=1.2922
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 ms=10.2310 tflops=6.7168
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 ms=10.0703 tflops=6.8240
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 ms=176.7715 tflops=0.3887
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 ms=177.0292 tflops=0.3882
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=256 n=256 k=256 batch=512 beta=0 ms=5.0588 tflops=3.3960
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=256 n=256 k=256 batch=512 beta=1 ms=4.9723 tflops=3.4551
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=512 n=512 k=512 batch=128 beta=0 ms=25.7759 tflops=1.3330
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=512 n=512 k=512 batch=128 beta=1 ms=25.9556 tflops=1.3238
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 ms=20.6382 tflops=6.6594
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 ms=20.7966 tflops=6.6087
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 ms=355.1026 tflops=0.3870
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 ms=356.2290 tflops=0.3858
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=512 n=512 k=512 batch=128 beta=0 ms=9.8041 tflops=3.5046
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=512 n=512 k=512 batch=128 beta=1 ms=9.4505 tflops=3.6357
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 ms=52.4507 tflops=1.3102
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 ms=52.2265 tflops=1.3158
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 ms=39.6429 tflops=6.9338
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 ms=39.7788 tflops=6.9102
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 ms=702.7086 tflops=0.3912
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 ms=701.6331 tflops=0.3918
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 ms=19.2059 tflops=3.5780
+CAND=incumbent-tiled16 RESULT lib=tiled16 dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 ms=18.8307 tflops=3.6493
+CAND=complex-split RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=0 tile=128x128x8/8x8:planar ms=1.4317 tflops=48.00 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cfloat m=256 n=256 k=256 batch=512 beta=1 tile=128x128x8/8x8:planar ms=1.5254 tflops=45.05 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=0 tile=128x128x8/8x8:planar ms=2.7842 tflops=49.36 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cfloat m=512 n=512 k=512 batch=128 beta=1 tile=128x128x8/8x8:planar ms=2.8852 tflops=47.64 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x128x8/8x8:planar ms=5.4272 tflops=50.65 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cfloat m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x128x8/8x8:planar ms=5.8218 tflops=47.22 maxrelerr=3.863e-07
+CAND=complex-split RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=0 tile=64x64x8/4x4:interleaved ms=50.0775 tflops=1.37 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=cdouble m=256 n=256 k=256 batch=512 beta=1 tile=64x64x8/4x4:interleaved ms=49.9433 tflops=1.38 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=0 tile=64x64x8/4x4:interleaved ms=99.8091 tflops=1.38 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=cdouble m=512 n=512 k=512 batch=128 beta=1 tile=64x64x8/4x4:interleaved ms=98.8110 tflops=1.39 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x8/4x4:interleaved ms=198.7563 tflops=1.38 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=cdouble m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x8/4x4:interleaved ms=196.9611 tflops=1.40 maxrelerr=6.691e-16
+CAND=complex-split RESULT dtype=double m=256 n=256 k=256 batch=512 beta=0 tile=64x64x16/4x4:planar ms=12.5085 tflops=1.37 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=double m=256 n=256 k=256 batch=512 beta=1 tile=64x64x16/4x4:planar ms=12.4800 tflops=1.38 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=double m=512 n=512 k=512 batch=128 beta=0 tile=64x64x16/4x4:planar ms=24.8282 tflops=1.38 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=double m=512 n=512 k=512 batch=128 beta=1 tile=64x64x16/4x4:planar ms=24.2973 tflops=1.41 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=0 tile=64x64x16/4x4:planar ms=48.4640 tflops=1.42 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=double m=1024 n=1024 k=1024 batch=32 beta=1 tile=64x64x16/4x4:planar ms=49.4235 tflops=1.39 maxrelerr=9.649e-16
+CAND=complex-split RESULT dtype=float m=256 n=256 k=256 batch=512 beta=0 tile=128x128x8/8x8:planar ms=0.5441 tflops=31.57 maxrelerr=3.340e-07
+CAND=complex-split RESULT dtype=float m=256 n=256 k=256 batch=512 beta=1 tile=128x128x8/8x8:planar ms=0.6456 tflops=26.61 maxrelerr=3.340e-07
+CAND=complex-split RESULT dtype=float m=512 n=512 k=512 batch=128 beta=0 tile=128x128x8/8x8:planar ms=0.7815 tflops=43.97 maxrelerr=3.340e-07
+CAND=complex-split RESULT dtype=float m=512 n=512 k=512 batch=128 beta=1 tile=128x128x8/8x8:planar ms=0.9579 tflops=35.87 maxrelerr=3.340e-07
+CAND=complex-split RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=0 tile=128x128x8/8x8:planar ms=1.5041 tflops=45.69 maxrelerr=3.340e-07
+CAND=complex-split RESULT dtype=float m=1024 n=1024 k=1024 batch=32 beta=1 tile=128x128x8/8x8:planar ms=1.6478 tflops=41.70 maxrelerr=3.340e-07

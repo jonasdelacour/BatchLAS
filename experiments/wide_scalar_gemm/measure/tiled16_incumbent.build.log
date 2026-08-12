@@ -1,0 +1,42 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelISt7complexIdELi16EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelISt7complexIdELi16EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 54 registers, used 1 barriers, 484 bytes cmem[0]
+ptxas info    : Compile time = 42.093 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelISt7complexIdELi16EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelISt7complexIdELi16EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 54 registers, used 1 barriers, 472 bytes cmem[0]
+ptxas info    : Compile time = 38.432 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelIdLi16EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelIdLi16EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 468 bytes cmem[0]
+ptxas info    : Compile time = 5.874 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelIdLi16EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelIdLi16EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 5.863 ms
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelISt7complexIfELi16EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelISt7complexIfELi16EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 39 registers, used 1 barriers, 464 bytes cmem[0]
+ptxas info    : Compile time = 35.536 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelISt7complexIfELi16EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelISt7complexIfELi16EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 39 registers, used 1 barriers, 452 bytes cmem[0]
+ptxas info    : Compile time = 31.795 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelIfLi16EE_with_offset' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelIfLi16EE_with_offset
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 29 registers, used 1 barriers, 456 bytes cmem[0]
+ptxas info    : Compile time = 9.738 ms
+ptxas info    : Compiling entry function '_ZTS22GemmTiledGeneralKernelIfLi16EE' for 'sm_89'
+ptxas info    : Function properties for _ZTS22GemmTiledGeneralKernelIfLi16EE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 29 registers, used 1 barriers, 444 bytes cmem[0]
+ptxas info    : Compile time = 15.130 ms
