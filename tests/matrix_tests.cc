@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 #include <complex>
+#include <string>
 
 using namespace batchlas;
 
@@ -701,10 +702,14 @@ TEST(MatrixTriangularize, NonSquareTallAndWide) {
 // read the wrong elements, and any batched matrix whose stride is not
 // rows * cols wrote past the end of the destination buffer -- both silently.
 //
-// The layouts below are the ones the class can express: the source is read with
-// its own ld/stride (for a row-major buffer the row pitch is ld when ld > rows,
-// which is the only way to express padding there, and cols otherwise), and the
-// destination is packed in the target major.
+// The row pitch used to be *inferred* from ld (`ld > rows ? ld : cols`). That
+// inference is gone: ld means the distance between successive columns, so for a
+// matrix with rows > cols every legal row pitch in (cols, rows] was silently read
+// as "packed", and an inferred pitch above cols made the read run past the end of
+// an allocation that is sized ld * cols. to_column_major now takes the pitch, and
+// defaults it to cols -- packed, the only row-major layout the class can promise
+// it holds, and the one to_row_major produces. The source's batch stride is still
+// its own stride(); the destination is packed in the target major.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -713,18 +718,17 @@ float major_marker(int i, int j, int b) {
 }
 }  // namespace
 
-TEST(MatrixMajorConversion, ToColumnMajorHonoursPaddedLd) {
-    // batch = 1, so the old code stayed in bounds and simply read the wrong
-    // elements: it used a row pitch of cols (4) where the buffer has ld (6).
-    constexpr int rows = 3, cols = 4, ld = 6;
+TEST(MatrixMajorConversion, ToColumnMajorHonoursAnExplicitRowPitch) {
+    // A padded row-major buffer: the pitch is stated, not guessed.
+    constexpr int rows = 3, cols = 4, ld = 6, pitch = 6;
     Matrix<float, MatrixFormat::Dense> row_major(rows, cols, 1, ld);
     auto raw = row_major.data();
     std::fill(raw.begin(), raw.end(), -7.0f);
     for (int i = 0; i < rows; ++i)
         for (int j = 0; j < cols; ++j)
-            raw[i * ld + j] = major_marker(i, j, 0);  // row-major, row pitch ld
+            raw[i * pitch + j] = major_marker(i, j, 0);  // row-major, row pitch 6
 
-    auto col_major = row_major.to_column_major();
+    auto col_major = row_major.to_column_major(pitch);
     EXPECT_EQ(col_major.ld(), rows);
     EXPECT_EQ(col_major.stride(), rows * cols);
     ASSERT_EQ(col_major.data().size(), static_cast<size_t>(rows * cols));
@@ -735,17 +739,18 @@ TEST(MatrixMajorConversion, ToColumnMajorHonoursPaddedLd) {
                 << "column-major (" << i << "," << j << ")";
 }
 
-TEST(MatrixMajorConversion, ToColumnMajorHonoursPaddedLdAndStrideBatched) {
+TEST(MatrixMajorConversion, ToColumnMajorHonoursExplicitPitchAndStrideBatched) {
     constexpr int rows = 3, cols = 4, batch = 2, ld = 6, stride = 40;  // stride > ld * cols
+    constexpr int pitch = 6;
     Matrix<float, MatrixFormat::Dense> row_major(rows, cols, batch, ld, stride);
     auto raw = row_major.data();
     std::fill(raw.begin(), raw.end(), -7.0f);
     for (int b = 0; b < batch; ++b)
         for (int i = 0; i < rows; ++i)
             for (int j = 0; j < cols; ++j)
-                raw[b * stride + i * ld + j] = major_marker(i, j, b);
+                raw[b * stride + i * pitch + j] = major_marker(i, j, b);
 
-    auto col_major = row_major.to_column_major();
+    auto col_major = row_major.to_column_major(pitch);
     EXPECT_EQ(col_major.ld(), rows);
     EXPECT_EQ(col_major.stride(), rows * cols);
     ASSERT_EQ(col_major.data().size(), static_cast<size_t>(rows * cols * batch));
@@ -805,17 +810,17 @@ TEST(MatrixMajorConversion, RoundTripFromPaddedColumnMajor) {
 
 TEST(MatrixMajorConversion, QueueOverloadMatchesTheQueueLessForm) {
     Queue ctx;
-    constexpr int rows = 3, cols = 4, batch = 2, ld = 6, stride = 40;
+    constexpr int rows = 3, cols = 4, batch = 2, ld = 6, stride = 40, pitch = 6;
     Matrix<float, MatrixFormat::Dense> mat(rows, cols, batch, ld, stride);
     auto raw = mat.data();
     std::fill(raw.begin(), raw.end(), -7.0f);
     for (int b = 0; b < batch; ++b)
         for (int i = 0; i < rows; ++i)
             for (int j = 0; j < cols; ++j)
-                raw[b * stride + i * ld + j] = major_marker(i, j, b);
+                raw[b * stride + i * pitch + j] = major_marker(i, j, b);
 
-    auto own_queue = mat.to_column_major();
-    auto given_queue = mat.to_column_major(ctx);
+    auto own_queue = mat.to_column_major(pitch);
+    auto given_queue = mat.to_column_major(ctx, pitch);
     ASSERT_EQ(own_queue.data().size(), given_queue.data().size());
     for (size_t k = 0; k < own_queue.data().size(); ++k)
         EXPECT_FLOAT_EQ(own_queue.data()[k], given_queue.data()[k]) << "element " << k;
@@ -824,6 +829,224 @@ TEST(MatrixMajorConversion, QueueOverloadMatchesTheQueueLessForm) {
     auto rm_given = mat.to_row_major(ctx);
     for (size_t k = 0; k < rm_own.data().size(); ++k)
         EXPECT_FLOAT_EQ(rm_own.data()[k], rm_given.data()[k]) << "element " << k;
+}
+
+// --- rows > cols: the shape the inferred pitch got wrong ---------------------
+//
+// Every case above has rows < cols, which is exactly why the inference survived:
+// with ld == rows it happened to return cols. The cases below are non-square the
+// other way, where "ld == rows" and "row pitch" are different numbers.
+
+TEST(MatrixMajorConversion, ToColumnMajorReadsTallRowMajorAtTheGivenPitch) {
+    // rows > cols with a padded row pitch of 8. The old inference
+    // (ld > rows ? ld : cols) folded ld == rows into "packed" and read pitch 6,
+    // returning 42 of 48 elements wrong without a word.
+    constexpr int rows = 8, cols = 6, ld = 8, stride = 64, pitch = 8;
+    Matrix<float, MatrixFormat::Dense> row_major(rows, cols, 1, ld, stride);
+    auto raw = row_major.data();
+    std::fill(raw.begin(), raw.end(), -999.0f);
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            raw[i * pitch + j] = major_marker(i, j, 0);
+
+    auto col_major = row_major.to_column_major(pitch);
+    EXPECT_EQ(col_major.ld(), rows);
+    for (int j = 0; j < cols; ++j)
+        for (int i = 0; i < rows; ++i)
+            EXPECT_FLOAT_EQ(col_major.data()[j * rows + i], major_marker(i, j, 0))
+                << "column-major (" << i << "," << j << ")";
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorDefaultsToPackedForATallMatrix) {
+    // Same shape, and the matrix is packed in *both* senses: ld == rows and the
+    // items are rows * cols apart, so packed row-major is the only layout that
+    // fits. The default pitch reads it, and it is what to_row_major hands back.
+    constexpr int rows = 8, cols = 6;
+    Matrix<float, MatrixFormat::Dense> row_major(rows, cols, 1);
+    ASSERT_EQ(row_major.ld(), rows);
+    ASSERT_EQ(row_major.stride(), rows * cols);
+    auto raw = row_major.data();
+    std::fill(raw.begin(), raw.end(), -999.0f);
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            raw[i * cols + j] = major_marker(i, j, 0);
+
+    auto col_major = row_major.to_column_major();
+    for (int j = 0; j < cols; ++j)
+        for (int i = 0; i < rows; ++i)
+            EXPECT_FLOAT_EQ(col_major.data()[j * rows + i], major_marker(i, j, 0))
+                << "column-major (" << i << "," << j << ")";
+}
+
+// --- the default pitch only applies where it is the only possibility ---------
+//
+// "Default to packed" is safe exactly when the metadata leaves no room for a
+// padded row pitch: with ld == rows and stride == rows * cols the buffer holds
+// rows * cols elements per item, and a row-major read at pitch p needs
+// (rows-1)*p + cols <= rows*cols, i.e. p <= cols, which the existing p >= cols
+// check pins to p == cols. Anywhere else a padded row-major buffer fits, and
+// guessing "packed" returned the wrong elements in bounds and without a word --
+// 42 of 48 for the 8x6/ld 8/stride 64 case below.
+
+TEST(MatrixMajorConversion, ToColumnMajorDefaultPitchRefusesAnOverAllocatedItem) {
+    // ld == rows, but the items are 64 apart, so a row-major pitch of 7 or 8 fits
+    // just as well as the packed 6. This is the case the probe fell into.
+    constexpr int rows = 8, cols = 6, ld = 8, stride = 64;
+    Matrix<float, MatrixFormat::Dense> mat(rows, cols, 1, ld, stride);
+    EXPECT_THROW(mat.to_column_major(), std::invalid_argument);
+
+    // Both escapes work: state the padded pitch, or state cols to say "packed".
+    EXPECT_NO_THROW(mat.to_column_major(8));
+    EXPECT_NO_THROW(mat.to_column_major(cols));
+
+    try {
+        mat.to_column_major();
+        FAIL() << "expected std::invalid_argument";
+    } catch (const std::invalid_argument& e) {
+        const std::string msg = e.what();
+        // The numbers, and both ways out, are in the message.
+        EXPECT_NE(msg.find("rows=8"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("cols=6"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("ld=8"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("stride=64"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("row pitch"), std::string::npos) << msg;
+    }
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorDefaultPitchRefusesAPaddedLd) {
+    // ld > rows: the allocation is a column-major extent of ld * cols, which again
+    // has room for a padded row-major layout.
+    Matrix<float, MatrixFormat::Dense> mat(3, 4, 1, /*ld=*/6);
+    EXPECT_THROW(mat.to_column_major(), std::invalid_argument);
+    EXPECT_NO_THROW(mat.to_column_major(4));
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorDefaultPitchRefusesAGappedBatchStride) {
+    Matrix<float, MatrixFormat::Dense> mat(3, 4, 2, /*ld=*/3, /*stride=*/20);
+    EXPECT_THROW(mat.to_column_major(), std::invalid_argument);
+    EXPECT_NO_THROW(mat.to_column_major(4));
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorDefaultPitchAllowsASingleRow) {
+    // One row: every pitch reads the same elements, so there is nothing to guess
+    // and a throw would be noise.
+    Matrix<float, MatrixFormat::Dense> mat(1, 6, 1, /*ld=*/4, /*stride=*/40);
+    EXPECT_NO_THROW(mat.to_column_major());
+}
+
+TEST(MatrixMajorConversion, ToRowMajorHandlesTallPaddedColumnMajor) {
+    constexpr int rows = 8, cols = 6, batch = 2, ld = 10, stride = 70;
+    Matrix<float, MatrixFormat::Dense> col_major(rows, cols, batch, ld, stride);
+    auto raw = col_major.data();
+    std::fill(raw.begin(), raw.end(), -7.0f);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                raw[b * stride + j * ld + i] = major_marker(i, j, b);
+
+    auto row_major = col_major.to_row_major();
+    ASSERT_EQ(row_major.data().size(), static_cast<size_t>(rows * cols * batch));
+    for (int b = 0; b < batch; ++b)
+        for (int i = 0; i < rows; ++i)
+            for (int j = 0; j < cols; ++j)
+                EXPECT_FLOAT_EQ(row_major.data()[b * rows * cols + i * cols + j],
+                                major_marker(i, j, b))
+                    << "row-major (" << i << "," << j << ") batch " << b;
+}
+
+TEST(MatrixMajorConversion, RoundTripTallPaddedColumnMajor) {
+    constexpr int rows = 8, cols = 6, batch = 2, ld = 10, stride = 70;
+    Matrix<float, MatrixFormat::Dense> original(rows, cols, batch, ld, stride);
+    auto raw = original.data();
+    std::fill(raw.begin(), raw.end(), -7.0f);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                raw[b * stride + j * ld + i] = major_marker(i, j, b);
+
+    // column-major (padded) -> row-major (packed) -> column-major (packed), with
+    // no pitch bookkeeping: to_row_major packs, and that is the default pitch.
+    auto back = original.to_row_major().to_column_major();
+    auto view = back.view();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i)
+                EXPECT_FLOAT_EQ(view(i, j, b), major_marker(i, j, b))
+                    << "round trip (" << i << "," << j << ") batch " << b;
+}
+
+// --- a pitch that cannot be honoured is named, not guessed at ----------------
+
+TEST(MatrixMajorConversion, ToColumnMajorRejectsAPitchBelowTheColumnCount) {
+    Matrix<float, MatrixFormat::Dense> mat(8, 6, 1, 8, 64);
+    EXPECT_THROW(mat.to_column_major(5), std::invalid_argument);
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorRejectsAPitchThatOverrunsTheBuffer) {
+    // The allocation is a column-major extent, ld * cols = 60 elements; a
+    // row-major read at pitch 10 needs (8-1)*10 + 6 = 76. The old code inferred
+    // exactly that pitch from ld and read 16 elements past the end.
+    Matrix<float, MatrixFormat::Dense> mat(8, 6, 1, 10);
+    ASSERT_EQ(mat.data().size(), 60u);
+    EXPECT_THROW(mat.to_column_major(10), std::invalid_argument);
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorRejectsAPitchThatStraddlesTheNextBatchItem) {
+    // stride 50 < (8-1)*8 + 6 = 62: batch item 1 would be read out of item 0's rows.
+    Matrix<float, MatrixFormat::Dense> mat(8, 6, 2, 8, 50);
+    EXPECT_THROW(mat.to_column_major(8), std::invalid_argument);
+}
+
+TEST(MatrixMajorConversion, ToColumnMajorRejectsANegativePitch) {
+    Matrix<float, MatrixFormat::Dense> mat(8, 6, 1, 8, 64);
+    EXPECT_THROW(mat.to_column_major(-1), std::invalid_argument);
+}
+
+// --- adopting a caller's row-major buffer, the way the docs spell it ---------
+
+TEST(MatrixMajorConversion, AdoptsAPackedRowMajorSpanAndConvertsIt) {
+    // docs/cpp-api.md: a row-major source is adopted packed (ld = 0), then
+    // converted with the default pitch. Non-square, in the tall direction too.
+    constexpr int rows = 4, cols = 3;
+    std::vector<float> src(rows * cols);
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            src[i * cols + j] = major_marker(i, j, 0);
+
+    Matrix<float, MatrixFormat::Dense> adopted(Span<const float>(src.data(), src.size()),
+                                               rows, cols, /*ld=*/0);
+    ASSERT_EQ(adopted.ld(), rows);
+    auto col_major = adopted.to_column_major();
+    for (int j = 0; j < cols; ++j)
+        for (int i = 0; i < rows; ++i)
+            EXPECT_FLOAT_EQ(col_major.data()[j * rows + i], src[i * cols + j])
+                << "(" << i << "," << j << ")";
+}
+
+TEST(MatrixMajorConversion, SpanCtorRejectsARowPitchPassedAsLd) {
+    // The copying constructors are column-major by definition, so "ld = row pitch"
+    // is not an adoption spelling: it asks for a 15-element column-major source.
+    std::vector<float> src(12, 0.0f);
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(Span<const float>(src.data(), src.size()),
+                                                     3, 4, /*ld=*/4)),
+                 std::invalid_argument);
+}
+
+// --- the layout invariant the conversions rely on ----------------------------
+
+TEST(MatrixDenseTest, UninitialisedCtorRejectsLdBelowRows) {
+    // ld is a column pitch; ld < rows makes every accessor read into the next
+    // column. The from-data constructors have always rejected it; this one did not.
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(8, 6, 1, 7, 64)), std::invalid_argument);
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(8, 6, 1, 7)), std::invalid_argument);
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(8, 6, 1, -1)), std::invalid_argument);
+}
+
+TEST(MatrixDenseTest, UninitialisedCtorRejectsStrideBelowLdTimesCols) {
+    // The allocation is stride * batch, so a short stride under-allocates and the
+    // last columns of every item land outside the buffer.
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(3, 4, 2, 5, 10)), std::invalid_argument);
+    EXPECT_THROW((Matrix<float, MatrixFormat::Dense>(3, 4, 1, 0, -4)), std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------

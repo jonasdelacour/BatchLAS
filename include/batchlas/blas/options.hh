@@ -25,11 +25,11 @@
 //           JobType::EigenVectors, Uplo::Lower));
 //       syev<Backend::CUDA>(ctx, A, W, JobType::EigenVectors, Uplo::Lower, ws); }
 //
-// Three things are going on, each from an earlier phase:
-//   - the Backend comes from the Queue (P3),
+// Three things make that shorter form work:
+//   - the Backend comes from the Queue,
 //   - the options carry their own defaults, so only what differs is written,
-//   - the workspace defaults to a lease from the queue's arena (P2), which is
-//     what lets the two-statement sizing dance collapse into the call.
+//   - the workspace defaults to a lease from the queue's arena, which collapses
+//     the two-statement sizing dance into the call.
 //
 // T is deduced from the matrix arguments, never from the option struct. That is
 // what makes `{.alpha = 2.0f}` work at the call: by the time the compiler looks
@@ -194,12 +194,10 @@ struct TrsmOptions {
 // to initialise. Deducing T *from* the option struct instead would make the
 // option parameter a deduced context, and a braced initialiser deduces nothing.
 //
-// Second, `Matrix` and `MatrixView` are both accepted, and may be mixed. The
-// positional entry points have always had a Matrix wrapper alongside the
-// MatrixView primary; without this the option spelling would have been the one
-// place in the library that demanded an explicit `.view()`, which is exactly the
-// kind of papercut that stops a new API from being adopted. Everything is
-// converted to MatrixView before the positional call, so mixing is fine.
+// Second, `Matrix` and `MatrixView` are both accepted, and may be mixed, as they
+// are on the positional entry points, which have a Matrix wrapper alongside the
+// MatrixView primary. Everything is converted to MatrixView before the
+// positional call, so mixing is fine.
 
 namespace detail {
 template <typename M>
@@ -223,23 +221,22 @@ concept DenseMatrixLike = requires { typename dense_scalar<std::remove_cvref_t<M
 // ---- why "workspace given" is an overload, not a null check -----------------
 //
 // Each workspace-taking entry point has two spellings: one that ends in a span,
-// and one that does not and leases from the queue's arena instead. It is
-// tempting to write that as a single function with `Span<std::byte> ws = {}`
-// and an `if (ws.data() != nullptr)` inside. That is wrong, and it silently
-// corrupted results before it was caught.
+// and one that does not and leases from the queue's arena instead. Write them as
+// two overloads. Do not write a single function with `Span<std::byte> ws = {}`
+// and an `if (ws.data() != nullptr)` inside.
 //
 // A null span is not a synonym for "I did not pass one". Library code that
 // sub-allocates from a BumpAllocator runs the whole algorithm twice: once in
 // sizing mode, where every pool allocation legitimately hands back an empty
 // span, and once for real. The input matrices are real in *both* passes -- only
-// the workspace-derived views are fabricated -- so treating the sizing pass's
-// empty span as "no workspace, allocate one and proceed" makes the measurement
-// pass actually execute the factorisation over the caller's live data.
+// the workspace-derived views are fabricated -- so a null check reads the sizing
+// pass's empty span as "no workspace, allocate one and proceed" and executes the
+// factorisation over the caller's live data during the measurement pass. Nothing
+// crashes and no size comes out wrong; the corrupted matrix surfaces later as an
+// algorithm that no longer converges.
 //
-// That failure is invisible where it happens: nothing crashes, no size is
-// wrong, and the corrupted matrix only shows up much later as an algorithm that
-// no longer converges. Splitting the two cases into two overloads removes the
-// sentinel entirely -- an argument that is present is used exactly as given.
+// Two overloads remove the sentinel: an argument that is present is used exactly
+// as given.
 
 #define BATCHLAS_DENSE_VIEW(T) MatrixView<T, MatrixFormat::Dense>
 

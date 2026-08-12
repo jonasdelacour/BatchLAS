@@ -458,11 +458,30 @@ namespace batchlas {
         static Matrix<T, MType> TriDiagToeplitz(int n, T diag = T(1), 
                                                 T sub_diag = T(-0.5), T super_diag = T(0.5), int batch_size = 1);
         
-        // Convert row-major to column-major format.
+        // Convert row-major data held in this matrix to column-major.
         //
-        // The source is read with this matrix' own layout: batch items are
-        // stride() apart, and the row pitch is ld() when ld() > rows() (the only
-        // way to express a padded row-major buffer here) and cols() otherwise.
+        // The row pitch is a parameter, never an inference. This class carries a
+        // single pitch field, ld(), and its meaning is fixed: the distance between
+        // successive *columns*. Nothing in (rows, cols, ld) distinguishes a packed
+        // row-major buffer from a padded one, so nothing tries:
+        //
+        //   - row_pitch == 0 (the default) means packed, i.e. a row pitch of
+        //     cols(). It is accepted only on a matrix that is itself packed --
+        //     ld() == rows() and stride() == rows() * cols() -- where an item is
+        //     exactly rows*cols elements and packed is therefore the only
+        //     row-major layout that fits. That is what to_row_major() hands back,
+        //     and what the span constructor with ld = 0 produces.
+        //   - a padded row-major buffer is converted by passing its row pitch.
+        //
+        // Throws std::invalid_argument, naming the problem, when the default is
+        // used on a matrix that is not packed (a padded ld or a gap between batch
+        // items leaves room for a padded row pitch, and the two layouts cannot be
+        // told apart -- pass the pitch, or pass cols() to say it really is
+        // packed), when the pitch is smaller than cols(), when a row-major read at
+        // that pitch would overlap the next batch item (pitch-extent > stride()),
+        // or when it would run past the end of this matrix' own allocation. Batch
+        // items are stride() apart. A one-row matrix reads the same at every pitch
+        // and is exempt from the packed-metadata rule.
         // The returned matrix is packed: ld = rows, stride = rows * cols.
         //
         // The queue-taking form submits to the queue you pass; the other builds
@@ -470,11 +489,11 @@ namespace batchlas {
         // the memory the kernel writes.
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Matrix<T, MType> to_column_major(const Queue& ctx) const;
+        Matrix<T, MType> to_column_major(const Queue& ctx, int row_pitch = 0) const;
 
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Matrix<T, MType> to_column_major() const;
+        Matrix<T, MType> to_column_major(int row_pitch = 0) const;
 
         // Convert to a different matrix format
         template <MatrixFormat NewMType>
@@ -483,7 +502,11 @@ namespace batchlas {
         // Create a copy with data in row-major format from column-major.
         //
         // The source is read with this matrix' own ld() and stride(); the result
-        // holds packed row-major data (row pitch cols, batch stride rows * cols).
+        // holds *packed* row-major data (row pitch cols, batch stride rows * cols),
+        // which is exactly what to_column_major() reads with its default pitch --
+        // the two are round-trip inverses with no pitch bookkeeping on the caller.
+        // Throws std::invalid_argument if a column-major read at ld()/stride()
+        // would run past the end of this matrix' allocation.
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Matrix<T, MType> to_row_major(const Queue& ctx) const;

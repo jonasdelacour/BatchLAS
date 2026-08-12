@@ -57,10 +57,11 @@ the zeros you initialised it with, i.e. a silently wrong answer rather than a
 crash. `main.cc` marks the one line this depends on.
 
 The related trap, also in `main.cc`: pointers handed to a `MatrixView` must be
-device-accessible (USM). A `std::vector<float>` compiles, returns correct
-results on a CPU backend, and aborts the process with
-`CUDA_ERROR_ILLEGAL_ADDRESS` on a GPU one. The owning `Matrix` allocates USM
-shared memory, so filling it from the host is fine.
+device-accessible (USM). A `std::vector<float>` compiles, and the entry points
+that take their backend from the `Queue` then throw `std::invalid_argument`
+naming the argument. On a CPU backend host memory is what the kernels read and
+nothing is rejected, so run the check on the device you will ship on. The owning
+`Matrix` allocates USM shared memory, so filling it from the host is fine.
 
 **3. `LD_LIBRARY_PATH` must cover the DPC++ runtime.**
 
@@ -83,10 +84,11 @@ batch item `b` is at
 view.data_ptr()[b * view.stride() + j * view.ld() + i]
 ```
 
-`ld()` (leading dimension, `>= rows`) and `stride()` (`>= ld * cols`) are chosen
-by the library when it allocates, and are not required to equal `rows` and
-`rows * cols`. `main.cc` routes every access through one `at()` helper for
-exactly that reason.
+`ld()` is the leading dimension (`>= rows`) and `stride()` the element distance
+between batch items (`>= ld * cols`). `Matrix(rows, cols, batch)` packs:
+`ld() == rows` and `stride() == rows * cols`. A matrix built over someone else's
+buffer can carry a larger `ld` or `stride`, so `main.cc` routes every access
+through one `at()` helper and reads both layouts unchanged.
 
 ## The decoy headers
 
@@ -94,7 +96,8 @@ exactly that reason.
 `internal/ormqr_blocked.hh` — none of which is a BatchLAS header and none of
 which is meant to compile. Each is a bare `#error` with its own sentinel. They
 stand in for an ordinary consumer that happens to own headers by those names,
-which are exactly the three top-level directories BatchLAS used to install into.
+which are the three top-level directory names a library could plausibly claim in
+a consumer's include root.
 
 The mechanism is CMake's include ordering: a target's own include directories
 come *before* anything an imported target propagates (imported targets propagate
@@ -104,8 +107,8 @@ consumer's file, and the error message would name files the consumer has never
 seen. Every one of the three names is on the real include chain reached from
 `<batchlas/blas/linalg.hh>`, so a regression in any of them fires.
 
-Since the public headers moved to `include/batchlas/` and are spelled
-`<batchlas/...>`, the decoy build must now succeed. `consumer_test.sh` builds
+BatchLAS' public headers live under `include/batchlas/` and are spelled
+`<batchlas/...>`, so the decoy build succeeds. `consumer_test.sh` builds
 the example a second time with `-DBATCHLAS_CONSUMER_DECOY=ON` and **fails** on
 anything but a clean build: a `BATCHLAS_DECOY_*_SHADOWED` sentinel in the log is
 reported as a regression, and any other failure means the probe stopped probing.
@@ -113,5 +116,5 @@ reported as a regression, and any other failure means the probe stopped probing.
 That is the second half of the guarantee. The first half — that nothing is
 installed at `<prefix>/include/{blas,util,internal}` at all, plus the matching
 positive check that everything *is* at `<prefix>/include/batchlas/` — is
-asserted separately against the install tree. Both are needed: the include root
-was already clean back when every internal spelling was still unprefixed.
+asserted separately against the install tree. Both are needed: a clean include
+root does not by itself prove the internal `#include` spellings are prefixed.

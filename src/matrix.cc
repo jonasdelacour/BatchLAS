@@ -220,6 +220,37 @@ template <typename U, MatrixFormat M>
 Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     : rows_(rows), cols_(cols), batch_size_(batch_size),
       ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols) {
+    // The layout invariant every other part of the class assumes: ld is the distance
+    // between successive columns, so it is at least rows, and the batch items are far
+    // enough apart to hold a full item. This used to go unchecked here (the from-data
+    // constructors have always checked it), so an ld < rows produced a matrix whose
+    // own accessors read into the next column.
+    {
+        const std::string prefix = "Matrix(rows, cols, batch_size, ld, stride): ";
+        if (rows < 0 || cols < 0) {
+            throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+                                        std::to_string(rows) + "x" + std::to_string(cols));
+        }
+        if (batch_size < 0) {
+            throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+        }
+        if (ld < 0) {
+            throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+        }
+        if (stride < 0) {
+            throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+        }
+        if (ld_ < rows) {
+            throw std::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
+                                        " is smaller than the row count " + std::to_string(rows));
+        }
+        const std::size_t packed = static_cast<std::size_t>(ld_) * static_cast<std::size_t>(cols);
+        if (static_cast<std::size_t>(stride_) < packed) {
+            throw std::invalid_argument(prefix + "stride " + std::to_string(stride_) +
+                                        " is smaller than ld * cols (" + std::to_string(packed) + ")");
+        }
+    }
+
     // Allocate memory for the matrix data
     data_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
     
@@ -1553,24 +1584,103 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
     return ctx.get_event();
 }
 
-// Pitch between successive *rows* of a buffer that holds row-major data, given
-// the (column-major-shaped) ld this class stores.
+// Pitch between successive *rows* of a buffer that holds row-major data.
 //
-// The class carries one pitch field, and its meaning is fixed by the constructor:
-// `ld` is the distance between successive columns and is validated `>= rows`. A
-// caller who has row-major data with a padded row pitch p can only express it by
-// passing `ld = p`, and the constructor only accepts that when `p >= rows`. So:
+// This used to be inferred from the stored ld (`ld > rows ? ld : cols`). The
+// inference cannot work: `ld` means the distance between successive *columns*, so
+// for any matrix with rows > cols a legal row-major pitch p in `cols < p <= rows`
+// is indistinguishable from "packed" and was silently read at pitch `cols`. And in
+// the other direction the inference was not even self-consistent: the allocation is
+// sized `ld * cols` (a column-major extent), so an inferred row pitch of `ld > cols`
+// makes the row-major read run off the end of the matrix' own buffer.
 //
-//   - `ld > rows`  =>  the caller passed an explicit ld; it is the row pitch.
-//   - `ld == rows` =>  either the default (`ld = 0 -> rows`) or an explicit ld
-//                      equal to rows, and in both cases the only representable
-//                      row-major layout is the packed one, pitch `cols`.
+// So the pitch is a parameter now. It still has a default -- `cols`, packed --
+// but only where packed is the *only* layout the matrix can be holding, which is
+// what the ld/stride check below decides:
 //
-// Every row-major layout this class can hold is covered: a pitch strictly
-// between cols and rows is rejected at construction (`ld < rows`).
+//   ld == rows and stride == rows * cols  =>  the item is exactly rows * cols
+//   elements, so a row-major read at pitch p needs (rows-1)*p + cols <= rows*cols,
+//   i.e. p <= cols; with the p >= cols check below that forces p == cols.
+//
+// Anywhere else -- a padded ld, or a gap between batch items -- the item has room
+// to spare and a padded row-major buffer fits in it just as well as a packed one.
+// Defaulting there is a guess, and a guess that reads the wrong elements *in
+// bounds*, silently: for rows=8, cols=6, ld=8, stride=64 a genuinely padded
+// (pitch 8) buffer came back with 42 of its 48 elements wrong. So the default
+// refuses to guess and says which two spellings resolve it. Note that the
+// converse makes this complete rather than merely strict: a padded row-major
+// layout needs more than rows * cols per item, so it cannot be held by a matrix
+// whose metadata is packed -- with this check every padded row-major read either
+// throws or was given its pitch explicitly.
+//
+// This helper resolves the default, decides that question, and checks that the
+// resulting read is inside the buffer and does not straddle the next batch item;
+// anything else throws with the numbers in the text.
 namespace {
-inline int row_major_pitch(int rows, int cols, int ld) {
-    return ld > rows ? ld : cols;
+inline std::size_t checked_row_major_pitch(int row_pitch, int rows, int cols, std::size_t ld,
+                                           std::size_t stride, int batch_size,
+                                           std::size_t buffer_elems) {
+    const std::string prefix = "Matrix::to_column_major: ";
+    if (row_pitch < 0) {
+        throw std::invalid_argument(prefix + "invalid row pitch " + std::to_string(row_pitch));
+    }
+    const std::size_t pitch = row_pitch > 0 ? static_cast<std::size_t>(row_pitch)
+                                            : static_cast<std::size_t>(cols);
+    if (rows <= 0 || cols <= 0 || batch_size <= 0) {
+        return pitch;  // nothing is read
+    }
+    if (row_pitch == 0 && rows > 1) {
+        // rows == 1 is exempt: a single row is read the same way at every pitch,
+        // so there is nothing to guess and a throw would be pure noise.
+        const std::size_t packed_item = static_cast<std::size_t>(rows) *
+                                        static_cast<std::size_t>(cols);
+        if (ld != static_cast<std::size_t>(rows) || stride != packed_item) {
+            throw std::invalid_argument(
+                prefix + "the default row pitch means packed (pitch cols = " + std::to_string(cols) +
+                "), but this matrix is not packed: rows=" + std::to_string(rows) +
+                " cols=" + std::to_string(cols) + " ld=" + std::to_string(ld) +
+                " stride=" + std::to_string(stride) + ", where packed is ld=" +
+                std::to_string(rows) + " stride=" + std::to_string(packed_item) +
+                ". A row-major buffer with a padded row pitch fits in this item too, and the "
+                "two cannot be told apart from the layout. Pass the buffer's row pitch, or pass "
+                "cols (" + std::to_string(cols) + ") if it really is packed");
+        }
+    }
+    if (pitch < static_cast<std::size_t>(cols)) {
+        throw std::invalid_argument(prefix + "row pitch " + std::to_string(pitch) +
+                                    " is smaller than the column count " + std::to_string(cols));
+    }
+    const std::size_t item = static_cast<std::size_t>(rows - 1) * pitch +
+                             static_cast<std::size_t>(cols);
+    if (batch_size > 1 && item > stride) {
+        throw std::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
+                                    " spans " + std::to_string(item) +
+                                    " elements per batch item, but the batch items are only " +
+                                    std::to_string(stride) + " apart (stride)");
+    }
+    const std::size_t needed = static_cast<std::size_t>(batch_size - 1) * stride + item;
+    if (needed > buffer_elems) {
+        throw std::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
+                                    " needs " + std::to_string(needed) +
+                                    " elements but the matrix owns " + std::to_string(buffer_elems) +
+                                    "; pass the pitch the buffer really has, or compact it first");
+    }
+    return pitch;
+}
+
+// The same bounds question for the column-major read to_row_major performs, which
+// uses the matrix' own ld and stride.
+inline void check_column_major_extent(int rows, int cols, std::size_t ld, std::size_t stride,
+                                      int batch_size, std::size_t buffer_elems) {
+    if (rows <= 0 || cols <= 0 || batch_size <= 0) return;
+    const std::size_t needed = static_cast<std::size_t>(batch_size - 1) * stride +
+                               static_cast<std::size_t>(cols - 1) * ld +
+                               static_cast<std::size_t>(rows);
+    if (needed > buffer_elems) {
+        throw std::invalid_argument("Matrix::to_row_major: a column-major read at ld " +
+                                    std::to_string(ld) + " needs " + std::to_string(needed) +
+                                    " elements but the matrix owns " + std::to_string(buffer_elems));
+    }
 }
 }  // namespace
 
@@ -1578,7 +1688,16 @@ inline int row_major_pitch(int rows, int cols, int ld) {
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx) const {
+Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pitch) const {
+    // The source holds row-major data. Its row pitch is what the caller says it is
+    // (default: packed, pitch cols -- allowed only where the layout leaves no room
+    // for a padded pitch); its batch items are stride_ apart, which need not be
+    // ld_ * cols. Validate before allocating anything.
+    const size_t src_pitch = checked_row_major_pitch(row_pitch, rows_, cols_,
+                                                     static_cast<size_t>(ld_),
+                                                     static_cast<size_t>(stride_), batch_size_,
+                                                     data_.size());
+
     // The destination is packed in the target major: ld = rows, stride = rows * cols.
     Matrix<T, MType> col_major(rows_, cols_, batch_size_);
 
@@ -1589,9 +1708,6 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx) const {
     // Capture dimensions for kernel
     int rows = rows_;
     int cols = cols_;
-    // The source holds row-major data, so its pitch is the row pitch; its batch
-    // items are separated by stride_, which need not be ld_ * cols.
-    size_t src_pitch = static_cast<size_t>(row_major_pitch(rows_, cols_, ld_));
     size_t src_stride = static_cast<size_t>(stride_);
     size_t dst_stride = static_cast<size_t>(col_major.stride_);
     size_t dst_ld = static_cast<size_t>(col_major.ld_);
@@ -1627,10 +1743,10 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx) const {
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_column_major() const {
+Matrix<T, MType> Matrix<T, MType>::to_column_major(int row_pitch) const {
     // Builds a queue of its own, and waits on it before returning.
     Queue q;
-    return to_column_major(q);
+    return to_column_major(q, row_pitch);
 }
 
 // Implement to_row_major using SYCL
@@ -1638,10 +1754,15 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
+    // The source is read column-major with this matrix' own ld_/stride_.
+    check_column_major_extent(rows_, cols_, static_cast<size_t>(ld_),
+                              static_cast<size_t>(stride_), batch_size_, data_.size());
+
     // The destination holds packed row-major data (row pitch cols, batch stride
     // rows * cols). The Matrix it is handed back in keeps the class' usual
-    // column-major-shaped metadata (ld = rows), which is what to_column_major
-    // reads back as "packed row-major" -- see row_major_pitch above.
+    // column-major-shaped metadata (ld = rows); the pitch is not recoverable from
+    // that metadata, which is exactly why to_column_major takes the pitch as an
+    // argument and defaults it to "packed" -- the layout produced here.
     Matrix<T, MType> row_major(rows_, cols_, batch_size_);
 
     // Get pointers to source and destination data
@@ -2317,15 +2438,15 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Diagonal(const Span<std::complex<float>>&, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Diagonal(const Span<std::complex<double>>&, int);
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_column_major() const;
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_column_major() const;
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_column_major() const;
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_column_major() const;
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_column_major(int) const;
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_column_major(int) const;
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_column_major(int) const;
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_column_major(int) const;
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_column_major(const Queue&) const;
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_column_major(const Queue&) const;
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_column_major(const Queue&) const;
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_column_major(const Queue&) const;
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_column_major(const Queue&, int) const;
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_column_major(const Queue&, int) const;
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::to_column_major(const Queue&, int) const;
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::to_column_major(const Queue&, int) const;
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::to_row_major() const;
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::to_row_major() const;

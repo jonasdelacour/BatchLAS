@@ -1,22 +1,173 @@
 # The BatchLAS C++ API
 
-This is the reference for the public C++ calling conventions: where your data has
-to live, how it is laid out, when results become readable, and how the backend,
-options and workspaces are spelled at a call site.
+Matrices are column-major and batched, every call enqueues work and returns
+immediately, and the backend, the workspace and the device all come from the
+`Queue`.
 
 ## The short version
 
 ```cpp
-#include <batchlas.hh>                            // umbrella header
+#include <batchlas.hh>                        // umbrella header
 using namespace batchlas;
 
-Queue ctx(Device::default_device());          // backend resolved from the device
-Matrix<float, MatrixFormat::Dense> A(n, n, batch), B(n, n, batch), C(n, n, batch);
+int main() {
+    const int n = 128, batch = 512;
 
-gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});
-potrf(ctx, A.view(), {.uplo = Uplo::Upper});
-ctx.wait();                                   // nothing is readable before this
+    Queue ctx(Device::default_device());      // backend resolved from the device
+    Matrix<float> A(n, n, batch), B(n, n, batch), C(n, n, batch);
+
+    A.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+    B.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+
+    gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});   // C := 2 A B
+    ctx.wait();                               // nothing is readable before this
+
+    float c00 = C(0, 0, 0);                   // Matrix owns USM shared memory
+}
 ```
+
+`Matrix`, `MatrixView`, `gemm`, `potrf` and the rest of the numerical surface are
+in namespace `batchlas`. `Queue`, `Device`, `Event`, `Span` and `UnifiedVector`
+are in the **global** namespace: they need no qualification and no
+`using namespace batchlas;`.
+
+### The short template spelling
+
+`Matrix`, `MatrixView` and `VectorView` default their template parameters to
+`<float, MatrixFormat::Dense>` (`<float>` for `VectorView`), so these pairs name
+the same type:
+
+```cpp
+Matrix<float>              A(n, n, batch);    // == Matrix<float, MatrixFormat::Dense>
+MatrixView<float>          V = A.view();      // == MatrixView<float, MatrixFormat::Dense>
+Matrix<std::complex<float>> Z(n, n, batch);   // dense too
+Matrix<float, MatrixFormat::CSR> S(n, n, NonZeros{nnz}, batch);
+```
+
+Write the format out when it is not `Dense`, and drop it when it is. `Vector<T>`
+has no default: spell it `Vector<float>`.
+
+### Building and installing BatchLAS
+
+What the build needs:
+
+- **A clang-based SYCL compiler, clang 16 or newer.** BatchLAS is developed and
+  tested with intel/llvm DPC++ built with `--cuda`, installed at
+  `/opt/dpcpp-cuda` in the commands below; substitute your own prefix. Build the
+  library and everything that consumes it with the same compiler: another one
+  links with undefined references to the constrained entry points.
+- **oneDPL headers**, which DPC++ does not bundle. Pass
+  `-DONEDPL_ROOT=<oneapi-dpl-prefix>`, where
+  `<oneapi-dpl-prefix>/include/oneapi/dpl` exists, or set `ONEDPL_ROOT` or
+  `DPL_ROOT` in the environment (oneAPI's `setvars.sh` sets `DPL_ROOT`).
+  Configure fails without them.
+- **LAPACKE and CBLAS** — `liblapacke` plus `libcblas` or `libblas` — for the
+  host backend, which `BATCHLAS_ENABLE_NETLIB` turns on by default. Configure
+  warns and builds with the host backend off when they are missing.
+- **The CUDA toolkit** (cudart, cuBLAS, cuSOLVER, cuSPARSE) whenever the CUDA
+  backend is on, which the default `AUTO` does as soon as the SYCL runtime
+  exposes a CUDA device.
+- **CMake 3.14 or newer** for BatchLAS itself, 3.21 for the consuming project
+  below.
+
+```bash
+git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS
+cmake -S . -B build \
+      -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ \
+      -DONEDPL_ROOT=<oneapi-dpl-prefix> \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DBATCHLAS_BUILD_TESTS=OFF
+cmake --build build -j"$(nproc)"
+cmake --install build --prefix "$HOME/inst"   # <prefix> in the consumer commands below
+```
+
+Build options:
+
+| option | what it does |
+| --- | --- |
+| `BATCHLAS_ENABLE_CUDA` | cuBLAS/cuSOLVER backend: `AUTO` (default — on when the SYCL runtime exposes a CUDA device), `ON` (configure fails when it does not), `OFF` |
+| `BATCHLAS_NVIDIA_ARCH` | target architecture, e.g. `sm_89`; the build detects the local GPU, so pass this only when cross-building |
+| `BATCHLAS_ENABLE_NETLIB` | host BLAS/LAPACK backend, `ON` by default |
+| `BATCHLAS_ENABLE_MKL`, `BATCHLAS_ENABLE_ROCM` | the oneMKL and ROCm backends, both `OFF` by default |
+| `BATCHLAS_BUILD_TESTS` | on by default for a top-level build; `OFF` when you only want the library |
+| `BATCHLAS_BUILD_BENCHMARKS`, `BATCHLAS_BUILD_PYTHON` | off by default |
+
+`CMakePresets.json` carries the development configurations — `cmake --preset dev`
+to build the library, `--preset dev-tests` to add the test suite.
+
+### Building against BatchLAS
+
+**Configure the whole consuming project with the same SYCL compiler BatchLAS was
+built with.** A mismatch compiles and then fails at link:
+
+```
+undefined reference to `batchlas::Matrix<float, (batchlas::MatrixFormat)0>::Matrix<...>(int, int, int, int, int)'
+```
+
+The package compares your `CMAKE_CXX_COMPILER` against the recorded one by
+realpath and warns when they differ; `-DBATCHLAS_REQUIRE_MATCHING_COMPILER=ON`
+makes that a hard error. If you do not know which compiler an install was built
+with, look for `CMAKE_CXX_COMPILER` in the `CMakeCache.txt` of its build tree.
+
+The consuming `CMakeLists.txt`:
+
+```cmake
+cmake_minimum_required(VERSION 3.21)
+project(my_app CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(BatchLAS CONFIG REQUIRED)
+
+add_executable(my_app main.cc)
+target_link_libraries(my_app PRIVATE BatchLAS::batchlas)
+```
+
+```bash
+cmake -S . -B build \
+      -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ \
+      -DCMAKE_PREFIX_PATH=<prefix>
+cmake --build build
+LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:<prefix>/lib ./build/my_app
+```
+
+**Start from `examples/consumer/`.** It is that project, standalone and
+runnable: `main.cc` is a batched `gemm` on USM-backed `Matrix` operands, checked
+against a hand-computed reference and printing `PASS`, and it is the shortest
+complete thing to copy. Its `CMakeLists.txt` is the file above plus two options
+the example uses for its own testing: `BATCHLAS_CONSUMER_USE_FSYCL` adds
+`-fsycl`, which is the recipe a consumer with its own kernels needs, and
+`BATCHLAS_CONSUMER_DECOY` puts colliding `blas/`, `util/` and `internal/`
+headers on the include path. Build and run it with the two commands above,
+pointed at `examples/consumer`.
+
+`BatchLAS::batchlas` is the only target to link. It propagates `cxx_std_20`, the
+include root `<prefix>/include`, the component libraries and `-Wl,--no-as-needed`
+— keep that flag if you override the link line yourself.
+
+A translation unit that only calls the documented API needs no SYCL flags. One
+that includes `<sycl/sycl.hpp>` or `<batchlas/sycl_interop.hh>`, or writes its
+own kernels, passes them itself, for the targets the install was built for — the
+config file records those in `BatchLAS_SYCL_TARGETS`:
+
+```cmake
+target_compile_options(my_app PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
+target_link_options(my_app    PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
+```
+
+`find_package(BatchLAS)` pulls in `OpenMP` when the install was built with it,
+and `MKL` when the MKL backend is on. CUDA and LAPACK are linked privately into
+the component libraries, so a CPU-only machine can `find_package` a CUDA-enabled
+install. Ask for the package whole — `find_package(BatchLAS CONFIG REQUIRED)`
+with no `COMPONENTS`.
+
+At run time the loader must find the DPC++ runtime and the SYCL adapters it
+`dlopen`s. Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib` for interactive use; in a
+container, drop a file naming that directory in `/etc/ld.so.conf.d/` and run
+`ldconfig`.
+
+### Headers
 
 Everything installs under `<prefix>/include/batchlas/`, plus the umbrella file
 `<prefix>/include/batchlas.hh`. Include `<batchlas.hh>`, or reach in directly:
@@ -26,8 +177,239 @@ Everything installs under `<prefix>/include/batchlas/`, plus the umbrella file
 #include <batchlas/util/sycl-device-queue.hh>
 ```
 
-`batchlas` is the only name BatchLAS claims in your include root, and every
-public header is spelled `<batchlas/...>`.
+Every public header is spelled `<batchlas/...>`; the paths named in this document
+— `batchlas/blas/options.hh`, `batchlas/blas/matrix.hh`,
+`batchlas/util/workspace.hh` — are the same under the install prefix as in the
+source tree.
+
+## Devices and queues
+
+A `Queue` names the device, carries the backend, owns a workspace arena and
+orders the work. `Device::default_device()` is the first GPU, else the first
+CPU, else the first host device. To pick a particular device, enumerate:
+
+```cpp
+auto gpus = Device::get_devices(DeviceType::GPU);   // CPU, ACCELERATOR, HOST too
+for (const auto& d : gpus) std::cout << d.get_name() << '\n';
+
+Queue ctx(gpus.at(1));                              // the second GPU
+Queue cpu("cpu");                                   // "cpu", "gpu", "accelerator"
+```
+
+`get_devices` returns the devices in the runtime's order; the string constructor
+takes the first of a type and throws `std::runtime_error` when there is none.
+`get_name()`, `get_vendor()` and `get_property(DeviceProperty::GLOBAL_MEM_SIZE)`
+describe one.
+
+The `Queue` constructors:
+
+```cpp
+Queue ctx;                                       // default device, in-order, backend AUTO
+Queue ctx2(device);                              // in-order
+Queue ooo(device, /*in_order=*/false);           // out-of-order
+Queue host(device, Backend::NETLIB);             // backend pinned, in-order
+Queue host2(device, Backend::NETLIB, /*in_order=*/false);
+Queue sibling(ctx, /*in_order=*/true);           // ctx's SYCL context and device
+```
+
+A `Queue` is movable and not copyable. `Queue(base, in_order)` shares `base`'s
+SYCL context and device, so the two see each other's USM allocations — that is
+how to get a second queue that can take the same buffers. Each queue still owns
+its own arena and event chain, and belongs to one thread (see *Synchronisation
+and threading*).
+
+In-order is the default and is what makes an arena-backed workspace free; on an
+out-of-order queue, pass your own workspace spans (see *When to keep managing the
+workspace yourself*).
+
+## What the operations compute
+
+Every entry point is batched: it applies the same operation to every item of the
+batch, and **all matrix arguments to one call must have the same batch size**.
+`α` and `β` below are the `alpha` and `beta` fields of the option struct, and
+`op(A)` is `A`, `Aᵀ` or `Aᴴ` according to the `trans` field. The "shapes" column
+of each table states a requirement: hold to it, and see *What gets thrown* for
+which calls check it.
+
+### Dense BLAS
+
+| call | computes | written | shapes, per batch item |
+| --- | --- | --- | --- |
+| `gemm(ctx, A, B, C, opts)` | `C := α·op(A)·op(B) + β·C` | `C` | `op(A)` m×k, `op(B)` k×n, `C` m×n |
+| `gemv(ctx, A, x, y, opts)` | `y := α·op(A)·x + β·y` | `y` | `op(A)` m×n, `x` length n, `y` length m |
+| `symm(ctx, A, B, C, opts)` | `C := α·A·B + β·C` (`Side::Left`), `C := α·B·A + β·C` (`Side::Right`); `A` symmetric, only its `uplo` triangle is read | `C` | `B`, `C` m×n; `A` m×m (Left) or n×n (Right) |
+| `hemm(ctx, A, B, C, opts)` | as `symm`, with `A` Hermitian: the other triangle is taken as the conjugate transpose and the diagonal's imaginary part as zero, whatever is stored there | `C` | as `symm` |
+| `syrk(ctx, A, C, opts)` | `C := α·A·Aᵀ + β·C` (`NoTrans`), `C := α·Aᵀ·A + β·C` (`Trans`) | `C`, `uplo` triangle only | `A` n×k (NoTrans) or k×n (Trans); `C` n×n |
+| `herk(ctx, A, C, opts)` | `C := α·A·Aᴴ + β·C` (`NoTrans`), `C := α·Aᴴ·A + β·C` (`ConjTrans`) | `C`, `uplo` triangle only; the diagonal comes out real | as `syrk`. `trans` must be `NoTrans` or `ConjTrans` |
+| `syr2k(ctx, A, B, C, opts)` | `C := α·A·Bᵀ + α·B·Aᵀ + β·C` (`NoTrans`), `C := α·Aᵀ·B + α·Bᵀ·A + β·C` (`Trans`) | `C`, `uplo` triangle only | `A`, `B` n×k or k×n; `C` n×n; k > 0 |
+| `her2k(ctx, A, B, C, opts)` | `C := α·A·Bᴴ + conj(α)·B·Aᴴ + β·C` (`NoTrans`), `C := α·Aᴴ·B + conj(α)·Bᴴ·A + β·C` (`ConjTrans`) | `C`, `uplo` triangle only; real diagonal | as `syr2k` |
+| `trmm(ctx, A, B, C, opts)` | `C := α·op(A)·B` (`Left`), `C := α·B·op(A)` (`Right`); `A` triangular, `uplo` and `diag` describe it | **`C`**; `B` is an input and is not modified | `A` m×m (Left) or n×n (Right); `B`, `C` m×n |
+| `trsm(ctx, A, B, opts)` | solves `op(A)·X = α·B` (`Left`) or `X·op(A) = α·B` (`Right`) | **`B`**, overwritten with `X` | `A` m×m (Left) or n×n (Right); `B` m×n |
+
+**`trmm` and `trsm` differ from `?trmm`/`?trsm` and from each other.** `trmm`
+takes three matrices and writes the product into `C`, leaving `B` alone — where
+the reference BLAS `?trmm` is in place on `B`. `trsm` takes two and is in place:
+the solution replaces `B`. Expecting `trmm` to have updated `B`, or expecting
+`trsm` to have left it alone, gives a wrong answer, not a compile error.
+
+**"`uplo` triangle only" means the other triangle comes back exactly as it went
+in — including uninitialised.** `syrk`, `herk`, `syr2k` and `her2k` write the
+named half of `C` and do not touch the other one, and a freshly constructed
+`Matrix(rows, cols, batch)` is uninitialised, so the unwritten half holds
+whatever was in that memory — not zeros. What comes back is a valid triangular
+result and not a symmetric matrix; no call reports this, so `gemm`, `gemv` or
+host code that indexes both halves silently produces wrong numbers.
+
+Mirror the triangle before any such use:
+
+```cpp
+syrk(ctx, A.view(), C.view(), {.uplo = Uplo::Lower}).wait();
+C.view().symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
+```
+
+`symmetrize(ctx, uplo)` copies the named triangle into the other one, and
+`hermitize(ctx, uplo)` copies its conjugate transpose (the correct one for
+`herk`/`her2k`); both are one kernel on `MatrixView` and return an `Event`.
+Zeroing `C` first (`Matrix::Zeros`, `view().fill_zeros(ctx)`) makes the other
+half defined, not symmetric — mirror it as well.
+
+`symm`, `syrk` and `syr2k` are constrained to **real** `T` and do not instantiate
+for `std::complex`; `hemm`, `herk` and `her2k` are constrained to **complex** `T`
+and do not instantiate for real. `gemm`, `gemv`, `trmm` and `trsm` take both.
+`herk`'s `α` and `β` are real even though its operands are complex, and `her2k`'s
+`β` is real, because that is what keeps the result Hermitian.
+
+### LAPACK-style
+
+These take a workspace. Leave it out and it is leased from the queue's arena; see
+*Workspaces come from the queue's arena*.
+
+| call | computes | written | shapes, per batch item |
+| --- | --- | --- | --- |
+| `potrf(ctx, A, opts)` | Cholesky: `A = L·Lᴴ` (`Uplo::Lower`) or `A = Uᴴ·U` (`Uplo::Upper`) | `A`, in place, `uplo` triangle | `A` n×n |
+| `getrf(ctx, A, pivots)` | LU with partial pivoting, `A = P·L·U` | `A` in place, and `pivots` | `A` n×n; `pivots` is a `Span<int64_t>` of n·batch |
+| `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors and pivots | `B`, overwritten with `X` | `A` n×n already factorised, `B` n×nrhs |
+| `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors and pivots | **`C`**; `A` is read-only | `A`, `C` both n×n |
+| `geqrf(ctx, A, tau)` | QR: `R` in the upper triangle of `A`, the Householder reflectors below it, their scalars in `tau` | `A` in place, and `tau` | `A` m×n; `tau` is a `Span<T>` of min(m,n)·batch |
+| `orgqr(ctx, A, tau)` | expands `geqrf`'s reflectors into the explicit `Q` | `A`, overwritten with `Q` | `A` m×n, k = min(m,n) columns of `Q` |
+| `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` gets the eigenvalues, ascending; `A` gets the eigenvectors when `jobz == JobType::EigenVectors` | `A` n×n; `W` is a `Span` of n·batch of the **real** type (`float` for `std::complex<float>`) |
+
+`getri`, like `trmm`, writes a second matrix operand and leaves its input alone.
+
+### Which type each parameter takes
+
+- **Matrix parameters** take `Matrix<T>` or `MatrixView<T>`, mixed freely, on
+  every spelling. Where an entry point's primary declares a `MatrixView<T>`, an
+  owning-`Matrix` overload forwards to it, so `A.view()` is never required.
+- **Vector parameters** — `gemv`'s `x` and `y` — take `VectorView<T>`. An owning
+  `Vector<T>` converts, and `x.view()` is the spelling that always works.
+- **Flat arrays** — eigenvalues `W`, singular values `S`, `tau`, `pivots`, and
+  workspaces — take `Span<T>`. `UnifiedVector<T>`, the owning USM array,
+  converts implicitly; `to_span()` is explicit. A `Vector<T>` is not a `Span`.
+
+`pivots` is `int64_t`, `tau` is `T`, and `W` is the real counterpart of `T`
+(`float` for `std::complex<float>`).
+
+```cpp
+UnifiedVector<int64_t> pivots(n * batch);       // owning USM array; also (count, value)
+UnifiedVector<float>   tau(std::min(m, n) * batch);
+UnifiedVector<float>   W(n * batch);            // real, even for complex A
+Span<float>            w = W.to_span();         // or Span<float>(ptr, count); never owns
+
+Vector<float> x(n, /*batch_size=*/batch), y(m, batch);   // owning USM vectors
+gemv(ctx, A.view(), x.view(), y.view(), {.alpha = 1.0f});
+```
+
+**`Vector` and `VectorView` take `inc` and `stride` in opposite orders.** It is
+`Vector<T>(size, batch_size, stride, inc)` and
+`VectorView<T>(ptr, size, batch_size, inc, stride)`. Both parameters are `int`
+and both default — `inc` to 1, `stride` to `size * inc` — so a pair passed in
+the other order compiles and reads the wrong elements. Read the argument order
+off the constructor you are calling, every time.
+
+`Vector<T>::zeros(size, batch_size, stride, inc)`, `::ones(...)` and
+`::standard_basis(size, index, batch_size, stride)` build one directly.
+
+## Options are structs with defaults
+
+Most entry points take an option struct, so you write only what differs from the
+default. Designated initialisers make the call self-documenting:
+
+```cpp
+gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f, .transA = Transpose::Trans});
+syev(ctx, A.view(), W, {.jobz = JobType::NoEigenVectors});
+getrs(ctx, LU.view(), X.view(), pivots, {.trans = Transpose::Trans});
+```
+
+### The fields and their defaults
+
+The dense BLAS structs are templated on `T`; the three LAPACK ones are not. They
+all live in `batchlas/blas/options.hh`.
+
+| struct | fields, with defaults |
+| --- | --- |
+| `GemmOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `transA = Transpose::NoTrans`, `transB = Transpose::NoTrans`, `precision = ComputePrecision::Default` |
+| `GemvOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `transA = Transpose::NoTrans` |
+| `SymmOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `side = Side::Left`, `uplo = Uplo::Lower` |
+| `HemmOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `side = Side::Left`, `uplo = Uplo::Lower` |
+| `SyrkOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `uplo = Uplo::Lower`, `trans = Transpose::NoTrans` |
+| `HerkOptions<T>` | `alpha`, `beta` — **real**, `float_t<T>(1)` and `float_t<T>(0)` — `uplo = Uplo::Lower`, `trans = Transpose::NoTrans` |
+| `Syr2kOptions<T>` | `alpha = T(1)`, `beta = T(0)`, `uplo = Uplo::Lower`, `trans = Transpose::NoTrans` |
+| `Her2kOptions<T>` | `alpha = T(1)` (complex), `beta = float_t<T>(0)` (**real**), `uplo = Uplo::Lower`, `trans = Transpose::NoTrans` |
+| `TrmmOptions<T>` | `alpha = T(1)` (**no `beta`**), `side = Side::Left`, `uplo = Uplo::Lower`, `trans = Transpose::NoTrans`, `diag = Diag::NonUnit` |
+| `TrsmOptions<T>` | `alpha = T(1)`, `side = Side::Left`, `uplo = Uplo::Lower`, `trans = Transpose::NoTrans`, `diag = Diag::NonUnit` |
+| `PotrfOptions` | `uplo = Uplo::Lower` |
+| `GetrsOptions` | `trans = Transpose::NoTrans` |
+| `SyevOptions` | `jobz = JobType::EigenVectors`, `uplo = Uplo::Lower` |
+
+**Every `uplo` defaults to `Uplo::Lower`.** A default-constructed option struct
+therefore reads the *lower* triangle, so fill the lower triangle or say
+`{.uplo = Uplo::Upper}`. Populating the upper triangle and calling `potrf` or
+`syev` with default options factorises whatever is in the lower one, and reports
+nothing.
+
+The field is spelled `transA` (and `transB`) in `GemmOptions` and `GemvOptions`,
+and `trans` everywhere else.
+
+`ComputePrecision` appears only on `gemm`. `Default` means "compute in the input
+type"; the other values are `F32`, `F64`, `F16`, `BF16` and `TF32`, and a backend
+that cannot serve the one you ask for says so at compile time.
+
+### Which spelling each entry point takes
+
+- The dense BLAS calls — `gemm`, `gemv`, `symm`, `hemm`, `herk`, `her2k`, `syrk`,
+  `syr2k`, `trmm`, `trsm` — take an option struct and no workspace.
+- `potrf`, `getrs` and `syev` take an option struct, and take the workspace or
+  lease it: `potrf(ctx, A, opts)` and `potrf(ctx, A, opts, ws)` both exist.
+- `getrf`, `getri`, `geqrf` and `orgqr` carry no options. The arena-backed
+  spelling omits the workspace — `getrf(ctx, A, pivots)` — and the positional
+  spelling takes it: `getrf<Back, T>(ctx, A, pivots, ws)`.
+- `gesvd`, `ormqr`, `ortho` and `spmm` take positional arguments and a workspace
+  span. Lease it from the arena yourself:
+
+  ```cpp
+  with_backend(ctx, [&](auto Back) {
+      constexpr Backend Bk = Back.value;
+      auto ws = ctx.workspace(gesvd_buffer_size<Bk, float>(
+                                  ctx, A.view(), S, U.view(), Vh.view(),
+                                  SvdVectors::All, SvdVectors::All));
+      gesvd<Bk, float>(ctx, A.view(), S, U.view(), Vh.view(),
+                       SvdVectors::All, SvdVectors::All, ws.span());
+  });
+  ```
+
+- Entry points whose template parameters cannot be deduced from their arguments —
+  `tridiagonal_solver_buffer_size`, whose arguments are all scalars — keep the
+  explicit `f<Backend, T>(...)` form.
+
+When you pass an empty option struct *together with* an explicit workspace, name
+the type: `potrf(ctx, A.view(), PotrfOptions{}, ws)`.
+
+`T` is deduced from the matrix arguments, never from the option struct, so on an
+option-struct call let it deduce — `syev<B>(ctx, ...)`, or `syev(ctx, ...)` to
+take the backend from the queue as well. Name `T` on the positional spelling,
+`syev<B, float>(ctx, ...)`, where the second template parameter is the scalar
+type.
 
 ## Data layout and memory
 
@@ -47,27 +429,83 @@ there), and `V.at(i, j, b)` or `V(i, j, b)` on a `MatrixView`, which bounds-chec
 and throws `std::out_of_range`.
 
 - **`ld`** — leading dimension, the element distance between column `j` and
-  column `j+1`. It defaults to `0`, which means "packed": `ld = rows`. It must be
-  at least `rows`; a larger `ld` is how you view a sub-block of a bigger buffer.
+  column `j+1`. Pass `0` for "packed", which resolves to `rows`, or a value of at
+  least `rows`; a larger `ld` is how you view a sub-block of a bigger buffer.
 - **`stride`** — the element distance between batch item `b` and item `b+1`. It
   defaults to `0`, which means `ld * cols`, i.e. the items are packed back to
   back.
 
 Both defaults are resolved the same way in `Matrix(rows, cols, batch, ld, stride)`
-and in `MatrixView(data, rows, cols, ld, stride, batch)`.
+and in `MatrixView(data, rows, cols, ld, stride, batch)`, and the resolution is
+deterministic: `Matrix(rows, cols, batch)` allocates exactly `rows * cols * batch`
+elements with `ld() == rows()` and `stride() == rows() * cols()`. Nothing pads.
 
-For row-major source data, use the operand swap below — it costs nothing.
+**The indices are `int`.** `rows`, `cols`, `ld`, `stride` and `batch_size` are
+`int`, and element access evaluates `b * stride + j * ld + i` in `int`
+arithmetic, so the largest index a matrix addresses —
+`(batch_size - 1) * stride + (cols - 1) * ld + rows - 1` — must stay below
+2³¹ (about 2.1·10⁹ elements, 8 GB of `float`). Past that the index overflows
+silently. Split the batch across several matrices to go further.
+
+**`stride = 0` is the packed default, not cuBLAS's broadcast.** BatchLAS has no
+broadcast operand: every operand carries a full batch, and unequal batch sizes
+throw (`"GEMM: incompatible matrix dimensions"`). Writing
+`MatrixView(dA, n, k, n, /*stride=*/0, batch)` over a buffer that holds one
+matrix does not repeat that matrix — it reads `batch` consecutive items, i.e.
+past the end of the buffer, and the USM check validates the base pointer only,
+not the extent. To multiply one shared matrix against many right-hand sides,
+either fold the batch into columns — packed `B` (`ld == k`, `stride == k*n`) is
+one `k × (n·batch)` matrix, so the product is a single un-batched `gemm` with no
+extra memory — or replicate the shared matrix across the batch.
+
+#### Row-major source data
+
+For `gemm`, use the operand swap below — it copies nothing. Otherwise convert:
 `Matrix::to_column_major()` returns a converted copy and `to_row_major()` goes
-back. Both read the source with its own `ld` and `stride` and return a packed
-matrix (`ld == rows`, `stride == rows * cols`). Both synchronise before
-returning: the no-argument form on a queue it builds itself, the
+back, both packed (`ld == rows`, `stride == rows * cols`) and both synchronising
+before they return — the no-argument form on a queue they build, the
 `to_column_major(ctx)` / `to_row_major(ctx)` form on the queue you pass.
 
-For a *row-major* source there is only one pitch field to carry the row pitch,
-and it is `ld`: a padded row-major buffer is spelled `Matrix(data, rows, cols,
-ld = row_pitch, ...)`, which the constructor accepts when `row_pitch >= rows`.
-When `ld == rows` the buffer can only be packed row-major, and the row pitch is
-`cols`.
+**A packed row-major buffer** (row pitch `cols`) is adopted with `ld = 0` and
+converted with the default pitch:
+
+```cpp
+// row-major, row pitch cols, no padding
+Matrix<float> A(Span<const float>(src, size_t(rows) * cols), rows, cols, /*ld=*/0);
+auto col_major = A.to_column_major();          // packed source, default pitch
+```
+
+`A` here holds the row-major bytes under a column-major label: `A(i, j, b)`
+returns `src[j*rows + i]`, not element `(i, j)`. Use only `col_major` — adopt,
+convert, use the result.
+
+**A row-major buffer with a padded row pitch `p`** goes into a matrix you own
+that is big enough for the padded layout, and converts at the pitch you state:
+
+```cpp
+Matrix<float> holder(rows, cols, batch, /*ld=*/rows, /*stride=*/(rows - 1) * p + cols);
+// ... copy the padded rows into holder.view().data_ptr() ...
+auto col_major = holder.to_column_major(p);    // or to_column_major(ctx, p)
+```
+
+`Matrix(rows, cols, batch, ld, stride)` allocates `stride * batch` elements, so
+`stride` is what has to cover the row-major extent `(rows-1)*p + cols`.
+
+The conversion rules:
+
+- `to_column_major()` with no pitch means **packed**, row pitch `cols`. It
+  requires a packed matrix — `ld() == rows()` and `stride() == rows()*cols()` —
+  which is what `to_row_major()` produces, so the round trip needs no
+  bookkeeping. On a padded `ld` or a gapped `stride` it throws
+  `std::invalid_argument` naming `rows/cols/ld/stride` and both ways out. A
+  one-row matrix reads the same at every pitch and is exempt.
+- `to_column_major(row_pitch)` reads at the pitch you state, and throws for a
+  pitch below `cols`, one whose rows run past the end of the allocation, or one
+  that straddles the next batch item.
+- `to_row_major()` reads the source column-major with its own `ld` and `stride`.
+- The copying constructors are column-major: `(ld, stride)` are the *source's*
+  column pitch and batch stride, and the constructor wants
+  `(cols-1)*ld + rows` elements per item.
 
 ### Where the memory has to live: the USM contract
 
@@ -75,13 +513,14 @@ When `ld == rows` the buffer can only be packed row-major, and the row pitch is
 the backend the `Queue` dispatches to.** `MatrixView` takes a bare `T*`, so it
 cannot check this at construction; the entry points that take their backend from
 the queue check every pointer argument at the call and throw
-`std::invalid_argument`. The explicit `f<Backend, T>(...)` spellings do not
-check — they go straight to the backend.
+`std::invalid_argument`.
 
 ```cpp
-std::vector<float> host(n * n * batch);          // compiles fine
-MatrixView<float, MatrixFormat::Dense> A(host.data(), n, n);
-gemm(ctx, A, A, A, GemmOptions<float>{});        // throws std::invalid_argument
+std::vector<float> ha(n * n * batch), hb(n * n * batch), hc(n * n * batch);
+MatrixView<float> A(ha.data(), n, n, n, n * n, batch);
+MatrixView<float> B(hb.data(), n, n, n, n * n, batch);
+MatrixView<float> C(hc.data(), n, n, n, n * n, batch);
+gemm(ctx, A, B, C, GemmOptions<float>{});        // throws std::invalid_argument
 ```
 
 ```
@@ -93,17 +532,23 @@ Use memory the device can reach:
   - let Matrix<T, MatrixFormat::Dense> own it (it allocates USM shared, ...
 ```
 
-`Queue::is_device_accessible(ptr)` asks the same question and returns a `bool`
-instead of throwing. `BATCHLAS_SKIP_POINTER_CHECKS=1` turns the check off for a
-hot loop whose pointers are already validated.
+The check runs on the spellings that take the backend from the queue. The
+`f<Backend, T>(...)` spellings — including the `gesvd`/`ormqr`/`ortho`/`spmm`
+calls and the positional workspace-taking spellings below — go straight to the
+backend, where a host pointer reaches the vendor call and aborts the process.
+Validate those arguments with `Queue::is_device_accessible(ptr)`, which returns
+a `bool` and asks exactly what the checked entry points ask.
+`BATCHLAS_SKIP_POINTER_CHECKS=1` turns the check off for a hot loop whose
+pointers are already validated.
 
 An argument that addresses no elements is exempt, because no kernel can
 dereference it. That covers the empty `Span` a sizing pass hands out, and the
 default-constructed view that means "this optional matrix is not in use":
 
 ```cpp
+SyevxParams<float> params;                     // the last argument of every syevx
 syevx(ctx, A, W, k, ws, JobType::NoEigenVectors,
-      MatrixView<float, MatrixFormat::Dense>(), params);   // fine, not checked
+      MatrixView<float>(), params);            // fine, not checked
 ```
 
 Allocations that work zero-copy on a GPU backend:
@@ -114,8 +559,8 @@ Allocations that work zero-copy on a GPU backend:
 
 Allocations that do **not** work on a GPU backend: `malloc`, `new`,
 `std::vector`, and anything else backed by ordinary host memory. On a host/CPU
-device ordinary host memory *is* what the kernels read, so nothing is rejected
-there — which is why a CPU prototype can pass where the GPU run would throw.
+device that memory *is* what the kernels read and nothing is rejected, so run the
+check on the device you will ship on.
 
 ### Getting host data in
 
@@ -127,9 +572,8 @@ directly. Load it in bulk with the copying constructor:
 std::vector<float> host(size_t(n) * n * batch);   // column-major, packed
 fill_from_wherever(host);
 
-Matrix<float, MatrixFormat::Dense> A(
-    Span<const float>(host.data(), host.size()),
-    n, n, /*ld=*/n, /*stride=*/0, /*batch_size=*/batch);
+Matrix<float> A(Span<const float>(host.data(), host.size()),
+                n, n, /*ld=*/n, /*stride=*/0, /*batch_size=*/batch);
 ```
 
 `(ld, stride)` describe the **source** buffer: element `(i, j, b)` is read from
@@ -143,15 +587,17 @@ Prefer the `Span<const T>` overload over the raw-pointer one,
 `Matrix(const T* data, rows, cols, ld, stride, batch_size)`. The span knows the
 source length, so a shape that would over-read throws `std::invalid_argument`;
 the pointer overload cannot check that. Both throw on null data, non-positive
-dimensions, `ld < rows`, and a batched `stride` smaller than `ld * cols`.
+dimensions, an `ld` that is neither `0` (packed, meaning `rows`) nor at least
+`rows`, and a batched `stride` that is neither `0` (packed, meaning `ld * cols`)
+nor at least `ld * cols`.
 
 If the data is generated rather than read in, skip the host entirely. These run
 on the device and synchronise before returning:
 
 ```cpp
-auto R = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch);
-auto I = Matrix<float, MatrixFormat::Dense>::Identity(n, batch);
-auto Z = Matrix<float, MatrixFormat::Dense>::Zeros(n, n, batch);
+auto R = Matrix<float>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/7);
+auto I = Matrix<float>::Identity(n, batch);
+auto Z = Matrix<float>::Zeros(n, n, batch);
 ```
 
 `Identity`, `Random`, `RandomTriangular`, `Zeros`, `Ones`, `Diagonal`,
@@ -167,17 +613,59 @@ B.view().fill_zeros(ctx);
 
 `fill`, `fill_zeros`, `fill_ones`, `fill_identity`, `fill_diagonal`,
 `fill_triangular`, `fill_tridiag`, `fill_tridiag_toeplitz`, `fill_random` and
-`fill_triangular_random` are in `include/batchlas/blas/matrix.hh`, alongside
+`fill_triangular_random` are in `batchlas/blas/matrix.hh`, alongside
 `fill_random_sparse_hermitian` for CSR. Most have a `(const Queue&, ...)` form
 and a form that builds a queue of its own; `fill_identity` and `fill_tridiag`
 take a queue.
+
+Two more `MatrixView` helpers work on a matrix that already holds one triangle —
+the shape `syrk`, `herk`, `syr2k`, `her2k` and the `uplo`-reading factorisations
+leave behind:
+
+```cpp
+C.view().symmetrize(ctx, Uplo::Lower);   // lower triangle -> upper: C == Cᵀ
+C.view().hermitize(ctx, Uplo::Lower);    // ... conjugated: C == Cᴴ
+```
+
+Both take a square matrix, run one kernel over the batch, and return an `Event`.
+`symmetrize` copies the named triangle across the diagonal, `hermitize` copies
+its conjugate. Use them before handing a one-triangle result to anything that
+reads both halves.
+
+#### `Random` is deterministic
+
+The `seed` parameter of `Random`, `RandomTriangular`, `fill_random` and
+`fill_triangular_random` defaults to **42**, and each element's value is a pure
+function of `(seed, index)` — no entropy, no time, no device state. Two
+default-seeded calls return **bit-identical** matrices:
+
+```cpp
+auto A = Matrix<float>::Random(n, n, false, batch);   // seed 42
+auto B = Matrix<float>::Random(n, n, false, batch);   // seed 42 -> A == B
+```
+
+Pass distinct seeds when you want distinct operands:
+
+```cpp
+auto A = Matrix<float>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1);
+auto B = Matrix<float>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2);
+```
+
+Two more consequences of keying on the index. `Random` keys on the flat index
+over the whole allocation, so the batch items of one matrix differ from each
+other, but two matrices of the same logical shape with different `ld` or `stride`
+get different values at the same `(i, j, b)`. `fill_triangular_random` keys on
+the index *within* a matrix, so every batch item of a `RandomTriangular` result is
+the same matrix.
+
+#### Copying between matrices
 
 To refresh a dense matrix from another one, copy view to view. It lowers to
 `memcpy` or `ext_oneapi_memcpy2d` where the layouts allow it, falls back to a
 3-D kernel where they do not, and is asynchronous:
 
 ```cpp
-MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), src.view());
+MatrixView<float>::copy(ctx, dst.view(), src.view());
 ```
 
 Element access — `A(i, j, b)` on an owning `Matrix`, `V.at(i, j, b)` on a view —
@@ -186,6 +674,56 @@ into managed memory per element. Use it to set or inspect a handful of entries,
 and in tests. Do not use it to load a batch.
 
 `MatrixView` never owns. To own an existing allocation, copy it into a `Matrix`.
+
+### Device-resident operands
+
+`Matrix` owns USM **shared** memory, which is what makes the bulk constructor and
+every `at()`-style access work; the runtime migrates its pages between host and
+device on demand, and a large batch written from the host and then read by many
+kernels pays for that traffic.
+
+For device-resident storage, allocate with `sycl::malloc_device` and wrap it in a
+`MatrixView`, which stores the pointer and copies nothing:
+
+```cpp
+#include <batchlas/sycl_interop.hh>            // this TU needs -fsycl
+
+auto& q = batchlas::sycl_queue(ctx);           // the queue BatchLAS submits on
+const size_t elems = size_t(n) * n * batch;
+
+float* dA = sycl::malloc_device<float>(elems, q);
+float** pA = sycl::malloc_device<float*>(batch, q);   // the batch pointer array
+q.memcpy(dA, host.data(), elems * sizeof(float)).wait();
+
+MatrixView<float> A(dA, n, n, /*ld=*/n, /*stride=*/n * n, batch, /*data_ptrs=*/pA);
+```
+
+Two rules make this work:
+
+- **The allocation must be reachable from the `Queue`'s SYCL context** — which
+  `sycl_queue(ctx).get_context()` is. `sycl::malloc_device`, `malloc_host`,
+  `cudaMalloc` and `cudaMallocManaged` all qualify. See *Interop with CUDA and
+  with your own SYCL*.
+- **Pass the `data_ptrs` array.** A `MatrixView` built from a raw pointer without
+  it has no pointer array, and every batched vendor call that needs one — `potrf`
+  at batch > 1, `getrf`, `getri` — throws
+  `std::runtime_error("data_ptrs target is null")`. It is a `T**` of length
+  `batch_size`, may itself be `malloc_device`, and BatchLAS fills it for you. An
+  owning `Matrix` builds it at construction, so this applies to raw-pointer views
+  only — including views over shared USM.
+
+`gemm` and `syev` do not use the pointer array and run on a raw-pointer view
+without it.
+
+Device memory is not host-addressable, so read results back with `q.memcpy`, and
+initialise the view in place with the `fill_*` family — `fill_random`,
+`fill_identity`, `fill_zeros`, `fill_diagonal` and the rest all take a
+`MatrixView` — rather than an `at()` loop or a `Matrix` factory, which allocates
+its own shared memory.
+
+For a device-memory workspace, pass your own `Span<std::byte>` over a
+`malloc_device` block to the positional spelling; the queue's arena serves shared
+memory.
 
 ### Row-major data: the operand swap
 
@@ -196,16 +734,15 @@ computes the row-major product with no copy and no transpose flags:
 
 ```cpp
 // Row-major A (m x k), B (k x n), C (m x n), packed, in USM at pa/pb/pc.
-MatrixView<float, MatrixFormat::Dense> At(pa, k, m, k);   // = Aᵀ
-MatrixView<float, MatrixFormat::Dense> Bt(pb, n, k, n);   // = Bᵀ
-MatrixView<float, MatrixFormat::Dense> Ct(pc, n, m, n);   // = Cᵀ
-gemm(ctx, Bt, At, Ct, GemmOptions<float>{});              // C = A B, row-major
+MatrixView<float> At(pa, k, m, k);            // = Aᵀ
+MatrixView<float> Bt(pb, n, k, n);            // = Bᵀ
+MatrixView<float> Ct(pc, n, m, n);            // = Cᵀ
+gemm(ctx, Bt, At, Ct, GemmOptions<float>{});  // C = A B, row-major
 ```
 
-This does not generalise. `potrf`, `getrf` and `syev` have no transpose knob; a
-row-major caller of the symmetric routines flips `uplo` instead, since a
-row-major upper triangle is a column-major lower one. A wrong-major result cannot
-be repaired by transposing it afterwards.
+The swap is `gemm`'s. For the symmetric routines, flip `uplo` — a row-major upper
+triangle is a column-major lower one. For everything else, including `potrf`,
+`getrf` and `syev`, convert the data first (see *Row-major source data*).
 
 ### The CSR non-zero count has its own type
 
@@ -214,23 +751,53 @@ format-specific extra, then the batch size — and the CSR non-zero count is
 spelled with the `NonZeros` strong typedef:
 
 ```cpp
-Matrix<float, MatrixFormat::Dense> D(rows, cols, batch_size, ld, stride);
-Matrix<float, MatrixFormat::CSR>   S(rows, cols, NonZeros{nnz}, batch_size);
+Matrix<float> D(rows, cols, batch_size, ld, stride);
+Matrix<float, MatrixFormat::CSR> S(rows, cols, NonZeros{nnz}, batch_size);
 ```
 
-`NonZeros` has an `explicit` constructor and no conversion back to `int`, so an
-all-`int` CSR call selects a deleted overload whose comment names the fix. The
+Spell the count `NonZeros{nnz}`; a bare `int` there does not compile. The
 from-data constructors follow the same order — buffers, shape, `NonZeros{nnz}`,
 strides, batch:
 
 ```cpp
-Matrix<float, MatrixFormat::Dense> D(data, rows, cols, ld, stride, batch_size);
-Matrix<float, MatrixFormat::CSR>   S(values, row_offsets, col_indices,
-                                     rows, cols, NonZeros{nnz},
-                                     matrix_stride, offset_stride, batch_size);
+Matrix<float> D(data, rows, cols, ld, stride, batch_size);
+Matrix<float, MatrixFormat::CSR> S(values, row_offsets, col_indices,
+                                   rows, cols, NonZeros{nnz},
+                                   matrix_stride, offset_stride, batch_size);
 ```
 
 `MatrixView` mirrors both.
+
+## What gets thrown
+
+| exception | thrown for |
+| --- | --- |
+| `std::invalid_argument` | a pointer that is not reachable from the queue's device (from the queue-dispatching entry points); `Matrix`/`MatrixView` construction and slicing — null data, non-positive dimensions, an `ld` that is neither `0` nor at least `rows`, too short a source span, a `to_column_major` row pitch that does not fit or a defaulted one on a matrix that is not packed; shape errors from `gesvd` and the extension routines |
+| `std::runtime_error` | shape and batch-size mismatches from the dense BLAS backends (`"GEMM: incompatible matrix dimensions"`, `"SYMM: batch size mismatch (A=…, B=…, C=…)"`); a backend that is not compiled into this build; a `Queue` used from a thread other than its owner; a raw-pointer view with no `data_ptrs` array |
+| `std::out_of_range` | `V.at(i, j, b)` / `V(i, j, b)` outside the view |
+
+Catch `std::exception` at the boundary; the message names the routine and the
+numbers.
+
+Errors that the device reports asynchronously surface at
+`ctx.wait_and_throw()`, not at the call that enqueued the work.
+
+The backend that runs the call validates the BLAS-2 and BLAS-3 shapes: `gemm`
+checks every batch item, `symm`, `hemm`, `herk`, `her2k`, `syrk`, `syr2k` and
+`trmm` check shapes and batch sizes, and `trsm` checks shapes, `lda` and `ldb`.
+The LAPACK-style calls — `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`,
+`syev` — and `trsm`'s batch sizes reach the vendor call as written, so hold to
+the shapes in *What the operations compute*: `potrf`'s operand square, `getrs`'s
+`B` at the same batch size as its `A`, and so on.
+
+**No factorisation reports per-item numerical status.** `potrf`, `getrf` and
+`geqrf` have no `info` argument and no status output. A batch item that is not
+positive definite, or one whose pivot is zero to working precision, produces
+numbers rather than an exception: `linalg::solve` on a near-singular `A` returns
+a plausible-looking result, and `potrf` on an indefinite one returns a triangle
+of garbage. Nothing in the table above fires. Where the inputs are not known to
+be well-conditioned, check afterwards — compute the residual `‖A·X − B‖`, or
+scan the factor's diagonal for zeros and NaNs — and decide per batch item.
 
 ## Synchronisation and threading
 
@@ -264,6 +831,125 @@ it exclusively there is supported: call `attach_to_current_thread()` from the ne
 owner before its first use, or the guard fires on the first call from the new
 thread.
 
+## The backend comes from the Queue
+
+A `Queue` carries the backend it dispatches to, and every entry point takes it
+from there.
+
+```cpp
+Queue ctx(Device::default_device());                    // AUTO: resolved from the device vendor
+Queue host(Device::default_device(), Backend::NETLIB);  // pinned
+
+ctx.set_backend(Backend::CUDA);                         // or change it later
+Backend b = ctx.backend();                              // the resolved backend
+```
+
+`Backend::AUTO` is resolved once, on first use, and cached; `set_backend` resets
+the cache. On a **GPU** it takes the vendor's own stack if that backend was
+compiled in — NVIDIA → CUDA, AMD → ROCM, Intel → MKL — and otherwise falls back
+to NETLIB, as every non-GPU device does. `set_backend` throws
+`std::runtime_error` if the *named* backend is not compiled into this build; an
+`AUTO` queue throws only when no compiled backend can serve its device at all.
+
+The backends to name are `CUDA`, `ROCM`, `MKL` and `NETLIB`, plus `AUTO`.
+`Backend::MAGMA` and `Backend::SYCL` are unavailable on every build:
+`Queue::backend_available` reports `false`, and naming either in `set_backend`
+or in a `Queue` constructor throws `std::runtime_error`.
+
+To check first:
+
+```cpp
+if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
+```
+
+This applies to the whole surface, extensions included: `ortho`, `syevx`,
+`lanczos`, `steqr`, `stedc`, the `sytrd_*` and `syev_*` family and the rest all
+take their backend from the queue.
+
+### Getting the compile-time backend
+
+Backend selection is a runtime switch over compile-time instantiations, and it
+happens once per call, in `with_backend` (`<batchlas/blas/queue-dispatch.hh>`),
+which you can use directly when you need the backend as a constant:
+
+```cpp
+with_backend(ctx, [&](auto Back) {
+    constexpr Backend Bk = Back.value;
+    gemm<Bk>(ctx, A.view(), B.view(), C.view(), 1.0f, 0.0f,
+             Transpose::NoTrans, Transpose::NoTrans);
+});
+```
+
+Use it rather than hardcoding `Backend::CUDA` in code that has to run on more
+than one backend.
+
+## Workspaces come from the queue's arena
+
+The LAPACK-style entry points need scratch space. Leaving the workspace argument
+out leases it from a per-`Queue` arena, sized by the matching `*_buffer_size`:
+
+```cpp
+potrf(ctx, A.view(), {.uplo = Uplo::Lower});   // workspace leased and returned
+```
+
+The alternative is to size and own the buffer yourself, and pass it in:
+
+```cpp
+with_backend(ctx, [&](auto Back) {
+    constexpr Backend Bk = Back.value;
+    UnifiedVector<std::byte> ws(potrf_buffer_size<Bk, float>(ctx, A.view(), Uplo::Lower));
+    potrf<Bk, float>(ctx, A.view(), Uplo::Lower, ws.to_span());
+    ctx.wait();                                // ws must outlive the kernels
+});
+```
+
+A repeated arena-backed call reuses the same memory rather than malloc/free-ing
+device memory each time. The arena never frees on its own: it grows to the peak
+it has been asked for and holds it, and `ctx.workspace_capacity()` reports the
+current size. To cap it: pass your own span, so capacity stays at 0; destroy the
+`Queue`, and the arena goes with it; or call `ctx.trim_workspace()`, which frees
+the blocks and drops capacity back to nothing. `trim_workspace()` is `[[nodiscard]]` — it returns `false` and does
+nothing while any lease is outstanding — and it drains the queue, so it can
+throw.
+
+You can also lease explicitly:
+
+```cpp
+auto lease = ctx.workspace(n_bytes);
+Span<std::byte> bytes = lease.span();
+// released when `lease` goes out of scope
+```
+
+### When to keep managing the workspace yourself
+
+Passing a span explicitly is the right thing inside an algorithm that is already
+sub-allocating from its own pool:
+
+```cpp
+potrf(ctx, A.view(), {.uplo = Uplo::Lower}, my_span);
+```
+
+**On an out-of-order queue, pass your own span.** A lease's bytes go to the next
+borrower when the call returns. On an in-order queue that borrower's work is
+ordered behind this call's, so the handover is free; on an out-of-order queue
+nothing orders the two, so the release drains the queue and every arena-backed
+call blocks until the device is idle before it returns.
+
+Two rules for leases you hold yourself:
+
+- Call `ws.release()` before reassigning a live lease (`ws = ctx.workspace(...)`),
+  or the new loan is taken before the old one is returned and the arena ratchets
+  instead of reusing.
+- A lease's release orders only against the queue it was taken from. Pass your
+  own span when the work runs on a sibling queue built with `Queue(base, in_order)`.
+
+See `batchlas/util/workspace.hh` for the full lifetime rules.
+
+Do not build a workspace out of a local `UnifiedVector` and let it go out of
+scope before the kernels using it have run — the memory is freed while the device
+may still be reading it. Wait on the queue before it dies, hoist it out of the
+call's scope, or use the arena, whose lifetime is tied to the queue.
+
 ## Interop with CUDA and with your own SYCL
 
 `Queue::native_handle()` returns the backend-native stream as a `void*` — a
@@ -282,8 +968,8 @@ enqueued it. No SYCL types are involved, so this needs no extra include.
 For SYCL-typed interop, include `<batchlas/sycl_interop.hh>`. It is the one
 BatchLAS header that pulls in `<sycl/sycl.hpp>`, and it is not reachable from
 `<batchlas.hh>`. Include it only in the translation units that move a `Queue` or
-an `Event` across the boundary, and do not re-export it from a header of your
-own. It provides:
+an `Event` across the boundary or allocate device memory, and do not re-export it
+from a header of your own. It provides:
 
 ```cpp
 batchlas::sycl_queue(const Queue&)   -> sycl::queue&
@@ -306,202 +992,11 @@ my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
 Both queues must live in the same SYCL context. Memory needs none of this:
 pointers from `cudaMalloc`, `cudaMallocManaged`, `sycl::malloc_device` and
 `sycl::malloc_host` all wrap into `Span`/`MatrixView` zero-copy as long as they
-are reachable from that context.
-
-## The backend comes from the Queue
-
-A `Queue` carries the backend it dispatches to, and every entry point takes it
-from there.
-
-```cpp
-Queue ctx(Device::default_device());                    // AUTO: resolved from the device vendor
-Queue host(Device::default_device(), Backend::NETLIB);  // pinned
-
-ctx.set_backend(Backend::CUDA);                         // or change it later
-Backend b = ctx.backend();                              // the resolved backend
-```
-
-`Backend::AUTO` is resolved once, on first use, and cached; `set_backend` resets
-the cache. On a **GPU** it takes the vendor's own stack if that backend was
-compiled in — NVIDIA → CUDA, AMD → ROCM, Intel → MKL — and otherwise falls back
-to NETLIB, as every non-GPU device does. `set_backend` throws
-`std::runtime_error` if the *named* backend is not compiled into this build; an
-`AUTO` queue throws only when no compiled backend can serve its device at all.
-To check first:
-
-```cpp
-if (Queue::backend_available(Backend::CUDA)) ctx.set_backend(Backend::CUDA);
-```
-
-This applies to the whole surface, extensions included: `ortho`, `syevx`,
-`lanczos`, `steqr`, `stedc`, the `sytrd_*` and `syev_*` family and the rest all
-take their backend from the queue. An entry point whose template parameters
-cannot be deduced from its arguments — `tridiagonal_solver_buffer_size`, whose
-arguments are all scalars — keeps the explicit `f<Backend, T>(...)` spelling.
-
-### Getting the compile-time backend
-
-Backend selection is a runtime switch over compile-time instantiations, and it
-happens once per call, in `with_backend` (`<batchlas/blas/queue-dispatch.hh>`),
-which you can use directly when you need the backend as a constant:
-
-```cpp
-with_backend(ctx, [&](auto Back) {
-    constexpr Backend Bk = Back.value;
-    gemm<Bk>(ctx, A.view(), B.view(), C.view(), 1.0f, 0.0f,
-             Transpose::NoTrans, Transpose::NoTrans);
-});
-```
-
-## Options are structs with defaults
-
-Most entry points take an option struct, so you write only what differs from
-the default. Designated initialisers make the call self-documenting:
-
-```cpp
-UnifiedVector<float>   W(n * batch);        // eigenvalues: the REAL type, even for complex A
-UnifiedVector<int64_t> pivots(n * batch);   // getrf/getrs pivots are int64_t
-
-gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f, .transA = Transpose::Trans});
-syev(ctx, A.view(), W, {.jobz = JobType::NoEigenVectors});
-getrs(ctx, LU.view(), X.view(), pivots, {.trans = Transpose::Trans});
-```
-
-`UnifiedVector<T>` converts implicitly to `Span<T>`, which is what those
-parameters are. `Vector<T>` is a different type — a strided, batched vector — and
-is not what they take.
-
-There is one option struct per entry point that has options, and they all live in
-`include/batchlas/blas/options.hh`: one per dense BLAS routine (`gemm`, `gemv`,
-`symm`, `hemm`, `herk`, `her2k`, `syrk`, `syr2k`, `trmm`, `trsm` — all templated
-on `T`) plus `PotrfOptions`, `GetrsOptions` and `SyevOptions`.
-
-When you pass an empty option struct *together with* an explicit workspace, name
-the type — `potrf(ctx, A.view(), PotrfOptions{}, ws)`. A bare `{}` there is
-ambiguous and the compiler says so.
-
-Three groups of entry points have **no** option struct:
-
-- `getrf`, `getri`, `geqrf` and `orgqr` carry nothing, so they have only the
-  arena-backed spelling: omit the workspace argument and it is leased for you. To
-  manage the workspace yourself, use the positional spelling.
-- `gesvd`, `ormqr`, `ortho` and `spmm` take positional arguments and a required
-  workspace span. To use the arena for them, lease it yourself:
-
-  ```cpp
-  auto ws = ctx.workspace(gesvd_buffer_size<Backend::CUDA, float>(
-                              ctx, A.view(), S, U.view(), Vh.view(),
-                              SvdVectors::All, SvdVectors::All));
-  gesvd<Backend::CUDA, float>(ctx, A.view(), S, U.view(), Vh.view(),
-                              SvdVectors::All, SvdVectors::All, ws.span());
-  ```
-
-  Wrap that in `with_backend` rather than hardcoding `Backend::CUDA` if the code
-  has to run on more than one backend. The explicit `f<Backend, T>(...)` spelling
-  does not check its pointer arguments, so a host pointer reaches the vendor call
-  instead of throwing.
-
-- Entry points whose template parameters cannot be deduced from their arguments
-  keep the explicit `f<Backend, T>(...)` form; see *The backend comes from the
-  Queue*.
-
-`T` is deduced from the matrix arguments, never from the option struct. Two
-consequences:
-
-- **You cannot name `T` on an option-struct call.** `syev<B, float>(ctx, ...)`
-  works on the positional spelling but not the option one, where the second
-  template parameter is the matrix type. Write `syev<B>(ctx, ...)` and let `T`
-  deduce, or use the positional spelling.
-- **`Matrix` and `MatrixView` are both accepted**, and may be mixed freely.
-  Elsewhere in the library, an entry point whose parameter is a `MatrixView<T>`
-  cannot deduce `T` from an owning `Matrix<T>`, so those calls need an explicit
-  `.view()`; `Vector` has a `.view()` for the same reason. The `Span`-valued
-  parameters — eigenvalues, singular values, `tau`, pivots — take a
-  `UnifiedVector<T>`, which converts implicitly, not a `Vector<T>`.
-
-## Workspaces come from the queue's arena
-
-The LAPACK-style entry points need scratch space. Leaving the workspace argument
-out leases it from a per-`Queue` arena, sized by the matching `*_buffer_size`:
-
-```cpp
-potrf(ctx, A.view(), {.uplo = Uplo::Lower});   // workspace leased and returned
-```
-
-The alternative is to size and own the buffer yourself, and pass it in:
-
-```cpp
-UnifiedVector<std::byte> ws(potrf_buffer_size<Backend::CUDA, float>(ctx, A.view(), Uplo::Lower));
-potrf<Backend::CUDA, float>(ctx, A.view(), Uplo::Lower, ws.to_span());
-ctx.wait();                                    // ws must outlive the kernels
-```
-
-This spelling names its backend, so it does not check its pointer arguments
-either.
-
-A repeated arena-backed call reuses the same memory rather than malloc/free-ing
-device memory each time. The arena never frees on its own: it grows and holds,
-and `ctx.workspace_capacity()` reports its current size.
-
-It grows by appending. The arena serves from a list of blocks and never replaces
-one: a request that does not fit in the current block opens a new one,
-geometrically sized. Repeated same-size calls and a descending sequence of sizes
-settle at the peak; an ascending ramp that keeps outgrowing the current block
-(128 KB → 256 KB → 512 KB) retains the **sum** of the blocks it opened — always
-under twice the largest block, which is itself up to twice the largest single
-request. Blocks are never smaller than 64 KB, so a ramp that stays under that
-never opens a second one. Three
-ways to control it, cheapest first: pass your own span, so capacity stays at 0;
-destroy the `Queue`, and the arena goes with it; or call `ctx.trim_workspace()`,
-which frees the blocks and drops capacity back to nothing. `trim_workspace()` is
-`[[nodiscard]]` — it returns `false` and does nothing while any lease is
-outstanding — and it drains the queue, so it can throw.
-
-You can also lease explicitly:
-
-```cpp
-auto lease = ctx.workspace(n_bytes);
-Span<std::byte> bytes = lease.span();
-// released when `lease` goes out of scope
-```
-
-### When to keep managing the workspace yourself
-
-Passing a span explicitly is the right thing inside an algorithm that is already
-sub-allocating from its own pool:
-
-```cpp
-potrf(ctx, A.view(), {.uplo = Uplo::Lower}, my_span);
-```
-
-It is also what keeps an arena-backed call asynchronous on an **out-of-order**
-queue. A lease is released when the call returns, and the bytes go to the next
-borrower rather than being freed. On an in-order queue — the default, and what
-`Queue(device)` gives you — the next borrower's work is ordered behind this
-call's, so the handover is safe and free. On an out-of-order queue nothing orders
-the two, so the release drains the queue before handing the bytes back: every
-arena-backed call blocks until the device is idle before it returns. If you chose
-an out-of-order queue in order to overlap work, pass your own span.
-
-Two things the drain does not cover:
-
-- It waits on the queue the lease was taken from, and nothing else. A lease
-  released on queue X does not order against work submitted to a queue built
-  from it with `Queue(X, in_order)`.
-- Reassigning a live lease (`ws = ctx.workspace(bigger);`) acquires the new loan
-  before releasing the old one, so in a loop the arena ratchets instead of
-  reusing. Call `ws.release()` first if that matters.
-
-See `include/batchlas/util/workspace.hh` for the full lifetime rules.
-
-Do not build a workspace out of a local `UnifiedVector` and let it go out of
-scope before the kernels using it have run — the memory is freed while the device
-may still be reading it. Wait on the queue before it dies, hoist it out of the
-call's scope, or use the arena, whose lifetime is tied to the queue.
+are reachable from that context. See *Device-resident operands*.
 
 ## The `linalg` convenience layer
 
-`batchlas::linalg` (`include/batchlas/blas/linalg-ops.hh`) offers value-returning
+`batchlas::linalg` (`batchlas/blas/linalg-ops.hh`) offers value-returning
 and elementwise operations. Free functions only; there are no operator overloads.
 Each takes its backend from the queue and its workspace from the arena.
 
@@ -525,8 +1020,8 @@ Elementwise arithmetic:
 auto S = linalg::add(ctx, A.view(), B.view());
 auto P = linalg::multiply(ctx, A.view(), B.view());   // Hadamard, NOT matmul
 auto K = linalg::scaled(ctx, A.view(), 2.0f);         // returns a scaled copy
-linalg::scale<float>(ctx, A.view(), 2.0f);            // in place
-linalg::axpby_into<float>(ctx, 2.0f, A.view(), 3.0f, B.view(), C.view());
+linalg::scale(ctx, A.view(), 2.0f);                   // in place
+linalg::axpby_into(ctx, 2.0f, A.view(), 3.0f, B.view(), C.view());
 ```
 
 `add`, `subtract`, `multiply`, `divide` and `scaled` allocate their result.
@@ -542,8 +1037,6 @@ Two behaviours to watch:
   allocated.
 - `multiply` is elementwise (Hadamard). Use `matmul` for the matrix product. For
   square operands both readings are shape-valid.
-
-For QR, use `geqrf` and `orgqr` from the main surface.
 
 ---
 
