@@ -29,20 +29,57 @@ critique, and each superseding the sketch in §5 of this document):
 | WP0 S1 | per-library probes, `BATCHLAS_HAS_<LIB>` in the generated header | configure clean; build exit 0; 7/7 smoke |
 | WP0 S2a | vendor *includes* keyed on library, not family | `-DBATCHLAS_ENABLE_CUBLAS=OFF` ⇒ 0 cuBLAS/cuSOLVER includes, vs 2 in the normal build |
 | WP0 S3 | each vendor TU gated on the library it calls | identical 17-TU object set to baseline; `gemm`/`symm`/`syrk`/`trmm`/`backend_dispatch` tests pass |
+| WP0 S2b | vendor *types and handles* keyed on the library axis | `ortho.cc` compiles clean with `-DBATCHLAS_ENABLE_CUBLAS=OFF`, where it previously produced 20+ errors |
+| WP0 S4a | the `Route` vocabulary (`Origin` × `Algorithm`) and the legacy env alias table, added additively | 17 new tests pinning every legacy spelling |
+| WP0 S4b | GEMM's three-way split: env read / `supports` / `preferred` | route diff vs a transcribed replica over 10 env spellings × ~2,300 shapes × 4 scalar types; `ReplicaIsFaithful` guards the transcription |
+| WP0 S4c | `gemm_use_sycl_custom` becomes an adapter over `resolve_gemm_route` — GEMM is wired | 6 typed adapter tests over live `MatrixView`s; full build; `ctest -LE slow` 52/53 |
+| WP0 S4d | `ormqr` onto `Route` | 2 regression tests; full build; `ctest -LE slow` 52/53 |
+| WP0 S4e | `gesvd` onto `Route`; the wide-band rule becomes `preferred` | translated routing test asserts both the default *and* that Jacobi still `supports` the shape |
+| WP0 S4f | `syev` onto `Route`; `provider.hh`/`env.hh`/`context.hh` deleted | full `ctest` 56/58 — both failures reproduced with the change reverted |
+| WP0 S4g | the four level-3 dispatchers onto `Route`; the last env parser deleted | 30 (variable, value) pairs swept before and after: byte-identical failure sets |
 
-The milestone those four steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
+The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
 CUDA math libraries**, a state the old scheme could not express at all. It does not yet
 *link*, and cannot until the public op definitions leave the vendor TUs (`WP0_DISPATCH_SPEC.md`
 step S5).
 
-**Not implemented:** WP0 steps S2b and S4–S8, the rest of WP1, and all of WP2–WP4.
-Two cautions for whoever continues. First, S5 must move each op's definition atomically
-across every vendor TU, and `rocblas.cc`/`rocsolver.cc`/`rocsparse.cc` **cannot be compiled
-on this machine** — that is the WP0 spec's own top-ranked risk. Second, S4's split of
-`gemm_use_sycl_custom` into env-read / `supports` / `preferred` is specified exactly in that
-document because getting it wrong silently changes the default route of the hottest op; its
-acceptance test is a diff of the *chosen route*, not the timing.
+### What S4 turned up
+
+The split was specified because getting it wrong silently changes the default route of the
+hottest op. It also found four real defects, none visible by reading:
+
+1. **The order-walk fallback inverted GEMM's default.** Taking "the first merely supported
+   route" picks Native, because the order lists it first — moving an 8×8×8 batch-1 GEMM from
+   vendor to native.
+2. **`BATCHLAS_GEMM_VARIANT=native` means the opposite of canonical `native`.** It is
+   `gemm_variant.hh`'s alias for `cuda-native`/`direct-cuda` — the raw CUDA path — consumed
+   purely as an *exclusion*. Routing it through the generic parser flips GEMM from vendor to
+   native for anyone who had set it.
+3. **`ormqr`'s buffer size and call disagreed by 108×.** `cta`, `two_stage` and `jacobi` all
+   parse but match no branch, so `ormqr_dispatch` ran on the vendor while `ormqr_buffer_size`
+   returned the *blocked* size — 2560 bytes against the 276480 the call then demanded. Sizing
+   a workspace with the public API and passing it to the public call threw, deterministically,
+   on every GPU type.
+4. **`{Vendor, FusedDevice}` satisfies `is_vendor`, but is not "the plain vendor call".** The
+   level-3 dispatchers' `request == Vendor` tests meant `cublasSsyrk` specifically; rendering
+   them as `is_vendor()` makes a forced cuBLASDx request answer yes. `is_plain_vendor` now
+   names the distinction.
+
+Defects 1, 3 and 4 are the same shape as `Provider` itself: two different questions sharing
+one value, so checking one looks like checking the other. Defect 2 is the vocabulary
+collision the user flagged at the outset, and it recurred twice more — `custom` means the
+fused cuBLASDx kernel in the level-3 ops but the register-tiled GEMM family in GEMM.
+
+**Not implemented:** WP0 steps S5–S8, the rest of WP1, and all of WP2–WP4.
+
+One caution for whoever continues: S5 must move each op's definition atomically across every
+vendor TU, and `rocblas.cc`/`rocsolver.cc`/`rocsparse.cc` **cannot be compiled on this
+machine** — that is the WP0 spec's own top-ranked risk, and it is now the next step.
+
+Two failures are present in the suite and are **not** from this work — both were reproduced
+by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`
+(4 cases, all host-backend, 3 of them double, matching the known bad OpenBLAS kernel).
 
 ---
 
