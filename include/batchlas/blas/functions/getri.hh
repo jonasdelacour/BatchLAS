@@ -22,6 +22,22 @@ using getri = Event(Queue&,
 template <typename T>
 using getri_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&);
+
+// backend::getri_vendor's signature, spelled out from the definition rather than
+// aliased to sig::getri: a vendor parameter list can differ from the public one.
+template <typename T>
+using getri_vendor = Event(Queue&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           Span<int64_t>,
+                           Span<std::byte>,
+                           Span<int32_t>);
+
+// backend::getri_vendor_buffer_size's signature, spelled out from the definition rather than
+// aliased to sig::getri_buffer_size: a vendor parameter list can differ from the public one.
+template <typename T>
+using getri_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
 
@@ -86,6 +102,31 @@ inline size_t getri_buffer_size(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for getri.
+//
+// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
+// `getri` used to be defined inside each vendor TU, so dropping a vendor library
+// dropped the public entry point with it; WP0 S5 moves that definition to
+// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// implementation here, named as such.
+template <Backend B, typename T>
+Event getri_vendor(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   const MatrixView<T, MatrixFormat::Dense>& C,
+                   Span<int64_t> pivots,
+                   Span<std::byte> work_space,
+                   Span<int32_t> info_out);
+
+
+template <Backend B, typename T>
+size_t getri_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

@@ -21,8 +21,10 @@ namespace batchlas {
         #pragma message("cuSOLVER X API is not available, using legacy API be wary batches of matrices larger than 128x128")
     #endif
 
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t potrf_buffer_size(Queue& ctx,
+    size_t potrf_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T,MatrixFormat::Dense>& A,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
@@ -38,8 +40,12 @@ namespace batchlas {
         return size;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event potrf(Queue& ctx,
+    Event potrf_vendor(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace,
@@ -60,6 +66,8 @@ namespace batchlas {
         }
         return ctx.create_event_after_external_work();
     }
+
+    } // namespace backend
 
     namespace backend {
         template <Backend B, typename T>
@@ -489,7 +497,7 @@ namespace batchlas {
     } // namespace backend
 
     #define POTRF_INSTANTIATE(fp) \
-    template Event potrf<Backend::CUDA, fp>( \
+    template Event backend::potrf_vendor<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo, \
@@ -497,7 +505,7 @@ namespace batchlas {
         Span<int32_t>);
     
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t potrf_buffer_size<Backend::CUDA, fp>( \
+    template size_t backend::potrf_vendor_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo);

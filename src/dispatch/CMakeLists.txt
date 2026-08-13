@@ -10,4 +10,5 @@
 # each TU by the per-library BATCHLAS_HAS_* macros.
 target_sources(batchlas_dispatch_obj PRIVATE
     entry_points/level3.cc
+    entry_points/factorization.cc
 )

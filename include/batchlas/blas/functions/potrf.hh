@@ -22,6 +22,22 @@ template <typename T>
 using potrf_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Uplo);
+
+// backend::potrf_vendor's signature, spelled out from the definition rather than
+// aliased to sig::potrf: a vendor parameter list can differ from the public one.
+template <typename T>
+using potrf_vendor = Event(Queue&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           Uplo,
+                           Span<std::byte>,
+                           Span<int32_t>);
+
+// backend::potrf_vendor_buffer_size's signature, spelled out from the definition rather than
+// aliased to sig::potrf_buffer_size: a vendor parameter list can differ from the public one.
+template <typename T>
+using potrf_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        Uplo);
 }  // namespace sig
 
 
@@ -86,6 +102,31 @@ inline Event potrf(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for potrf.
+//
+// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
+// `potrf` used to be defined inside each vendor TU, so dropping a vendor library
+// dropped the public entry point with it; WP0 S5 moves that definition to
+// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// implementation here, named as such.
+template <Backend B, typename T>
+Event potrf_vendor(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& descrA,
+                   Uplo uplo,
+                   Span<std::byte> workspace,
+                   Span<int32_t> info_out);
+
+
+template <Backend B, typename T>
+size_t potrf_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<T,MatrixFormat::Dense>& A,
+                                Uplo uplo);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

@@ -20,6 +20,21 @@ template <typename T>
 using orgqr_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Span<T>);
+
+// backend::orgqr_vendor's signature, spelled out from the definition rather than
+// aliased to sig::orgqr: a vendor parameter list can differ from the public one.
+template <typename T>
+using orgqr_vendor = Event(Queue&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           Span<T>,
+                           Span<std::byte>);
+
+// backend::orgqr_vendor_buffer_size's signature, spelled out from the definition rather than
+// aliased to sig::orgqr_buffer_size: a vendor parameter list can differ from the public one.
+template <typename T>
+using orgqr_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        Span<T>);
 }  // namespace sig
 
 
@@ -50,6 +65,30 @@ inline size_t orgqr_buffer_size(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for orgqr.
+//
+// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
+// `orgqr` used to be defined inside each vendor TU, so dropping a vendor library
+// dropped the public entry point with it; WP0 S5 moves that definition to
+// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// implementation here, named as such.
+template <Backend B, typename T>
+Event orgqr_vendor(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   Span<T> tau,
+                   Span<std::byte> workspace);
+
+
+template <Backend B, typename T>
+size_t orgqr_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                Span<T> tau);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 
