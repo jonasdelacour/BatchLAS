@@ -42,6 +42,7 @@ critique, and each superseding the sketch in §5 of this document):
 | WP0 S5b | the other nine level-3 entry points | `scripts/facade_symbol_check.sh` 10/10; ROCm check caught a bad `trsm` instantiation |
 | WP0 S5c | the twelve factorization entry points (each with its buffer-size query) | signature divergence surveyed *first*; build clean first attempt; ctest 56/58 |
 | WP0 S5d | `spmm`, and `syev`/`ormqr`'s instantiations | ROCm check caught 4 orphaned lines invisible to the CUDA build |
+| WP0 S6 | the vendor-free build **configures, links, loads and runs** | `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`: build exit 0, ctest 20/53 with `NoRouteError` diagnostics; vendor-present ctest unchanged at 56/58 |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -104,11 +105,41 @@ That is now fixed for all 21 entry points. Three things are worth recording.
 Verification is by **symbol**, not by diff (`scripts/facade_symbol_check.sh`): a forwarder
 left behind, or an instantiation aimed at the wrong template, still compiles and links.
 
-**Not implemented:** WP0 steps S6–S8, the rest of WP1, and all of WP2–WP4.
+### M1 reached, and what it does and does not mean
 
-Next is S6, which puts route resolution between the facade and the vendor call. Only then
-can a backend be instantiated with no vendor behind it, which is what a vendor-free build
-needs to *link*.
+`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` now yields `BATCHLAS_HAS_CUDA_BACKEND 1` with every
+CUDA math library at 0 — a CUDA device with no CUDA math libraries — and **that build
+compiles, links, loads and runs**. The pre-WP0 scheme could not express that state, let
+alone link it.
+
+It is **not green**: `ctest -LE slow` passes 20 of 53. That is the expected and honest
+outcome, and no dispatch mechanism could improve it — the gap is missing *kernels*, not
+missing routing. The failing set is recorded in `VENDOR_FREE_BASELINE.md` as the WP1–WP8
+burn-down baseline, so any change to it is a reviewable diff. Failures are `NoRouteError`
+naming the op, the scalar type and the switch that would restore it — not crashes, and
+not link errors.
+
+S6 also declined the spec's design. It proposes seven `src/dispatch/absent/*.cc` stub TUs
+defining a throwing `backend::<op>_vendor` for every absent library; that restates all 26
+vendor signatures a second time, and S5b's two real bugs were both signature divergence
+between restated copies. An `if constexpr` in the facade is the same gate with no
+signature duplicated: the vendor call is not compiled at all when the library is absent,
+so there is no symbol to satisfy.
+
+Building it turned up **four more family-vs-library guards** of exactly the kind S2 was
+written to remove — in `linalg-impl.hh`'s host arms, `backend_handle_impl.hh`'s cuSPARSE
+descriptors, and three test files — plus **nineteen call sites in extensions, tests and
+benchmarks that reached `backend::*_vendor` directly**, bypassing the public entry point
+and therefore every gate. None of these was findable without actually building without a
+vendor.
+
+**Not implemented:** WP0 steps S7–S8, the rest of WP1, and all of WP2–WP4.
+
+Next is S7 (the coverage instrument, which turns the burn-down list into a per-shape
+table) and S8 (retiring the four `B == Backend::CUDA` sites that mean "our kernel is wired
+here"). After that, WP1 — routing the four level-3 tile routes' terminal `*_vendor_cuda_raw`
+call through the public `gemm` entry point — should remove four suites from the baseline on
+its own.
 
 Two failures are present in the suite and are **not** from this work — both were reproduced
 by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`
