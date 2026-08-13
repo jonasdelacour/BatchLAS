@@ -54,6 +54,20 @@ Two of those — `lanczos_tests` and part of `steqr_tests` — fail in the
 vendor-PRESENT build too, for reasons unrelated to this work; see
 `VENDOR_INDEPENDENCE_PLAN.md`.
 
+## The same gap, per op
+
+`cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose
+`linked` rows answer this exactly and without running anything:
+
+| native kernel linked | ops |
+|---|---|
+| yes | `gemm`, `ormqr`, `syev`, `gesvd` |
+| **no** | `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `herk`, `her2k`, `geqrf`, `orgqr`, `getrf`, `getrs`, `getri`, `potrf`, `spmm` |
+
+`miss` rows add what a run actually reached, e.g.
+
+    miss,getri,float,CUDA,,,,,,,,1,0,0,cuBLAS
+
 ## Why so many, and what closes them
 
 The count is dominated by transitive dependence rather than by breadth of

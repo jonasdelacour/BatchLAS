@@ -43,6 +43,8 @@ critique, and each superseding the sketch in §5 of this document):
 | WP0 S5c | the twelve factorization entry points (each with its buffer-size query) | signature divergence surveyed *first*; build clean first attempt; ctest 56/58 |
 | WP0 S5d | `spmm`, and `syev`/`ormqr`'s instantiations | ROCm check caught 4 orphaned lines invisible to the CUDA build |
 | WP0 S6 | the vendor-free build **configures, links, loads and runs** | `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`: build exit 0, ctest 20/53 with `NoRouteError` diagnostics; vendor-present ctest unchanged at 56/58 |
+| WP0 S7 | the coverage instrument (`batchlas_coverage`) | static table names the 16 ops with no native kernel; `miss` rows verified against a known gap |
+| WP0 S8 | six sites stop using the `Backend` enum to mean something else | vendor-present ctest 56/58 and vendor-free 20/53, both unchanged — no site silently flipped |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -133,13 +135,39 @@ benchmarks that reached `backend::*_vendor` directly**, bypassing the public ent
 and therefore every gate. None of these was findable without actually building without a
 vendor.
 
-**Not implemented:** WP0 steps S7–S8, the rest of WP1, and all of WP2–WP4.
+### WP0 is complete
 
-Next is S7 (the coverage instrument, which turns the burn-down list into a per-shape
-table) and S8 (retiring the four `B == Backend::CUDA` sites that mean "our kernel is wired
-here"). After that, WP1 — routing the four level-3 tile routes' terminal `*_vendor_cuda_raw`
-call through the public `gemm` entry point — should remove four suites from the baseline on
-its own.
+S7 turns the burn-down from a list of failing *suites* into a list of missing *ops*, which
+is the difference between "33 suites fail" and this, from the vendor-free CUDA build:
+
+| native kernel linked | ops |
+|---|---|
+| yes | `gemm` (register-tiled), `ormqr` (blocked), `syev` (cta/blocked/two-stage), `gesvd` (jacobi/cta/blocked) |
+| **no** | `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `herk`, `her2k`, `geqrf`, `orgqr`, `getrf`, `getrs`, `getri`, `potrf`, `spmm` |
+
+Four of those sixteen — `trmm`, `symm`, `syrk`, `syr2k` — already *have* portable SYCL tile
+kernels; they are simply compiled only alongside cuBLAS, because their dispatch still ends
+in `*_vendor_cuda_raw`. That is WP1, and it should move four rows without writing a kernel.
+
+S8 removed the last places where the `Backend` enum stood in for something else. Three sites
+used `B == Backend::CUDA` to mean "the tile kernel is wired on this route" — one of them
+said so in its own comment while the code said otherwise — and two used
+`B == Backend::NETLIB` to mean "this is a host device". Both questions are now asked
+directly. This matters beyond tidiness: in the vendor-free build the backend is *still*
+`Backend::CUDA` while the tile TUs are absent, so all three sites would have claimed a
+kernel that is not linked.
+
+Deliberately left alone: `syev.hh`'s measured-grid guard, which the spec also lists.
+`s.backend == Backend::CUDA` there is measurement *provenance*, not wiring — the routes are
+compiled elsewhere, they have simply not been measured there. Rewriting it as
+`route_compiled` would assert something false; changing it needs a measurement.
+
+**Not implemented:** the rest of WP1, and all of WP2–WP4.
+
+Next is WP1: routing the four level-3 tile routes' terminal `*_vendor_cuda_raw` call
+through the public `gemm` entry point. That frees `{symm,syrk,syr2k,trmm}_custom_dispatch.cc`
+from cuBLAS, flips `dispatch::level3_tile_kernels_compiled` true for every backend, and
+should move four ops out of the "no native kernel" column without writing a kernel.
 
 Two failures are present in the suite and are **not** from this work — both were reproduced
 by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`
