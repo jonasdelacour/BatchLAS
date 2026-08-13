@@ -37,6 +37,11 @@ critique, and each superseding the sketch in §5 of this document):
 | WP0 S4e | `gesvd` onto `Route`; the wide-band rule becomes `preferred` | translated routing test asserts both the default *and* that Jacobi still `supports` the shape |
 | WP0 S4f | `syev` onto `Route`; `provider.hh`/`env.hh`/`context.hh` deleted | full `ctest` 56/58 — both failures reproduced with the change reverted |
 | WP0 S4g | the four level-3 dispatchers onto `Route`; the last env parser deleted | 30 (variable, value) pairs swept before and after: byte-identical failure sets |
+| WP0 S5 prep | `scripts/rocm_syntax_check.sh` — the ROCm TUs are checkable after all | all three PASS; a deliberately undeclared symbol makes it FAIL |
+| WP0 S5a | `gemm`'s public definition leaves the vendor TUs; `mkl.cc` deleted | symbol check: absent from the cuBLAS component, present in the facade |
+| WP0 S5b | the other nine level-3 entry points | `scripts/facade_symbol_check.sh` 10/10; ROCm check caught a bad `trsm` instantiation |
+| WP0 S5c | the twelve factorization entry points (each with its buffer-size query) | signature divergence surveyed *first*; build clean first attempt; ctest 56/58 |
+| WP0 S5d | `spmm`, and `syev`/`ormqr`'s instantiations | ROCm check caught 4 orphaned lines invisible to the CUDA build |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -71,11 +76,39 @@ one value, so checking one looks like checking the other. Defect 2 is the vocabu
 collision the user flagged at the outset, and it recurred twice more — `custom` means the
 fused cuBLASDx kernel in the level-3 ops but the register-tiled GEMM family in GEMM.
 
-**Not implemented:** WP0 steps S5–S8, the rest of WP1, and all of WP2–WP4.
+### What S5 turned up
 
-One caution for whoever continues: S5 must move each op's definition atomically across every
-vendor TU, and `rocblas.cc`/`rocsolver.cc`/`rocsparse.cc` **cannot be compiled on this
-machine** — that is the WP0 spec's own top-ranked risk, and it is now the next step.
+The facade move is the step the plan called *the* obstacle: `gemm<Backend::CUDA, float>`
+was **defined** at `cublas.cc:1568`, so dropping cuBLAS dropped `batchlas::gemm` itself.
+That is now fixed for all 21 entry points. Three things are worth recording.
+
+1. **The spec's top-ranked risk was answerable here.** It says `rocblas.cc`/`rocsolver.cc`/
+   `rocsparse.cc` "cannot be compiled on this machine" and proposes a container CI job.
+   `/opt/rocm-6.2.4` has all three vendor headers, under `include/roc*/roc*.h` — a
+   subdirectory, which is why they read as absent. `scripts/rocm_syntax_check.sh` gates on
+   "exactly one expected error" (a `get_native<ext_oneapi_hip>` overload this CUDA-only
+   DPC++ lacks). **It then caught two real defects that nothing else could see:** a `trsm`
+   instantiation left in the old parameter order, and four orphaned macro-continuation
+   lines. Both were in files the normal build never compiles.
+2. **Divergence between vendor TUs was invisible until one declaration served them all.**
+   `trsm`'s vendor form takes `alpha` last while the public form takes it third;
+   `symm`/`syrk`/`syr2k` were `RealScalar`-constrained everywhere except cuBLAS. Generating
+   the facade bodies from the public declarations — the obvious approach — would have
+   silently passed `alpha` where `side` was expected on every backend. The bodies are
+   therefore lifted verbatim from the forwarders being deleted.
+3. **An instantiation binds as hard as a definition.** `syev` and `ormqr` were already
+   defined in headers, so it looked like there was nothing to move. Their *instantiations*
+   were in `cusolver.cc`/`cublas.cc`, which is enough to make them vanish from a build
+   without those libraries.
+
+Verification is by **symbol**, not by diff (`scripts/facade_symbol_check.sh`): a forwarder
+left behind, or an instantiation aimed at the wrong template, still compiles and links.
+
+**Not implemented:** WP0 steps S6–S8, the rest of WP1, and all of WP2–WP4.
+
+Next is S6, which puts route resolution between the facade and the vendor call. Only then
+can a backend be instantiated with no vendor behind it, which is what a vendor-free build
+needs to *link*.
 
 Two failures are present in the suite and are **not** from this work — both were reproduced
 by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`
