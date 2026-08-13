@@ -14,9 +14,9 @@
 
 #include <batchlas/internal/ormqr_blocked.hh>
 
-#include <batchlas/blas/dispatch/context.hh>
-#include <batchlas/blas/dispatch/env.hh>
-#include <batchlas/blas/dispatch/provider.hh>
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/blas/dispatch/route_ormqr.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {
@@ -139,39 +139,42 @@ namespace batchlas::blas::dispatch {
 
 namespace detail {
 
-inline Provider normalize_ormqr_vendor_like(Provider p) {
-    if (p == Provider::Netlib) return Provider::Vendor;
-    return p;
+// The routing inputs, in one place so the call and its buffer-size query cannot
+// build different ones. `side` is not read: ormqr_supports_blocked ignored it
+// too, and it is carried only so the shape describes the call faithfully.
+template <typename T>
+inline batchlas::dispatch::OpShape ormqr_op_shape(const Queue& ctx,
+                                                  const MatrixView<T, MatrixFormat::Dense>& A,
+                                                  Side side,
+                                                  Transpose trans) {
+    batchlas::dispatch::OpShape s;
+    s.op = batchlas::dispatch::Op::ormqr;
+    s.scalar = batchlas::dispatch::scalar_kind_of<T>;
+    s.m = A.rows();
+    s.n = A.cols();
+    s.k = std::min(A.rows(), A.cols());
+    s.batch = A.batch_size();
+    s.side = side;
+    s.transA = trans;
+    s.is_gpu = ctx.device().type == DeviceType::GPU;
+    return s;
 }
 
+// One resolution per call, shared by ormqr_dispatch and its buffer-size query.
+//
+// This replaces choose_ormqr_provider, which returned a forced provider without
+// checking it against ormqr_supports_blocked -- see route_ormqr.hh for the two
+// defects that followed. The unset default for ormqr is Auto, unlike GEMM's
+// Vendor.
 template <typename T>
-inline bool ormqr_supports_blocked(const DeviceCaps& caps,
-                                  Side /*side*/,
-                                  Transpose trans) {
-    if (!caps.is_gpu) return false;
-
-    if constexpr (is_std_complex_v<T>) {
-        if (trans == Transpose::Trans) return false;
-    }
-
-    return true;
-}
-
-template <typename T>
-inline Provider choose_ormqr_provider(const DispatchPolicy& policy,
-                                     const DeviceCaps& caps,
-                                     Side side,
-                                     Transpose trans) {
-    Provider chosen = normalize_ormqr_vendor_like(policy.forced);
-    if (chosen != Provider::Auto) return chosen;
-
-    for (Provider p : policy.order) {
-        p = normalize_ormqr_vendor_like(p);
-        if (p == Provider::BatchLAS_Blocked && ormqr_supports_blocked<T>(caps, side, trans)) return p;
-        if (p == Provider::Vendor) return Provider::Vendor;
-    }
-
-    return Provider::Vendor;
+inline batchlas::dispatch::Route ormqr_route(const Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             Side side,
+                                             Transpose trans) {
+    namespace d = batchlas::dispatch;
+    const auto parsed = d::parse_route_env(d::Op::ormqr);
+    const d::Route forced = parsed.found ? parsed.route : d::legacy_unset_default(d::Op::ormqr);
+    return d::resolve_ormqr_route<T>(forced, ormqr_op_shape<T>(ctx, A, side, trans));
 }
 
 // Resolve the WY block width used by the blocked provider.
@@ -202,21 +205,17 @@ inline Event ormqr_dispatch(Queue& ctx,
                            Span<T> tau,
                            Span<std::byte> workspace,
                            int32_t block_size_hint = 0) {
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("ORMQR");
-    Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
+    const batchlas::dispatch::Route chosen = detail::ormqr_route<T>(ctx, A, side, trans);
+    const bool use_vendor = batchlas::dispatch::is_vendor(chosen);
 
     const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
 
-    size_t need_ws = 0;
-    if (chosen == Provider::Vendor) {
-        need_ws = backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau);
-    } else if (chosen == Provider::BatchLAS_Blocked) {
-        need_ws = ormqr_blocked_buffer_size<B, T>(ctx, A, C, side, trans, tau, block_size);
-    } else {
-        chosen = Provider::Vendor;
-        need_ws = backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau);
-    }
+    // No third arm. The resolver returns either a vendor route or a supported
+    // native one, so the old `else { chosen = Vendor; ... }` branch -- the one
+    // that disagreed with ormqr_buffer_size -- has nothing left to catch.
+    const size_t need_ws = use_vendor
+        ? backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau)
+        : ormqr_blocked_buffer_size<B, T>(ctx, A, C, side, trans, tau, block_size);
 
     if (workspace.size() < need_ws) {
         throw std::invalid_argument("ormqr: insufficient workspace for chosen provider");
@@ -238,7 +237,7 @@ inline Event ormqr_dispatch(Queue& ctx,
     }
 
     Event e;
-    if (chosen == Provider::Vendor) {
+    if (use_vendor) {
         e = backend::ormqr_vendor<B, T>(*run_q, A, C, side, trans, tau, workspace);
     } else {
         e = ormqr_blocked<B, T>(*run_q, A, C, side, trans, tau, workspace, block_size);
@@ -255,13 +254,17 @@ inline size_t ormqr_buffer_size_dispatch(Queue& ctx,
                                         Transpose trans,
                                         Span<T> tau,
                                         int32_t block_size_hint = 0) {
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("ORMQR");
-    const Provider chosen = detail::choose_ormqr_provider<T>(policy, caps, side, trans);
+    // The SAME resolution ormqr_dispatch performs, from the same pure inputs.
+    // Previously these two disagreed: a forced provider that was neither Vendor
+    // nor Blocked reached ormqr_dispatch's `else` arm and ran on the vendor,
+    // while this function fell past its single `if` and returned the BLOCKED
+    // size -- so sizing a workspace here and passing it there could throw
+    // "insufficient workspace for chosen provider".
+    const batchlas::dispatch::Route chosen = detail::ormqr_route<T>(ctx, A, side, trans);
 
     const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
 
-    if (chosen == Provider::Vendor) {
+    if (batchlas::dispatch::is_vendor(chosen)) {
         return backend::ormqr_vendor_buffer_size<B, T>(ctx, A, C, side, trans, tau);
     }
 

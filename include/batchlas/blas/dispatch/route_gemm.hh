@@ -35,6 +35,7 @@
 // pins it against the current behaviour first. See WP0_DISPATCH_SPEC.md S4.
 
 #include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
@@ -46,9 +47,6 @@ inline constexpr Route kGemmOrder[] = {
     {Origin::Native, Algorithm::RegisterTiled},
     {Origin::Vendor, Algorithm::Auto},
 };
-
-template <Op O, typename T>
-struct RouteTable;
 
 template <typename T>
 struct RouteTable<Op::gemm, T> {
@@ -121,6 +119,11 @@ struct RouteTable<Op::gemm, T> {
 // ---------------------------------------------------------------------------
 // Resolution for one call. Pure.
 //
+// The body now lives in route_resolve.hh, shared with every other op: the
+// forced-bypasses-preferred-but-not-supports rule, the requested-vendor-must-
+// exist rule, and the vendor-off degradation are not GEMM-specific. This name
+// stays as the spelling GEMM's callers and tests already use.
+//
 // `forced` is what the environment (or an explicit policy) asked for; pass a
 // default-constructed Route for "no opinion". The unset default differs per op
 // and is supplied by the caller -- see legacy_unset_default() in route_env.hh,
@@ -129,58 +132,7 @@ struct RouteTable<Op::gemm, T> {
 template <typename T>
 inline Route resolve_gemm_route(Route forced, const OpShape& s,
                                 bool vendor_available = true) {
-    using Table = RouteTable<Op::gemm, T>;
-
-    // Where everything that cannot get what it asked for ends up.
-    //
-    // The obvious body -- "take the first merely SUPPORTED route" -- is wrong,
-    // and the equivalence test catches it: the order lists Native first, so an
-    // 8x8x8 batch-1 GEMM (supported, but far outside the measured window) would
-    // select the native kernel where today it goes to the vendor. That silently
-    // inverts GEMM's vendor-by-default.
-    //
-    // Supported-but-not-preferred means "correct, but not the one we measured
-    // as better", so it is reached only when there is no vendor left to fall
-    // back to -- exactly the configuration this work package is building
-    // toward. Returning Vendor when nothing at all can serve the shape is
-    // deliberate: it is the honest "this needs a vendor and there isn't one"
-    // signal, and the caller turns it into a diagnostic rather than a wrong
-    // answer.
-    auto fallback = [&]() -> Route {
-        if (!vendor_available) {
-            for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
-                if (is_native(*r) && Table::supports(*r, s)) return *r;
-            }
-        }
-        return Route{Origin::Vendor, Algorithm::Auto};
-    };
-
-    // A forced selection bypasses `preferred` -- that is the entire point of
-    // forcing -- but never bypasses `supports`, because that would hand the
-    // caller a wrong answer rather than a slow one.
-    if (forced.origin != Origin::Auto) {
-        // A REQUESTED VENDOR STILL HAS TO EXIST. This arm is not hypothetical:
-        // GEMM's unset default IS Vendor (legacy_unset_default), so an ordinary
-        // call with nothing set arrives here rather than at the preference walk
-        // below. Returning `forced` unconditionally therefore made the
-        // vendor-off degradation unreachable through the real call path --
-        // provable only at the pure layer, where a test can pass Origin::Auto
-        // that the adapter never produces. Caught by GemmTest.RouteAdapter*.
-        if (is_vendor(forced)) {
-            return vendor_available ? forced : fallback();
-        }
-        // A forced native route that cannot serve this shape yields rather than
-        // computing nonsense. The old code did the same, by returning false
-        // from gemm_use_sycl_custom.
-        return Table::supports(forced, s) ? forced : fallback();
-    }
-
-    // Preference decides. A native route wins only where it is BOTH able to
-    // serve the shape and measured to be the better choice for it.
-    for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
-        if (Table::supports(*r, s) && Table::preferred(*r, s)) return *r;
-    }
-    return fallback();
+    return resolve_route<Op::gemm, T>(forced, s, vendor_available);
 }
 
 } // namespace batchlas::dispatch
