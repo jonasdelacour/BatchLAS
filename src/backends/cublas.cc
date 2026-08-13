@@ -1590,8 +1590,6 @@ namespace batchlas {
     #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_vendor_buffer_size<fp>, backend::getrf_vendor_buffer_size, B_, fp)
     #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri_vendor<fp>, backend::getri_vendor, B_, fp)
     #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_vendor_buffer_size<fp>, backend::getri_vendor_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
     #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
     #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
     #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr_vendor<fp>, backend::orgqr_vendor, B_, fp)
@@ -1609,8 +1607,6 @@ namespace batchlas {
         GETRF_BUFFER_SIZE_INSTANTIATE(fp)\
         GETRI_INSTANTIATE(fp)\
         GETRI_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORMQR_INSTANTIATE(fp)\
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)\
         ORMQR_VENDOR_INSTANTIATE(fp)\
         ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)\
         ORGQR_INSTANTIATE(fp)\
@@ -1656,8 +1652,6 @@ namespace batchlas {
     #undef GETRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRI_INSTANTIATE
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_VENDOR_INSTANTIATE
     #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE

@@ -214,8 +214,10 @@ namespace batchlas{
     }
     } // namespace detail
 
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
+    Event spmm_vendor(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -264,8 +266,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
+    size_t spmm_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T, MFormat>& A,
                             const MatrixView<T, MatrixFormat::Dense>& B,
                             const MatrixView<T, MatrixFormat::Dense>& C,
@@ -283,6 +289,8 @@ namespace batchlas{
         static_cast<void>(transB);
         return 0;
     }
+
+    } // namespace backend
     
     // The netlib gemm is the vendor implementation, so it moves into
     // `backend` under its vendor name rather than being deleted: unlike
@@ -1549,8 +1557,8 @@ namespace batchlas{
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 
-    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F)
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
+    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm_vendor<fp BATCHLAS_COMMA F>, backend::spmm_vendor, B_, fp, F)
+    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<fp BATCHLAS_COMMA F>, backend::spmm_vendor_buffer_size, B_, fp, F)
     #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm_vendor<fp>, backend::gemm_vendor, B_, fp)
     #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv_vendor<fp>, backend::gemv_vendor, B_, fp)
     #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm_vendor<fp>, backend::trsm_vendor, B_, fp)
@@ -1571,14 +1579,10 @@ namespace batchlas{
     #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_vendor_buffer_size<fp>, backend::getrf_vendor_buffer_size, B_, fp)
     #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri_vendor<fp>, backend::getri_vendor, B_, fp)
     #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_vendor_buffer_size<fp>, backend::getri_vendor_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
     #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
     #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
     #define POTRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::potrf_vendor<fp>, backend::potrf_vendor, B_, fp)
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::potrf_vendor_buffer_size<fp>, backend::potrf_vendor_buffer_size, B_, fp)
-    #define SYEV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syev<fp>, syev, B_, fp)
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp)    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
     #define SYEV_VENDOR_INSTANTIATE(fp)         BATCHLAS_INSTANTIATE(sig::syev_vendor<fp>, backend::syev_vendor, B_, fp)
     #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::syev_vendor_buffer_size<fp>, backend::syev_vendor_buffer_size, B_, fp)
     #define GESVD_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::gesvd_vendor<fp>, backend::gesvd_vendor, B_, fp)
@@ -1598,16 +1602,12 @@ namespace batchlas{
         GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRI_INSTANTIATE(fp) \
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_INSTANTIATE(fp) \
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_VENDOR_INSTANTIATE(fp) \
         ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORGQR_INSTANTIATE(fp) \
         ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
         SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GESVD_VENDOR_INSTANTIATE(fp) \
@@ -1655,16 +1655,12 @@ namespace batchlas{
     #undef GETRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRI_INSTANTIATE
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_VENDOR_INSTANTIATE
     #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE
     #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GESVD_VENDOR_INSTANTIATE

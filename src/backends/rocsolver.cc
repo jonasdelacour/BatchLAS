@@ -440,10 +440,6 @@ namespace batchlas {
     template Event backend::potrf_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>, Span<int32_t>);
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t backend::potrf_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo);
-    #define SYEV_INSTANTIATE(fp) \
-    template Event syev<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t syev_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
     #define SYEV_VENDOR_INSTANTIATE(fp) \
     template Event backend::syev_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
     #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
@@ -452,10 +448,6 @@ namespace batchlas {
     template Event backend::geqrf_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
     #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
     template size_t backend::geqrf_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-    #define ORMQR_INSTANTIATE(fp) \
-    template Event ormqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>, int32_t);
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t ormqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, int32_t);
     #define ORMQR_VENDOR_INSTANTIATE(fp) \
     template Event backend::ormqr_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
     #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
@@ -480,8 +472,6 @@ namespace batchlas {
     #define ROCSOLVER_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
         SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GESVD_VENDOR_INSTANTIATE(fp) \
@@ -494,8 +484,6 @@ namespace batchlas {
         GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRI_INSTANTIATE(fp) \
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_INSTANTIATE(fp) \
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_VENDOR_INSTANTIATE(fp) \
         ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORGQR_INSTANTIATE(fp) \
@@ -508,16 +496,12 @@ namespace batchlas {
 
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GESVD_VENDOR_INSTANTIATE
     #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GEQRF_INSTANTIATE
     #undef GEQRF_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_VENDOR_INSTANTIATE
     #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE
