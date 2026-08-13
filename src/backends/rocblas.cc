@@ -95,19 +95,6 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
-
     template <Backend B, typename T>
     Event gemv(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
@@ -419,7 +406,7 @@ namespace batchlas {
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
     #define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
+    template Event backend::gemm_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
     #define GEMV_INSTANTIATE(fp) \
     template Event gemv<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
     #define TRSM_INSTANTIATE(fp) \

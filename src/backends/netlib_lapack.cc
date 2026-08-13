@@ -284,8 +284,14 @@ namespace batchlas{
         return 0;
     }
     
+    // The netlib gemm is the vendor implementation, so it moves into
+    // `backend` under its vendor name rather than being deleted: unlike
+    // cublas.cc and rocblas.cc, this TU had no separate gemm_vendor to forward
+    // to -- its public `gemm` WAS the CBLAS call.
+    namespace backend {
+
     template <Backend B, typename T>
-    Event gemm(Queue& ctx,
+    Event gemm_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& descrA,
                    const MatrixView<T, MatrixFormat::Dense>& descrB,
                    const MatrixView<T, MatrixFormat::Dense>& descrC,
@@ -348,6 +354,8 @@ namespace batchlas{
             }
         });
     }
+
+    } // namespace backend
 
     template <Backend B, typename T>
     Event gemv(Queue& ctx,
@@ -1454,7 +1462,7 @@ namespace batchlas{
 
     #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F)
     #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
+    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm_vendor<fp>, backend::gemm_vendor, B_, fp)
     #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
     #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
     #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)

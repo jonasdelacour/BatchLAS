@@ -7,6 +7,8 @@ add_library(batchlas_core_obj OBJECT
     #util/sycl-util-impl.cc
 )
 add_library(batchlas_backends_obj OBJECT)
+# The vendor-independent facade -- see src/dispatch/CMakeLists.txt.
+add_library(batchlas_dispatch_obj OBJECT)
 if(BATCHLAS_HAS_CUDA_BACKEND)
     add_library(batchlas_backends_cuda_obj OBJECT)
 endif()
@@ -30,6 +32,7 @@ add_library(batchlas_sycl_obj OBJECT)
 set(BATCHLAS_OBJECT_LIBS
     batchlas_core_obj
     batchlas_backends_obj
+    batchlas_dispatch_obj
     batchlas_extensions_eigen_obj
     batchlas_extensions_factorization_obj
     batchlas_extensions_symmetric_obj
@@ -66,6 +69,7 @@ endforeach()
 
 # Add source files from subdirectories
 add_subdirectory(backends)
+add_subdirectory(dispatch)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)
@@ -100,8 +104,14 @@ add_library(batchlas_core SHARED
 )
 batchlas_configure_component(batchlas_core)
 
+# batchlas_dispatch_obj rides in this component rather than getting a .so of its
+# own: it is the public face of exactly these entry points, and a separate
+# library would add an install target and an export entry for two dozen
+# forwarding functions. The separation that matters is at TU level -- the
+# definitions are no longer inside a vendor file -- not at library level.
 add_library(batchlas_backends SHARED
     $<TARGET_OBJECTS:batchlas_backends_obj>
+    $<TARGET_OBJECTS:batchlas_dispatch_obj>
 )
 batchlas_configure_component(batchlas_backends)
 

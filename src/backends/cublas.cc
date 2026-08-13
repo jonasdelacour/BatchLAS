@@ -1566,19 +1566,6 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
-
     template <Backend B, typename T>
     Event gemv(Queue& ctx,
                const MatrixView<T,MatrixFormat::Dense>& A,
@@ -1770,7 +1757,7 @@ namespace batchlas {
     // header edit rather than one edit per backend TU.
     #define B_ Backend::CUDA
 
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
+    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm_vendor<fp>, backend::gemm_vendor, B_, fp)
     #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
     #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
     #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
