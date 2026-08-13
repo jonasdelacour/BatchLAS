@@ -1176,17 +1176,16 @@ TYPED_TEST(GesvdTest, DefaultProviderRoutesSmallGeneralToJacobi) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
     namespace disp = batchlas::blas::dispatch;
+    namespace d = batchlas::dispatch;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
         GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
     } else {
-        const disp::DeviceCaps caps = disp::query_caps(*this->ctx);
-        const disp::DispatchPolicy policy = disp::policy_from_env("GESVD");
-
-        // A stray BATCHLAS_GESVD_PROVIDER in the environment would make every
-        // expectation below pass or fail for the wrong reason.
-        ASSERT_EQ(policy.forced, disp::Provider::Auto)
-            << "BATCHLAS_GESVD_PROVIDER is set; this test asserts the Auto order";
+        // A stray BATCHLAS_GESVD_PROVIDER (or the newer _ROUTE spelling) in the
+        // environment would make every expectation below pass or fail for the
+        // wrong reason.
+        ASSERT_FALSE(d::parse_route_env(d::Op::gesvd).found)
+            << "a gesvd route is forced in the environment; this test asserts the Auto order";
 
         Matrix<Scalar, MatrixFormat::Dense> A(32, 32, 2);
 
@@ -1195,25 +1194,41 @@ TYPED_TEST(GesvdTest, DefaultProviderRoutesSmallGeneralToJacobi) {
         // kappa = 1e3, so it is not the default for any of them.
         for (SvdVectors jobu : {SvdVectors::None, SvdVectors::All}) {
             for (SvdVectors jobvh : {SvdVectors::None, SvdVectors::All}) {
-                EXPECT_EQ(disp::detail::choose_gesvd_provider(policy, caps, A.view(), jobu, jobvh),
-                          disp::Provider::BatchLAS_Jacobi)
+                const d::Route r = disp::detail::gesvd_route<Scalar>(
+                    *this->ctx, A.view(), jobu, jobvh, std::nullopt);
+                EXPECT_TRUE(d::is_native(r));
+                EXPECT_EQ(r.algo, d::Algorithm::Jacobi)
                     << "jobu=" << static_cast<int>(jobu)
                     << " jobvh=" << static_cast<int>(jobvh);
             }
         }
 
-        // Hermitian input is untouched: gesvd_supports_jacobi declines it, so
-        // these still land on the CTA path.
-        EXPECT_EQ(disp::detail::choose_gesvd_provider(policy, caps, A.view(),
-                                                      SvdVectors::All, SvdVectors::All, Uplo::Lower),
-                  disp::Provider::BatchLAS_CTA);
+        // Hermitian input is untouched: the Jacobi route declines it, so these
+        // still land on the CTA path.
+        EXPECT_EQ(disp::detail::gesvd_route<Scalar>(
+                      *this->ctx, A.view(), SvdVectors::All, SvdVectors::All, Uplo::Lower).algo,
+                  d::Algorithm::CTA);
 
         // And n > 32 still reaches the blocked path rather than being captured
-        // by the promoted Jacobi entry.
+        // by the promoted Jacobi entry. This is the wide-band rule, which is now
+        // `preferred` rather than a test inside the order walk...
         Matrix<Scalar, MatrixFormat::Dense> Big(64, 64, 2);
-        EXPECT_EQ(disp::detail::choose_gesvd_provider(policy, caps, Big.view(),
-                                                      SvdVectors::All, SvdVectors::All),
-                  disp::Provider::BatchLAS_Blocked);
+        EXPECT_EQ(disp::detail::gesvd_route<Scalar>(
+                      *this->ctx, Big.view(), SvdVectors::All, SvdVectors::All, std::nullopt).algo,
+                  d::Algorithm::Blocked);
+
+        // ...and that distinction is load-bearing, not cosmetic. Being merely
+        // un-preferred, Jacobi is still ELIGIBLE for this shape, so with no
+        // vendor compiled in the same 64x64 is served natively instead of being
+        // routed to a library that is not there. Under the old order walk the
+        // wide-band test sat next to the support checks and would have made the
+        // route ineligible outright.
+        d::GesvdShape big_shape = disp::detail::gesvd_op_shape<Scalar>(
+            *this->ctx, Big.view(), SvdVectors::All, SvdVectors::All, std::nullopt);
+        using GesvdTable = d::RouteTable<d::Op::gesvd, Scalar>;
+        EXPECT_TRUE(GesvdTable::supports(
+            d::Route{d::Origin::Native, d::Algorithm::Jacobi}, big_shape))
+            << "the wide-band rule is a preference, not a capability";
     }
 }
 

@@ -118,6 +118,13 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
 // size. Sizing a workspace with the public ormqr_buffer_size and handing it to
 // the public ormqr therefore raised "insufficient workspace for chosen
 // provider" -- from the call it had just been sized for.
+//
+// The property asserted is that the two AGREE, checked against whichever route
+// actually resolves. Pinning a particular route here would be pinning the
+// fallback rule rather than the defect: an unsupported forced route falls back
+// to the ordinary automatic choice (see route_resolve.hh), which for ormqr on a
+// GPU is the blocked path, and would have been a different answer earlier in
+// this work package without the bug being any less fixed.
 TYPED_TEST(OrmqrTest, BufferSizeAgreesWithDispatchUnderAnUnmatchedForcedRoute) {
     using T = typename TestFixture::ScalarType;
     const int n = 4;
@@ -134,16 +141,16 @@ TYPED_TEST(OrmqrTest, BufferSizeAgreesWithDispatchUnderAnUnmatchedForcedRoute) {
     const size_t unmatched_size = ormqr_buffer_size(
         *this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span());
 
-    // The size an unmatched forced route reports must be the size the route it
-    // actually resolves to needs. Stated against the vendor size directly
-    // rather than as a bare no-throw, which would be vacuous whenever the
-    // blocked size happens to be the larger of the two.
+    // The size reported must be the size the route that actually runs needs.
+    // Stated against the two candidate sizes rather than as a bare no-throw,
+    // which would be vacuous whenever the reported size happens to be the
+    // larger of the two.
     //
-    // Measured on this tree at n=4, RTX 4090: vendor 276480 bytes, blocked
-    // 2560. The old code returned the blocked size here and then demanded the
-    // vendor size, so this was a deterministic 108x under-size on every GPU
-    // instantiation, not a near-miss. (The host instantiations report 0 for
-    // both and neither passes nor fails on the size.)
+    // The gap is not a near-miss: measured on this tree at n=4, RTX 4090, the
+    // vendor wants 276480 bytes (float) and blocked 2560. The old code reported
+    // the blocked size here and then demanded the vendor size, a deterministic
+    // 108x under-size on every GPU instantiation. (The host instantiations
+    // report 0 for both and neither pass nor fail on the size.)
     size_t vendor_size = 0;
     {
         ScopedEnvVar force_vendor("BATCHLAS_ORMQR_PROVIDER", "vendor");
@@ -156,9 +163,15 @@ TYPED_TEST(OrmqrTest, BufferSizeAgreesWithDispatchUnderAnUnmatchedForcedRoute) {
         blocked_size = ormqr_buffer_size(
             *this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span());
     }
-    EXPECT_EQ(unmatched_size, vendor_size)
-        << "an unmatched forced route resolves to the vendor, so it must report the vendor size"
-        << " (vendor=" << vendor_size << " blocked=" << blocked_size << ")";
+    const auto resolved = batchlas::blas::dispatch::detail::ormqr_route<T>(
+        *this->ctx, A.view(), Side::Left, Transpose::NoTrans);
+    const size_t expected_size =
+        batchlas::dispatch::is_vendor(resolved) ? vendor_size : blocked_size;
+    EXPECT_EQ(unmatched_size, expected_size)
+        << "the reported size must be the one the resolved route needs"
+        << " (resolved=" << batchlas::dispatch::to_string(resolved.origin)
+        << ":" << batchlas::dispatch::to_string(resolved.algo)
+        << ", vendor=" << vendor_size << ", blocked=" << blocked_size << ")";
 
     UnifiedVector<std::byte> ws(unmatched_size);
     ASSERT_NO_THROW(ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans,
