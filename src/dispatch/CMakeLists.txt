@@ -9,6 +9,7 @@
 # It compiles unconditionally. Which BACKENDS get instantiated is decided inside
 # each TU by the per-library BATCHLAS_HAS_* macros.
 target_sources(batchlas_dispatch_obj PRIVATE
+    coverage.cc
     entry_points/level3.cc
     entry_points/factorization.cc
     entry_points/sparse.cc

@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <batchlas/blas/dispatch/coverage.hh>
 #include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas::dispatch {
@@ -56,10 +57,16 @@ private:
     ScalarKind scalar_;
 };
 
-// Raised from the absent-vendor stubs in src/dispatch/absent/.
+// The single funnel for "nothing can serve this call". Raised by the facade's
+// availability gate (dispatch/vendor_available.hh) and by the *_or_throw shims.
 template <typename T>
 [[noreturn]] inline void throw_no_vendor_route(Op op, Backend backend,
                                                const char* library) {
+    // Every no-route path funnels through here, so this is the one place the
+    // coverage table has to be told about a gap. Recorded unconditionally --
+    // unlike the per-call route counters, a miss is rare by construction and
+    // is the row that matters most for the burn-down.
+    coverage::record_miss(op, scalar_kind_of<T>, backend, library);
     throw NoRouteError(op, backend, scalar_kind_of<T>,
                        std::string("built without ") + library);
 }
