@@ -16,6 +16,20 @@ using trmm = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    T, Side, Uplo, Transpose, Diag);
+
+// backend::trmm_vendor's signature. NOT an alias for sig::trmm: the vendor
+// parameter order can differ from the public one -- trsm's alpha moves to
+// the end -- so each is spelled out from the definition it describes.
+template <typename T>
+using trmm_vendor = Event(Queue&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
+                          T,
+                          Side,
+                          Uplo,
+                          Transpose,
+                          Diag);
 }  // namespace sig
 
 
@@ -44,6 +58,30 @@ inline Event trmm(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for trmm.
+//
+// DECLARATION ONLY. The public `trmm<Back, T>` used to be DEFINED inside each
+// vendor TU, so dropping a vendor library dropped the public entry point along
+// with the vendor path. WP0 S5 moves that definition to
+// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
+// implementation, named as such. Each vendor wrapper TU defines this primary
+// template for its own Backend value and instantiates it there.
+template <Backend Back, typename T>
+Event trmm_vendor(Queue& ctx,
+                  const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<T, MatrixFormat::Dense>& C,
+                  T alpha,
+                  Side side,
+                  Uplo uplo,
+                  Transpose transA,
+                  Diag diag);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

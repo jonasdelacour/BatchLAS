@@ -255,7 +255,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event symm_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B,
@@ -750,7 +750,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event syrk_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& C,
@@ -861,7 +861,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event syr2k_vendor(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B,
@@ -1567,112 +1567,6 @@ namespace batchlas {
     } // namespace backend
 
     template <Backend B, typename T>
-    Event gemv(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const VectorView<T>& X,
-               const VectorView<T>& Y,
-               T alpha,
-               T beta,
-               Transpose transA) {
-        return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
-    }
-
-    template <Backend Back, typename T>
-    Event trsm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               T alpha,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag) {
-        return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event symm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Side side,
-               Uplo uplo) {
-        return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event hemm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Side side,
-               Uplo uplo) {
-        return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event herk(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               float_t<T> alpha,
-               float_t<T> beta,
-               Uplo uplo,
-               Transpose transA) {
-        return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event her2k(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                float_t<T> beta,
-                Uplo uplo,
-                Transpose transA) {
-        return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event syrk(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Uplo uplo,
-               Transpose transA) {
-        return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event syr2k(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                T beta,
-                Uplo uplo,
-                Transpose transA) {
-        return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, typename T>
-    Event trmm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag) {
-        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-
-    template <Backend B, typename T>
     Event geqrf(Queue& ctx,
                 const MatrixView<T,MatrixFormat::Dense>& A,
                 Span<T> tau,
@@ -1758,15 +1652,15 @@ namespace batchlas {
     #define B_ Backend::CUDA
 
     #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm_vendor<fp>, backend::gemm_vendor, B_, fp)
-    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
-    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
-    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk<fp>, herk, B_, fp)
-    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)
-    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
+    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv_vendor<fp>, backend::gemv_vendor, B_, fp)
+    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm_vendor<fp>, backend::trsm_vendor, B_, fp)
+    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm_vendor<fp>, backend::trmm_vendor, B_, fp)
+    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm_vendor<fp>, backend::symm_vendor, B_, fp)
+    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm_vendor<fp>, backend::hemm_vendor, B_, fp)
+    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk_vendor<fp>, backend::syrk_vendor, B_, fp)
+    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk_vendor<fp>, backend::herk_vendor, B_, fp)
+    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k_vendor<fp>, backend::her2k_vendor, B_, fp)
+    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k_vendor<fp>, backend::syr2k_vendor, B_, fp)
     #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
     #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
     #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)

@@ -28,6 +28,15 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
+#include <batchlas/blas/functions/gemv.hh>
+#include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/blas/functions/symm.hh>
+#include <batchlas/blas/functions/hemm.hh>
+#include <batchlas/blas/functions/herk.hh>
+#include <batchlas/blas/functions/her2k.hh>
+#include <batchlas/blas/functions/syrk.hh>
+#include <batchlas/blas/functions/syr2k.hh>
+#include <batchlas/blas/functions/trmm.hh>
 
 #include "../../util/template-instantiations.hh"
 
@@ -48,31 +57,176 @@ Event gemm(Queue& ctx,
     return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
 }
 
+template <Backend B, typename T>
+Event gemv(Queue& ctx,
+           const MatrixView<T,MatrixFormat::Dense>& A,
+           const VectorView<T>& X,
+           const VectorView<T>& Y,
+           T alpha,
+           T beta,
+           Transpose transA) {
+    return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
+}
+
+template <Backend Back, typename T>
+Event trsm(Queue& ctx,
+           const MatrixView<T,MatrixFormat::Dense>& A,
+           const MatrixView<T,MatrixFormat::Dense>& B,
+           T alpha,
+           Side side,
+           Uplo uplo,
+           Transpose transA,
+           Diag diag) {
+    return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
+}
+
+template <Backend Back, RealScalar T>
+Event symm(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           T alpha,
+           T beta,
+           Side side,
+           Uplo uplo) {
+    return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+}
+
+template <Backend Back, ComplexScalar T>
+Event hemm(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           T alpha,
+           T beta,
+           Side side,
+           Uplo uplo) {
+    return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+}
+
+template <Backend Back, ComplexScalar T>
+Event herk(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           float_t<T> alpha,
+           float_t<T> beta,
+           Uplo uplo,
+           Transpose transA) {
+    return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+}
+
+template <Backend Back, ComplexScalar T>
+Event her2k(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<T, MatrixFormat::Dense>& B,
+            const MatrixView<T, MatrixFormat::Dense>& C,
+            T alpha,
+            float_t<T> beta,
+            Uplo uplo,
+            Transpose transA) {
+    return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+}
+
+template <Backend Back, RealScalar T>
+Event syrk(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           T alpha,
+           T beta,
+           Uplo uplo,
+           Transpose transA) {
+    return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+}
+
+template <Backend Back, RealScalar T>
+Event syr2k(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<T, MatrixFormat::Dense>& B,
+            const MatrixView<T, MatrixFormat::Dense>& C,
+            T alpha,
+            T beta,
+            Uplo uplo,
+            Transpose transA) {
+    return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+}
+
+template <Backend Back, typename T>
+Event trmm(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           T alpha,
+           Side side,
+           Uplo uplo,
+           Transpose transA,
+           Diag diag) {
+    return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+}
+
 // ---------------------------------------------------------------------------
 // Explicit instantiations, one block per backend whose vendor TU is compiled.
 // ---------------------------------------------------------------------------
 
-#define GEMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
+#define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
-#define GEMM_INSTANTIATE_ALL_TYPES(B_)      \
-    GEMM_INSTANTIATE(B_, float)             \
-    GEMM_INSTANTIATE(B_, double)            \
-    GEMM_INSTANTIATE(B_, std::complex<float>)  \
-    GEMM_INSTANTIATE(B_, std::complex<double>)
+// Real- and complex-only ops are separated because symm/syrk/syr2k are
+// RealScalar-constrained and hemm/herk/her2k ComplexScalar-constrained.
+#define REAL_ONLY_OPS(B_)             \
+    OP_INSTANTIATE(symm,  B_, float)  \
+    OP_INSTANTIATE(symm,  B_, double) \
+    OP_INSTANTIATE(syrk,  B_, float)  \
+    OP_INSTANTIATE(syrk,  B_, double) \
+    OP_INSTANTIATE(syr2k, B_, float)  \
+    OP_INSTANTIATE(syr2k, B_, double)
+
+#define COMPLEX_ONLY_OPS(B_)                            \
+    OP_INSTANTIATE(hemm,  B_, std::complex<float>)      \
+    OP_INSTANTIATE(hemm,  B_, std::complex<double>)     \
+    OP_INSTANTIATE(herk,  B_, std::complex<float>)      \
+    OP_INSTANTIATE(herk,  B_, std::complex<double>)     \
+    OP_INSTANTIATE(her2k, B_, std::complex<float>)      \
+    OP_INSTANTIATE(her2k, B_, std::complex<double>)
+
+#define ALL_TYPE_OPS_ONE(B_, fp)  \
+    OP_INSTANTIATE(gemm, B_, fp)  \
+    OP_INSTANTIATE(gemv, B_, fp)  \
+    OP_INSTANTIATE(trsm, B_, fp)  \
+    OP_INSTANTIATE(trmm, B_, fp)
+
+#define LEVEL3_INSTANTIATE(B_)                       \
+    ALL_TYPE_OPS_ONE(B_, float)                      \
+    ALL_TYPE_OPS_ONE(B_, double)                     \
+    ALL_TYPE_OPS_ONE(B_, std::complex<float>)        \
+    ALL_TYPE_OPS_ONE(B_, std::complex<double>)       \
+    REAL_ONLY_OPS(B_)                                \
+    COMPLEX_ONLY_OPS(B_)
 
 #if BATCHLAS_HAS_CUBLAS
-GEMM_INSTANTIATE_ALL_TYPES(Backend::CUDA)
+LEVEL3_INSTANTIATE(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCBLAS
-GEMM_INSTANTIATE_ALL_TYPES(Backend::ROCM)
+// rocBLAS has no hemm/herk/her2k/symm wrapper in rocblas.cc, so the ROCm
+// backend instantiates only the ops it actually implements. That asymmetry
+// predates S5 -- rocblas.cc's own instantiation block listed exactly these.
+ALL_TYPE_OPS_ONE(Backend::ROCM, float)
+ALL_TYPE_OPS_ONE(Backend::ROCM, double)
+ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<float>)
+ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<double>)
+OP_INSTANTIATE(syrk,  Backend::ROCM, float)
+OP_INSTANTIATE(syrk,  Backend::ROCM, double)
+OP_INSTANTIATE(syr2k, Backend::ROCM, float)
+OP_INSTANTIATE(syr2k, Backend::ROCM, double)
 #endif
 
 #if BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS
-GEMM_INSTANTIATE_ALL_TYPES(Backend::NETLIB)
+LEVEL3_INSTANTIATE(Backend::NETLIB)
 #endif
 
-#undef GEMM_INSTANTIATE_ALL_TYPES
-#undef GEMM_INSTANTIATE
+#undef LEVEL3_INSTANTIATE
+#undef ALL_TYPE_OPS_ONE
+#undef COMPLEX_ONLY_OPS
+#undef REAL_ONLY_OPS
+#undef OP_INSTANTIATE
 
 }  // namespace batchlas
