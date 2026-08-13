@@ -21,11 +21,19 @@ namespace batchlas {
 
 namespace {
 
+// `is_gpu`, not `B != Backend::NETLIB`.
+//
+// The else-branch below says why in its own comment: the host backend "cannot
+// safely invoke the ROCm-style secular root routines from inside SYCL kernels".
+// That is a statement about the DEVICE, and the backend enum was standing in for
+// it. Asked directly it stays correct for a host queue reached through any
+// backend, and today's outcome is unchanged -- NETLIB is the only backend that
+// runs on a host device in this tree.
 template <Backend B, typename T>
-inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params) {
+inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params, bool is_gpu) {
     const int32_t nn = static_cast<int32_t>(n);
 
-    if constexpr (B != Backend::NETLIB) {
+    if (is_gpu) {
         if (params.recursion_threshold <= 0) {
             params.recursion_threshold = tuning::stedc_recursion_threshold_for_n(nn);
         }
@@ -520,7 +528,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 {
     auto n = d.size();
     auto batch_size = d.batch_size();
-    auto effective_params = resolve_stedc_tuning<B, T>(n, params);
+    auto effective_params = resolve_stedc_tuning<B, T>(n, params, ctx.device().type == DeviceType::GPU);
 
     // Ensure leaf subproblems return sorted eigenvalues so higher levels can safely
     // rely on the "children sorted" invariant.
@@ -873,7 +881,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto rho_level = Span<T>(rho_all.data() + (k - 1) * bs, P);
         auto Qprime = MatrixView<T>(qprime_buf.data(), s, s, s, s * s, P);
         auto temp_Q = MatrixView<T>(tempq_buf.data(), s, s, s, s * s, P);
-        const auto level_params = resolve_stedc_tuning<B, T>(s, params);
+        const auto level_params = resolve_stedc_tuning<B, T>(s, params, ctx.device().type == DeviceType::GPU);
 
         if (l == 0) {
             stedc_merge_step<B, T>(ctx, lambda, Zp, Qprime, temp_Q, rho_level, merge_ws, half, level_params);
@@ -932,7 +940,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
     }
 
     const auto n = d.size();
-    const auto effective_params = resolve_stedc_tuning<B, T>(n, params);
+    const auto effective_params = resolve_stedc_tuning<B, T>(n, params, ctx.device().type == DeviceType::GPU);
     if (params.algorithm != StedcAlgorithm::Recursive) {
         const auto plan = plan_stedc_levels(n, effective_params.recursion_threshold);
         // A padded problem always needs its own top-level buffer, which the
@@ -978,7 +986,8 @@ size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, 
         return recursive_bytes;
     }
 
-    const auto effective_params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params);
+    const auto effective_params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params,
+                                                             ctx.device().type == DeviceType::GPU);
     const auto plan = plan_stedc_levels(static_cast<int64_t>(n), effective_params.recursion_threshold);
     if (plan.levels == 0) {
         return recursive_bytes;
@@ -999,7 +1008,8 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
         return 0;
     }
 
-    params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params);
+    params = resolve_stedc_tuning<B, T>(static_cast<int64_t>(n), params,
+                                        ctx.device().type == DeviceType::GPU);
 
     const auto add_int32 = [&](size_t count) {
         return BumpAllocator::allocation_size<int32_t>(ctx, count);

@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <batchlas/blas/dispatch/route_compiled.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
@@ -104,9 +105,14 @@ inline bool wy_trmm_applicable(int ib) {
     if (pin != WyPin::Measured) {
         return pin == WyPin::Trmm;
     }
-    // The routes whose trmm reaches the batched triangular tile kernel. Not a
-    // statement about CUDA the vendor -- it is where the kernel is wired.
-    constexpr bool route_has_tile_kernel = (B == Backend::CUDA);
+    // The routes whose trmm reaches the batched triangular tile kernel. The
+    // comment this replaces already said the right thing -- "not a statement
+    // about CUDA the vendor, it is where the kernel is wired" -- while the
+    // expression said `B == Backend::CUDA`. Now it asks what it means. That is
+    // not cosmetic: in a vendor-free build the backend is still Backend::CUDA
+    // but the TU carrying the tile kernel is not compiled, so the old form
+    // claimed a kernel that is not linked.
+    constexpr bool route_has_tile_kernel = dispatch::level3_tile_kernels_compiled<B>;
     constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
     return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64;
 }
