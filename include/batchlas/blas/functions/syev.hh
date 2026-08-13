@@ -14,6 +14,8 @@
 #include <batchlas/blas/extensions.hh>
 
 #include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/no_route.hh>
+#include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 #include <batchlas/blas/queue-dispatch.hh>
@@ -96,6 +98,36 @@ size_t syev_vendor_buffer_size(Queue& ctx,
                                Uplo uplo);
 
 } // namespace batchlas::backend
+
+
+namespace batchlas::blas::dispatch::detail {
+
+// The vendor call, gated on the vendor actually being compiled in.
+//
+// Without this, a build with no cuSOLVER / rocSOLVER / netlib library leaves backend::syev_vendor<B, T> undefined and the LINK fails -- which is
+// the state WP0 exists to remove. Being `if constexpr`, the vendor call is not
+// compiled at all when the library is absent, so there is no symbol to satisfy.
+template <Backend B, typename T, typename... Args>
+Event syev_vendor_or_throw(Args&&... args) {
+    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
+        batchlas::dispatch::throw_no_vendor_route<T>(
+            batchlas::dispatch::Op::syev, B, batchlas::dispatch::kSolverLibrary<B>);
+    } else {
+        return batchlas::backend::syev_vendor<B, T>(std::forward<Args>(args)...);
+    }
+}
+
+template <Backend B, typename T, typename... Args>
+size_t syev_vendor_buffer_size_or_throw(Args&&... args) {
+    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
+        batchlas::dispatch::throw_no_vendor_route<T>(
+            batchlas::dispatch::Op::syev, B, batchlas::dispatch::kSolverLibrary<B>);
+    } else {
+        return batchlas::backend::syev_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
+    }
+}
+
+} // namespace batchlas::blas::dispatch::detail
 
 namespace batchlas::blas::dispatch {
 
@@ -936,7 +968,7 @@ inline Event syev_dispatch(Queue& ctx,
 
     size_t need_ws = 0;
     if (d::is_vendor(chosen)) {
-        need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
+        need_ws = detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     } else if (chosen.algo == d::Algorithm::CTA) {
         switch (detail::syev_choose_small_kernel<T>(descrA)) {
             case detail::SyevSmallKernel::Jacobi:
@@ -992,7 +1024,7 @@ inline Event syev_dispatch(Queue& ctx,
 
     Event e;
     if (d::is_vendor(chosen)) {
-        e = backend::syev_vendor<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
+        e = detail::syev_vendor_or_throw<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
     } else if (chosen.algo == d::Algorithm::CTA) {
         // Which of the three n<=32 kernels -- see syev_choose_small_kernel. The workspace
         // query above MUST take the same branch; both call the same selector, and the
@@ -1058,7 +1090,7 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
         : detail::syev_route<B, T>(ctx, descrA, uplo, jobtype);
 
     if (d::is_vendor(chosen)) {
-        return backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
+        return detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     }
     if (chosen.algo == d::Algorithm::CTA) {
         // Must mirror syev_dispatch exactly: a caller that sizes its workspace here and then

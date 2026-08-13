@@ -38,6 +38,9 @@
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/trmm.hh>
 
+#include <batchlas/blas/dispatch/no_route.hh>
+#include <batchlas/blas/dispatch/vendor_available.hh>
+
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -54,7 +57,12 @@ Event gemm(Queue& ctx,
            Transpose transA,
            Transpose transB,
            ComputePrecision precision) {
-    return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::gemm, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+    }
 }
 
 template <Backend B, typename T>
@@ -65,7 +73,12 @@ Event gemv(Queue& ctx,
            T alpha,
            T beta,
            Transpose transA) {
-    return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
+    if constexpr (!dispatch::level3_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::gemv, B, dispatch::kLevel3Library<B>);
+    } else {
+        return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
+    }
 }
 
 template <Backend Back, typename T>
@@ -77,7 +90,12 @@ Event trsm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
-    return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::trsm, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
+    }
 }
 
 template <Backend Back, RealScalar T>
@@ -89,7 +107,12 @@ Event symm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
-    return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::symm, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
 }
 
 template <Backend Back, ComplexScalar T>
@@ -101,7 +124,12 @@ Event hemm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
-    return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::hemm, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
+    }
 }
 
 template <Backend Back, ComplexScalar T>
@@ -112,7 +140,12 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
-    return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::herk, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    }
 }
 
 template <Backend Back, ComplexScalar T>
@@ -124,7 +157,12 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
-    return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::her2k, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
 }
 
 template <Backend Back, RealScalar T>
@@ -135,7 +173,12 @@ Event syrk(Queue& ctx,
            T beta,
            Uplo uplo,
            Transpose transA) {
-    return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::syrk, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
+    }
 }
 
 template <Backend Back, RealScalar T>
@@ -147,7 +190,12 @@ Event syr2k(Queue& ctx,
             T beta,
             Uplo uplo,
             Transpose transA) {
-    return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::syr2k, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
+    }
 }
 
 template <Backend Back, typename T>
@@ -160,7 +208,12 @@ Event trmm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
-    return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::trmm, Back, dispatch::kLevel3Library<Back>);
+    } else {
+        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,11 +254,15 @@ Event trmm(Queue& ctx,
     REAL_ONLY_OPS(B_)                                \
     COMPLEX_ONLY_OPS(B_)
 
-#if BATCHLAS_HAS_CUBLAS
+// Keyed on the DEVICE FAMILY, not on the vendor library. The bodies above
+// compile to a throw when the library is absent, so the public entry point
+// exists as a symbol in every build that has the device -- which is exactly what
+// stopped being true when the definitions lived in the vendor TUs.
+#if BATCHLAS_HAS_CUDA_BACKEND
 LEVEL3_INSTANTIATE(Backend::CUDA)
 #endif
 
-#if BATCHLAS_HAS_ROCBLAS
+#if BATCHLAS_HAS_ROCM_BACKEND
 // rocBLAS has no hemm/herk/her2k/symm wrapper in rocblas.cc, so the ROCm
 // backend instantiates only the ops it actually implements. That asymmetry
 // predates S5 -- rocblas.cc's own instantiation block listed exactly these.
@@ -219,7 +276,7 @@ OP_INSTANTIATE(syr2k, Backend::ROCM, float)
 OP_INSTANTIATE(syr2k, Backend::ROCM, double)
 #endif
 
-#if BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS
+#if BATCHLAS_HAS_HOST_BACKEND
 LEVEL3_INSTANTIATE(Backend::NETLIB)
 #endif
 

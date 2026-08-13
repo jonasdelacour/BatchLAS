@@ -361,7 +361,7 @@ Event syev_two_stage(Queue& ctx,
 
         size_t ormqr_ws_bytes = 0;
         if constexpr (B == Backend::NETLIB) {
-            ormqr_ws_bytes = backend::ormqr_vendor_buffer_size<B, T>(
+            ormqr_ws_bytes = blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(
                 ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat);
         } else {
             ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(
@@ -369,7 +369,7 @@ Event syev_two_stage(Queue& ctx,
         }
         auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
         if constexpr (B == Backend::NETLIB) {
-            backend::ormqr_vendor<B, T>(
+            blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(
                 ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat, ormqr_ws);
         } else {
             ormqr_blocked<B, T>(ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans,
@@ -520,7 +520,7 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         auto z_sub_dummy = z_dummy({1, SliceEnd()}, Slice{});
         Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
         if constexpr (B == Backend::NETLIB) {
-            bytes += backend::ormqr_vendor_buffer_size<B, T>(ctx,
+            bytes += blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(ctx,
                                                               aq_dummy,
                                                               z_sub_dummy,
                                                               Side::Left,

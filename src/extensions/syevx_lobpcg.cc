@@ -448,9 +448,9 @@ inline constexpr R jacobi_definiteness_floor() {
         const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
         size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
-            const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
             ws_projected = std::max(ws_projected,
                                     std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
@@ -649,7 +649,7 @@ inline constexpr R jacobi_definiteness_floor() {
         //Solve the eigenvalue problem
         trace("syevx: syev XtAX");
         if (prefer_vendor_projected_syev) {
-            backend::syev_vendor<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
             syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
@@ -1279,7 +1279,7 @@ inline constexpr R jacobi_definiteness_floor() {
             //Solve the eigenvalue problem
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
-                backend::syev_vendor<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
                 syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
@@ -1484,9 +1484,9 @@ inline constexpr R jacobi_definiteness_floor() {
 
                 // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
                 if constexpr (B != Backend::NETLIB) {
-                    const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     ws_projected = std::max(ws_projected,
                                             std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
                 }

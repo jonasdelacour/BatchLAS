@@ -136,8 +136,15 @@ protected:
         UnifiedVector<real_t> eigs(mat.rows());
 
         Queue &queue = *(this->ctx);
-        UnifiedVector<std::byte> ws = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<Backend::NETLIB>(queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-        backend::syev_vendor<Backend::NETLIB>(queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
+        // Through the gated shim, not backend::syev_vendor directly: with no
+        // netlib in the build there is no vendor syev to reference, and the
+        // shim turns that into a NoRouteError instead of an undefined symbol.
+        namespace disp = batchlas::blas::dispatch::detail;
+        UnifiedVector<std::byte> ws = UnifiedVector<std::byte>(
+            disp::syev_vendor_buffer_size_or_throw<Backend::NETLIB, ScalarType>(
+                queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+        disp::syev_vendor_or_throw<Backend::NETLIB, ScalarType>(
+            queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         queue.wait();
         auto max_eig = *std::max_element(eigs.begin(), eigs.end(), [](real_t a, real_t b) { return std::abs(a) < std::abs(b); });
         return std::abs(max_eig);

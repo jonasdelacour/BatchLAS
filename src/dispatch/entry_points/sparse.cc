@@ -12,6 +12,9 @@
 
 #include <batchlas/blas/functions/spmm.hh>
 
+#include <batchlas/blas/dispatch/no_route.hh>
+#include <batchlas/blas/dispatch/vendor_available.hh>
+
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -28,7 +31,12 @@ Event spmm(Queue& ctx,
            Transpose transA,
            Transpose transB,
            Span<std::byte> workspace) {
-    return backend::spmm_vendor<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB, workspace);
+    if constexpr (!dispatch::sparse_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::spmm, B, dispatch::kSparseLibrary<B>);
+    } else {
+        return backend::spmm_vendor<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB, workspace);
+    }
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -40,7 +48,12 @@ size_t spmm_buffer_size(Queue& ctx,
                         T beta,
                         Transpose transA,
                         Transpose transB) {
-    return backend::spmm_vendor_buffer_size<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB);
+    if constexpr (!dispatch::sparse_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::spmm, B, dispatch::kSparseLibrary<B>);
+    } else {
+        return backend::spmm_vendor_buffer_size<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -58,15 +71,19 @@ size_t spmm_buffer_size(Queue& ctx,
     SPMM_ONE(B_, std::complex<float>, MatrixFormat::CSR)\
     SPMM_ONE(B_, std::complex<double>, MatrixFormat::CSR)
 
-#if BATCHLAS_HAS_CUSPARSE
+// Keyed on the DEVICE FAMILY, not on the vendor library. The bodies above
+// compile to a throw when the library is absent, so the public entry point
+// exists as a symbol in every build that has the device -- which is exactly what
+// stopped being true when the definitions lived in the vendor TUs.
+#if BATCHLAS_HAS_CUDA_BACKEND
 SPMM_ALL(Backend::CUDA)
 #endif
 
-#if BATCHLAS_HAS_ROCSPARSE
+#if BATCHLAS_HAS_ROCM_BACKEND
 SPMM_ALL(Backend::ROCM)
 #endif
 
-#if BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS
+#if BATCHLAS_HAS_HOST_BACKEND
 SPMM_ALL(Backend::NETLIB)
 #endif
 

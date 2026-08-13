@@ -39,17 +39,19 @@ namespace batchlas {
     EIGEN_ONE(B_, std::complex<float>)             \
     EIGEN_ONE(B_, std::complex<double>)
 
-// syev's vendor path is cuSOLVER's; ormqr's is cuBLAS-adjacent but lives in
-// cublas.cc, so both libraries have to be present for the CUDA backend.
-#if BATCHLAS_HAS_CUSOLVER && BATCHLAS_HAS_CUBLAS
+// Keyed on the DEVICE FAMILY, not on the vendor library. The bodies above
+// compile to a throw when the library is absent, so the public entry point
+// exists as a symbol in every build that has the device -- which is exactly what
+// stopped being true when the definitions lived in the vendor TUs.
+#if BATCHLAS_HAS_CUDA_BACKEND
 EIGEN_ALL(Backend::CUDA)
 #endif
 
-#if BATCHLAS_HAS_ROCSOLVER
+#if BATCHLAS_HAS_ROCM_BACKEND
 EIGEN_ALL(Backend::ROCM)
 #endif
 
-#if BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS
+#if BATCHLAS_HAS_HOST_BACKEND
 EIGEN_ALL(Backend::NETLIB)
 #endif
 

@@ -18,6 +18,9 @@
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/potrf.hh>
 
+#include <batchlas/blas/dispatch/no_route.hh>
+#include <batchlas/blas/dispatch/vendor_available.hh>
+
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -29,14 +32,24 @@ Event geqrf(Queue& ctx,
             const MatrixView<T,MatrixFormat::Dense>& A,
             Span<T> tau,
             Span<std::byte> work_space) {
-    return backend::geqrf_vendor<B, T>(ctx, A, tau, work_space);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::geqrf_vendor<B, T>(ctx, A, tau, work_space);
+    }
 }
 
 template <Backend B, typename T>
 size_t geqrf_buffer_size(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          Span<T> tau) {
-    return backend::geqrf_vendor_buffer_size<B, T>(ctx, A, tau);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::geqrf_vendor_buffer_size<B, T>(ctx, A, tau);
+    }
 }
 
 template <Backend B, typename T>
@@ -44,14 +57,24 @@ Event orgqr(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             Span<T> tau,
             Span<std::byte> workspace) {
-    return backend::orgqr_vendor<B, T>(ctx, A, tau, workspace);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::orgqr, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::orgqr_vendor<B, T>(ctx, A, tau, workspace);
+    }
 }
 
 template <Backend B, typename T>
 size_t orgqr_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau) {
-    return backend::orgqr_vendor_buffer_size<B, T>(ctx, A, tau);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::orgqr, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::orgqr_vendor_buffer_size<B, T>(ctx, A, tau);
+    }
 }
 
 template <Backend B, typename T>
@@ -60,13 +83,23 @@ Event getrf(Queue& ctx,
             Span<int64_t> pivots,
             Span<std::byte> work_space,
             Span<int32_t> info) {
-    return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space, info);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space, info);
+    }
 }
 
 template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A) {
-    return backend::getrf_vendor_buffer_size<B, T>(ctx, A);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::getrf_vendor_buffer_size<B, T>(ctx, A);
+    }
 }
 
 template <Backend Back, typename T>
@@ -76,7 +109,12 @@ Event getrs(Queue& ctx,
             Transpose transA,
             Span<int64_t> pivots,
             Span<std::byte> work_space) {
-    return backend::getrs_vendor<Back, T>(ctx, A, B, transA, pivots, work_space);
+    if constexpr (!dispatch::factorization_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getrs, Back, dispatch::kFactorizationLibrary<Back>);
+    } else {
+        return backend::getrs_vendor<Back, T>(ctx, A, B, transA, pivots, work_space);
+    }
 }
 
 template <Backend Back, typename T>
@@ -84,7 +122,12 @@ size_t getrs_buffer_size(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          const MatrixView<T,MatrixFormat::Dense>& B,
                          Transpose transA) {
-    return backend::getrs_vendor_buffer_size<Back, T>(ctx, A, B, transA);
+    if constexpr (!dispatch::factorization_vendor_available<Back>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getrs, Back, dispatch::kFactorizationLibrary<Back>);
+    } else {
+        return backend::getrs_vendor_buffer_size<Back, T>(ctx, A, B, transA);
+    }
 }
 
 template <Backend B, typename T>
@@ -94,13 +137,23 @@ Event getri(Queue& ctx,
             Span<int64_t> pivots,
             Span<std::byte> work_space,
             Span<int32_t> info) {
-    return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space, info);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space, info);
+    }
 }
 
 template <Backend B, typename T>
 size_t getri_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A) {
-    return backend::getri_vendor_buffer_size<B, T>(ctx, A);
+    if constexpr (!dispatch::factorization_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+    } else {
+        return backend::getri_vendor_buffer_size<B, T>(ctx, A);
+    }
 }
 
 template <Backend B, typename T>
@@ -109,14 +162,24 @@ Event potrf(Queue& ctx,
                 Uplo uplo,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
-    return backend::potrf_vendor<B, T>(ctx, descrA, uplo, workspace, info_out);
+    if constexpr (!dispatch::solver_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
+    } else {
+        return backend::potrf_vendor<B, T>(ctx, descrA, uplo, workspace, info_out);
+    }
 }
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx,
                         const MatrixView<T,MatrixFormat::Dense>& A,
                         Uplo uplo) {
-    return backend::potrf_vendor_buffer_size<B, T>(ctx, A, uplo);
+    if constexpr (!dispatch::solver_vendor_available<B>) {
+        dispatch::throw_no_vendor_route<T>(
+            dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
+    } else {
+        return backend::potrf_vendor_buffer_size<B, T>(ctx, A, uplo);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -154,20 +217,22 @@ size_t potrf_buffer_size(Queue& ctx,
     OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<double>)
 
 // geqrf/orgqr/getrf/getrs/getri come from cuBLAS on NVIDIA; potrf from cuSOLVER.
-#if BATCHLAS_HAS_CUBLAS
+// Keyed on the DEVICE FAMILY, not on the vendor library. The bodies above
+// compile to a throw when the library is absent, so the public entry point
+// exists as a symbol in every build that has the device -- which is exactly what
+// stopped being true when the definitions lived in the vendor TUs.
+#if BATCHLAS_HAS_CUDA_BACKEND
 FACTORIZATION_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_CUSOLVER
 POTRF_ALL(Backend::CUDA)
 #endif
 
 // On ROCm all of them come from rocSOLVER.
-#if BATCHLAS_HAS_ROCSOLVER
+#if BATCHLAS_HAS_ROCM_BACKEND
 FACTORIZATION_ALL(Backend::ROCM)
 POTRF_ALL(Backend::ROCM)
 #endif
 
-#if BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS
+#if BATCHLAS_HAS_HOST_BACKEND
 FACTORIZATION_ALL(Backend::NETLIB)
 POTRF_ALL(Backend::NETLIB)
 #endif
