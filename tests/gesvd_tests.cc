@@ -1098,7 +1098,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
 // equations; measured at n=32/float/256 samples, its singular-value relative
 // error runs 1.4e-6 -> 3.1e-3 -> 0.235 -> 1.857 across log10(kappa) 1..6 while
 // gesvdj_cta holds 4.8e-6 -> 1.2e-5 -> 7.1e-5 -> 5.6e-3. The order is now
-// per-op (blas/dispatch/env.hh) and Jacobi leads for gesvd.
+// per-op (now kGesvdOrder in blas/dispatch/route_gesvd.hh) and Jacobi leads.
 //
 // These two tests guard that from opposite sides: the first pins the dispatch
 // decision itself, the second pins the numerical consequence on the default

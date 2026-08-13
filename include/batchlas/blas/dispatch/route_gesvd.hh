@@ -42,7 +42,8 @@ struct GesvdShape : OpShape {
 };
 
 // Jacobi first. That ordering is not arbitrary and its measurement is recorded
-// in full on default_order_gesvd (dispatch/env.hh): the one-sided Jacobi kernel
+// in full on the git history of dispatch/env.hh's default_order_gesvd (deleted
+// with the rest of the Provider mechanism): the one-sided Jacobi kernel
 // dominates the older CTA path on accuracy across the whole conditioning sweep,
 // and on speed wherever U is requested, and the shared order had buried it
 // behind exactly the path it replaces.
