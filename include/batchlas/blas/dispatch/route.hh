@@ -29,9 +29,10 @@
 // this library is SYCL; naming one of them "SYCL" would carry no information and
 // would collide with the device-family axis. See VENDOR_INDEPENDENCE_PLAN.md §3.1.
 //
-// STATUS: additive. Nothing consumes this header yet -- `Provider` is still the
-// live mechanism. Migration is stepwise so that the build stays green
-// throughout; see WP0_DISPATCH_SPEC.md step S4.
+// STATUS: live. This is the only routing vocabulary in the tree. `Provider`,
+// DispatchPolicy and the three dispatch/{provider,env,context}.hh headers are
+// gone; every op that has a routing decision now makes it through a
+// RouteTable<Op, T> and dispatch::resolve_route. See WP0_DISPATCH_SPEC.md S4.
 
 #include <cstdint>
 #include <string>
@@ -108,6 +109,19 @@ struct Route {
 // never accidentally escape the gate.
 inline constexpr bool is_vendor(Origin o) { return o == Origin::Vendor; }
 inline constexpr bool is_vendor(const Route& r) { return is_vendor(r.origin); }
+
+// "The ordinary vendor library call", as distinct from any vendor route.
+//
+// A TRAP WORTH NAMING. The MathDx device libraries are Origin::Vendor (their
+// source is NVIDIA's), so {Vendor, FusedDevice} satisfies is_vendor -- but the
+// level-3 dispatchers' old `request == Vendor` tests meant specifically "call
+// cublasSsyrk", and a fused-kernel request was emphatically NOT that. Rendering
+// those as is_vendor() inverts them: a forced cublasdx request starts answering
+// yes to "did the caller ask for the vendor?". Use this instead wherever the
+// question is about the plain library call rather than about origin.
+inline constexpr bool is_plain_vendor(const Route& r) {
+    return r.origin == Origin::Vendor && r.algo == Algorithm::Auto;
+}
 inline constexpr bool is_native(Origin o) { return o == Origin::Native; }
 inline constexpr bool is_native(const Route& r) { return is_native(r.origin); }
 

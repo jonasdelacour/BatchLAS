@@ -31,8 +31,10 @@
 // query. That is what makes `gemm` and `gemm_buffer_size` reach the same route
 // by construction rather than by a hand-written comment asking them to.
 //
-// STATUS: additive. Not yet wired into cublas.cc; tests/route_gemm_equivalence_tests.cc
-// pins it against the current behaviour first. See WP0_DISPATCH_SPEC.md S4.
+// STATUS: live. gemm_use_sycl_custom (src/backends/gemm_variant.hh) is now a
+// two-line adapter over resolve_gemm_route, so cublas.cc, mkl.cc and rocblas.cc
+// all route through this. tests/route_gemm_equivalence_tests.cc pins it against
+// the behaviour it replaced. See WP0_DISPATCH_SPEC.md S4.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>

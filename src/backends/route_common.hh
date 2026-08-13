@@ -32,40 +32,13 @@ inline int ceil_div(int value, int divisor) {
     return internal::ceil_div(value, divisor);
 }
 
-// Parses a BATCHLAS_<OP>_VARIANT env var into one of three route requests.
-//
-// Note the default: an UNSET variable yields `auto_variant`, not
-// `vendor_variant`. So the custom level-3 routes are live by default wherever
-// their heuristics fire -- unlike GEMM, whose gemm_variant_request() defaults to
-// Vendor. That asymmetry is easy to misread and is load-bearing for anyone
-// reasoning about what runs out of the box.
-template <typename Variant>
-Variant parse_cublasdx_variant_request(const char* env_var,
-                                      Variant vendor_variant,
-                                      Variant custom_variant,
-                                      Variant auto_variant) {
-    const char* raw = std::getenv(env_var);
-    if (!raw) {
-        return auto_variant;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return vendor_variant;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return custom_variant;
-    }
-    if (value == "auto") {
-        return auto_variant;
-    }
-
-    return auto_variant;
-}
+// parse_cublasdx_variant_request used to live here: it turned a
+// BATCHLAS_<OP>_VARIANT string into one of three per-op enum values, and it was
+// the last of the five non-communicating environment mechanisms the plan names.
+// All four callers now go through dispatch::parse_route_env, so the asymmetry it
+// documented -- an UNSET variable meant Auto here but Vendor for GEMM -- is
+// recorded once, on dispatch::legacy_unset_default, instead of in a comment on
+// a function each op called separately.
 
 inline bool is_gpu_queue(const Queue& ctx) {
     return ctx.device().type == DeviceType::GPU;

@@ -6,6 +6,9 @@
 #include "trmm_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+
 #include "../util/kernel-trace.hh"
 
 #include <cctype>
@@ -20,31 +23,27 @@ namespace {
 
 constexpr int kTrmmCublasDxTile = 32;
 
-enum class TrmmVariantRequest {
-    Vendor,
-    CuBLASDx,
-    Auto,
-};
-
-TrmmVariantRequest trmm_variant_request() {
-    return detail::parse_cublasdx_variant_request("BATCHLAS_TRMM_VARIANT",
-                                                  TrmmVariantRequest::Vendor,
-                                                  TrmmVariantRequest::CuBLASDx,
-                                                  TrmmVariantRequest::Auto);
+// ONE VARIABLE, TWO PARSERS. BATCHLAS_TRMM_VARIANT used to be read twice, by
+// parsers that did not agree on its vocabulary: parse_cublasdx_variant_request
+// understood vendor / cublasdx|dx|custom / auto and returned Auto for anything
+// else, while trmm_triangular_requested separately looked for triangular|tiles.
+// So `=triangular` was simultaneously "no opinion" to one reader and "pin the
+// tile kernel" to the other, and the two had to be consulted together at four
+// call sites for the pair to mean anything. That is the mangling this work
+// package is named after, in its smallest form.
+//
+// Now there is one parse and one value. Legacy spellings are unchanged and
+// pinned by tests/route_vocabulary_tests.cc.
+dispatch::Route trmm_route_request() {
+    const auto parsed = dispatch::parse_route_env(dispatch::Op::trmm);
+    return parsed.found ? parsed.route
+                        : dispatch::legacy_unset_default(dispatch::Op::trmm);
 }
 
 // BATCHLAS_TRMM_VARIANT=triangular pins the tile kernel, =vendor the expansion
 // plus GEMM it replaces, so the two stay independently measurable.
 bool trmm_triangular_requested() {
-    const char* raw = std::getenv("BATCHLAS_TRMM_VARIANT");
-    if (raw == nullptr) {
-        return false;
-    }
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value == "triangular" || value == "tiles";
+    return trmm_route_request().algo == dispatch::Algorithm::TriangularTiles;
 }
 
 // Every left-side float problem with a homogeneous batch. The kernel indexes
@@ -131,11 +130,12 @@ bool trmm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
 } // namespace
 
 bool trmm_route_prefers_vendor() {
-    return trmm_variant_request() == TrmmVariantRequest::Vendor && !trmm_triangular_requested();
+    const auto r = trmm_route_request();
+    return dispatch::is_plain_vendor(r);
 }
 
 bool trmm_cuda_custom_forced() {
-    return trmm_variant_request() == TrmmVariantRequest::CuBLASDx;
+    return trmm_route_request().algo == dispatch::Algorithm::FusedDevice;
 }
 
 bool trmm_use_cuda_custom(const Queue& ctx,
@@ -152,15 +152,15 @@ bool trmm_use_cuda_custom(const Queue& ctx,
     // new route as the old one.
     if (detail::is_gpu_queue(ctx) && trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
-         trmm_variant_request() != TrmmVariantRequest::Vendor)) {
+         !dispatch::is_plain_vendor(trmm_route_request()))) {
         return true;
     }
-    const auto request = trmm_variant_request();
+    const auto request = trmm_route_request();
     const bool problem_supported = trmm_problem_supported(A, B, C, side, uplo, transA);
     return detail::should_use_cublasdx(ctx,
                                        request,
-                                       TrmmVariantRequest::Vendor,
-                                       TrmmVariantRequest::CuBLASDx,
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice},
                                        problem_supported,
                                        problem_supported && trmm_prefer_cuda_custom_heuristic(A, B));
 }
@@ -185,7 +185,7 @@ Event trmm_cuda_custom(Queue& ctx,
     // expanding it, so it is what the automatic choice takes wherever it fits.
     if (trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
-         (!forced && trmm_variant_request() != TrmmVariantRequest::Vendor))) {
+         (!forced && !dispatch::is_plain_vendor(trmm_route_request())))) {
         return detail::trmm_triangular_tiles(ctx, A, B, C, alpha, uplo, transA, diag);
     }
     if (!trmm_problem_supported(A, B, C, side, uplo, transA)) {

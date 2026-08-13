@@ -3,13 +3,16 @@
 // One environment vocabulary for route selection, and the legacy spellings that
 // map onto it.
 //
-// Today there are five non-communicating mechanisms:
+// There used to be five non-communicating mechanisms, each with its own parser
+// and its own idea of what an unset variable meant:
 //
 //   BATCHLAS_<OP>_PROVIDER          syev, gesvd, ormqr only   (dispatch/env.hh)
 //   BATCHLAS_GEMM_VARIANT           gemm                      (gemm_variant.hh)
 //   BATCHLAS_{SYMM,SYRK,SYR2K,TRMM}_VARIANT                   (*_custom_dispatch.cc)
 //   ad-hoc per-op knobs             BATCHLAS_ORTHO_GRAM, BATCHLAS_ORMQR_IMPL, ...
 //   (and Backend itself, chosen once per Queue)
+//
+// The first three are now this file. The ad-hoc knobs are not yet folded in.
 //
 // The canonical spelling becomes BATCHLAS_<OP>_ROUTE, taking either an origin
 // ("vendor", "native"), an algorithm ("cta", "expand_gemm", ...), or both
@@ -22,7 +25,7 @@
 // parse_route_env() reports which variable it honoured so a diagnostic can
 // quote it back.
 //
-// STATUS: additive. Nothing reads this yet; see WP0_DISPATCH_SPEC.md step S4.
+// STATUS: live. Every op with a legacy variable reads it through here.
 
 #include <cctype>
 #include <cstdlib>
@@ -140,6 +143,18 @@ inline Route legacy_unset_default(Op op) {
 // through the generic parser would flip GEMM from vendor to native for anyone
 // who had set it -- silently, and only for that one spelling. Caught by
 // tests/route_gemm_equivalence_tests.cc; do not "simplify" this away.
+// The second collision, in the four level-3 ops: "custom" means their FUSED
+// cuBLASDx kernel (parse_cublasdx_variant_request's custom_variant), whereas
+// the canonical parser reads it as an alias for the register-tiled GEMM family.
+// Different kernel, same word.
+//
+// Two more spellings exist only in these ops' private parsers and have no
+// canonical equivalent: "tiles" for the tile-masked triangular kernel and
+// "narrow" for syrk's single-tile Gram kernel.
+inline bool is_level3_tile_op(Op op) {
+    return op == Op::symm || op == Op::syrk || op == Op::syr2k || op == Op::trmm;
+}
+
 inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw) {
     const std::string v = route_lowercase(std::string(raw));
 
@@ -148,6 +163,24 @@ inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw
             return Route{Origin::Vendor, Algorithm::Direct};
         }
     }
+
+    if (is_level3_tile_op(op)) {
+        if (v == "custom") return Route{Origin::Vendor, Algorithm::FusedDevice};
+        if (v == "tiles")  return Route{Origin::Native, Algorithm::TriangularTiles};
+        if (op == Op::syrk && v == "narrow") {
+            return Route{Origin::Native, Algorithm::GramTiles};
+        }
+        if ((op == Op::syrk || op == Op::syr2k) && v == "gemm") {
+            // The deliberately WRONG route, kept only so the arithmetic the
+            // triangular kernel saves can be measured against it: it computes
+            // and stores BOTH triangles, which is not what syrk/syr2k mean. It
+            // runs through gemm_cublasdx, a cuBLASDx entry point, so its origin
+            // is Vendor rather than the Native the bare-algorithm rule would
+            // otherwise give it.
+            return Route{Origin::Vendor, Algorithm::DiagFullGemm};
+        }
+    }
+
     return parse_route_value(v);
 }
 

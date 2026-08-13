@@ -183,6 +183,78 @@ TEST(RouteVocabulary, LegacyGemmNativeMeansRawCudaNotBatchLAS) {
     EXPECT_TRUE(is_native(*other));
 }
 
+TEST(RouteVocabulary, LegacyLevel3CustomMeansTheFusedKernelNotRegisterTiled) {
+    // THE SECOND COLLISION. In symm/syrk/syr2k/trmm, "custom" was
+    // parse_cublasdx_variant_request's custom_variant -- the FUSED cuBLASDx
+    // kernel. The canonical parser reads "custom" as an alias for the
+    // register-tiled GEMM family. Different kernel, same word, so the level-3
+    // ops must not go through the generic parser for it.
+    for (Op op : {Op::symm, Op::syrk, Op::syr2k, Op::trmm}) {
+        const auto legacy = parse_legacy_route_value(op, "custom");
+        ASSERT_TRUE(legacy.has_value()) << op_env_stem(op);
+        EXPECT_EQ(legacy->algo, Algorithm::FusedDevice) << op_env_stem(op);
+        EXPECT_TRUE(is_vendor(*legacy)) << "the fused kernel is NVIDIA's source";
+    }
+
+    // The canonical spelling is unaffected, and still names our own kernel.
+    const auto canonical = parse_route_value("custom");
+    ASSERT_TRUE(canonical.has_value());
+    EXPECT_EQ(canonical->algo, Algorithm::RegisterTiled);
+    EXPECT_TRUE(is_native(*canonical));
+
+    // ...and the collision does not leak into gemm, whose "custom" really is
+    // the register-tiled kernel.
+    const auto gemm_custom = parse_legacy_route_value(Op::gemm, "custom");
+    ASSERT_TRUE(gemm_custom.has_value());
+    EXPECT_EQ(gemm_custom->algo, Algorithm::RegisterTiled);
+    EXPECT_TRUE(is_native(*gemm_custom));
+}
+
+TEST(RouteVocabulary, LegacyLevel3TileSpellingsSurvive) {
+    // `tiles` and `narrow` existed only in the ops' private parsers and have no
+    // canonical spelling, so nothing but the alias table can carry them.
+    for (Op op : {Op::syrk, Op::syr2k, Op::trmm}) {
+        for (const char* spelling : {"triangular", "tiles"}) {
+            const auto r = parse_legacy_route_value(op, spelling);
+            ASSERT_TRUE(r.has_value()) << op_env_stem(op) << " " << spelling;
+            EXPECT_EQ(r->algo, Algorithm::TriangularTiles)
+                << op_env_stem(op) << " " << spelling;
+        }
+    }
+    for (const char* spelling : {"gram", "narrow"}) {
+        const auto r = parse_legacy_route_value(Op::syrk, spelling);
+        ASSERT_TRUE(r.has_value()) << spelling;
+        EXPECT_EQ(r->algo, Algorithm::GramTiles) << spelling;
+    }
+}
+
+TEST(RouteVocabulary, LegacyLevel3GemmIsTheVendorMeasurementRoute) {
+    // syrk/syr2k's `gemm` is the deliberately WRONG route kept for measurement:
+    // it computes both triangles, and it runs through gemm_cublasdx. The
+    // bare-algorithm rule would otherwise call it Native.
+    for (Op op : {Op::syrk, Op::syr2k}) {
+        const auto r = parse_legacy_route_value(op, "gemm");
+        ASSERT_TRUE(r.has_value()) << op_env_stem(op);
+        EXPECT_EQ(r->algo, Algorithm::DiagFullGemm) << op_env_stem(op);
+        EXPECT_TRUE(is_vendor(*r)) << op_env_stem(op);
+    }
+}
+
+TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
+    // BATCHLAS_TRMM_VARIANT was read by two parsers that disagreed about its
+    // vocabulary: one understood vendor/cublasdx/auto and answered Auto for
+    // anything else, the other looked only for triangular|tiles. So this value
+    // was simultaneously "no opinion" and "pin the tile kernel", and the pair
+    // had to be consulted together to mean anything.
+    ClearRouteEnv clear(Op::trmm);
+    ScopedEnv set("BATCHLAS_TRMM_VARIANT", "triangular");
+
+    const auto parsed = parse_route_env(Op::trmm);
+    ASSERT_TRUE(parsed.found) << "it is an opinion, not the absence of one";
+    EXPECT_EQ(parsed.route.algo, Algorithm::TriangularTiles);
+    EXPECT_TRUE(is_native(parsed.route));
+}
+
 TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
     ClearRouteEnv clear(Op::trmm);
     ScopedEnv set("BATCHLAS_TRMM_VARIANT", "vendor");
