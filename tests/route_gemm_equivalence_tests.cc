@@ -279,6 +279,33 @@ TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
         << "an unsupported route must never be selected, even with no alternative";
 }
 
+TEST(RouteGemmEquivalence, DefaultedVendorAlsoDegradesWhenThereIsNoVendor) {
+    // The gap the test above did NOT close, found only once the adapter was
+    // wired up: it passes Origin::Auto, which the real call path never produces
+    // for an unset environment. GEMM's unset default is Vendor
+    // (legacy_unset_default), so an ordinary call arrives as a FORCED Vendor
+    // request and used to be returned verbatim -- making the degradation above
+    // unreachable outside this file.
+    OpShape tiny; tiny.op = Op::gemm; tiny.scalar = ScalarKind::F32;
+    tiny.m = tiny.n = tiny.k = 8; tiny.batch = 1; tiny.is_gpu = true;
+    const Route defaulted = legacy_unset_default(Op::gemm);
+    ASSERT_TRUE(is_vendor(defaulted)) << "the premise of this test";
+
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/true)));
+    EXPECT_TRUE(is_native(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/false)))
+        << "a vendor that is not compiled in cannot be the answer";
+
+    // And an explicitly forced vendor degrades the same way. Silently running
+    // native is the better failure than dispatching to a library that is not
+    // there; announcing it is the job of the S6 gate, not of the resolver.
+    const Route explicit_vendor{Origin::Vendor, Algorithm::Auto};
+    EXPECT_TRUE(is_native(resolve_gemm_route<float>(explicit_vendor, tiny, /*vendor_available=*/false)));
+
+    // Still never at the cost of correctness.
+    OpShape het = tiny; het.heterogeneous_batch = true;
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, het, /*vendor_available=*/false)));
+}
+
 TEST(RouteGemmEquivalence, ResolutionIsPureAndRepeatable) {
     // gemm and gemm_buffer_size must reach the same route by construction. A
     // pure resolver gives that for free; the current code relies on a comment.
