@@ -41,11 +41,19 @@ capture() {
     mkdir -p "$STORE"
     local raw="$STORE/$label.csv"
 
+    local abs="$(cd "$(dirname "$raw")" && pwd)/$(basename "$raw")"
+    rm -f "$abs" "$abs".[0-9]*
+
     # Tests are EXPECTED to fail in a vendor-free build; a non-zero ctest is not
-    # a capture failure. What matters is that the file appears and has rows.
-    BATCHLAS_COVERAGE_OUT="$(cd "$(dirname "$raw")" && pwd)/$(basename "$raw")" \
+    # a capture failure. What matters is that rows appear.
+    BATCHLAS_COVERAGE_OUT="$abs" \
         ctest --test-dir "$build_dir" -LE slow >"$STORE/$label.ctest.log" 2>&1
     local ctest_status=$?
+
+    # Each test BINARY writes its own shard; without this merge the capture is
+    # whichever process finished last. See coverage.cc's emit().
+    "$(dirname "$0")/coverage_merge.sh" "$abs" >>"$STORE/$label.ctest.log" 2>&1 \
+        || die "coverage merge failed; see $STORE/$label.ctest.log"
 
     [[ -s "$raw" ]] || die "no coverage file written to $raw (BATCHLAS_COVERAGE_OUT unread?)"
 
@@ -60,10 +68,10 @@ capture() {
     # COUNT. Counts vary with test scheduling and iteration and are not part of
     # the decision; including them would make every comparison fail for reasons
     # that are not route changes.
-    #   kind,op,scalar,backend,shape_class,m,n,k,batch,origin,algo,calls,...
-    #   1    2  3      4       5           6 7 8 9     10     11   12
+    #  kind op scalar backend shape_class m n k batch origin algo calls  ... uplo side diag transA transB
+    #  1    2  3      4       5           6 7 8 9     10     11   12        16   17   18   19     20
     grep '^reached,' "$raw" \
-        | awk -F, '{print $1","$2","$3","$4","$5","$10","$11","$13","$14}' \
+        | awk -F, '{print $1","$2","$3","$4","$5","$10","$11","$13","$14","$16","$17","$18","$19","$20}' \
         | sort -u > "$STORE/$label.routes"
 
     printf 'captured %s: %s reached rows -> %s distinct decisions (ctest exit %s)\n' \

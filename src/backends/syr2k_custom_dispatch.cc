@@ -5,6 +5,7 @@
 #include "syr2k_cublasdx_fused.hh"
 #include "syr2k_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
+#include "level3_coverage.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
@@ -149,37 +150,59 @@ Event syr2k_cuda_custom(Queue& ctx,
                         float beta,
                         Uplo uplo,
                         Transpose transA) {
+    // WP1 S0 instrumentation -- beside every return, never in place of one, and
+    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    const auto rec = [&](dispatch::Route taken, bool native_supported) {
+        detail::record_level3_route(dispatch::Op::syr2k, taken,
+                                    C.rows(), C.cols(),
+                                    transA == Transpose::NoTrans ? A.cols() : A.rows(),
+                                    A.batch_size(), native_supported,
+                                    {uplo, Side::Left, Diag::NonUnit, transA});
+    };
+
     const auto route = syr2k_route_request();
     const bool forced = route.algo == dispatch::Algorithm::FusedDevice;
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
         }
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
     }
     if (!syr2k_problem_supported(A, B, C, transA)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the problem shape or transpose mode is unsupported");
         }
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
     if (route.algo == dispatch::Algorithm::DiagFullGemm) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
         return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
     }
     if (route.algo == dispatch::Algorithm::TriangularTiles ||
         route.origin == dispatch::Origin::Auto) {
         if (syr2k_triangular_supported(A, B, C)) {
+            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
             return detail::syr2k_triangular_tiles(ctx, A, B, C, alpha, beta, uplo, transA);
         }
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     const auto variant = cublasdx_gemm_select_variant(A, B, C, transA, transB);
     if (detail::cublasdx_variant_needs_fallback(variant, syr2k_cublasdx::available())) {
+        // Note this THROWS rather than falling back, and is not guarded by
+        // `forced` -- unlike the two throws above. Pre-existing (a non-fused
+        // named route reaching here gets a cuBLASDx message it did not ask
+        // for); recorded in WP1_LEVEL3_SPEC.md as out of scope, not fixed in
+        // passing.
         throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
     }
+
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
 
     syr2k_cublasdx::Syr2kLaunchDescriptor desc{};
     desc.a_ptr = A.data_ptr();

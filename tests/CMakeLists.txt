@@ -303,6 +303,10 @@ add_custom_target(batchlas_coverage
     COMMAND ${CMAKE_COMMAND} -E env
             BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
             ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # Each test BINARY writes its own shard. Merging is not optional: a single
+    # shared file meant every process truncated the last, so this target used to
+    # report the rows of whichever binary finished last.
+    COMMAND ${PROJECT_SOURCE_DIR}/scripts/coverage_merge.sh ${CMAKE_BINARY_DIR}/coverage.csv
     COMMAND ${CMAKE_COMMAND} -E echo "coverage table: ${CMAKE_BINARY_DIR}/coverage.csv"
     DEPENDS ${TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

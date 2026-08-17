@@ -59,8 +59,13 @@ namespace batchlas::dispatch::coverage {
 
 // Emitted to $BATCHLAS_COVERAGE_OUT (CSV) from an atexit handler that touches
 // no SYCL object -- the standing static-destruction rule in this tree.
+// `native_route_supported` is a TRI-STATE: 1 yes, 0 no, -1 the call site could
+// not tell. The third value exists because a gate that merely says "not this
+// route" cannot distinguish "nothing native serves this shape" from "something
+// does, but the vendor was preferred" -- and recording either as a definite
+// answer would be a claim the caller cannot support.
 void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-            Route chosen, bool native_route_existed, bool native_route_supported);
+            Route chosen, bool native_route_existed, int native_route_supported);
 
 // A call that found no route at all. Recorded separately because it is the row
 // that matters most: it is a gap, not a preference.
@@ -84,7 +89,7 @@ inline bool dynamic_enabled() { return g_dynamic_enabled; }
 // so adding an op cannot silently skip coverage.
 inline void record_if_enabled(Op op, ScalarKind scalar, Backend backend,
                               const OpShape& shape, Route chosen,
-                              bool native_existed, bool native_supported) {
+                              bool native_existed, int native_supported) {
     if (g_dynamic_enabled) {
         record(op, scalar, backend, shape, chosen, native_existed, native_supported);
     }

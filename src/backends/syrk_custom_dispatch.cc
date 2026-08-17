@@ -6,6 +6,7 @@
 #include "syrk_gram_tiles.hh"
 #include "syrk_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
+#include "level3_coverage.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
@@ -195,12 +196,27 @@ Event syrk_cuda_custom(Queue& ctx,
                        float beta,
                        Uplo uplo,
                        Transpose transA) {
+    // WP1 S0 instrumentation. Every `record` below sits BESIDE a return, never
+    // in place of one, and is a no-op unless BATCHLAS_COVERAGE_OUT is set --
+    // so this function's decisions are unchanged by construction. See
+    // level3_coverage.hh for why these four ops cannot simply use
+    // dispatch::resolve_route.
+    const auto rec = [&](dispatch::Route taken, bool native_supported) {
+        detail::record_level3_route(dispatch::Op::syrk, taken,
+                                    C.rows(), C.cols(),
+                                    transA == Transpose::NoTrans ? A.cols() : A.rows(),
+                                    A.batch_size(), native_supported,
+                                    {uplo, Side::Left, Diag::NonUnit, transA});
+    };
+
     if (!syrk_problem_supported(A, C, transA)) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
     }
 
     const auto route = syrk_route_request();
     if (route.algo == dispatch::Algorithm::DiagFullGemm) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
         return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
     }
     if (syrk_triangular_supported(A, C)) {
@@ -210,22 +226,35 @@ Event syrk_cuda_custom(Queue& ctx,
         const bool gram = route.algo == dispatch::Algorithm::GramTiles ||
             (route.origin == dispatch::Origin::Auto && syrk_prefer_gram_tiles(C));
         if (gram) {
+            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::GramTiles}, true);
             return detail::syrk_gram_tiles(ctx, A, C, alpha, beta, uplo, transA);
         }
         if (route.algo == dispatch::Algorithm::TriangularTiles ||
             route.origin == dispatch::Origin::Auto) {
+            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
             return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
         }
     }
     if (route.origin == dispatch::Origin::Auto) {
+        // Reached when the batch is heterogeneous, so the tile kernels cannot
+        // serve it -- native_supported is false, and that is the distinction
+        // the row exists to record.
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
     }
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     const auto variant = cublasdx_gemm_select_variant(A, A, C, transA, transB);
     if (detail::cublasdx_variant_needs_fallback(variant, syrk_cublasdx::available())) {
+        // The route TAKEN, not the one requested: with MathDx absent
+        // syrk_cublasdx::available() is false, so every forced FusedDevice
+        // request lands here. Recording FusedDevice would make the table lie
+        // about what ran.
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
         return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
     }
+
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
 
     syrk_cublasdx::SyrkLaunchDescriptor desc{};
     desc.a_ptr = A.data_ptr();

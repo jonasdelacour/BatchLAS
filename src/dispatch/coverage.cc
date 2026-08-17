@@ -8,7 +8,10 @@
 #include <cstdlib>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <unordered_map>
+
+#include <unistd.h>   // getpid; see emit()
 
 namespace batchlas::dispatch::coverage {
 
@@ -33,16 +36,35 @@ struct Row {
     OpShape shape{};
     Route chosen{};
     bool native_existed = false;
-    bool native_supported = false;
+    int  native_supported = 0;   // tri-state; -1 = call site could not tell
     uint64_t calls = 0;
 };
+
+// The structural flags that change WHICH TRIANGLE or which operand a level-3
+// op touches. Part of the key, not just of the row.
+//
+// Without this, two calls differing only in `uplo` collapse into one row and
+// whichever ran first decides what the table reports. For trmm that is not a
+// rounding error: this project has a documented incident where the tempting 8x
+// "fix" was the wrong-answer one and the test guarding it could not fail by
+// construction. An instrument that cannot distinguish uplo cannot catch that
+// class of defect coming back, which is most of why it exists.
+uint32_t variant_key(const OpShape& s) {
+    return (static_cast<uint32_t>(s.uplo)   << 12) |
+           (static_cast<uint32_t>(s.side)   <<  9) |
+           (static_cast<uint32_t>(s.diag)   <<  6) |
+           (static_cast<uint32_t>(s.transA) <<  3) |
+           (static_cast<uint32_t>(s.transB));
+}
 
 // Keyed on shape_class, not on the exact shape: shape_class() buckets
 // max(m,n,k) and batch by power of two, so a 10,000-iteration test collapses to
 // a handful of rows instead of 10,000.
-uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class) {
-    return (static_cast<uint64_t>(op) << 48) | (static_cast<uint64_t>(s) << 40) |
-           (static_cast<uint64_t>(b) << 32) | shape_class;
+uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
+                uint32_t variant = 0) {
+    return (static_cast<uint64_t>(op) << 56) | (static_cast<uint64_t>(s) << 48) |
+           (static_cast<uint64_t>(b) << 40) |
+           (static_cast<uint64_t>(variant) << 24) | shape_class;
 }
 
 std::mutex& table_mutex() {
@@ -103,21 +125,38 @@ void emit() {
     if (!path || !*path) {
         return;
     }
+
+    // ONE FILE PER PROCESS, and this is not tidiness -- the single-file version
+    // was wrong in a way that silently destroyed almost all of the data.
+    //
+    // A ctest run is 53 separate BINARIES, each with its own atexit handler.
+    // Opening $BATCHLAS_COVERAGE_OUT with "w" meant every process TRUNCATED the
+    // previous one's table, so `batchlas_coverage` -- whose whole job is to run
+    // the suite and report what it reached -- emitted the rows of whichever
+    // binary happened to finish last, and looked entirely healthy doing it.
+    // Caught by noticing that a four-test run reported rows for exactly one op.
+    //
+    // Appending instead would fix the truncation but not the interleaving under
+    // `ctest -j`, where two processes can tear each other's lines. A file per
+    // pid has neither problem, and merging is a `cat` -- see
+    // scripts/coverage_merge.sh and the batchlas_coverage target.
+    const std::string out = std::string(path) + "." + std::to_string(::getpid());
+
     // Deliberately FILE* and no SYCL object: this runs from atexit, where any
     // SYCL handle is already a use-after-free risk. See the standing rule in
     // this tree about static destruction.
-    std::FILE* f = std::fopen(path, "w");
+    std::FILE* f = std::fopen(out.c_str(), "w");
     if (!f) {
         return;
     }
 
     std::fputs("kind,op,scalar,backend,shape_class,m,n,k,batch,"
                "chosen_origin,chosen_algo,calls,native_route_existed,"
-               "native_route_supported,library\n", f);
+               "native_route_supported,library,uplo,side,diag,transA,transB\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
     for (const auto& [k, r] : table()) {
-        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,\n",
+        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
                      std::string(op_name(r.op)).c_str(),
                      std::string(to_string(r.scalar)).c_str(),
                      backend_name(r.backend),
@@ -127,7 +166,10 @@ void emit() {
                      std::string(to_string(r.chosen.origin)).c_str(),
                      std::string(to_string(r.chosen.algo)).c_str(),
                      static_cast<unsigned long long>(r.calls),
-                     r.native_existed ? 1 : 0, r.native_supported ? 1 : 0);
+                     r.native_existed ? 1 : 0, r.native_supported,
+                     static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
+                     static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
+                     static_cast<int>(r.shape.transB));
     }
     for (const auto& [k, m] : misses()) {
         std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",
@@ -157,10 +199,24 @@ void append_static_rows(std::ostringstream& out) {
         bool native;
     };
     // `native` here is "BatchLAS has a kernel for this op that is LINKED in this
-    // build", which is what the burn-down needs to know. gemm's register-tiled
-    // family lives in the vendor-free batchlas_sycl component, so it is always
-    // present; the four level-3 tile routes are still gated with cuBLAS (WP1);
-    // everything else has no native kernel yet at all.
+    // build". gemm's register-tiled family lives in the vendor-free
+    // batchlas_sycl component, so it is always present; the four level-3 tile
+    // routes are still gated with cuBLAS (WP1); everything else has no native
+    // kernel yet at all.
+    //
+    // LINKED IS NOT REACHABLE, and the difference is not academic. In a
+    // vendor-free build gemm reports native=1 here and still throws on every
+    // call: the facade (entry_points/level3.cc:60-64) throws before reaching
+    // any route, because the three-way GEMM decision lives in
+    // backend::gemm_vendor inside the cuBLAS-gated cublas.cc. Measured --
+    // build-novendor gemm_tests is 48/184, and all 48 passes are pure
+    // route-resolution tests that never run a kernel.
+    //
+    // So this table answers "is the kernel in the build", which is the right
+    // PLANNING question, and the `reached` rows answer "did a call actually get
+    // there", which is the right BURN-DOWN question. Reading either as the
+    // other is how VENDOR_FREE_BASELINE.md came to claim a working vendor-free
+    // gemm.
     const bool tiles = level3_tile_kernels_compiled<B>;
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
@@ -196,9 +252,10 @@ void append_static_rows(std::ostringstream& out) {
 } // namespace
 
 void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-            Route chosen, bool native_existed, bool native_supported) {
+            Route chosen, bool native_existed, int native_supported) {
     std::lock_guard<std::mutex> lock(table_mutex());
-    auto& row = table()[key_of(op, scalar, backend, shape.shape_class())];
+    auto& row = table()[key_of(op, scalar, backend, shape.shape_class(),
+                               variant_key(shape))];
     if (row.calls == 0) {
         row.op = op;
         row.scalar = scalar;

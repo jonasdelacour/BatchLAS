@@ -75,12 +75,42 @@ missing ops. `ortho` alone needs `potrf`, `trsm`, `geqrf`, `orgqr` and `gemv`,
 and `ortho` sits under `syevx`, `lobpcg` and `lanczos` — so one missing native
 `trsm` fails a dozen suites.
 
-`gemm` is the interesting entry in the list. Its native register-tiled kernel
-exists and is vendor-free, so `gemm_tests` fails only on the shapes outside
-`gemm_custom_problem_supported` plus the cases that force a vendor route by
-name. That is the shape of every remaining row once the kernels land.
+`gemm` is the interesting entry in the list, and the first version of this
+paragraph got it **wrong** in a way worth keeping visible.
+
+It claimed the native register-tiled kernel "exists and is vendor-free, so
+`gemm_tests` fails only on the shapes outside `gemm_custom_problem_supported`".
+The kernel does exist and is vendor-free. It is also **unreachable**: the facade
+(`src/dispatch/entry_points/level3.cc:60-64`) is
+
+```cpp
+if constexpr (!dispatch::level3_vendor_available<Back>) { throw_no_vendor_route(...); }
+else { return backend::gemm_vendor<Back, T>(...); }
+```
+
+and the three-way route that would pick the native kernel lives in
+`backend::gemm_vendor` at `cublas.cc:153-178` — inside the cuBLAS-gated TU. So a
+vendor-free `gemm` throws on *every* call. Measured, not argued:
+`build-novendor/tests/gemm_tests` is 48 passed / 136 failed, and every one of the
+48 is a pure route-resolution test (`GemmDispatchPolicyTest.*`,
+`GemmTest/*.RouteAdapter*`, all 0 ms) that never executes a GEMM. The failures
+are `NoRouteError: no route for gemm<float> on this backend`.
+
+**`linked` is not `reachable`, and the table above reports `linked`.** That is
+the distinction the whole burn-down turns on, so read the `yes` column as "the
+kernel is in the build", never as "the op works". Closing the gap for `gemm` is
+WP1 S5; until then `gemm`'s `yes` is a statement about the linker.
 
 The four level-3 tile routes (`symm`/`syrk`/`syr2k`/`trmm`) are portable SYCL
 already, but their dispatch still terminates in `*_vendor_cuda_raw`, so they are
-compiled only with cuBLAS. Routing that terminal call through the public `gemm`
-entry point is WP1 and should remove four suites from this list on its own.
+compiled only with cuBLAS. WP1 frees them — but see `WP1_LEVEL3_SPEC.md`, which
+corrects three claims made here and in the plan:
+
+- `symm` carries **no tile kernel**; its only portable kernel is the mirrored
+  expansion, and everything after it is a GEMM.
+- The four routes are reachable **only from `cublas.cc`** (`:269`, `:763`,
+  `:882`, `:1005`). Compiling the TUs everywhere makes them linked everywhere
+  and called nowhere.
+- Routing the terminal at the public `gemm` is the right destination but is not
+  sufficient, per the `gemm` correction above: it converts a `NoRouteError`
+  naming `symm` into one naming `gemm`.

@@ -4,6 +4,7 @@
 #include "gemm_variant.hh"
 #include "symm_cublasdx_fused.hh"
 #include "cublasdx_dispatch_common.hh"
+#include "level3_coverage.hh"
 #include "triangular_expand.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -157,7 +158,17 @@ Event symm_cuda_custom(Queue& ctx,
                        float beta,
                        Side side,
                        Uplo uplo) {
+    // WP1 S0 instrumentation -- beside every return, never in place of one, and
+    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    const auto rec = [&](dispatch::Route taken, bool native_supported) {
+        detail::record_level3_route(dispatch::Op::symm, taken,
+                                    C.rows(), C.cols(), A.rows(),
+                                    A.batch_size(), native_supported,
+                                    {uplo, side, Diag::NonUnit, Transpose::NoTrans});
+    };
+
     if (!symm_problem_supported(A, B, C, side)) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return symm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
@@ -167,8 +178,15 @@ Event symm_cuda_custom(Queue& ctx,
                                                       Transpose::NoTrans,
                                                       Transpose::NoTrans);
     if (detail::cublasdx_variant_needs_fallback(variant, symm_cublasdx::available())) {
+        // symm's only portable kernel is the mirrored expansion; everything
+        // after it is a GEMM. ExpandGemm names that honestly -- and note it is
+        // NOT a claim that the GEMM is native, which is exactly what WP1 S2
+        // and S5 have to make true.
+        rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
         return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
     }
+
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
 
     symm_cublasdx::SymmLaunchDescriptor desc{};
     desc.a_ptr = A.data_ptr();
