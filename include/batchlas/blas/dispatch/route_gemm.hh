@@ -67,7 +67,16 @@ struct RouteTable<Op::gemm, T> {
         }
         // --- gemm_custom_problem_supported ---
         if (s.precision != ComputePrecision::Default) return false;
-        if (s.heterogeneous_batch) return false;
+        // WP2 C2: heterogeneous batch is no longer a correctness gap. The
+        // facade walks the batch (gemm_heterogeneous.hh) and each member is
+        // HOMOGENEOUS by construction, so a native route can serve it.
+        //
+        // It stays rejected by preferred() below, deliberately: the per-item
+        // loop is one launch per batch member, which is a cost, not a win. This
+        // is exactly the supports()/preferred() split doing its job -- "can
+        // produce the right answer" and "is the right choice" are different
+        // questions, and conflating them is the defect this vocabulary exists
+        // to prevent.
         return s.m > 0 && s.n > 0 && s.k > 0;
     }
 
@@ -81,11 +90,26 @@ struct RouteTable<Op::gemm, T> {
 
         if (!s.is_gpu) return false;
 
-        // Complex was excluded outright. NOTE: the WP2 measurement now shows
-        // wide-scalar tiles beating both cuBLAS and the in-tree Tiled16
-        // fallback for complex, so this exclusion is expected to be revisited
-        // -- but changing it is a routing change with its own measurement, not
-        // part of a refactor that must preserve behaviour.
+        // WP2 C2. This test used to live in supports() and is now stated here
+        // explicitly, because loosening supports() would otherwise have let a
+        // heterogeneous batch through preferred() and MOVED A VENDOR-PRESENT
+        // ROUTE -- a silent perf change riding on a correctness fix. The
+        // per-item loop is one launch per batch member; correct, but not a
+        // reason to leave the vendor.
+        if (s.heterogeneous_batch) return false;
+
+        // COMPLEX IS NOT MERELY UNPREFERRED HERE -- IT HAS NO REGISTER KERNEL.
+        // The note that used to sit here said the WP2 measurement shows
+        // wide-scalar tiles beating cuBLAS "so this exclusion is expected to be
+        // revisited". Acting on that sentence alone is a REGRESSION: the second
+        // gate is select_kernel_variant (src/sycl/gemm_kernels.cc:466), whose
+        // entire register ladder is inside `if constexpr (is_same_v<T,float>)`,
+        // so complex falls to `max_dim <= 64 ? Direct : Tiled16` (:514) --
+        // measured at 3.2-7.1x SLOWER than cuBLAS in
+        // WP2_WIDE_SCALAR_GEMM_VERDICT.md. Widening here without first porting
+        // the 64x64x16 t4x4 tile into src/ and wiring the selector routes
+        // complex to Tiled16, not to a register kernel. Order: port ->
+        // selector -> predicate. See WP2_GEMM_SPEC.md.
         if constexpr (is_std_complex_v<T>) {
             return false;
         } else {

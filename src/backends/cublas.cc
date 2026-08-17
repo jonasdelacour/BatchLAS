@@ -17,6 +17,7 @@
 
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
+#include "gemm_heterogeneous.hh"
 #include "level3_coverage.hh"
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
@@ -67,41 +68,20 @@ namespace batchlas {
                                          Transpose transA,
                                          Transpose transB,
                                          ComputePrecision precision) {
-        if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
-        }
-
-        bool launched = false;
-        Event last_event;
-        for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
-            const auto [m, k] = get_effective_dims(A, transA, batch_index);
-            const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-            static_cast<void>(k_b);
-            if (m == 0 || n == 0) {
-                continue;
-            }
-            if (k == 0) {
-                last_event = scale(ctx, beta, C.batch_item(batch_index));
-                launched = true;
-                continue;
-            }
-
-            last_event = gemm_vendor_impl<Back, T>(ctx,
-                                                   A.batch_item(batch_index),
-                                                   B.batch_item(batch_index),
-                                                   C.batch_item(batch_index),
-                                                   alpha,
-                                                   beta,
-                                                   transA,
-                                                   transB,
-                                                   precision);
-            launched = true;
-        }
-
-        if (launched) {
-            return std::move(last_event);
-        }
-        return ctx.create_event_after_external_work();
+        // WP2 C1: the loop, the m==0/n==0 skips, the k==0 -> scale(beta)
+        // substitution and the empty-batch Event moved to
+        // detail::gemm_heterogeneous_loop. None of that was ever about the
+        // vendor, and keeping it here is why a vendor-free build had none of it
+        // -- all 17 remaining vendor-free gemm_tests failures are this.
+        // Only the per-item terminal is backend-specific.
+        return detail::gemm_heterogeneous_loop<T>(
+            ctx, A, B, C, beta, transA, transB,
+            [&](const MatrixView<T, MatrixFormat::Dense>& a,
+                const MatrixView<T, MatrixFormat::Dense>& b,
+                const MatrixView<T, MatrixFormat::Dense>& c) {
+                return gemm_vendor_impl<Back, T>(ctx, a, b, c, alpha, beta,
+                                                 transA, transB, precision);
+            });
     }
 
     template <Backend Back, typename T>

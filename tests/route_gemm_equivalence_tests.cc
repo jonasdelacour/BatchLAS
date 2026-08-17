@@ -160,15 +160,48 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
     return out;
 }
 
+// THE ONE INTENDED DIVERGENCE FROM THE LEGACY DECISION (WP2 C2).
+//
+// The legacy predicate rejected a heterogeneous batch as UNSUPPORTED, so a
+// forced native request on one fell through to the vendor. That was a
+// correctness statement and it is no longer true: the facade now walks the
+// batch (src/backends/gemm_heterogeneous.hh) and each member is homogeneous by
+// construction, so a native route can serve it. supports() says so.
+//
+// This is deliberately an EXCEPTION LIST rather than a change to the replica.
+// The replica's job is to model the legacy decision faithfully; editing it to
+// match the new behaviour would make the two agree by construction and the test
+// would stop being able to detect anything. Every future intended divergence
+// should be added here, with its reason, and the count below asserted -- an
+// exception list that grows silently is just a disabled test.
+//
+// Note this cell does NOT change the production route on a vendor-present box:
+// backend::gemm_vendor (src/backends/cublas.cc) tests
+// gemm_has_heterogeneous_batch BEFORE consulting gemm_use_sycl_custom, so the
+// heterogeneous loop is entered either way. The divergence is visible to this
+// test because it calls the predicate directly.
+template <typename T>
+bool is_intended_divergence(const char* env, const OpShape& s,
+                            bool old_native, bool new_native) {
+    const bool forced_native = env != nullptr &&
+        (std::string_view(env) == "sycl" || std::string_view(env) == "custom");
+    return s.heterogeneous_batch && forced_native && !old_native && new_native;
+}
+
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
-    size_t compared = 0, native_cases = 0;
+    size_t compared = 0, native_cases = 0, intended = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
             const bool new_native = new_uses_native<T>(env, s);
             ++compared;
             if (old_native) ++native_cases;
+
+            if (is_intended_divergence<T>(env, s, old_native, new_native)) {
+                ++intended;
+                continue;
+            }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -185,6 +218,14 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
     // Guards against the degenerate pass where the new code never picks native
     // and the old code never did either because the grid missed the window.
     EXPECT_GT(native_cases, 0u) << "grid never exercised the native route for " << type_name;
+
+    // The exception list is ASSERTED, not merely allowed. An exception list
+    // that can grow without anyone noticing is a disabled test, and a count of
+    // zero would mean the grid stopped reaching the heterogeneous cells and the
+    // exception silently stopped guarding anything.
+    EXPECT_GT(intended, 0u)
+        << "grid no longer reaches the intended heterogeneous divergence for "
+        << type_name << " -- the exception is now vacuous";
 }
 
 } // namespace
@@ -242,15 +283,35 @@ TEST(RouteGemmEquivalence, SupportsIsCorrectnessOnlyNotSpeed) {
 
 TEST(RouteGemmEquivalence, CorrectnessGateSurvivesForcing) {
     using Table = RouteTable<Op::gemm, float>;
+
+    // The rule under test is "forcing cannot select a route that computes the
+    // WRONG ANSWER" -- forcing bypasses preferred(), never supports().
+    //
+    // The example was a heterogeneous batch until WP2 C2 made that supported.
+    // Swapped for a non-Default ComputePrecision, which no native kernel serves:
+    // select_kernel_variant has no TF32 path at all, so this is a correctness
+    // gate and not a speed one. Picking a still-unsupported example matters more
+    // than the specific shape -- a test whose premise has quietly become false
+    // passes for the wrong reason.
+    OpShape unsupported; unsupported.op = Op::gemm; unsupported.scalar = ScalarKind::F32;
+    unsupported.m = unsupported.n = unsupported.k = 256;
+    unsupported.batch = 512; unsupported.is_gpu = true;
+    unsupported.precision = ComputePrecision::F32;
+
+    const Route native{Origin::Native, Algorithm::RegisterTiled};
+    EXPECT_FALSE(Table::supports(native, unsupported));
+    const Route chosen = resolve_gemm_route<float>(native, unsupported);
+    EXPECT_TRUE(is_vendor(chosen));
+
+    // And the retired example, asserted in its new direction so the change is
+    // pinned rather than merely absent.
     OpShape het; het.op = Op::gemm; het.scalar = ScalarKind::F32;
     het.m = het.n = het.k = 256; het.batch = 512; het.is_gpu = true;
     het.heterogeneous_batch = true;
-
-    const Route native{Origin::Native, Algorithm::RegisterTiled};
-    EXPECT_FALSE(Table::supports(native, het));
-    // Forcing must not be able to select a route that computes the wrong answer.
-    const Route chosen = resolve_gemm_route<float>(native, het);
-    EXPECT_TRUE(is_vendor(chosen));
+    EXPECT_TRUE(Table::supports(native, het))
+        << "WP2 C2: the facade walks a heterogeneous batch, so native supports it";
+    EXPECT_FALSE(Table::preferred(native, het))
+        << "...but a per-item loop is a cost, so it is never the preferred choice";
 }
 
 TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
@@ -272,11 +333,31 @@ TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
     EXPECT_TRUE(is_native(chosen))
         << "with no vendor available, the supported native route must be chosen";
 
-    // ...but only when it is actually supported. A heterogeneous batch is a
-    // correctness failure, so vendor-off must not manufacture a wrong answer.
-    OpShape het = tiny; het.heterogeneous_batch = true;
-    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, het, /*vendor_available=*/false)))
+    // ...but only when it is actually supported: vendor-off must not
+    // manufacture a wrong answer.
+    //
+    // This used to use a heterogeneous batch as the unsupported example. WP2 C2
+    // made heterogeneous SUPPORTED -- the facade walks the batch and each member
+    // is homogeneous by construction -- so that example stopped testing
+    // anything, and the assertion failed rather than silently passing, which is
+    // the behaviour worth having. Substituted with a genuinely unsupported
+    // shape: a non-Default ComputePrecision, which no native kernel serves
+    // (route_gemm.hh supports(), and select_kernel_variant has no TF32 path).
+    OpShape unsupported = tiny;
+    unsupported.precision = ComputePrecision::F32;
+    // Aliased because the comma in RouteTable<Op::gemm, float> is a macro
+    // argument separator to the preprocessor, not a template argument.
+    using GemmTable = RouteTable<Op::gemm, float>;
+    ASSERT_FALSE(GemmTable::supports(
+                     Route{Origin::Native, Algorithm::RegisterTiled}, unsupported))
+        << "the premise: this shape must actually be unsupported";
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, unsupported, /*vendor_available=*/false)))
         << "an unsupported route must never be selected, even with no alternative";
+
+    // And the retired example now behaves the other way, on purpose.
+    OpShape het = tiny; het.heterogeneous_batch = true;
+    EXPECT_TRUE(is_native(resolve_gemm_route<float>(automatic, het, /*vendor_available=*/false)))
+        << "WP2 C2: heterogeneous batch is supported natively via the facade loop";
 }
 
 TEST(RouteGemmEquivalence, DefaultedVendorAlsoDegradesWhenThereIsNoVendor) {
@@ -301,9 +382,11 @@ TEST(RouteGemmEquivalence, DefaultedVendorAlsoDegradesWhenThereIsNoVendor) {
     const Route explicit_vendor{Origin::Vendor, Algorithm::Auto};
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(explicit_vendor, tiny, /*vendor_available=*/false)));
 
-    // Still never at the cost of correctness.
-    OpShape het = tiny; het.heterogeneous_batch = true;
-    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, het, /*vendor_available=*/false)));
+    // Still never at the cost of correctness -- with an example that is still
+    // unsupported after WP2 C2 (see the note in the test above).
+    OpShape unsupported = tiny;
+    unsupported.precision = ComputePrecision::F32;
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, unsupported, /*vendor_available=*/false)));
 }
 
 TEST(RouteGemmEquivalence, ResolutionIsPureAndRepeatable) {
