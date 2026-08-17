@@ -1,6 +1,16 @@
 #pragma once
 
-#include "../linalg-impl.hh"
+// WP1 S5: ../linalg-impl.hh was the ONLY thing in this header that reached
+// CUDA (its line 23 includes <cuda_runtime.h> under BATCHLAS_HAS_CUDA_BACKEND).
+// Nothing here needs it: MatrixView, get_effective_dims, Queue and DeviceType
+// all come from the three portable headers below. Dropping it makes the whole
+// Route adapter -- gemm_op_shape, gemm_route_request, gemm_route,
+// gemm_use_sycl_custom -- includable from the vendor-independent facade, which
+// is what lets the facade's gemm gain a native arm without duplicating any
+// routing logic.
+#include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>

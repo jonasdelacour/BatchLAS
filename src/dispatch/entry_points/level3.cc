@@ -41,6 +41,12 @@
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
+// WP1 S5: the native GEMM arm. Both are vendor-free -- gemm_kernels.hh reaches
+// only enums/matrix/queue, and gemm_variant.hh stopped including linalg-impl.hh
+// (its sole CUDA tie) in the same step.
+#include "../../backends/gemm_variant.hh"
+#include "../../sycl/gemm_kernels.hh"
+
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -58,6 +64,32 @@ Event gemm(Queue& ctx,
            Transpose transB,
            ComputePrecision precision) {
     if constexpr (!dispatch::level3_vendor_available<Back>) {
+        // WP1 S5. Without this arm the whole work package delivers nothing
+        // vendor-free: S2 pointed the level-3 expansions at this entry point,
+        // and this entry point threw. VENDOR_FREE_BASELINE.md claimed gemm
+        // "fails only on the shapes outside gemm_custom_problem_supported";
+        // it threw on EVERY call, measured at 48 passed / 136 failed where all
+        // 48 passes are pure route-resolution tests that never run a kernel.
+        //
+        // The register-tiled family was linked the whole time -- it lives in
+        // the vendor-free batchlas_sycl component -- just unreachable. LINKED
+        // is not REACHABLE, and that distinction is what the coverage table's
+        // `linked` rows do and do not tell you.
+        //
+        // The routing is NOT duplicated here. backend::gemm_route is the same
+        // adapter cublas.cc consults, over the same RouteTable<Op::gemm, T>;
+        // `vendor_available = false` is the one input that differs, and
+        // resolve_route already has a branch for it (route_resolve.hh: a
+        // requested vendor that does not exist falls back to the ordinary
+        // automatic choice rather than being honoured).
+        const auto route = backend::gemm_route<T>(ctx, A, B, C, transA, transB,
+                                                  precision, /*vendor_available=*/false);
+        if (dispatch::is_native(route)) {
+            return sycl_gemm::gemm_custom<T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+        }
+        // Still honest about the gap: shapes the native kernel does not serve
+        // (heterogeneous batches, non-Default precision, degenerate dims) have
+        // no route at all without a vendor, and say so by name.
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::gemm, Back, dispatch::kLevel3Library<Back>);
     } else {
