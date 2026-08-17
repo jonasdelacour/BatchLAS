@@ -6,6 +6,7 @@
 #include "syr2k_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "level3_coverage.hh"
+#include "level3_vendor_fallback.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
@@ -167,14 +168,14 @@ Event syr2k_cuda_custom(Queue& ctx,
             throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
+        return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
     if (!syr2k_problem_supported(A, B, C, transA)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the problem shape or transpose mode is unsupported");
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
+        return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
     if (route.algo == dispatch::Algorithm::DiagFullGemm) {
@@ -188,7 +189,7 @@ Event syr2k_cuda_custom(Queue& ctx,
             return detail::syr2k_triangular_tiles(ctx, A, B, C, alpha, beta, uplo, transA);
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
+        return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;

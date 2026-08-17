@@ -7,6 +7,7 @@
 #include "syrk_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "level3_coverage.hh"
+#include "level3_vendor_fallback.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
@@ -211,7 +212,7 @@ Event syrk_cuda_custom(Queue& ctx,
 
     if (!syrk_problem_supported(A, C, transA)) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
+        return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
     }
 
     const auto route = syrk_route_request();
@@ -240,7 +241,7 @@ Event syrk_cuda_custom(Queue& ctx,
         // serve it -- native_supported is false, and that is the distinction
         // the row exists to record.
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
+        return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
     }
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;

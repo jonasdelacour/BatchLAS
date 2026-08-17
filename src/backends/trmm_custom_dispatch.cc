@@ -6,6 +6,7 @@
 #include "trmm_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "level3_coverage.hh"
+#include "level3_vendor_fallback.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
@@ -196,7 +197,7 @@ Event trmm_cuda_custom(Queue& ctx,
             throw_forced_trmm_unavailable("the active queue is not a GPU queue");
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
     // The tile kernel is the only route that respects the triangle rather than
     // expanding it, so it is what the automatic choice takes wherever it fits.
@@ -211,7 +212,7 @@ Event trmm_cuda_custom(Queue& ctx,
             throw_forced_trmm_unavailable("only left/lower/notrans float problems with matching dense batches are currently supported");
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
     const auto variant = cublasdx_gemm_select_variant(A,
@@ -224,7 +225,7 @@ Event trmm_cuda_custom(Queue& ctx,
             throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
         }
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, true);
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
     rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
@@ -253,7 +254,7 @@ Event trmm_cuda_custom(Queue& ctx,
         if (forced) {
             throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
         }
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
     if (status != cudaSuccess) {
         throw std::runtime_error(std::string("cuBLASDx fused TRMM launch failed: ") + cudaGetErrorString(status));

@@ -1,5 +1,13 @@
 set(BACKEND_COMMON_SOURCES
     backend_handle_instantiations.cc
+    # WP1 S1. The seam where a level-3 tile route gives up and asks for the
+    # vendor. Compiled in EVERY configuration -- including the one with no CUDA
+    # object library at all -- because it is what lets the four *_custom_dispatch
+    # TUs stop naming cuBLAS symbols. Its own #if picks vendor-or-throw; see
+    # level3_vendor_fallback.hh for why this cannot just call the public entry
+    # point (it would recurse: every call site is reached AFTER a gate that
+    # already returned true).
+    level3_vendor_fallback.cc
 )
 
 set(BACKEND_HOST_SOURCES)

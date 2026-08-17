@@ -5,6 +5,7 @@
 #include "symm_cublasdx_fused.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "level3_coverage.hh"
+#include "level3_vendor_fallback.hh"
 #include "triangular_expand.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -169,7 +170,7 @@ Event symm_cuda_custom(Queue& ctx,
 
     if (!symm_problem_supported(A, B, C, side)) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return symm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, side, uplo);
+        return detail::symm_vendor_fallback(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
     const auto variant = cublasdx_gemm_select_variant(side == Side::Left ? A : B,
