@@ -9,6 +9,12 @@
 #include "level3_coverage.hh"
 #include "level3_vendor_fallback.hh"
 
+// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
+// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
+// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
+// queue-dispatch.hh.
+#include <batchlas/blas/functions/gemm.hh>
+
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 
@@ -147,7 +153,7 @@ Event syrk_cublasdx_fallback_gemm(Queue& ctx,
                                   Transpose transA) {
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.gemm_fallback");
-    return gemm_cublasdx(ctx, A, A, C, alpha, beta, transA, transB, ComputePrecision::Default);
+    return ::batchlas::gemm<Backend::CUDA, float>(ctx, A, A, C, alpha, beta, transA, transB, ComputePrecision::Default);
 }
 
 } // namespace

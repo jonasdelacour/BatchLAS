@@ -8,6 +8,12 @@
 #include "level3_coverage.hh"
 #include "level3_vendor_fallback.hh"
 
+// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
+// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
+// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
+// queue-dispatch.hh.
+#include <batchlas/blas/functions/gemm.hh>
+
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 
@@ -106,11 +112,11 @@ Event syr2k_cublasdx_fallback_gemm(Queue& ctx,
     // have to be ordered. An in-order queue already orders them: both run on
     // its native stream. An out-of-order queue orders nothing across the
     // SYCL/native boundary, so there the first has to be waited out.
-    Event first = gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
+    Event first = ::batchlas::gemm<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
     if (!ctx.in_order()) {
         first.wait();
     }
-    return gemm_cublasdx(ctx, B, A, C, alpha, 1.0f, transA, transB, ComputePrecision::Default);
+    return ::batchlas::gemm<Backend::CUDA, float>(ctx, B, A, C, alpha, 1.0f, transA, transB, ComputePrecision::Default);
 }
 
 [[noreturn]] void throw_forced_syr2k_unavailable(const std::string& reason) {

@@ -6,6 +6,12 @@
 #include "cublasdx_dispatch_common.hh"
 #include "level3_coverage.hh"
 #include "level3_vendor_fallback.hh"
+
+// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
+// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
+// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
+// queue-dispatch.hh.
+#include <batchlas/blas/functions/gemm.hh>
 #include "triangular_expand.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -111,7 +117,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
     }
 
     if (side == Side::Left) {
-        return gemm_cublasdx(ctx,
+        return ::batchlas::gemm<Backend::CUDA, float>(ctx,
                              expanded,
                              B,
                              C,
@@ -122,7 +128,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
                              ComputePrecision::Default);
     }
 
-    return gemm_cublasdx(ctx,
+    return ::batchlas::gemm<Backend::CUDA, float>(ctx,
                          B,
                          expanded,
                          C,
