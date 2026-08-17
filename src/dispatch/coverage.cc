@@ -12,6 +12,18 @@
 
 namespace batchlas::dispatch::coverage {
 
+// One definition, in one TU, so the library and every consumer necessarily
+// agree -- which the -DBATCHLAS_ENABLE_COVERAGE macro could not guarantee, and
+// in practice did not (see coverage.hh).
+//
+// Keyed on the SAME variable that emit() reads. Recording into a table that
+// will never be written, or writing a table nothing recorded into, are both
+// states worth making unrepresentable.
+bool g_dynamic_enabled = [] {
+    const char* p = std::getenv("BATCHLAS_COVERAGE_OUT");
+    return p != nullptr && *p != '\0';
+}();
+
 namespace {
 
 struct Row {
@@ -75,6 +87,13 @@ const char* backend_name(Backend b) {
         case Backend::ROCM:   return "ROCM";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
+        // Expected, not a defect. The adapters that build an OpShape (gemm's
+        // gemm_op_shape, ormqr_op_shape, and the rest) do not set `backend`:
+        // the backend is a TEMPLATE parameter at the call site, so the shape
+        // never learns it. `reached` rows therefore read AUTO, and the row is
+        // still keyed uniquely by op x scalar x shape_class. Naming it AUTO
+        // rather than "?" keeps that visible instead of looking like a bug.
+        case Backend::AUTO:   return "AUTO";
         default:              return "?";
     }
 }

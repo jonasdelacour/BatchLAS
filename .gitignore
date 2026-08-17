@@ -96,3 +96,4 @@ evaluation/traces/*.json
 # Kernel trace output (default name + common folders)
 batchlas_kernels.trace.json
 evaluation/trace/
+.route-diff/

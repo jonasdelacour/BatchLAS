@@ -20,12 +20,33 @@
 //              vendor. This is the burn-down input: it says which shapes real
 //              callers actually hit, so WP3-WP8 can cover those first.
 //
-// The dynamic half is COMPILED OUT unless -DBATCHLAS_ENABLE_COVERAGE=ON. The
-// spec has it always on, arguing the counters are cheap; they are cheap per
-// call, but gemm is called in inner loops and "cheap" is not "free". Making it
-// a build option keeps the measurement honest -- a coverage build is not the
-// build you benchmark -- and costs nothing in the default one, where
-// record_route() compiles to nothing.
+// The dynamic half is gated at RUNTIME on $BATCHLAS_COVERAGE_OUT -- the same
+// variable that decides whether anything is written at all -- so recording and
+// emission cannot disagree about whether coverage is on.
+//
+// IT WAS A COMPILE-TIME GATE FIRST, AND THAT WAS THE WRONG CALL, TWICE OVER.
+//
+// The stated reason was "the counters are cheap per call, but gemm is called in
+// inner loops and cheap is not free". That does not survive reading the code
+// it guards: resolve_route runs ONCE PER OP INVOCATION, not per element, and it
+// already walks the route order calling supports() and preferred() on every
+// entry. A predicted branch on a global bool is far cheaper than the work
+// sitting next to it, so the gate was optimising something that was never the
+// cost.
+//
+// The second problem is the one that actually bit. resolve_route is an inline
+// function template, so EVERY TU that routes instantiates its own weak copy.
+// ELF resolves the executable's weak symbols ahead of a shared library's, so a
+// test compiled without the macro interposes its uninstrumented copy over the
+// library's instrumented one -- and the library's own calls then record
+// nothing. Observed exactly that: build with -DBATCHLAS_ENABLE_COVERAGE=ON,
+// confirm libbatchlas_backends.so references coverage::record, run gemm_tests,
+// get a coverage file with a correct header and ZERO `reached` rows, because
+// gemm_tests carried its own `resolve_route_uninstrumented<Op::gemm, float>`.
+//
+// A compile-time switch on an inline function in a header is only sound if
+// EVERY TU in the process agrees on it, which is not something a library can
+// enforce on its consumers. The runtime gate has no such requirement.
 
 #include <cstdint>
 #include <string>
@@ -49,19 +70,22 @@ void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library)
 // Returns CSV with a header row.
 std::string static_table();
 
-// True when the dynamic half is compiled in.
-inline constexpr bool dynamic_enabled =
-#ifdef BATCHLAS_ENABLE_COVERAGE
-    true;
-#else
-    false;
-#endif
+// Set once, from $BATCHLAS_COVERAGE_OUT, by a dynamic initialiser in
+// coverage.cc. A plain bool rather than a function-local static so the hot path
+// is a load and a predictable branch, with no guard-variable acquire.
+//
+// It lives in exactly one TU, so unlike the macro it cannot differ between the
+// library and its callers -- which is the whole point of the change.
+extern bool g_dynamic_enabled;
 
-// Zero-cost in the default build.
+inline bool dynamic_enabled() { return g_dynamic_enabled; }
+
+// Called from resolve_route -- the single choke point every op passes through,
+// so adding an op cannot silently skip coverage.
 inline void record_if_enabled(Op op, ScalarKind scalar, Backend backend,
                               const OpShape& shape, Route chosen,
                               bool native_existed, bool native_supported) {
-    if constexpr (dynamic_enabled) {
+    if (g_dynamic_enabled) {
         record(op, scalar, backend, shape, chosen, native_existed, native_supported);
     }
 }
