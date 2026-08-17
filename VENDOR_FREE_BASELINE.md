@@ -62,12 +62,23 @@ moved them: the suite is now **24/53**, `gemm_tests` is 167 passing / 17 failing
 linked. Four suites recovered — `bdsdc_tests`, `ritz_values_tests`, `sytrd_cta_tests`,
 `transpose_tests` — with none newly failing. See `WP1_LEVEL3_SPEC.md`.
 
-Two named gaps remain in this area, both precise enough to be worked directly:
+## After WP2's correctness track
 
-- **`gemm`: heterogeneous batch.** All 17 remaining `gemm_tests` failures are this one
-  thing.
+`gemm_tests` is now **184/184 vendor-free** (was 48/184 pre-WP1, 167/184 after WP1 S5), and
+the suite is **25/53**. `gemm_tests` left the failing set and nothing joined it.
+
+The gap that closed was heterogeneous batch, and it was never a kernel gap: the per-item loop
+— including the `m==0`/`n==0` skips and the `k==0 → scale(beta)` substitution — lived inside
+cuBLAS-gated code, so a vendor-free build simply did not have those semantics. See
+`WP2_GEMM_SPEC.md`.
+
+One named gap remains in this area:
+
 - **Level-3 non-float.** `syrk`'s gram branch and `trmm`'s tile branch for double/complex
   are still reachable only from `cublas.cc`, and `syr2k` has no non-float tile route at all.
+
+And one that WP2's envelope track owns: `select_kernel_variant` is **float-only**, so a
+vendor-free `double` or `complex` GEMM reaches `Tiled16`, not a register kernel.
 
 ## The same gap, per op
 

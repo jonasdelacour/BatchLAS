@@ -74,7 +74,32 @@ commits.
 | C2 | Give the vendor-free facade a heterogeneous arm; stop `supports()` rejecting it | vendor-free only |
 | C3 | Record the cost of vendor-free heterogeneous; do **not** gate on it | none |
 
-This closes the **17 remaining vendor-free `gemm_tests` failures**, which are all
+**Status: C1–C3 landed.** Vendor-free `gemm_tests` went **167/184 → 184/184**, and the
+vendor-free suite **24/53 → 25/53** with `gemm_tests` the only suite to leave the failing set
+and nothing newly failing. Vendor-present stayed at its documented 52/53, with a route diff of
+4 lines that are all `native_route_supported` 0→1 and **zero decisions moved**.
+
+### C3 result — what vendor-freedom costs for heterogeneous batch
+
+`gemm_heterogeneous_benchmark`, float, GPU-guarded, JIT warmed, 10 iterations:
+
+| shape | batch | vendor-present GFLOP/s | vendor-free GFLOP/s |
+|---|---|---|---|
+| 64×64×32 | 4096 | 6.96 | 6.99 |
+| 128×128×32 | 1024 | 7.25 | 7.39 |
+| 256×256×32 | 256 | 7.58 | 8.14 |
+
+**Vendor-freedom costs nothing measurable here** — every difference is inside the 2–13%
+run-to-run spread (Std/Avg on these rows). That is the expected result and the reason C3 does
+not gate: both paths pay the same dominant cost, one kernel launch per batch member.
+
+The number worth acting on is the absolute one. ~7 GFLOP/s against a ~47 TFLOP/s FP32 peak is
+roughly 6000× off, and it is launch-bound, not kernel-bound. The single-launch alternative is
+buildable without new infrastructure — `KernelMatrixView` already carries `active_rows_` /
+`active_cols_` — and is **deferred**: it is a performance project with its own measurement,
+not part of closing a correctness gap.
+
+This closed the **17 remaining vendor-free `gemm_tests` failures**, which were all
 heterogeneous batch. `gemm_heterogeneous_vendor_impl` (`cublas.cc:60-104`) also carries the
 `m==0`/`n==0` skip and the `k==0 → scale(beta)` substitution, so those semantics — currently
 vendor-only — come with it.
