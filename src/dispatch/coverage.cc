@@ -217,15 +217,30 @@ void append_static_rows(std::ostringstream& out) {
     // there", which is the right BURN-DOWN question. Reading either as the
     // other is how VENDOR_FREE_BASELINE.md came to claim a working vendor-free
     // gemm.
-    const bool tiles = level3_tile_kernels_compiled<B>;
+    // WP1 S7: the tile routes' availability is per (backend, SCALAR), not per
+    // backend, so this column is reported FOR FLOAT and the scalar column now
+    // says so. double and complex differ: syrk's non-float gram branch and
+    // trmm's non-float tile branch are reachable only when cuBLAS is compiled,
+    // and syr2k has no non-float tile route at all. A single type-blind column
+    // here would have re-stated exactly the overclaim S7 exists to prevent.
+    const bool tiles_f32 = level3_tile_route_available<B, float>;
     const Entry entries[] = {
+        // gemm's `true` is now REACHABLE and not merely linked -- WP1 S5 gave
+        // the facade a native arm. Before that this row said `true` while every
+        // vendor-free gemm call threw.
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        false},
         {"trsm",  level3_vendor_available<B>,        false},
-        {"trmm",  level3_vendor_available<B>,        tiles},
-        {"symm",  level3_vendor_available<B>,        tiles},
-        {"syrk",  level3_vendor_available<B>,        tiles},
-        {"syr2k", level3_vendor_available<B>,        tiles},
+        {"trmm",  level3_vendor_available<B>,        tiles_f32},
+        // symm has NO tile kernel. Its only portable kernel is the mirrored
+        // expansion (triangular_expand.hh); everything after it is a GEMM. The
+        // plan and this table both called it a tile route -- it is an
+        // expand-then-gemm route, and the distinction matters because the
+        // expansion alone does not make symm vendor-free, the GEMM it feeds
+        // has to be too (WP1 S2 + S5).
+        {"symm",  level3_vendor_available<B>,        tiles_f32},
+        {"syrk",  level3_vendor_available<B>,        tiles_f32},
+        {"syr2k", level3_vendor_available<B>,        tiles_f32},
         {"hemm",  level3_vendor_available<B>,        false},
         {"herk",  level3_vendor_available<B>,        false},
         {"her2k", level3_vendor_available<B>,        false},
@@ -241,7 +256,10 @@ void append_static_rows(std::ostringstream& out) {
         {"spmm",  sparse_vendor_available<B>,        false},
     };
     for (const auto& e : entries) {
-        out << "linked," << e.op << ",,"
+        // The scalar column was blank, which read as "all types". It is not:
+        // the level-3 tile routes are float-only outside a cuBLAS build. Saying
+        // `float` is the honest width of this row.
+        out << "linked," << e.op << ",float,"
             << backend_name(B) << ",,,,,,"
             << (e.native ? "native" : "-") << ","
             << (e.vendor ? "vendor" : "-") << ",,"
