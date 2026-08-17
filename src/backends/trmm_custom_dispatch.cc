@@ -1,11 +1,9 @@
 #include "trmm_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "trmm_cublasdx_fused.hh"
 #include "trmm_triangular_tiles.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
 #include "level3_coverage.hh"
+#include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -215,52 +213,23 @@ Event trmm_cuda_custom(Queue& ctx,
         return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
-    const auto variant = cublasdx_gemm_select_variant(A,
-                                                      B,
-                                                      C,
-                                                      Transpose::NoTrans,
-                                                      Transpose::NoTrans);
-    if (detail::cublasdx_variant_needs_fallback(variant, trmm_cublasdx::available())) {
-        if (forced) {
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). trmm is the op
+    // whose two non-Ran outcomes differ from each other: both fall back to the
+    // vendor, but each throws a DIFFERENT message when the route was forced.
+    auto fused = detail::trmm_fused_try(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
+    }
+    if (forced) {
+        if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
             throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, true);
-        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
     }
 
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-
-    trmm_cublasdx::TrmmLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.b_ptr = B.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldb = B.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_b = B.stride();
-    desc.stride_c = C.stride();
-    desc.m = C.rows();
-    desc.n = C.cols();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("trmm_cuda_custom.fused");
-    const cudaError_t status = trmm_cublasdx::launch_float(variant,
-                                                           desc,
-                                                           diag,
-                                                           detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        if (forced) {
-            throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
-        }
-        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused TRMM launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, true);
+    return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
 }
 
 } // namespace batchlas::backend

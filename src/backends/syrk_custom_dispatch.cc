@@ -1,12 +1,10 @@
 #include "syrk_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "syrk_cublasdx_fused.hh"
 #include "syrk_gram_tiles.hh"
 #include "syrk_triangular_tiles.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
 #include "level3_coverage.hh"
+#include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
 // WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
@@ -250,46 +248,18 @@ Event syrk_cuda_custom(Queue& ctx,
         return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
     }
 
-    const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    const auto variant = cublasdx_gemm_select_variant(A, A, C, transA, transB);
-    if (detail::cublasdx_variant_needs_fallback(variant, syrk_cublasdx::available())) {
-        // The route TAKEN, not the one requested: with MathDx absent
-        // syrk_cublasdx::available() is false, so every forced FusedDevice
-        // request lands here. Recording FusedDevice would make the table lie
-        // about what ran.
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
-        return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3).
+    auto fused = detail::syrk_fused_try(ctx, A, C, alpha, beta, uplo, transA);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
     }
 
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-
-    syrk_cublasdx::SyrkLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_c = C.stride();
-    desc.n = C.rows();
-    desc.k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-    desc.beta = beta;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.fused");
-    const cudaError_t status = syrk_cublasdx::launch_float(variant,
-                                                           desc,
-                                                           uplo,
-                                                           transA,
-                                                           detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYRK launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    // The route TAKEN, not the one requested: with MathDx absent the fused
+    // kernel is never available, so every forced FusedDevice request lands
+    // here. Recording FusedDevice would make the table lie about what ran.
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
+    return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
 }
 
 } // namespace batchlas::backend

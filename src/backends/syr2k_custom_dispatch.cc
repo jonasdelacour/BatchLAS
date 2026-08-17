@@ -1,11 +1,9 @@
 #include "syr2k_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "syr2k_cublasdx_fused.hh"
 #include "syr2k_triangular_tiles.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
 #include "level3_coverage.hh"
+#include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
 // WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
@@ -198,49 +196,23 @@ Event syr2k_cuda_custom(Queue& ctx,
         return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
-    const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    const auto variant = cublasdx_gemm_select_variant(A, B, C, transA, transB);
-    if (detail::cublasdx_variant_needs_fallback(variant, syr2k_cublasdx::available())) {
-        // Note this THROWS rather than falling back, and is not guarded by
-        // `forced` -- unlike the two throws above. Pre-existing (a non-fused
-        // named route reaching here gets a cuBLASDx message it did not ask
-        // for); recorded in WP1_LEVEL3_SPEC.md as out of scope, not fixed in
-        // passing.
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). syr2k is the
+    // op that does NOT fall back on NoKernel -- it throws, and the throw is not
+    // guarded by `forced`, so a non-fused named route reaching here gets a
+    // cuBLASDx message it did not ask for. Pre-existing; preserved exactly
+    // rather than quietly improved, and recorded in WP1_LEVEL3_SPEC.md.
+    auto fused = detail::syr2k_fused_try(ctx, A, B, C, alpha, beta, uplo, transA);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
+    }
+    if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
         throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
     }
 
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-
-    syr2k_cublasdx::Syr2kLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.b_ptr = B.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldb = B.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_b = B.stride();
-    desc.stride_c = C.stride();
-    desc.n = C.rows();
-    desc.k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-    desc.beta = beta;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("syr2k_cuda_custom.fused");
-    const cudaError_t status = syr2k_cublasdx::launch_float(variant,
-                                                            desc,
-                                                            uplo,
-                                                            transA,
-                                                            detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        throw_forced_syr2k_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYR2K launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    // DeviceUnsupported only: the kernel existed but the device refused it.
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
+    return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
 }
 
 } // namespace batchlas::backend

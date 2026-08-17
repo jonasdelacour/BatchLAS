@@ -1,10 +1,8 @@
 #include "symm_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "symm_cublasdx_fused.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
 #include "level3_coverage.hh"
+#include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
 // WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
@@ -179,53 +177,22 @@ Event symm_cuda_custom(Queue& ctx,
         return detail::symm_vendor_fallback(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    const auto variant = cublasdx_gemm_select_variant(side == Side::Left ? A : B,
-                                                      side == Side::Left ? B : A,
-                                                      C,
-                                                      Transpose::NoTrans,
-                                                      Transpose::NoTrans);
-    if (detail::cublasdx_variant_needs_fallback(variant, symm_cublasdx::available())) {
-        // symm's only portable kernel is the mirrored expansion; everything
-        // after it is a GEMM. ExpandGemm names that honestly -- and note it is
-        // NOT a claim that the GEMM is native, which is exactly what WP1 S2
-        // and S5 have to make true.
-        rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
-        return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). Both of its
+    // non-Ran outcomes mean the same thing for symm -- fall back to the
+    // expansion -- but they are kept distinct at the seam because syr2k and
+    // trmm react to them differently.
+    auto fused = detail::symm_fused_try(ctx, A, B, C, alpha, beta, side, uplo);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
     }
 
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-
-    symm_cublasdx::SymmLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.b_ptr = B.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldb = B.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_b = B.stride();
-    desc.stride_c = C.stride();
-    desc.m = C.rows();
-    desc.n = C.cols();
-    desc.k = A.rows();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-    desc.beta = beta;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.fused");
-    const cudaError_t status = symm_cublasdx::launch_float(variant,
-                                                            desc,
-                                                            side,
-                                                            uplo,
-                                                            detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYMM launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    // symm's only portable kernel is the mirrored expansion; everything after
+    // it is a GEMM. ExpandGemm names that honestly -- and note it is NOT a
+    // claim that the GEMM is native, which is what WP1 S5 has to make true.
+    rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
+    return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
 }
+
 
 } // namespace batchlas::backend

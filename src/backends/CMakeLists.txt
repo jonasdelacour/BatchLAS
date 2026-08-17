@@ -14,6 +14,25 @@ set(BACKEND_HOST_SOURCES)
 set(BACKEND_CUDA_SOURCES)
 set(BACKEND_ROCM_SOURCES)
 
+# WP1 S3. The cuBLASDx fused level-3 tails, behind a portable hook
+# (level3_fused.hh). Exactly one of these two is ever compiled, so the four
+# dispatchers link in every configuration while only ONE level-3 TU reaches a
+# CUDA header at all.
+#
+# A hook rather than #if inside the dispatchers, because an `if constexpr`
+# cannot discard a file-scope #include -- only a #if can -- so fencing in place
+# would have left them striped with preprocessor AND still pulling
+# <cuda_runtime_api.h> through the *_cublasdx_fused.hh headers.
+#
+# This block sits AFTER the set() calls above on purpose: appending to
+# BACKEND_CUDA_SOURCES before `set(BACKEND_CUDA_SOURCES)` clears it would drop
+# the file silently, with no error and no cuBLASDx route in the build.
+if(BATCHLAS_HAS_CUBLAS)
+    list(APPEND BACKEND_CUDA_SOURCES level3_fused_cuda.cc)
+else()
+    list(APPEND BACKEND_COMMON_SOURCES level3_fused_absent.cc)
+endif()
+
 # WP0 S3: gate each vendor translation unit on ITS OWN library, not on the
 # device family. netlib_lapack.cc calls LAPACKE and CBLAS, so it belongs to
 # those libraries; cublas.cc calls cuBLAS; cusolver.cc calls cuSOLVER; and so
