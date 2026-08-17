@@ -45,6 +45,14 @@ critique, and each superseding the sketch in §5 of this document):
 | WP0 S6 | the vendor-free build **configures, links, loads and runs** | `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`: build exit 0, ctest 20/53 with `NoRouteError` diagnostics; vendor-present ctest unchanged at 56/58 |
 | WP0 S7 | the coverage instrument (`batchlas_coverage`) | static table names the 16 ops with no native kernel; `miss` rows verified against a known gap |
 | WP0 S8 | six sites stop using the `Backend` enum to mean something else | vendor-present ctest 56/58 and vendor-free 20/53, both unchanged — no site silently flipped |
+| WP1 S0 | the four level-3 routes become measurable | a 4-suite run goes from 96 rows for one op to 312 across five |
+| WP1 S1 | a portable vendor-fallback seam replaces 10 `*_vendor_cuda_raw` calls | route diff 3016 decisions identical; capture CSVs byte-identical |
+| WP1 S2 | the expansions' terminal GEMM becomes the public entry point | routes identical; timings within noise, measured at saturating batch |
+| WP1 S3 | the cuBLASDx fused tails leave the dispatchers | `nm -C` finds **no** CUDA symbol in any of the four .o files |
+| WP1 S4 | the four TUs leave the CUDA object library | vendor-free build links them with **no** CUDA object library present |
+| WP1 S5 | the facade's `gemm` gains a native arm | vendor-free `gemm_tests` 48/184 → 167/184; suite 20/53 → 24/53 |
+| WP1 S6 | the level-3 gates move to the facade | tile kernels **reached** vendor-free for the first time (measured, 41 native rows) |
+| WP1 S7 | the tile predicate gains a scalar parameter instead of flipping | vendor-present unchanged by construction; failing set byte-identical |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -162,12 +170,42 @@ Deliberately left alone: `syev.hh`'s measured-grid guard, which the spec also li
 compiled elsewhere, they have simply not been measured there. Rewriting it as
 `route_compiled` would assert something false; changing it needs a measurement.
 
-**Not implemented:** the rest of WP1, and all of WP2–WP4.
+### WP1 is complete, and it corrected the plan in five places
 
-Next is WP1: routing the four level-3 tile routes' terminal `*_vendor_cuda_raw` call
-through the public `gemm` entry point. That frees `{symm,syrk,syr2k,trmm}_custom_dispatch.cc`
-from cuBLAS, flips `dispatch::level3_tile_kernels_compiled` true for every backend, and
-should move four ops out of the "no native kernel" column without writing a kernel.
+The full design and its corrections are in `WP1_LEVEL3_SPEC.md` (12-agent pass: 5 mapping,
+3 designs, 3 adversarial judges). What WP1 delivered:
+
+- **The four level-3 dispatchers are genuinely CUDA-free.** `nm -C` over
+  `{symm,syrk,syr2k,trmm}_custom_dispatch.cc.o` finds no CUDA symbol at all; the sources
+  carry no CUDA include and no preprocessor directive. They compile in every configuration.
+- **Vendor-free went 20/53 → 24/53**, and vendor-free `gemm_tests` went 48 passing → 167.
+- **The tile kernels are reached, not merely linked** — proven by coverage rows, since a
+  symbol being present was never evidence it runs.
+- **Vendor-present did not move.** All eight steps report the same 3016 distinct routing
+  decisions, diffed per step with `scripts/route_diff.sh`.
+
+Five plan claims were wrong and are corrected in the spec:
+
+1. `batchlas::gemm` was **not** "the already-routing public entry point" — it threw or
+   forwarded, with the routing inside cuBLAS-gated `cublas.cc`. Retargeting at it alone
+   would have converted a `NoRouteError` naming `symm` into one naming `gemm`.
+2. **`symm` has no tile kernel.** Its only portable kernel is the mirrored expansion; three
+   ops carry tile kernels, not four.
+3. The four routes were **reachable only from `cublas.cc`**, so compiling them everywhere
+   made them linked everywhere and callable nowhere.
+4. The crossover constants are **4 and 256**, not 2 and 128.
+5. The level-3 ops have **no `RouteTable`** and never call `resolve_route`.
+
+And `route_compiled.hh`'s own prediction — that the flag would simply flip `true` — was
+wrong in two directions; it took a scalar parameter instead (S7).
+
+**Not implemented:** WP2–WP4.
+
+Next is WP2 (GEMM: close the envelope), whose first burn-down item is now named precisely:
+every one of the 17 remaining vendor-free `gemm` failures is **heterogeneous batch**. The
+native register-tiled kernel rejects it, and `gemm_heterogeneous_vendor_impl` — which also
+carries the `m==0`/`n==0` skip and the `k==0 → scale(beta)` substitution — lives only inside
+cuBLAS-gated code.
 
 Two failures are present in the suite and are **not** from this work — both were reproduced
 by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`

@@ -164,6 +164,36 @@ all. Flipping the flag would re-introduce precisely the defect S8 removed.
   `tests/route_gemm_equivalence_tests.cc` — is cheap and safe; *wiring* it is the change that
   moved n=256 onto the wrong kernel, and it needs its own measurement.
 
+## Outcome — all eight steps landed
+
+| step | delivered | evidence |
+|---|---|---|
+| S0 | the four routes become measurable | 4-suite run: 96 rows for one op → 312 across five |
+| S1 | portable vendor seam, 10 call sites | 3016 decisions identical; capture CSVs byte-identical |
+| S2 | terminal GEMM → public entry point | routes identical; timings within noise at saturating batch |
+| S3 | fused tails leave the dispatchers | `nm -C`: **no** CUDA symbol in any of the four `.o` |
+| S4 | TUs leave the CUDA object library | vendor-free links them with **no** CUDA object library present |
+| S5 | facade `gemm` gains a native arm | `gemm_tests` 48/184 → 167/184; suite 20/53 → **24/53** |
+| S6 | gates move to the facade | tile kernels **reached** vendor-free: 41 native rows, previously 0 |
+| S7 | tile predicate gains a scalar parameter | vendor-present unchanged by construction; failing set byte-identical |
+
+Vendor-present reported **3016 distinct routing decisions at every one of the eight steps**.
+
+Three things worth carrying forward:
+
+- **A false win was nearly reported.** `syr2k` at n=1024 looked 10.9% faster after S2.
+  Repeating S1 at that shape gave a 5.65–6.40 ms spread; the "win" was noise. The
+  flattering direction needs the same scepticism as the alarming one.
+- **A pre-existing blocker was found, not caused.** `symm_benchmark`, `syrk_benchmark` and
+  `syr2k_benchmark` all abort before printing anything — a SYCL scheduler assertion
+  (`adjustNDRangePerKernel: NDR.LocalSize[0] == 0`) that fires on the host backend at tiny
+  shapes and, attributed by revert-and-rebuild, fires identically without any WP1 change.
+  The level-3 benchmarks are currently unusable; S2 needed a standalone harness.
+- **The instrument had to be repaired before it could judge anything.** Three defects in the
+  S7 coverage tool surfaced only by *using* it: the gate-declined half was unrecorded,
+  `uplo`/`side`/`diag` were not in the key, and `emit()` opened with `"w"` so each of 53 test
+  binaries truncated the last. Each looked healthy while reporting almost nothing.
+
 ## Acceptance
 
 - Vendor-present: `ctest` unchanged at its documented baseline, and `scripts/route_diff.sh`

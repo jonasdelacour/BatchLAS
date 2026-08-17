@@ -54,6 +54,21 @@ Two of those — `lanczos_tests` and part of `steqr_tests` — fail in the
 vendor-PRESENT build too, for reasons unrelated to this work; see
 `VENDOR_INDEPENDENCE_PLAN.md`.
 
+## After WP1
+
+The numbers below are the **pre-WP1** baseline and are kept as the historical record. WP1
+moved them: the suite is now **24/53**, `gemm_tests` is 167 passing / 17 failing (was
+48/136), and the `symm`/`syrk`/`syr2k`/`trmm` tile kernels are reached rather than merely
+linked. Four suites recovered — `bdsdc_tests`, `ritz_values_tests`, `sytrd_cta_tests`,
+`transpose_tests` — with none newly failing. See `WP1_LEVEL3_SPEC.md`.
+
+Two named gaps remain in this area, both precise enough to be worked directly:
+
+- **`gemm`: heterogeneous batch.** All 17 remaining `gemm_tests` failures are this one
+  thing.
+- **Level-3 non-float.** `syrk`'s gram branch and `trmm`'s tile branch for double/complex
+  are still reachable only from `cublas.cc`, and `syr2k` has no non-float tile route at all.
+
 ## The same gap, per op
 
 `cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose
