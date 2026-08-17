@@ -34,8 +34,23 @@ COL = {name: i for i, name in enumerate(
     "native_route_existed native_route_supported library uplo side diag transA transB".split())}
 
 
+def supports(m, n, k, heterogeneous=False):
+    """Transcription of RouteTable<Op::gemm, T>::supports() for the Native origin.
+
+    preferred() calls supports() FIRST (route_gemm.hh:80). Omitting that guard here
+    over-counted by four degenerate m=n=k=0 rows -- a small error, but the kind that
+    makes a demand figure quietly wrong, which is the one thing this table must not be.
+    Heterogeneous rows are not distinguishable in the CSV, so this reports the
+    homogeneous answer; the coverage rows for heterogeneous calls take the vendor
+    anyway.
+    """
+    return m > 0 and n > 0 and k > 0 and not heterogeneous
+
+
 def preferred(t, m, n, k, batch, tA, tB):
     """Transcription of RouteTable<Op::gemm, T>::preferred() -- keep in step with the header."""
+    if not supports(m, n, k):
+        return False
     if t.startswith("complex"):
         return False                       # rejected outright
     if not (m == n == k) or batch < 64:    # square only, enough batch to fill the device
@@ -66,24 +81,28 @@ def main(path, check=False):
     by_route = collections.Counter((g(r, "scalar"), g(r, "chosen_origin"), g(r, "chosen_algo"))
                                    for r in rows)
 
-    would, cells, disagree = 0, collections.Counter(), []
+    would, would_calls, cells, disagree = 0, 0, collections.Counter(), []
+    total_calls = 0
     for r in rows:
         t = g(r, "scalar")
         m, n, k = int(g(r, "m")), int(g(r, "n")), int(g(r, "k"))
         b = int(g(r, "batch"))
         tA, tB = int(g(r, "transA")), int(g(r, "transB"))
+        calls = int(g(r, "calls") or 0)
+        total_calls += calls
         p = preferred(t, m, n, k, b, tA, tB)
         if p:
             would += 1
+            would_calls += calls
             cells[(t, "square" if m == n == k else "non-square",
-                   f"max_dim={max(m,n,k)}", f"batch={b}")] += 1
+                   f"max_dim={max(m,n,k)}", f"batch={b}")] += calls
         # A row that took native under an UNFORCED call should have been preferred.
         # Forced routes bypass preferred(), so a mismatch here is a hint, not a proof.
         if check and g(r, "chosen_origin") == "native" and not p:
             disagree.append((t, m, n, k, b, tA, tB))
 
     total = len(rows)
-    print(f"gemm calls issued: {total}")
+    print(f"gemm coverage rows: {total}   (calls: {total_calls})")
     print("by type:", dict(by_type))
     print("\nroute actually taken:")
     for kk, v in sorted(by_route.items()):
@@ -91,12 +110,16 @@ def main(path, check=False):
 
     native_now = sum(v for kk, v in by_route.items() if kk[1] == "native")
     print(f"\nrouted native today: {native_now} / {total} ({100.0*native_now/total:.1f}%)")
-    print(f"preferred() would accept: {would} / {total} ({100.0*would/total:.1f}%)")
-    print(f"  -> flipping the unset default from Vendor to Auto moves {would - native_now} "
-          f"calls off cuBLAS")
+    print(f"preferred() would accept: {would} rows / {would_calls} calls "
+          f"({100.0*would/total:.1f}% of rows, {100.0*would_calls/max(total_calls,1):.1f}% of calls)")
+    print(f"  -> flipping the unset default from Vendor to Auto moves ~{would - native_now} "
+          f"rows off cuBLAS")
 
-    print("\nwhat would move, by type:")
-    mv = collections.Counter(kk[0] for kk in cells.elements())
+    print("\nwhat would move, by type (call-weighted -- rows are not calls, and the")
+    print("distinction matters: a hot shape and a one-off cost the same one row):")
+    mv = collections.Counter()
+    for kk, v in cells.items():
+        mv[kk[0]] += v
     for t, v in sorted(mv.items()):
         print(f"   {t:>16} {v}")
 
