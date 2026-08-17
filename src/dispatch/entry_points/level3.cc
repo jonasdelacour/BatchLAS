@@ -47,6 +47,24 @@
 #include "../../backends/gemm_variant.hh"
 #include "../../sycl/gemm_kernels.hh"
 
+// WP1 S6: the four level-3 custom-route gates live here now, not in cublas.cc.
+//
+// Their only callers used to be four sites inside cublas.cc, a TU compiled only
+// when cuBLAS exists. So after S4 the tile kernels were compiled in every
+// configuration and reachable in none -- linked everywhere, callable nowhere.
+// The gate has to run before the vendor-available test, which means it has to
+// run here.
+//
+// These headers are portable as of S3: the dispatchers carry no CUDA include,
+// no CUDA symbol and no preprocessor. level3_coverage.hh is the same
+// instrumentation the gate-declined path used in cublas.cc.
+#include "../../backends/symm_custom_dispatch.hh"
+#include "../../backends/syrk_custom_dispatch.hh"
+#include "../../backends/syr2k_custom_dispatch.hh"
+#include "../../backends/trmm_custom_dispatch.hh"
+#include "../../backends/level3_coverage.hh"
+
+
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -139,6 +157,26 @@ Event symm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
+    // WP1 S6. Relocated verbatim from cublas.cc -- same predicate, same
+    // arguments, same order -- so on a vendor-present box this is a pure move.
+    // What changes is a vendor-FREE build, where the gate is reachable at all
+    // for the first time. Still guarded on CUDA and on float: relocating a
+    // decision and widening it are different changes, and only the first is in
+    // this step.
+    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
+        if (backend::symm_use_cuda_custom(ctx, A, B, C, side, uplo)) {
+            return backend::symm_cuda_custom(ctx, A, B, C, alpha, beta, side, uplo);
+        }
+        // GATE DECLINED -- the half a route diff needs most: a shape
+        // moving OFF a native kernel onto the vendor shows up only here.
+        backend::detail::record_level3_route(
+            dispatch::Op::symm,
+            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            C.rows(), C.cols(), A.rows(), A.batch_size(),
+            backend::detail::kNativeUnknown,
+            {uplo, side, Diag::NonUnit, Transpose::NoTrans});
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::symm, Back, dispatch::kLevel3Library<Back>);
@@ -205,6 +243,27 @@ Event syrk(Queue& ctx,
            T beta,
            Uplo uplo,
            Transpose transA) {
+    // WP1 S6. Relocated verbatim from cublas.cc -- same predicate, same
+    // arguments, same order -- so on a vendor-present box this is a pure move.
+    // What changes is a vendor-FREE build, where the gate is reachable at all
+    // for the first time. Still guarded on CUDA and on float: relocating a
+    // decision and widening it are different changes, and only the first is in
+    // this step.
+    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
+        if (backend::syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
+            return backend::syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
+        }
+        // GATE DECLINED -- the half a route diff needs most: a shape
+        // moving OFF a native kernel onto the vendor shows up only here.
+        backend::detail::record_level3_route(
+            dispatch::Op::syrk,
+            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            C.rows(), C.cols(),
+            transA == Transpose::NoTrans ? A.cols() : A.rows(),
+            A.batch_size(), backend::detail::kNativeUnknown,
+            {uplo, Side::Left, Diag::NonUnit, transA});
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::syrk, Back, dispatch::kLevel3Library<Back>);
@@ -222,6 +281,27 @@ Event syr2k(Queue& ctx,
             T beta,
             Uplo uplo,
             Transpose transA) {
+    // WP1 S6. Relocated verbatim from cublas.cc -- same predicate, same
+    // arguments, same order -- so on a vendor-present box this is a pure move.
+    // What changes is a vendor-FREE build, where the gate is reachable at all
+    // for the first time. Still guarded on CUDA and on float: relocating a
+    // decision and widening it are different changes, and only the first is in
+    // this step.
+    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
+        if (backend::syr2k_use_cuda_custom(ctx, A, B, C, uplo, transA)) {
+            return backend::syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
+        }
+        // GATE DECLINED -- the half a route diff needs most: a shape
+        // moving OFF a native kernel onto the vendor shows up only here.
+        backend::detail::record_level3_route(
+            dispatch::Op::syr2k,
+            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            C.rows(), C.cols(),
+            transA == Transpose::NoTrans ? A.cols() : A.rows(),
+            A.batch_size(), backend::detail::kNativeUnknown,
+            {uplo, Side::Left, Diag::NonUnit, transA});
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::syr2k, Back, dispatch::kLevel3Library<Back>);
@@ -240,6 +320,25 @@ Event trmm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
+    // WP1 S6. Relocated verbatim from cublas.cc -- same predicate, same
+    // arguments, same order -- so on a vendor-present box this is a pure move.
+    // What changes is a vendor-FREE build, where the gate is reachable at all
+    // for the first time. Still guarded on CUDA and on float: relocating a
+    // decision and widening it are different changes, and only the first is in
+    // this step.
+    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
+        if (backend::trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
+            return backend::trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        }
+        // GATE DECLINED -- the half a route diff needs most: a shape
+        // moving OFF a native kernel onto the vendor shows up only here.
+        backend::detail::record_level3_route(
+            dispatch::Op::trmm,
+            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            C.rows(), C.cols(), A.rows(), A.batch_size(),
+            backend::detail::kNativeUnknown, {uplo, side, diag, transA});
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::trmm, Back, dispatch::kLevel3Library<Back>);
