@@ -105,22 +105,40 @@ if(BATCHLAS_HAS_CUSOLVER)
     )
 endif()
 
-# These four are the portable expand-then-gemm / tile-masked level-3 routes, and
-# the dispatch shims that pick between them and the vendor. They are SYCL, not
-# CUDA -- see the standalone-compile check on triangular_expand.hh and the
-# *_tiles.hh family -- but they still call *_vendor_cuda_raw and the cuBLASDx
-# entry points, so they cannot leave the CUDA object library until that terminal
-# call is routed through the public gemm entry point (WP1). Keep them with
-# cuBLAS for now, which is the library they actually depend on.
+# gemm_cublasdx_dispatch.cc stays gated: it genuinely calls gemm_vendor_cuda_raw
+# and hosts the cuBLASDx variant machinery, so cuBLAS is the library it actually
+# depends on.
 if(BATCHLAS_HAS_CUBLAS)
     list(APPEND BACKEND_CUDA_SOURCES
         gemm_cublasdx_dispatch.cc
-        symm_custom_dispatch.cc
-        syrk_custom_dispatch.cc
-        syr2k_custom_dispatch.cc
-        trmm_custom_dispatch.cc
     )
 endif()
+
+# WP1 S4. The four portable expand-then-gemm / tile-masked level-3 routes leave
+# the CUDA object library. They were never CUDA -- the standalone-compile check
+# on triangular_expand.hh and the *_tiles.hh family established that long ago --
+# they were merely tied to it by three terminals, all of which are now gone:
+# *_vendor_cuda_raw (S1), gemm_cublasdx (S2) and the cuBLASDx fused tail (S3).
+# Verified on the objects, not asserted: `nm -C` over all four .o files finds no
+# CUDA symbol at all, and the sources contain no CUDA include and no
+# preprocessor.
+#
+# THE GATE IS RELAXED BY MOVING THE NAMES, NOT BY DELETING THE if(). Deleting it
+# would be the natural-looking edit and would defeat the entire work package:
+# BACKEND_CUDA_SOURCES feeds batchlas_backends_cuda_obj, which
+# src/CMakeLists.txt:17-19 does not even CREATE unless a CUDA math library is
+# present -- exactly the configuration that fails in a vendor-free build. The
+# four TUs would silently stop being compiled in the one build WP1 exists for.
+#
+# Compiling them everywhere does not yet make them REACHABLE anywhere: their
+# only callers are the four gates in cublas.cc, which is still cuBLAS-gated.
+# That is S6.
+list(APPEND BACKEND_COMMON_SOURCES
+    symm_custom_dispatch.cc
+    syrk_custom_dispatch.cc
+    syr2k_custom_dispatch.cc
+    trmm_custom_dispatch.cc
+)
 
 if(BATCHLAS_HAS_ROCBLAS)
     list(APPEND BACKEND_ROCM_SOURCES rocblas.cc)
