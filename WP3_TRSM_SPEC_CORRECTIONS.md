@@ -120,10 +120,13 @@ the *shared-library device link* (`cmake/BatchLASDetectSYCL.cmake:528,544-552`),
 single-TU compile is reported "argument unused". This is not drift — it is identical at
 `aa827f5`, i.e. a pre-existing authoring error.
 
-**And `stack frame == 0` is the wrong gate** (spec:703). Measured on the current TU: 220 of 376
-entry functions have a non-zero stack frame *with* `0 bytes spill stores, 0 bytes spill loads`.
-Gating on stack frame rejects spill-free kernels; worse, grepping a compile log for "spill" finds
-nothing and reads as "no spill" — a phantom measurement.
+**On `stack frame == 0` (spec:703)** this document originally said the spec was wrong, because
+220 of 376 entry functions in this library carry a non-zero stack frame *with*
+`0 bytes spill stores, 0 bytes spill loads`. That generalisation does not hold for the TRSM
+kernel and was itself corrected by running the gate — see the ✱ section below. What remains true
+regardless: since the flag silently does nothing on a per-TU compile, grepping such a log for
+"spill" finds nothing and reads as "no spill". That is a phantom measurement whichever gate you
+use, and it is the reason the recipe below exists.
 
 **Working recipe:** `scripts/register_probe.sh`, which replays
 `build/src/CMakeFiles/batchlas_sycl.dir/link.txt` verbatim with a second
