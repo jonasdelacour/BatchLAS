@@ -3,7 +3,25 @@
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
 
+#include <cstdlib>
+
 using namespace batchlas;
+
+// beta was hardcoded to 1 here. It has to be settable, because beta is not a
+// detail of the epilogue -- it decides whether C is READ at all, and a kernel
+// can look completely different on the two sides of that. One kernel in this
+// tree scored 26 instead of 41 TFLOP/s with an identical inner loop purely
+// because its beta != 0 read of C was one scattered transaction per lane, and
+// a beta == 0 measurement structurally cannot see that.
+//
+// Env rather than a fifth range arg so the registered size sets keep working
+// unchanged: BATCHLAS_BENCH_BETA=0 or 1 (default 1, the prior behaviour).
+static double bench_beta() {
+    if (const char* p = std::getenv("BATCHLAS_BENCH_BETA")) {
+        return std::atof(p);
+    }
+    return 1.0;
+}
 
 template <typename T, Backend B>
 static void BM_GEMM_IMPL(minibench::State& state) {
@@ -11,6 +29,7 @@ static void BM_GEMM_IMPL(minibench::State& state) {
     const size_t n = state.range(1);
     const size_t k = state.range(2);
     const size_t batch = state.range(3);
+    const T beta = static_cast<T>(bench_beta());
 
     auto A = Matrix<T>::Random(m, k, false, batch);
     auto Bm = Matrix<T>::Random(k, n, false, batch);
@@ -22,7 +41,7 @@ static void BM_GEMM_IMPL(minibench::State& state) {
                     std::move(Bm),
                     bench::pristine(C),
                     T(1),
-                    T(1),
+                    beta,
                     Transpose::NoTrans,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {

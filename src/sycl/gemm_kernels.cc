@@ -563,7 +563,26 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 
     if constexpr (std::is_same_v<T, double>) {
-        return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
+        // The Direct/Tiled16 crossover for double is at 24, not 32. Measured on
+        // RTX 4090 / sm_89, median of 3, both betas, at saturation:
+        //
+        //   n   batch   Direct   Tiled16   winner
+        //   24    512     708      518     Direct,  1.37x
+        //   24   4096    1126      687     Direct,  1.64x
+        //   25   4096     750      746     a wash (inside spread)
+        //   28   4096     903      937     Tiled16, 1.04x
+        //   32    512     903      973     Tiled16, 1.08x
+        //   32   4096     938     1211     Tiled16, 1.29x
+        //
+        // This was worth finding rather than tidying: n=32 was the ONLY cell in
+        // the entire window preferred() accepts for double where the native
+        // route lost to cuBLAS (0.92-0.96x at batch 4096). Picking Tiled16
+        // there turns it into a 1.15-1.23x win, so the whole double window is
+        // now a native win from n=4 to n=512. See WP2_GEMM_SPEC.md E3.
+        //
+        // 24 rather than 25 because 25 is inside the run-to-run spread and a
+        // boundary should sit where the evidence is unambiguous.
+        return max_dim <= 24 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
 
     return max_dim <= 64 ? KernelVariant::Direct : KernelVariant::Tiled16;

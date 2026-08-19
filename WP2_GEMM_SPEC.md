@@ -170,6 +170,62 @@ large-m,n small-k call is also transposed or ragged. So:
   the complex fallback is 3.6–7.7× off the vendor there. That is a new kernel, not a routing
   change, and it should be ranked ahead of E4/E5.
 
+### E3 result — double is not the flip's risk, it is the flip's win
+
+E3 was written as *"settle **double** first — 85% of the flip, the largest live risk."* Both
+halves were wrong, in opposite directions.
+
+**The premise was probe rows.** The "85% of the flip / 9022 double calls" figure came from a
+table that was ~83% `route_gemm_equivalence_tests` probes. `scripts/gemm_demand.py` now takes
+`--minus=<probe-capture>`; on real demand `preferred()` accepts **1 row / 4 calls**. Correcting
+only for the `batch < 64` blocker — which is *test-scale*, since batch is the user's parameter
+and this suite runs 1–8 — the flip would move ~666 double and ~690 float calls, and **zero
+complex**.
+
+**And it is not a risk.** Of those 666 double calls, **585 land on `Tiled16`, 57 on `Direct`,
+and only 24 on the wide tile WP2 measured** — so the real question was never about the new
+kernel. It was *"does `Tiled16` beat cuBLAS DGEMM at n = 34..200?"*, which nothing in the tree
+had measured. Measured now: RTX 4090, batch 512, median of 3, **both betas**, warm JIT,
+`gpu_guard`, spreads **0.0–0.3%**.
+
+| n | native kernel | cuBLAS | native | ratio |
+|---|---|---|---|---|
+| 4 | Direct | 16.5 | 58.4 | **3.55×** |
+| 8 | Direct | 86.1 | 388 | **4.51×** |
+| 16 | Direct | 227 | 888 | **3.92×** |
+| 24 | Direct | 440 | 1127 | **2.56×** |
+| 32 | Tiled16 *(was Direct)* | 982 | 1213 | **1.23×** |
+| 48 | Tiled16 | 633 | 1204 | **1.90×** |
+| 64 | Tiled16 | 1151 | 1214 | 1.05× |
+| 96 | Tiled16 | 903 | 1330 | **1.47×** |
+| 136 | Tiled16 | 698 | 1215 | **1.74×** |
+| 200 | Tiled16 | 829 | 1270 | **1.53×** |
+| 256–512 | wide-64x64 | 1239–1246 | 1399–1411 | 1.13× |
+
+**Native wins every cell in the accepted window.** Corroboration, since margins this size
+deserve it: the endpoints reproduce an independent prior measurement — vendor 1244 GFLOP/s at
+512³ against `WP2_WIDE_SCALAR_GEMM_VERDICT.md`'s 1232–1247 for cuBLAS DGEMM, and native 1411
+against its 1413–1415 for the same tile. Peak vendor DGEMM observed is 1246 GFLOP/s, inside
+the ~1450 FP64 ceiling a 4090 can reach, so these are FP64 numbers and not something else.
+
+**Saturation, checked rather than asserted.** Sweeping batch 64 → 8192 at the two largest
+margins, both arms plateau by 2048 and the ratio is *stable or rising* — n=48 goes
+1.58× → 1.96×, n=136 1.82× → 1.75×. Launch overhead would shrink the ratio toward 1 as batch
+grows; it does not, so this is an algorithm difference.
+
+**One routing defect found and fixed.** n=32 was the *only* losing cell (0.92–0.96× at batch
+4096), and it sat exactly on `select_kernel_variant`'s `max_dim <= 32 ? Direct : Tiled16`
+boundary for double. Tiled16 beats Direct there by 1.08× at batch 512 and 1.29× at 4096, both
+betas, outside spread; Direct still wins clearly at n=24 (1.37–1.64×) and n=25 is a wash. The
+boundary moved to `max_dim <= 24`, chosen where the evidence is unambiguous rather than at the
+first sign of crossover, and n=32 became a 1.14–1.23× win. That is a native-vs-native kernel
+choice, so it moves no `Route` and the route diff stays clean.
+
+**What this does not say.** Every number here is square, NN, aligned, real-typed. It says the
+double *window as `preferred()` currently defines it* is safe to route natively — not that
+GEMM generally is. Complex is still refused outright by `preferred()`, and the panel-update
+population (non-square, transposed) is untouched by any of it.
+
 ## Non-negotiable measurement rules
 
 Every one of these is here because it has already cost this project real time:
