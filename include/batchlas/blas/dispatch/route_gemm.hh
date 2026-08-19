@@ -115,10 +115,14 @@ struct RouteTable<Op::gemm, T> {
         } else {
             const int64_t max_dim = s.max_dim();
 
-            // Square only, and enough batch to fill the device.
-            if (s.m != s.n || s.n != s.k || s.batch < 64) return false;
+            // Enough batch to fill the device. This one is common to both real
+            // types; SQUARENESS is not, and used to be tested here -- WP2 E5
+            // moved it into the float branch, because it was never a property
+            // of the kernels, only of the shapes anyone had measured.
+            if (s.batch < 64) return false;
 
             if constexpr (std::is_same_v<T, float>) {
+                if (s.m != s.n || s.n != s.k) return false;
                 // WP2 E4 NARROWED float, and the direction is the interesting
                 // part: this predicate is what the flip (E6) would act on, and
                 // measured against cuBLAS it was claiming windows the native
@@ -162,7 +166,44 @@ struct RouteTable<Op::gemm, T> {
                 // from choosing a slower kernel.
                 return false;
             } else if constexpr (std::is_same_v<T, double>) {
-                return max_dim <= 512;
+                // WP2 E5 WIDENED double: no squareness requirement, no upper
+                // size bound, any transpose form. What is left is a single
+                // lower bound on k, and that one IS measured.
+                //
+                // The old predicate was `max_dim <= 512` AND square. Both were
+                // artefacts of what had been benchmarked, not of what the
+                // kernels can do, and together they excluded essentially all of
+                // BatchLAS's own GEMM: the dominant internal shape is a PANEL
+                // UPDATE -- large m, large n, small k -- which is neither
+                // square nor small. Measured on exactly the shapes the demand
+                // table says the library issues (RTX 4090, batch 128, NN/NT/TN,
+                // both betas, median of 3, spreads under 5%):
+                //
+                //   992x992x32  1.10-1.14x     288x288x32  1.21-1.22x
+                //   480x480x32  1.14-1.17x     248x248x8   1.34-1.41x
+                //   312x312x8   1.21-1.25x     224x224x32  1.24-1.25x
+                //
+                // 36 of 36 cells win. The edges agree: 1024^3 1.13x, 2048^3
+                // 1.14x, 4096x64x64 1.04-1.06x, 64x4096x64 1.04-1.05x.
+                //
+                // WHY k >= 2 AND NOT k >= 1. k=1 is the one shape in this whole
+                // work package where double loses: 512x512x1 measures 0.49x at
+                // beta=0 (cuBLAS 230 vs native 112). A rank-1 update is not
+                // really a GEMM and cuBLAS has a path for it. k=2 already wins
+                // 1.64x, so the boundary sits exactly there rather than at a
+                // rounder number. k=1 is not hypothetical -- it is 761 calls in
+                // the demand table.
+                //
+                // NO UPPER BOUND, deliberately, and this is the one place here
+                // that reaches past its measurements. The largest measured is
+                // 2048^3; above that the same kernel runs with more tiles and
+                // nothing changes in kind. The limit is an FP64 ISSUE RATE --
+                // a 4090 is 1/64 FP32, ceiling ~1.44 TFLOP/s -- and native sits
+                // at 88-98% of it while cuBLAS sits at 78-87%, at every size
+                // from 4 to 2048. A gap produced by a size-independent
+                // mechanism does not need a size cutoff; a cliff at 2048 would
+                // itself be the unjustified number.
+                return s.k >= 2;
             } else {
                 return false;
             }

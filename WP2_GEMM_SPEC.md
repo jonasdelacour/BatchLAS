@@ -328,6 +328,67 @@ reached there (verified: failing set byte-identical). And explicit requests:
 `BATCHLAS_GEMM_VARIANT=vendor` still means vendor, which is the escape hatch if a future cuBLAS
 turns any of these cells around — not hypothetical, given the parity claim that aged out in E4.
 
+### E5 result — non-square, measured on the shapes the library actually issues
+
+`preferred()` required `m == n == k`, so **no non-square GEMM had ever routed native** — while
+E2-prep's demand analysis says that is where nearly all of BatchLAS's own GEMM lives. So this
+step measured the *demand table's own shapes* rather than a cross-product: 992×992×32,
+480×480×32, 288×288×32, 224×224×32, 248×248×8, 312×312×8, in the NN/NT/TN forms those call
+sites use.
+
+**The split by type is total:**
+
+| type | cells | verdict |
+|---|---|---|
+| **double** | 36 / 36 | **native wins, 1.10–1.41×** |
+| **float** | 0 / 36 | **native loses, 0.22–0.51×** |
+
+Float needs no change — E4 already reduced its window to `max_dim <= 32`, so these shapes were
+never eligible. E5 is a double-only widening: no squareness requirement, no upper size bound,
+any transpose form.
+
+**Where it stops, and why there.** The edges: 1024³ 1.13×, 2048³ 1.14×, 4096×64×64 1.04–1.06×,
+64×4096×64 1.04–1.05×, 992×992×8 1.39–1.46×. One loss: **512×512×1 at 0.49×**. Sweeping k at
+512×512×k pins it exactly —
+
+| k | 1 | 2 | 3 | 4 | 6 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|---|---|
+| ratio | **0.49×** | 1.64× | 1.62× | 1.58× | 1.53× | 1.49× | 1.34× | 1.09× |
+
+**k=1 is the only losing shape for double in this entire work package.** A rank-1 update is
+barely a GEMM and cuBLAS has a path for it — its advantage is β=0 only (cuBLAS 230 → 114 when
+β=1; native is 112 either way). k=2 already wins 1.64×, so the predicate is `k >= 2` rather
+than a rounder number, and k=1 is not hypothetical: 761 calls in the demand table.
+
+**The one place this reaches past its measurements**, stated rather than hidden: the widened
+window has no upper size bound and 2048³ is the largest measured. The limiting mechanism is an
+FP64 issue rate — a 4090 is 1/64 FP32, ceiling ~1.44 TFLOP/s — and native sits at 88–98% of it
+against cuBLAS's 78–87% at *every* size from 4 to 2048. A gap produced by a size-independent
+mechanism does not need a size cutoff, and a cliff at 2048 would itself be the unjustified
+number.
+
+Route diff: **81 decisions moved, all double, all vendor→native, zero regressions, zero
+complex.**
+
+### Where WP2 ends
+
+| track | status |
+|---|---|
+| C1–C3 correctness | vendor-free GEMM complete; heterogeneous costs nothing measurable |
+| E1 in-tree claims | three corrected, incl. two that would have caused a wrong edit |
+| E2 wide-scalar tile | landed; first register kernel for a non-float scalar |
+| E3 double window | native wins 1.05–4.51×; one misplaced kernel boundary fixed |
+| E4 float window | narrowed on measurement; predicated path worth 2–4.4× |
+| E5 non-square | double widened to the real demand shapes; float correctly excluded |
+| E6 the flip | default is Auto; 262 decisions moved, 0 regressions |
+
+**What is still vendor-dependent, and it is the honest headline:** complex. `preferred()`
+refuses it outright, because `select_kernel_variant`'s register ladder for complex is reachable
+only through `Tiled64x64RegisterK16Wide`, which needs `min_dim >= 256` and an aligned NN shape —
+a gate that fires on 0.64% of real non-float demand. The panel-update population that dominates
+that demand needs a **transposed and predicated wide-scalar kernel**, which is a new kernel and
+not a routing change. That is the highest-value remaining item in this area.
+
 ## Non-negotiable measurement rules
 
 Every one of these is here because it has already cost this project real time:

@@ -162,14 +162,15 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 
 // THE INTENDED DIVERGENCES FROM THE LEGACY DECISION.
 //
-// There are two. They are classified and COUNTED SEPARATELY below, so that
-// neither can quietly stop being reached: a single boolean "is this expected?"
-// would let one divergence's cells disappear from the grid while the other
-// kept the count non-zero, and the test would still pass.
+// There are four. They are classified and COUNTED SEPARATELY below, so that
+// none can quietly stop being reached: a single boolean "is this expected?"
+// would let one divergence's cells disappear from the grid while another kept
+// the count non-zero, and the test would still pass.
 //
 // (1) WP2 C2 -- heterogeneous batch, a WIDENING.
 // (2) WP2 E4 -- float's measured window, a NARROWING.
 // (3) WP2 E6 -- the UNSET DEFAULT flipped from Vendor to Auto.
+// (4) WP2 E5 -- double's window WIDENED to non-square and unbounded size.
 //
 // (3) is different in kind from the other two: it is not a change to which
 // shapes are preferred, it is a change to what happens when nobody asked. It
@@ -199,7 +200,8 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 // gemm_has_heterogeneous_batch BEFORE consulting gemm_use_sycl_custom, so the
 // heterogeneous loop is entered either way. The divergence is visible to this
 // test because it calls the predicate directly.
-enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped };
+enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped,
+                        DoubleWindowWidened };
 
 // (2) WP2 E4. The legacy predicate preferred native for float on two windows
 // that measurement says it loses: every transposed cell (0.34-0.55x of cuBLAS
@@ -233,13 +235,26 @@ Divergence classify_divergence(const char* env, const OpShape& s,
             }
         }
     }
+    // (4) WP2 E5. The legacy predicate required m == n == k and max_dim <= 512
+    // for double. Both were artefacts of what had been benchmarked rather than
+    // of the kernels, and they excluded the panel-update shape BatchLAS itself
+    // issues most. Measured 1.10-1.41x on the real demand shapes, 1.13-1.14x at
+    // 1024^3 and 2048^3. Only k == 1 still loses (0.49x) and is still refused.
+    if constexpr (std::is_same_v<T, double>) {
+        if (!old_native && new_native) {
+            const bool non_square = (s.m != s.n || s.n != s.k);
+            if (non_square || s.max_dim() > 512) {
+                return Divergence::DoubleWindowWidened;
+            }
+        }
+    }
     return Divergence::None;
 }
 
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
     size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0,
-           default_flipped = 0;
+           default_flipped = 0, double_widened = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
@@ -251,6 +266,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
             if (d == Divergence::HeterogeneousWidened) { ++het_widened; continue; }
             if (d == Divergence::FloatWindowNarrowed)  { ++float_narrowed; continue; }
             if (d == Divergence::DefaultFlipped)       { ++default_flipped; continue; }
+            if (d == Divergence::DoubleWindowWidened)  { ++double_widened; continue; }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -300,6 +316,16 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         EXPECT_GT(default_flipped, 0u)
             << "grid no longer reaches the WP2 E6 default flip for " << type_name
             << " -- the exception is now vacuous";
+    }
+
+    // Counted on its own for the same reason as the others.
+    if constexpr (std::is_same_v<T, double>) {
+        EXPECT_GT(double_widened, 0u)
+            << "grid no longer reaches the WP2 E5 double widening -- the "
+               "exception is now vacuous";
+    } else {
+        EXPECT_EQ(double_widened, 0u)
+            << "the E5 widening is double-only but fired for " << type_name;
     }
 }
 

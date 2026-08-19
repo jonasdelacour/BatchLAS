@@ -2253,9 +2253,27 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
         EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
     }
 
-    // 1024^3 is outside the window for every type, so Auto declines it.
-    EXPECT_TRUE(batchlas::dispatch::is_vendor(
-        route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+    // 1024^3 used to be outside the window for every type. WP2 E5 removed
+    // double's upper bound -- measured 1.13x at 1024^3 and 1.14x at 2048^3, and
+    // the gap comes from an FP64 issue-rate ceiling that does not vary with
+    // size -- so double now claims it and everything else still declines.
+    if constexpr (std::is_same_v<ScalarType, double>) {
+        EXPECT_TRUE(batchlas::dispatch::is_native(
+            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+
+        // E5 also dropped the squareness requirement for double: a panel update
+        // (large m and n, small k) is the shape BatchLAS itself issues most,
+        // measured 1.10-1.41x. And the one shape it must still decline is k=1,
+        // a rank-1 update, where cuBLAS has a dedicated path and native is
+        // 0.49x.
+        EXPECT_TRUE(batchlas::dispatch::is_native(
+            route_for<ScalarType>(*(this->ctx), 992, 992, 32, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 512, 512, 1, 128)));
+    } else {
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+    }
 }
 
 TYPED_TEST(GemmTest, RouteAdapterForcedSyclBypassesTheWindowButNotCorrectness) {
