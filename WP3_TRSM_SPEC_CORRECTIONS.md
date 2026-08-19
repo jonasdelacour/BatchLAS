@@ -200,8 +200,15 @@ divide by it.
 
 ## What WP3 can and cannot claim
 
-**Unblocked vendor-free:** `trsm` itself — today `level3.cc:165-167` throws for every call — plus
-`trsm_tests`. With WP2's GEMM that makes gemm+trsm the first vendor-free level-3 pair.
+**Unblocked vendor-free:** `trsm` itself — `level3.cc` used to throw for every call. With WP2's
+GEMM that makes gemm+trsm the first vendor-free level-3 pair.
+
+**✱ But not `trsm_tests` as a suite, which this document originally claimed.** Measured after
+steps 4-6: 16 `TrsmOperationsTest` cases now pass vendor-free where every one previously threw
+— and they are the two **CUDA** parameterisations. The NETLIB ones still fail, because the CTA
+kernel is a GPU kernel and `supports()` correctly reports `is_gpu == false` as unsupported. The
+vendor-free failing *set* is therefore byte-identical to the WP2 baseline: the suite stays red
+while most of its GPU content went green. A CPU trsm is separate work.
 
 **Still red, and trsm cannot help.** Each of these is gated on a *different* missing op:
 
