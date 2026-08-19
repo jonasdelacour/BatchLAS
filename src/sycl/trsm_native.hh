@@ -77,4 +77,16 @@ Event trsm_native_v1_dispatch(Queue& ctx,
                               Transpose transA,
                               Diag diag);
 
+// V2, the blocked driver, for orders above trsm_cta_max_n<T>(). Calls V1 on
+// each diagonal block and sycl_gemm::gemm_custom for the trailing update.
+template <typename T>
+Event trsm_native_blocked(Queue& ctx,
+                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<T, MatrixFormat::Dense>& B,
+                          T alpha,
+                          Side side,
+                          Uplo uplo,
+                          Transpose transA,
+                          Diag diag);
+
 } // namespace batchlas::sycl_trsm

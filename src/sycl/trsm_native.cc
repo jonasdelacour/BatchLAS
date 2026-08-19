@@ -47,6 +47,7 @@
 #include "trsm_native.hh"
 
 #include "../linalg-impl.hh"
+#include "gemm_kernels.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -336,6 +337,127 @@ Event trsm_native_v1_buckets(Queue& ctx,
     }
 }
 
+// ---------------------------------------------------------------------------
+// V2 -- the host-blocked driver, for orders above V1's register capacity.
+//
+// Canonical block i covers s in [i*nb, min(n,(i+1)*nb)). Because rho is a
+// BIJECTION on [0,n), both the block R_i and the already-solved set S_i are
+// contiguous runs in STORED indices:
+//
+//        r0 (start of R_i)      s0 (start of S_i)     m = hi-lo   k = lo
+//   fwd  lo                     0                     block rows  solved rows
+//  !fwd  n-hi                   n-lo                  block rows  solved rows
+//
+// so fwd enters only through two scalars and all four (side, fwd) cases share
+// one code path.
+//
+// THE ALPHA CONTRACT, which is the one thing here that is silently wrong if
+// mis-stated. alpha is applied EXACTLY ONCE per block, by one of two routes:
+//   * block 0        -- no trailing update exists, so V1 applies it (alpha_eff = alpha)
+//   * blocks i > 0   -- the trailing GEMM applies it as its BETA (beta = alpha),
+//                       computing B_i := alpha*B_i - op(A_off)*X_prev, and V1
+//                       then runs with alpha_eff = 1
+// Never both, never neither. Writing the natural beta = 1 on that GEMM computes
+// B_i - sum(...) where alpha*B_i - sum(...) is required: a wrong answer for
+// every alpha != 1 at every block i > 0, which compiles and passes any alpha = 1
+// test. The existing suite uses alpha = 1 throughout, so this would have been
+// invisible without a test that varies it.
+//
+// SUB-VIEWS ARE BUILT BY THE EXPLICIT 6-ARG CONSTRUCTOR, never by
+// operator()(Slice,Slice). Two reasons, both verified in source. First, that
+// operator passes the parent's pointer array into the child despite a comment
+// directly above it saying it must not (matrix.hh:1140), and any later
+// data_ptrs() call on the slice would rewrite the parent's per-batch bases.
+// Second, and the trap that actually bites here: the constructor DEFAULTS
+// stride to ld*cols when 0 is passed (src/matrix.cc:1839-1842), so a sub-view
+// of k columns built without an explicit stride silently gets stride = ld*k and
+// every batch item after the first reads the wrong matrix. The parent's ld AND
+// stride are passed explicitly at every call below.
+// ---------------------------------------------------------------------------
+template <typename T>
+Event trsm_native_blocked(Queue& ctx,
+                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<T, MatrixFormat::Dense>& B,
+                          T alpha,
+                          Side side,
+                          Uplo uplo,
+                          Transpose transA,
+                          Diag diag) {
+    const Canonical can = canonicalise(side, uplo, transA, diag);
+    const int n = static_cast<int>(A.rows());
+    const int q = static_cast<int>(side == Side::Left ? B.cols() : B.rows());
+    const int nb = trsm_cta_max_n<T>();          // the CTA capacity IS the block size
+
+    const int lda = A.ld(), ldb = B.ld();
+    const int sa = A.stride(), sb = B.stride();
+    const int bs = A.batch_size();
+
+    auto sub = [](const MatrixView<T, MatrixFormat::Dense>& V,
+                  int r0, int nr, int c0, int nc, int ld, int stride, int batch) {
+        // Column-major: offset = c0*ld + r0, the repo's own dense-slice form.
+        return MatrixView<T, MatrixFormat::Dense>(
+            V.data_ptr() + static_cast<std::ptrdiff_t>(c0) * ld + r0,
+            nr, nc, ld, stride, batch);
+    };
+
+    for (int lo = 0; lo < n; lo += nb) {
+        const int hi = std::min(n, lo + nb);
+        const int m = hi - lo;                    // rows of this block
+        const int k = lo;                         // rows already solved
+        const int r0 = can.fwd ? lo : (n - hi);
+        const int s0 = can.fwd ? 0 : (n - lo);
+
+        if (k > 0) {
+            // Trailing update. beta = alpha carries the scaling; see the
+            // contract above.
+            const auto C = (side == Side::Left)
+                               ? sub(B, r0, m, 0, q, ldb, sb, bs)
+                               : sub(B, 0, q, r0, m, ldb, sb, bs);
+            const auto X = (side == Side::Left)
+                               ? sub(B, s0, k, 0, q, ldb, sb, bs)
+                               : sub(B, 0, q, s0, k, ldb, sb, bs);
+            // The A block is chosen so that op() lands on the required
+            // sub-block, which is why transA is passed through unchanged.
+            const auto Aoff =
+                (side == Side::Left)
+                    ? (can.do_trans ? sub(A, s0, k, r0, m, lda, sa, bs)
+                                    : sub(A, r0, m, s0, k, lda, sa, bs))
+                    : (can.do_trans ? sub(A, r0, m, s0, k, lda, sa, bs)
+                                    : sub(A, s0, k, r0, m, lda, sa, bs));
+
+            if (side == Side::Left) {
+                // C(m x q) := -op(Aoff)(m x k) * X(k x q) + alpha*C
+                sycl_gemm::gemm_custom<T>(ctx, Aoff, X, C, T(-1), alpha,
+                                          transA, Transpose::NoTrans,
+                                          ComputePrecision::Default);
+            } else {
+                // C(q x m) := -X(q x k) * op(Aoff)(k x m) + alpha*C.
+                // X GOES IN THE A POSITION. The obvious single form with the A
+                // block first produces a C of at most nb rows against the
+                // required q and does not conform for any transpose.
+                sycl_gemm::gemm_custom<T>(ctx, X, Aoff, C, T(-1), alpha,
+                                          Transpose::NoTrans, transA,
+                                          ComputePrecision::Default);
+            }
+        }
+
+        const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
+        const auto Bblk = (side == Side::Left) ? sub(B, r0, m, 0, q, ldb, sb, bs)
+                                               : sub(B, 0, q, r0, m, ldb, sb, bs);
+        const T alpha_eff = (k == 0) ? alpha : T(1);
+        trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+
+        // Block i+1's GEMM reads what block i's solve just wrote. An in-order
+        // queue gives that for free; an out-of-order one does not, and a caller
+        // may construct either (sycl-device-queue.hh:239 defaults in_order=true
+        // but it is a parameter). This is a correctness requirement, not a
+        // tuning choice, and it costs nothing on the default path.
+        if (!ctx.in_order()) ctx.wait();
+    }
+
+    return ctx.get_event();
+}
+
 template <typename T>
 Event trsm_native_v1_dispatch(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& A,
@@ -423,8 +545,15 @@ template <> int trsm_cta_max_n<std::complex<double>>() { return 0; }
 // must say so -- otherwise a vendor-free caller at n > 32 is handed a Blocked
 // route the facade cannot service and the call dies further downstream with a
 // message that blames the wrong thing.
-template <> bool trsm_blocked_available<float>()                { return false; }
-template <> bool trsm_blocked_available<double>()               { return false; }
+template Event trsm_native_blocked<float>(
+    Queue&, const MatrixView<float, MatrixFormat::Dense>&,
+    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag);
+template Event trsm_native_blocked<double>(
+    Queue&, const MatrixView<double, MatrixFormat::Dense>&,
+    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
+
+template <> bool trsm_blocked_available<float>()                { return true; }
+template <> bool trsm_blocked_available<double>()               { return true; }
 template <> bool trsm_blocked_available<std::complex<float>>()  { return false; }
 template <> bool trsm_blocked_available<std::complex<double>>() { return false; }
 

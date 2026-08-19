@@ -441,3 +441,116 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
         << "n=33 exceeds the CTA capacity; silently solving 32 of 33 rows is the "
            "failure mode this guards";
 }
+
+
+// ===========================================================================
+// V2, the blocked driver. Same independent multiply-back oracle as V1; the only
+// difference is that n exceeds the CTA capacity, so the driver blocks.
+// ===========================================================================
+namespace {
+template <typename T>
+void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
+    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int n = tc.n, q = tc.q, bs = tc.batch;
+    const int brows = (tc.side == Side::Left) ? n : q;
+    const int bcols = (tc.side == Side::Left) ? q : n;
+    Matrix<T, MatrixFormat::Dense> A(n, n, bs);
+    Matrix<T, MatrixFormat::Dense> B(brows, bcols, bs);
+    auto Av = A.view();
+    auto Bv = B.view();
+    std::vector<T> a_host(static_cast<size_t>(n) * n * bs);
+    std::vector<T> b_in(static_cast<size_t>(brows) * bcols * bs);
+    for (int b = 0; b < bs; ++b) {
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < n; ++r) {
+                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
+                T v = (r == c) ? static_cast<T>(2 + (r % 3))
+                               : (in_tri ? static_cast<T>(0.02 * (1 + ((r * 7 + c * 3) % 5)))
+                                         : static_cast<T>(0));
+                Av.at(r, c, b) = v;
+                a_host[(static_cast<size_t>(b) * n + c) * n + r] = v;
+            }
+        for (int c = 0; c < bcols; ++c)
+            for (int r = 0; r < brows; ++r) {
+                const T v = static_cast<T>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
+                Bv.at(r, c, b) = v;
+                b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
+            }
+    }
+    batchlas::sycl_trsm::trsm_native_blocked<T>(
+        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
+    ctx->wait();
+
+    using Acc = double;
+    const Acc tol = std::is_same_v<T, float> ? Acc(5e-3) : Acc(1e-9);
+    for (int b = 0; b < bs; ++b) {
+        std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < n; ++r) {
+                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
+                if (!in_tri) continue;
+                T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
+                if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
+                if (tc.transA == Transpose::NoTrans)
+                    opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
+                else
+                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] = v;
+            }
+        for (int r = 0; r < brows; ++r)
+            for (int c = 0; c < bcols; ++c) {
+                Acc got = Acc(0);
+                for (int t = 0; t < n; ++t)
+                    got += (tc.side == Side::Left)
+                               ? Acc(opA[static_cast<size_t>(r) + static_cast<size_t>(t) * n]) *
+                                     Acc(Bv.at(t, c, b))
+                               : Acc(Bv.at(r, t, b)) *
+                                     Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
+                const Acc want =
+                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
+                ASSERT_NEAR(got, want, tol)
+                    << "blocked: b=" << b << " r=" << r << " c=" << c << " n=" << n
+                    << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
+                    << " transA=" << int(tc.transA) << " diag=" << int(tc.diag)
+                    << " alpha=" << double(tc.alpha);
+            }
+    }
+}
+}  // namespace
+
+// The crossover and the block structure. 33 is one past the capacity (two
+// blocks, the second of width 1 -- the short-final-block case); 64 is exactly
+// two full blocks; 96 is three; 100 is three plus a ragged 4.
+TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (int n : {33, 40, 64, 96, 100})
+            RunTrsmBlocked<double>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+                                    Diag::NonUnit, 1.0});
+}
+
+// ALPHA != 1 IS THE TEST THAT MATTERS HERE. alpha is applied exactly once, and
+// for blocks i>0 that happens through the trailing GEMM's BETA, not through V1.
+// Writing the natural beta = 1 computes B_i - sum(...) where alpha*B_i - sum(...)
+// is required: correct at block 0, wrong at every later block, and invisible to
+// any alpha == 1 test -- which is every other test in this file.
+TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOncePerBlock) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (double a : {-2.5, 0.75, 3.0})
+            for (int n : {33, 64, 96})
+                RunTrsmBlocked<double>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                                        Diag::NonUnit, a});
+}
+
+TEST(TrsmNativeBlocked, CanonicalCrossProduct) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmBlocked<double>({70, 16, 2, sd, up, tr, dg, -1.5});
+}
+
+TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (int q : {1, 33, 129})
+            RunTrsmBlocked<float>({48, q, 2, sd, Uplo::Lower, Transpose::Trans,
+                                   Diag::NonUnit, 2.0f});
+}

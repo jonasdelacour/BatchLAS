@@ -188,11 +188,12 @@ Event trsm(Queue& ctx,
     // and inventing one would claim a capability that is not there.
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
         if (dispatch::is_native(route)) {
-            // Only Algorithm::CTA exists so far; Blocked (V2) is a later step
-            // and supports() still reports it unsupported, so it cannot be
-            // selected here.
             if (route.algo == dispatch::Algorithm::CTA) {
                 return sycl_trsm::trsm_native_v1_dispatch<T>(
+                    ctx, A, B, alpha, side, uplo, transA, diag);
+            }
+            if (route.algo == dispatch::Algorithm::Blocked) {
+                return sycl_trsm::trsm_native_blocked<T>(
                     ctx, A, B, alpha, side, uplo, transA, diag);
             }
         }
