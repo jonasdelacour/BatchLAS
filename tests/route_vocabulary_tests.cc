@@ -302,16 +302,29 @@ TEST(RouteVocabulary, CanonicalSpellingWinsOverLegacy) {
     EXPECT_FALSE(parsed.source.legacy);
 }
 
-// --- the unset-default asymmetry, which is real and easy to get wrong ------
+// --- the unset default, which used to be asymmetric ------------------------
 
-TEST(RouteVocabulary, UnsetDefaultsDifferBetweenGemmAndLevel3) {
-    // gemm_variant_request() returns Vendor when its variable is unset, while
-    // parse_cublasdx_variant_request() returns Auto. That asymmetry is why the
-    // level-3 native tile kernels run by default today and GEMM's does not.
-    EXPECT_TRUE(is_vendor(legacy_unset_default(Op::gemm)));
+TEST(RouteVocabulary, UnsetDefaultsAreAutoForEveryOp) {
+    // This test used to be called UnsetDefaultsDifferBetweenGemmAndLevel3 and
+    // asserted the opposite for GEMM: gemm_variant_request() returned Vendor
+    // when its variable was unset while parse_cublasdx_variant_request()
+    // returned Auto, which is why the level-3 native tile kernels ran by
+    // default and GEMM's never did.
+    //
+    // WP2 E6 removed that asymmetry, after E3 and E4 measured every window
+    // preferred() claims. Keeping the assertion and inverting it -- rather than
+    // deleting it -- is deliberate: an absent assertion cannot detect a silent
+    // revert, and this particular default is one line that changes the route of
+    // every GEMM call in the library.
+    EXPECT_EQ(legacy_unset_default(Op::gemm).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::syrk).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::symm).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::trmm).origin, Origin::Auto);
+
+    // Auto is not "always native": it defers to preferred(), and an explicitly
+    // named route still wins. Those are covered in
+    // tests/route_gemm_equivalence_tests.cc.
+    EXPECT_EQ(legacy_unset_default(Op::gemm).algo, Algorithm::Auto);
 }
 
 TEST(RouteVocabulary, NothingSetReportsNotFound) {

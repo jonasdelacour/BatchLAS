@@ -120,14 +120,31 @@ inline std::string_view legacy_variable_for(Op op) {
     }
 }
 
-// What an UNSET legacy variable meant. This asymmetry is real and load-bearing:
-// GEMM defaulted to Vendor while the four level-3 ops defaulted to Auto, so the
-// level-3 native tile kernels have been running by default and GEMM's has not.
+// What an UNSET variable means. GEMM used to be the odd one out -- it defaulted
+// to Vendor while the four level-3 ops defaulted to Auto, so the level-3 native
+// tile kernels ran by default and GEMM's never did. WP2 E6 removed that
+// asymmetry: every op now defaults to Auto, i.e. to whatever preferred() says.
+//
+// The flip is only as good as preferred(), so it was made LAST, after E3 and E4
+// had measured every window preferred() claims. What it actually turns on, all
+// on a GPU, square, batch >= 64, and homogeneous:
+//
+//   double,  n=4..512, ALL transpose forms   1.01-4.51x over cuBLAS DGEMM
+//   float,   NN, max_dim <= 32               1.03-1.46x over cuBLAS SGEMM
+//
+// and nothing else -- complex is refused outright, and E4 removed float's
+// 128..512 NN window and its entire transposed window because both measured as
+// losses. See WP2_GEMM_SPEC.md and experiments/wp2_e3, wp2_e4, wp2_e6.
+//
+// Two things this flip is NOT. It does not change the vendor-free build at all:
+// there, resolve_route already fell back to any supported native route
+// (route_resolve.hh:60-62), so Vendor-as-default was never reached. And it does
+// not touch a call that names a route explicitly -- BATCHLAS_GEMM_VARIANT=vendor
+// still means vendor, which is the escape hatch if a future cuBLAS turns any of
+// the cells above around.
 inline Route legacy_unset_default(Op op) {
-    switch (op) {
-        case Op::gemm: return Route{Origin::Vendor, Algorithm::Auto};
-        default:       return Route{Origin::Auto, Algorithm::Auto};
-    }
+    static_cast<void>(op);
+    return Route{Origin::Auto, Algorithm::Auto};
 }
 
 // Legacy values whose meaning does NOT match the canonical vocabulary.

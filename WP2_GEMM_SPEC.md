@@ -277,6 +277,57 @@ is only as durable as that vendor's version.
 n=4 to 512 (a 1.05–4.51× win) and `float` NN at `max_dim <= 32` (1.03–1.46×). Everything else
 now prefers the vendor on measurement rather than on assumption.
 
+### E6 result — the flip, and the gap the prediction caught
+
+`legacy_unset_default(Op::gemm)` is now `{Auto, Auto}`. GEMM was the one op whose native
+kernel never ran by default; it no longer is.
+
+**The prediction earned its keep.** Enumerating the intended moves *before* flipping is what
+found that **`preferred()`'s `double` branch is a bare `max_dim <= 512` with no transpose test
+at all** — so the flip would route double TN/NT/TT, and ConjTrans (which float's branch
+explicitly rejects), while E3 had measured NN only. Given E4 had just measured float's
+transposed window at **0.34–0.55×**, shipping that unmeasured would have risked a 2–3×
+regression on every transposed double GEMM.
+
+Measured instead — double, square, batch 512, n=32..512, all four forms, both betas:
+**1.01–1.12×, no losses anywhere, ConjTrans included.** The contrast with float is a ceiling
+argument: cuBLAS DGEMM sits at ~86% of the 4090's FP64 ceiling and `Tiled16` reaches ~96%, so
+there is room; cuBLAS SGEMM is strong and the transposed register family plateaus at 15–18
+TFLOP/s, so there is not.
+
+**What the flip turns on**, all GPU-only, square, `batch >= 64`, homogeneous, default
+precision:
+
+- **double**, n=4..512, all transpose forms — 1.01–4.51×
+- **float**, NN only, `max_dim <= 32` — 1.03–1.46×
+- complex: nothing. `preferred()` refuses it.
+
+**Route diff, verified field by field rather than by eye** (`experiments/wp2_e6/`):
+
+| check | result |
+|---|---|
+| added decisions that are not native | **0** |
+| native decisions lost (would be a regression) | **0** |
+| complex decisions moved | **0** |
+| double moved | 27–28 per transpose form, all 9 forms |
+| float moved | 11, **NN only** |
+
+That float moved in NN only is direct confirmation E4 was load-bearing: without its transposed
+narrowing, float would have moved in all nine forms at 0.34–0.55×.
+
+**Four pins fired across E4 and E6 and none were deleted** — each was re-pointed at the new
+behaviour and asserted in its new direction, because an absent assertion cannot detect a silent
+revert. The equivalence test now classifies three separate divergences and counts them
+independently; and the E6 exception is paired with `UnsetNowMeansAuto*`, which asserts
+positively that unset and `"auto"` agree on every shape in the grid. An excuse plus a positive
+assertion of what replaced it beats an excuse alone.
+
+**What the flip does not change.** The vendor-free build, at all — `resolve_route` already fell
+back to any *supported* native route when no vendor exists, so the Vendor default was never
+reached there (verified: failing set byte-identical). And explicit requests:
+`BATCHLAS_GEMM_VARIANT=vendor` still means vendor, which is the escape hatch if a future cuBLAS
+turns any of these cells around — not hypothetical, given the parity claim that aged out in E4.
+
 ## Non-negotiable measurement rules
 
 Every one of these is here because it has already cost this project real time:

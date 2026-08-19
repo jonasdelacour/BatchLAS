@@ -92,7 +92,7 @@ bool legacy_use_sycl_custom(LegacyRequest request, const OpShape& s) {
 // ---------------------------------------------------------------------------
 template <typename T>
 bool new_uses_native(const char* env_value, const OpShape& s) {
-    Route forced = legacy_unset_default(Op::gemm);   // Vendor when unset
+    Route forced = legacy_unset_default(Op::gemm);   // Auto since WP2 E6
     if (env_value) {
         // The legacy parser: these values arrive through
         // BATCHLAS_GEMM_VARIANT, where "native" means the raw CUDA path rather
@@ -169,6 +169,17 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 //
 // (1) WP2 C2 -- heterogeneous batch, a WIDENING.
 // (2) WP2 E4 -- float's measured window, a NARROWING.
+// (3) WP2 E6 -- the UNSET DEFAULT flipped from Vendor to Auto.
+//
+// (3) is different in kind from the other two: it is not a change to which
+// shapes are preferred, it is a change to what happens when nobody asked. It
+// therefore only ever fires for env == nullptr, and excusing it wholesale would
+// blind the test at that one env value -- which is the value ordinary calls
+// use, so that would be the worst place to lose coverage. Instead the exception
+// is narrow (unset only, and only in the vendor -> native direction) and
+// `UnsetNowMeansAuto` below asserts POSITIVELY that unset and "auto" now agree
+// on every shape in the grid. An excuse plus a positive assertion of what
+// replaced it beats an excuse alone.
 //
 // The legacy predicate rejected a heterogeneous batch as UNSUPPORTED, so a
 // forced native request on one fell through to the vendor. That was a
@@ -188,7 +199,7 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 // gemm_has_heterogeneous_batch BEFORE consulting gemm_use_sycl_custom, so the
 // heterogeneous loop is entered either way. The divergence is visible to this
 // test because it calls the predicate directly.
-enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed };
+enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped };
 
 // (2) WP2 E4. The legacy predicate preferred native for float on two windows
 // that measurement says it loses: every transposed cell (0.34-0.55x of cuBLAS
@@ -205,6 +216,13 @@ Divergence classify_divergence(const char* env, const OpShape& s,
     if (s.heterogeneous_batch && forced_native && !old_native && new_native) {
         return Divergence::HeterogeneousWidened;
     }
+    // (3) WP2 E6. Only for an UNSET environment, and only in the direction the
+    // flip goes: the legacy default was a forced Vendor, so it never chose
+    // native; Auto now defers to preferred(). Anything else at env == nullptr
+    // is still compared.
+    if (env == nullptr && !old_native && new_native) {
+        return Divergence::DefaultFlipped;
+    }
     if constexpr (std::is_same_v<T, float>) {
         if (old_native && !new_native) {
             const bool transposed =
@@ -220,7 +238,8 @@ Divergence classify_divergence(const char* env, const OpShape& s,
 
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
-    size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0;
+    size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0,
+           default_flipped = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
@@ -231,6 +250,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
             const Divergence d = classify_divergence<T>(env, s, old_native, new_native);
             if (d == Divergence::HeterogeneousWidened) { ++het_widened; continue; }
             if (d == Divergence::FloatWindowNarrowed)  { ++float_narrowed; continue; }
+            if (d == Divergence::DefaultFlipped)       { ++default_flipped; continue; }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -266,6 +286,47 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         EXPECT_EQ(float_narrowed, 0u)
             << "the E4 narrowing is float-only but fired for " << type_name;
     }
+
+    // The flip only produces divergences for types preferred() actually accepts.
+    // complex is refused outright, so zero there is the correct answer and a
+    // NON-zero one would mean complex had started routing native by default --
+    // exactly the regression WP2_GEMM_SPEC warns about.
+    if constexpr (is_std_complex_v<T>) {
+        EXPECT_EQ(default_flipped, 0u)
+            << "complex must not route native by default: preferred() refuses it, "
+               "and the register ladder for complex needs min_dim >= 256 and an "
+               "aligned NN shape (see WP2_GEMM_SPEC.md)";
+    } else {
+        EXPECT_GT(default_flipped, 0u)
+            << "grid no longer reaches the WP2 E6 default flip for " << type_name
+            << " -- the exception is now vacuous";
+    }
+}
+
+// What the E6 exception above excuses, asserted positively: after the flip an
+// UNSET environment must decide exactly as an explicit "auto" does, on every
+// shape in the grid. Without this the exception would merely hide the change.
+template <typename T>
+void expect_unset_equals_auto(ScalarKind kind, const char* type_name) {
+    size_t compared = 0, native_cases = 0;
+    for (const OpShape& s : shape_grid(kind)) {
+        const bool unset = new_uses_native<T>(nullptr, s);
+        const bool automatic = new_uses_native<T>("auto", s);
+        ++compared;
+        if (unset) ++native_cases;
+        ASSERT_EQ(unset, automatic)
+            << "unset and \"auto\" disagree for " << type_name << "  " << s.describe()
+            << "  transA=" << static_cast<int>(s.transA)
+            << " transB=" << static_cast<int>(s.transB)
+            << "  gpu=" << s.is_gpu;
+    }
+    EXPECT_GT(compared, 100u) << "grid too small to be meaningful";
+    // Guard against the degenerate agreement where neither ever picks native.
+    if constexpr (!is_std_complex_v<T>) {
+        EXPECT_GT(native_cases, 0u)
+            << "unset never chose native for " << type_name
+            << " -- the flip would be a no-op and this test vacuous";
+    }
 }
 
 } // namespace
@@ -274,6 +335,11 @@ TEST(RouteGemmEquivalence, Float)         { expect_equivalent<float>(ScalarKind:
 TEST(RouteGemmEquivalence, Double)        { expect_equivalent<double>(ScalarKind::F64, "double"); }
 TEST(RouteGemmEquivalence, ComplexFloat)  { expect_equivalent<std::complex<float>>(ScalarKind::C32, "complex<float>"); }
 TEST(RouteGemmEquivalence, ComplexDouble) { expect_equivalent<std::complex<double>>(ScalarKind::C64, "complex<double>"); }
+
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoFloat)         { expect_unset_equals_auto<float>(ScalarKind::F32, "float"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoDouble)        { expect_unset_equals_auto<double>(ScalarKind::F64, "double"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoComplexFloat)  { expect_unset_equals_auto<std::complex<float>>(ScalarKind::C32, "complex<float>"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoComplexDouble) { expect_unset_equals_auto<std::complex<double>>(ScalarKind::C64, "complex<double>"); }
 
 // --- the replica itself must be faithful ----------------------------------
 
@@ -400,18 +466,25 @@ TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
         << "WP2 C2: heterogeneous batch is supported natively via the facade loop";
 }
 
-TEST(RouteGemmEquivalence, DefaultedVendorAlsoDegradesWhenThereIsNoVendor) {
-    // The gap the test above did NOT close, found only once the adapter was
-    // wired up: it passes Origin::Auto, which the real call path never produces
-    // for an unset environment. GEMM's unset default is Vendor
-    // (legacy_unset_default), so an ordinary call arrives as a FORCED Vendor
-    // request and used to be returned verbatim -- making the degradation above
-    // unreachable outside this file.
+TEST(RouteGemmEquivalence, ForcedVendorStillDegradesWhenThereIsNoVendor) {
+    // This test used to be called DefaultedVendorAlsoDegradesWhenThereIsNoVendor
+    // and its premise was that GEMM's unset default IS Vendor, so an ordinary
+    // call arrived as a forced Vendor request. WP2 E6 flipped that default to
+    // Auto, so the premise is now false -- but the behaviour it guards is not:
+    // an EXPLICITLY forced Vendor must still degrade to native where no vendor
+    // was compiled in, and that path is now reached only by explicit forcing.
     OpShape tiny; tiny.op = Op::gemm; tiny.scalar = ScalarKind::F32;
     tiny.m = tiny.n = tiny.k = 8; tiny.batch = 1; tiny.is_gpu = true;
-    const Route defaulted = legacy_unset_default(Op::gemm);
-    ASSERT_TRUE(is_vendor(defaulted)) << "the premise of this test";
 
+    // Pin the new default in its own right rather than merely dropping the old
+    // assertion: a deleted assertion cannot detect a silent revert.
+    const Route defaulted = legacy_unset_default(Op::gemm);
+    EXPECT_EQ(defaulted.origin, Origin::Auto)
+        << "WP2 E6: GEMM's unset default is Auto, like every other op";
+
+    // batch 1 and 8x8 is outside every measured window, so Auto defers to the
+    // vendor when there is one -- the flip did not make Auto mean "always
+    // native".
     EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/true)));
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/false)))
         << "a vendor that is not compiled in cannot be the answer";
