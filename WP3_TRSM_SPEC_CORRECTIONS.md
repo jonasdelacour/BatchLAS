@@ -125,13 +125,41 @@ entry functions have a non-zero stack frame *with* `0 bytes spill stores, 0 byte
 Gating on stack frame rejects spill-free kernels; worse, grepping a compile log for "spill" finds
 nothing and reads as "no spill" — a phantom measurement.
 
-**Working recipe:** replay `build/src/CMakeFiles/batchlas_sycl.dir/link.txt` verbatim with a
-second `-Xsycl-target-backend=nvptx64-nvidia-cuda -Xcuda-ptxas -v` pair appended and `-o`
-redirected. No reconfigure needed. Gate on:
+**Working recipe:** `scripts/register_probe.sh`, which replays
+`build/src/CMakeFiles/batchlas_sycl.dir/link.txt` verbatim with a second
+`-Xsycl-target-backend=nvptx64-nvidia-cuda -Xcuda-ptxas -v` pair appended and `-o` redirected.
+No reconfigure needed.
 
-- `0 bytes spill stores, 0 bytes spill loads` on the `TrsmCtaKernel<...>` lines, **and**
-- `Used N registers × WG <= 65536` — the per-**block** limit, which `gemm_kernels.cc:725-735`
-  records as the real failure mode (a launch abort, not a slowdown).
+### ✱ The gate, corrected again by running it (WP3 step 3)
+
+This document originally said: gate on spill bytes, **not** on stack frame. Measured against the
+actual TRSM kernels, that is wrong, and the spec's `stack frame == 0` was right — for a reason
+neither document had:
+
+| type | N | registers | stack frame | spill |
+|---|---|---|---|---|
+| float | 8 / 16 / 32 | 42 / 76 / 114 | 0 | 0 |
+| float | **64** | 119 | **256 B** | 0 |
+| double | 8 / 16 / 32 | 59 / 100 / 153 | 0 | 0 |
+| double | **64** | 145 | **512 B** | 0 |
+
+**Nothing spills**, including `double N=64` — so the spec's "256 B/thread cliff" is falsified,
+as this document said. But 256 B is 64 floats and 512 B is 64 doubles: that is `x[]` itself,
+placed in local memory rather than promoted to registers. ptxas calls that a **stack frame**,
+not a spill, because the array was never in registers to be spilled out of — and register
+residency is V1's entire thesis. A spill-only check passes N=64 while the design is void.
+
+The distinction is kernel-specific and that is why both documents got it wrong from one side
+each: in the GEMM kernels this document generalised from, 220 of 376 entry functions carry a
+benign non-zero frame; in **this** kernel the only thing that can be on the stack is the
+accumulator array.
+
+**The gate is: `stack frame == 0` AND `0 bytes spill stores/loads` AND
+`registers × WG <= 65536`.**
+
+Measured capacity: **`n_cta(float) = 32`, `n_cta(double) = 32`.** The spec predicted float 64;
+its instruction "if x[64] spills, reduce `n_cta(float)` to 32" reached the right number by a
+mechanism that does not occur.
 
 Each kernel appears twice (`…_with_offset` and not) and the two can differ by a couple of
 registers; take the max, and grep by mangled name.
