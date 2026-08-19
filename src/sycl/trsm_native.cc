@@ -53,6 +53,8 @@
 #include <algorithm>
 #include <complex>
 #include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 namespace batchlas::sycl_trsm {
@@ -88,13 +90,26 @@ inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag)
     return c;
 }
 
-// The smallest compile-time bucket >= n. Buckets are powers of two up to 64;
-// the router guarantees n <= trsm_cta_max_n<T>() before this is consulted.
+// The smallest compile-time bucket >= n, or 0 if there is none.
+//
+// RETURNING 0 RATHER THAN THE NEXT POWER OF TWO IS THE POINT. This used to
+// return 64 for any n > 32, and the dispatch switch below collapsed 64 onto the
+// N=32 instantiation via its `default:` label -- so a 33-order solve ran with
+// N=32 and silently solved the leading 32x32 system, leaving the last row of B
+// untouched. Nothing caught it: the staging pad test (s >= n) cannot fire when
+// N < n, the recurrence simply stops early, and the store loop writes only the
+// rows it computed. It was unreachable through the facade because supports(CTA)
+// caps the order at trsm_cta_max_n, but the direct entry is exactly what V2
+// calls on its diagonal blocks.
+//
+// There is no N=64 bucket by measurement, not by omission: the register probe
+// put x[64] in local memory for both real types (256 B / 512 B stack frame,
+// zero spill), which voids V1's register residency. n > 32 is V2's job.
 inline int smallest_bucket_ge(int n) {
     if (n <= 8) return 8;
     if (n <= 16) return 16;
     if (n <= 32) return 32;
-    return 64;
+    return 0;
 }
 
 // Packed lower-triangle index, row-major by s: N(N+1)/2 elements.
@@ -303,13 +318,21 @@ Event trsm_native_v1_buckets(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              T alpha, Uplo uplo, Transpose transA, Diag diag) {
-    // Buckets stop at 32: the register probe measured x[64] landing in local
-    // memory for both real types (256 B / 512 B stack frame, zero spill), which
-    // voids V1's register residency. n > 32 is V2's job.
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
         case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        default: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 32: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        default:
+            // ENFORCED, not assumed. The router already caps the order via
+            // supports(CTA), so reaching here means a direct caller (V2, or a
+            // test) exceeded the contract -- and the alternative to throwing is
+            // returning a wrong answer for the rows that do not fit.
+            throw std::runtime_error(
+                "BatchLAS: trsm_native_v1 called with triangular order " +
+                std::to_string(A.rows()) +
+                ", which exceeds the CTA register capacity of 32. Orders above the "
+                "capacity are the blocked driver's (V2's) job; the CTA kernel cannot "
+                "serve them and must not silently solve a leading submatrix.");
     }
 }
 

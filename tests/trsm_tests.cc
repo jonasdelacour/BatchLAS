@@ -408,3 +408,36 @@ TEST(TrsmNativeCta, LargestResidentOrder) {
         RunTrsmNative<double>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
     }
 }
+
+
+// V1's contract is n <= trsm_cta_max_n<T>() (32). The bucket ladder had a hole:
+// smallest_bucket_ge(33) returned 64, which the dispatch switch's `default:`
+// label collapsed onto the N=32 instantiation -- so a 33-order solve silently
+// solved the leading 32x32 system and left the last row of B untouched. It was
+// unreachable through the facade, because supports(CTA) caps the order, but the
+// direct entry is what V2 will call on its diagonal blocks, so it was one step
+// from being live.
+//
+// The contract is now enforced rather than assumed: over-capacity throws.
+TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
+    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int n = 33, q = 8, bs = 1;
+    Matrix<double, MatrixFormat::Dense> A(n, n, bs);
+    Matrix<double, MatrixFormat::Dense> B(q, n, bs);
+    auto Av = A.view();
+    auto Bv = B.view();
+    for (int c = 0; c < n; ++c)
+        for (int r = 0; r < n; ++r)
+            Av.at(r, c, 0) = (r == c) ? 2.0 : (r > c ? 0.05 : 0.0);
+    for (int c = 0; c < n; ++c)
+        for (int r = 0; r < q; ++r)
+            Bv.at(r, c, 0) = 1.0;
+
+    EXPECT_THROW(
+        (batchlas::sycl_trsm::trsm_native_v1_dispatch<double>(
+            *ctx, A.view(), B.view(), 1.0, Side::Right, Uplo::Lower,
+            Transpose::NoTrans, Diag::NonUnit)),
+        std::runtime_error)
+        << "n=33 exceeds the CTA capacity; silently solving 32 of 33 rows is the "
+           "failure mode this guards";
+}
