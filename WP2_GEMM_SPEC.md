@@ -115,6 +115,61 @@ vendor-only — come with it.
 | E5 | Non-square: unlock the predicated *kernel* first (route diff EMPTY), then the *route* | medium |
 | E6 | **The flip**: `legacy_unset_default(Op::gemm)` → `{Auto, Auto}` | highest |
 
+### E2 result — the kernel landed, and the demand measurement that reframes E3–E6
+
+`WP2_WIDE_SCALAR_GEMM_VERDICT.md` §5 named one follow-up as more valuable than any faster
+tile: *"A 7.5× win behind a gate that never fires is worth exactly zero"* — so measure
+whether BatchLAS's own call sites hit the gate before believing the win. That measurement is
+now done, and it changes the plan.
+
+**What landed.** `src/sycl/gemm/register_64x64_k16_wide.hh`, wired into the enum,
+`kernel_trace_name`, force-by-name, `select_kernel_variant` and `gemm_custom`. It is the only
+register-tiled variant serving a non-float scalar. Verified:
+
+- 16 new forced-variant tests, **all four scalar types**, aligned and ragged, `α=2, β=-1`.
+- The kernel provably *runs*: `BATCHLAS_KERNEL_TRACE` shows 8 launches of
+  `gemm_sycl_register_64x64_k16_wide` against 8 of `gemm_sycl_tiled16`.
+- All five load-bearing PTX properties survived the port, read out of the device image the
+  build actually embeds: **zero** `__mulsc3`/`__muldc3`/`call.uni`; **zero** scalar
+  `ld.shared` in any fragment path (float `ld.shared.v4`, double and complex `ld.shared.v2` —
+  the 16-byte granule holding across scalar widths); vector global staging on the fast path;
+  vector epilogue stores; and **zero** `.local` traffic, i.e. no spill.
+- Route diff vs `wp2-c2`: **0 decisions removed, 3 added**, all `native,register_tiled` NN for
+  `double`/`complex<float>`/`complex<double>` at a shape class that had none, all attributable
+  to the new tests. No existing decision moved — which is the acceptance criterion, since the
+  kernel lands behind `gemm_use_sycl_custom`'s `Vendor` default.
+
+**What the demand measurement found.** Against the whole suite's coverage capture:
+
+| population | non-float gemm calls | gate fires | rate |
+|---|---|---|---|
+| full-suite capture | 23 134 | 823 | 3.56% |
+| **real demand** (probe rows removed) | **7 223** | **46** | **0.64%** |
+
+The full-suite number is inflated: **2 312 of the 2 795 `gemm` rows come from
+`tests/route_gemm_equivalence_tests.cc`'s synthetic `dims[] × batches[]` cross-product**
+(lines 119–120), which feeds shapes straight to the resolver and never executes a GEMM. Those
+are probes, not demand. Restricted to calls where the problem is genuinely not small
+(`max(m,n) >= 128`): **91.6% are blocked by `k < 256`** and **69% by a transpose**.
+
+**That is structural, not test sizing.** The dominant internal GEMM here is a *panel update* —
+large m, large n, small k — and k is the blocking factor, clustered at 1/8/32/48/96/136, a
+tuning constant that does not grow with the problem. `min_dim` takes the min over k, so for
+that population the gate cannot fire at *any* problem size.
+
+**And no single relaxation rescues it: zero calls are blocked by the k floor alone.** Every
+large-m,n small-k call is also transposed or ragged. So:
+
+- **E3/E4/E5 cannot deliver an internal win by widening a predicate.** They can only move the
+  large-square-aligned-NN cells, which real demand barely occupies. They are still worth doing
+  for the **public API** — a user calling `batchlas::gemm` with a large square complex matrix
+  is a normal thing to do, and vendor-free that call is 3.6–7.7× better than it was — but the
+  claim "this closes the vendor gap for BatchLAS's complex work" would be false.
+- **The deferred item is now the main one.** ConjTrans plus a predicated path for wide scalars
+  is what the panel-update population actually needs, and the verdict doc's own numbers say
+  the complex fallback is 3.6–7.7× off the vendor there. That is a new kernel, not a routing
+  change, and it should be ranked ahead of E4/E5.
+
 ## Non-negotiable measurement rules
 
 Every one of these is here because it has already cost this project real time:

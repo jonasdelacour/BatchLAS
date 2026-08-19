@@ -80,6 +80,21 @@ One named gap remains in this area:
 And one that WP2's envelope track owns: `select_kernel_variant` is **float-only**, so a
 vendor-free `double` or `complex` GEMM reaches `Tiled16`, not a register kernel.
 
+## After WP2 E2
+
+That last gap is now closed for the aligned square NN bucket.
+`src/sycl/gemm/register_64x64_k16_wide.hh` is the first register-tiled kernel in this tree to
+serve a non-float scalar, and vendor-free `gemm_tests` goes **184 → 200 passing** (the 16 new
+forced-variant tests, all four scalar types, aligned and ragged). The suite stays **25/53**
+with a byte-identical failing set, and the vendor-present route diff moves **zero** existing
+decisions.
+
+Note what it does *not* close, measured rather than assumed: on real demand (with
+`route_gemm_equivalence_tests`'s 2312 synthetic probe rows removed) the kernel's routing gate
+fires on **46 of 7223 non-float gemm calls, 0.64%**. BatchLAS's own GEMM is dominated by panel
+updates — large m, large n, small k, usually transposed — and `min_dim >= 256` takes the min
+over k, which is a blocking constant. See `WP2_GEMM_SPEC.md`.
+
 ## The same gap, per op
 
 `cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose
