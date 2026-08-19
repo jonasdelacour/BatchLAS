@@ -1,0 +1,85 @@
+trsm ortho grid: 9 of 54 cells dropped, over the 6.0 GB cap:
+    n=32 q=4096 batch=2048 (8.6 GB)
+    n=64 q=4096 batch=2048 (17.3 GB)
+    n=128 q=1024 batch=2048 (9.1 GB)
+    n=128 q=4096 batch=512 (8.7 GB)
+    n=128 q=4096 batch=2048 (34.9 GB)
+    n=256 q=256 batch=2048 (6.4 GB)
+    n=256 q=1024 batch=2048 (19.3 GB)
+    n=256 q=4096 batch=512 (17.7 GB)
+    n=256 q=4096 batch=2048 (70.9 GB)
+trsm route forced: native -> native:auto
+[1;36mName                                              Arg0    Arg1    Arg2    Iter        Avg(ms)     Std(ms)     GFLOPS      Time (us) / matrix[0m
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       32      1       100         0.0084531   4.6954e-05  0.24228     8.4531      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       32      8       100         0.0085226   0.00021994  1.9224      1.0653      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       32      32      100         0.0085460   0.00022291  7.6686      0.26706     
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       128     1       100         0.0084753   0.00015800  0.96658     8.4753      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       128     8       100         0.0085306   2.8647e-05  7.6825      1.0663      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m8       128     32      100         0.0085338   2.9388e-05  30.718      0.26668     
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      32      1       100         0.020234    0.0013937   1.6194      20.234      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      32      8       100         0.019361    6.8522e-05  13.540      2.4202      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      32      32      100         0.019396    0.00019356  54.061      0.60613     
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      128     1       100         0.019391    0.00011655  6.7596      19.391      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      128     8       100         0.019405    6.6991e-05  54.035      2.4257      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m32      128     32      100         0.019447    5.7900e-05  215.68      0.60772     
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     32      1       100         0.074746    0.00011937  7.0143      74.746      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     32      8       100         0.076083    0.00045996  55.128      9.5104      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     32      32      100         0.076385    0.00010068  219.64      2.3870      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     128     1       100         0.072887    8.3545e-05  28.773      72.887      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     128     8       100         0.073363    9.6094e-05  228.69      9.1704      
+[1m(BM_TRSM_StarvedRight<float, batchlas::Backend::CUDA>)[0m128     128     32      100         0.081890    0.00011853  819.50      2.5591      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       32      1       100         0.0084966   6.3868e-05  0.24104     8.4966      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       32      8       100         0.0088647   0.00012011  1.8482      1.1081      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       32      32      100         0.0089154   8.3392e-05  7.3508      0.27861     
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       128     1       100         0.0088808   0.00010395  0.92244     8.8808      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       128     8       100         0.0088711   7.4252e-05  7.3876      1.1089      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m8       128     32      100         0.0089037   0.00010670  29.442      0.27824     
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      32      1       100         0.027699    0.00090764  1.1830      27.699      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      32      8       100         0.027317    0.00027779  9.5963      3.4147      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      32      32      100         0.027304    0.00022572  38.403      0.85326     
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      128     1       100         0.027320    0.00028814  4.7976      27.320      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      128     8       100         0.027320    0.00014918  38.382      3.4150      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m32      128     32      100         0.027303    0.00015411  153.62      0.85323     
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     32      1       100         0.11215     0.00027778  4.6749      112.15      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     32      8       100         0.11298     0.00032482  37.123      14.123      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     32      32      100         0.11333     0.00032285  148.04      3.5415      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     128     1       100         0.11092     0.00029696  18.907      110.92      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     128     8       100         0.11140     0.00029762  150.60      13.926      
+[1m(BM_TRSM_StarvedRight<double, batchlas::Backend::CUDA>)[0m128     128     32      100         0.14017     0.00012119  478.78      4.3802      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       32      1       100         0.0086169   8.6051e-05  0.23767     8.6169      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       32      8       100         0.0090127   0.00012679  1.8179      1.1266      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       32      32      100         0.0091008   7.8176e-05  7.2011      0.28440     
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       128     1       100         0.0090250   3.2282e-05  0.90770     9.0250      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       128     8       100         0.0090979   0.00011438  7.2034      1.1372      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m8       128     32      100         0.0090397   4.1312e-05  28.999      0.28249     
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      32      1       100         0.022288    0.00072503  1.4702      22.288      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      32      8       100         0.021981    0.00012622  11.926      2.7476      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      32      32      100         0.021471    9.0881e-05  48.837      0.67097     
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      128     1       100         0.022325    7.5307e-05  5.8711      22.325      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      128     8       100         0.021527    0.00027471  48.710      2.6908      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m32      128     32      100         0.021417    0.00014878  195.84      0.66928     
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     32      1       100         0.094382    7.2536e-05  5.5550      94.382      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     32      8       100         0.095957    8.5746e-05  43.710      11.995      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     32      32      100         0.092618    7.0913e-05  181.14      2.8943      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     128     1       100         0.093280    8.2687e-05  22.482      93.280      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     128     8       100         0.089925    0.00014507  186.57      11.241      
+[1m(BM_TRSM_StarvedRight<std::complex<float>, batchlas::Backend::CUDA>)[0m128     128     32      100         0.10550     0.00015854  636.09      3.2969      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       32      1       100         0.010826    4.0369e-05  0.18918     10.826      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       32      8       100         0.010910    7.9529e-05  1.5017      1.3638      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       32      32      100         0.010903    0.00021801  6.0110      0.34071     
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       128     1       100         0.010877    6.3002e-05  0.75318     10.877      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       128     8       100         0.010877    6.2026e-05  6.0252      1.3596      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m8       128     32      100         0.010983    6.5650e-05  23.868      0.34322     
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      32      1       100         0.046016    0.00011754  0.71210     46.016      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      32      8       100         0.046212    9.0102e-05  5.6726      5.7765      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      32      32      100         0.045877    0.00015075  22.856      1.4337      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      128     1       100         0.046362    0.00019586  2.8271      46.362      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      128     8       100         0.046020    0.00010802  22.785      5.7525      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m32      128     32      100         0.046204    9.7301e-05  90.779      1.4439      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     32      1       100         0.29725     0.00037325  1.7638      297.25      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     32      8       100         0.29808     0.00023090  14.071      37.259      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     32      32      100         0.31165     0.00021510  53.834      9.7389      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     128     1       100         0.31007     0.00065672  6.7635      310.07      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     128     8       100         0.30945     0.00042235  54.217      38.681      
+[1m(BM_TRSM_StarvedRight<std::complex<double>, batchlas::Backend::CUDA>)[0m128     128     32      100         0.70027     0.00071178  95.833      21.883      
+gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)

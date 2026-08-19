@@ -233,8 +233,14 @@ measured.
    self-contradiction, not a fact about the tree. Decide, then edit one of the two.
 2. **Should the trsm shape builder populate `compute_units`, or should `Queue` cache it for
    every op?** `src/util/queue-impl.cc` already queries `max_compute_units`.
-3. **The starvation constant `8` (spec:654) and "complex flips native" (spec:659)** are both
-   hypotheses. `preferred()` must not encode either before the §10 grid exists.
+3. ~~**The starvation constant `8` (spec:654) and "complex flips native" (spec:659)** are both
+   hypotheses.~~ ✱ **SETTLED BY STEP 9, AND BOTH ARE WRONG.** The grid was run; see
+   `experiments/wp3_s9/`. The starvation guard is not merely unimplementable, it is
+   *refuted*: at `batch=8, q=32` the product is 256 against its own threshold of 32,768,
+   and native wins those cells 2.2–2.4×. And "complex flips native" understates the
+   result — `double` wins **32 of 32** saturated cells (1.39–9.62×) and `float` wins every
+   `Side::Right` cell (1.54–4.59×). The stated kill criterion ("if native real exceeds
+   1.10× vendor, real stays vendor-first and only complex flips") did not fire.
 4. **`n_cta(double)`/`n_cta(cdouble)`** — settled by the register gate above.
 5. **DPC++'s SLM carveout** — `local_accessor` lowering to dynamic shared memory with a quantised
    Ada carveout could cap CTAs regardless of the register arithmetic. Same `ncu` run as §4.4.
@@ -243,3 +249,47 @@ measured.
    reports nothing for trsm while looking healthy.
 7. **Should `BATCHLAS_TRSM_VARIANT` exist as a legacy alias at all?** It never shipped; not adding
    it is defensible. A decision, not a measurement.
+
+---
+
+## ✱ What step 9 measured, and the three claims it disproved
+
+The grid exists (`experiments/wp3_s9/`, with its own README), `preferred()` is live,
+and this is the first WP3 change that moves traffic. Three corrections, each to
+something this document or the spec asserted:
+
+**The §10 grid cannot be run as written.** Nine of its 54 cells exceed this box's
+24 GB, the largest asking 70.9 GB once the harness's pristine copy of `B` is counted.
+The implemented grid caps at 6 GB and prints every dropped cell. My own first draft
+of the cap table omitted the pristine copy and understated every row by ~2×, which
+would have put four dropped cells back into the table on paper while the code kept
+dropping them — the comment now says to read the figures off `trsm_grid_bytes()`
+rather than re-derive them.
+
+**"WP3 cannot claim a speed result" is now false, but the claim it can make is
+narrower than the win suggests.** `preferred()` moved **zero library decisions**.
+Every trsm call the test suite issues runs at batch ≤ 5, below the measured batch
+floor of 8, so the route diff `wp3-cx → wp3-s9` shows only two changed rows and
+both are `route_vocabulary_tests` recording its own `resolve_trsm_route` calls. The
+speed claim rests entirely on the `ortho` A/B — 80/80 cells at or above parity,
+1.15–2.72×, with the route unset so that `preferred()` is what selects. A flip
+validated only by the suite would have been validated by nothing.
+
+**The `Side::Left` staging tile of §3.4 is no longer optional-and-unmeasured.** It
+is the one losing region in the whole grid: `float`, `Side::Left`, order ≥ 32,
+0.57–0.87×, with a sharp cliff between order 16 and 32 and flat across q and batch.
+`double` at the same shapes wins 1.39–6.37× — same kernel, same access pattern,
+opposite verdict, because cuBLAS's double triangular path is weak enough that the
+over-fetch does not decide the race. The predicate encodes the cliff
+(`float && Side::Left → order <= 16`) rather than papering over it, so building the
+tile has a known prize and a ready-made A/B.
+
+### Revised remaining order
+
+| step | what | status |
+|---|---|---|
+| 9 | the §10 grid | **done** — `experiments/wp3_s9/` |
+| 10 | widen `preferred()` for complex | **done, and wider than planned** — folded into step 9; complex, double, and float-Right all flipped together because the grid ranked them in one pass |
+| 11 | per-cell real flips | **done** — same commit; the per-cell structure is the `float`/`Side::Left` split |
+| 12 | the `Side::Left` SLM staging tile (§3.4) | open, and now justified by measurement rather than predicted |
+| 13 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched — needs its own verification pass |

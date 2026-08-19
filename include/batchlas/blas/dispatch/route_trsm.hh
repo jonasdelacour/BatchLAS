@@ -50,8 +50,9 @@
 // later predicate cannot pick the wrong one by writing `s.n` and meaning the
 // order.
 //
-// STATUS: table only. preferred() is all-false by construction -- see the note
-// on it -- so this file changes no routing decision on a vendor-present box.
+// STATUS: live. preferred() was all-false until WP3 step 9 measured the grid;
+// it now moves trsm traffic to the native kernels on a vendor-present box for
+// every cell the measurement backs. See the note on preferred() for which.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -185,33 +186,111 @@ struct RouteTable<Op::trsm, T> {
     }
 
     // ---- MEASURED WINDOW --------------------------------------------------
-    // FALSE FOR EVERY CELL, ON PURPOSE, AND NOT AN OVERSIGHT.
+    // WP3 step 9 measured it. Every clause below cites the cells it comes from;
+    // the raw CSVs are in experiments/wp3_s9/ and the grid that produced them
+    // is benchmarks/trsm_benchmark.cc's TrsmOrthoSizes.
     //
-    // Nothing about the native TRSM has been measured yet. Returning true
-    // anywhere here would MOVE LIVE TRAFFIC off the vendor on the strength of
-    // the spec's S10 table, whose own confidence column reads "low" for three
-    // of its five rows and whose two numeric constants -- the starvation cut
-    // `batch*q >= 8*CU*32` and "complex flips native" -- are both recorded as
-    // hypotheses in WP3_TRSM_SPEC_CORRECTIONS.md.
+    // THE GRID. Not the square-RHS one the old trsm_benchmark swept -- the
+    // library never issues a square RHS. The two real call sites (ortho.cc:202
+    // and :289) pass a k x k Cholesky factor as A and an m x k basis as B, so
+    // the triangular order is SMALL and the other extent is LARGE. Measured
+    // n in {8..256} x q in {256,1024,4096} x batch in {128,512,2048}, all four
+    // types, both sides, RTX 4090, one card guarded exclusive, vendor and
+    // native runs differing ONLY in BATCHLAS_TRSM_ROUTE. Ratios are
+    // vendor_ms / native_ms, so >1 means native is faster, and are quoted only
+    // where the (type, side, n, q) family had stopped scaling with batch.
     //
-    // The starvation guard in particular COULD NOT BE WRITTEN YET even if it
-    // were trusted: it needs the SM count, and OpShape::compute_units
-    // (route.hh:240) has zero writers in include/, src/ and tests/ today -- it
-    // reads 0, so any predicate comparing against it is comparing against zero.
-    // The shape builder is what has to populate it; the table may not, because
-    // a SYCL query in here breaks the purity route_resolve.hh:19-20 depends on.
+    // THE RESULT, worst cell per type over the whole saturated grid:
     //
-    // Consequence, and it is the one WP3 step 6 wants: with a vendor present
-    // every trsm call keeps going to the vendor, so every existing test stays
-    // green unchanged; with no vendor present route_resolve.hh:60-63 still finds
-    // the supported native route, which is the gap being closed. On a
-    // vendor-present box the native path is reachable only by naming it --
-    // BATCHLAS_TRSM_ROUTE=cta / =blocked / =native -- which is a FORCED request
-    // and so never consults this function (route_resolve.hh:89-101).
+    //   double            1.39x   (32/32 cells win, best 9.62x)
+    //   complex<double>   1.20x   (30/30 cells win, best 4.66x)
+    //   complex<float>    1.01x   (30/30 cells win, best 21.91x)
+    //   float, Right      1.54x   (every n wins once batch >= 512)
+    //   float, Left       0.57x   AT n >= 32 -- the one losing region
     //
-    // Cells get flipped here one at a time, each with its measurement quoted in
-    // place, in the style of route_gemm.hh:124-206. Do not flip one without one.
-    static bool preferred(Route, const TrsmShape&) { return false; }
+    // and end-to-end through the actual caller, ortho at m in {1024,4096},
+    // k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: 80 of 80 cells
+    // at or above parity, 1.15x to 2.69x. That check is not decoration. A
+    // 2.16x kernel win in this repo once turned into an 11% gesvd loss, and a
+    // predicate justified only at kernel level would not have caught it.
+    static bool preferred(Route r, const TrsmShape& s) {
+        // The vendor is never "preferred"; it is where the walk ends when
+        // nothing native is. Saying so explicitly matters because the vendor
+        // route is LAST in kTrsmOrder and returning true here would be
+        // indistinguishable from falling through -- until someone reorders the
+        // list.
+        if (!is_native(r)) return false;
+
+        const int64_t order = s.tri_order();
+
+        // BATCH FLOOR. At batch = 1 the native kernel loses at every order at
+        // or above 32 -- float 0.40-0.46x, double 0.80-0.86x -- because one
+        // work-item solves one system and there is nothing else on the device.
+        // At batch = 8 it already wins (double 1.08-2.93x, float n<=32
+        // 1.09-2.44x), so the boundary sits at the first measured win rather
+        // than at a rounder number. See experiments/wp3_s9/starved-*.csv.
+        //
+        // NOTE WHAT THIS IS NOT. Spec S10 proposed a starvation guard
+        // `batch*q < 8*CU*32 -> vendor`, and the measurement REFUTES it: at
+        // batch=8, q=32 that product is 256 against a threshold of 32,768, and
+        // native wins those cells 2.2-2.4x. The guard would have handed back
+        // every one of them. It is also unimplementable as written --
+        // OpShape::compute_units still has no writer and reads 0 -- but it is
+        // rejected here on the measurement, not on the plumbing.
+        if (s.batch < 8) return false;
+
+        if constexpr (std::is_same_v<T, float>) {
+            // FLOAT IS THE ONLY TYPE WHERE THE VENDOR IS STILL COMPETITIVE,
+            // and it splits by SIDE, which no other type does.
+            if (s.side == Side::Left) {
+                // A cliff between order 16 and order 32, and it is sharp:
+                //
+                //   order   8   16    32    64   128   256
+                //   ratio 3.58 1.47  0.73  0.80  0.77  0.61     (batch 2048/512)
+                //
+                // flat across q and across batch, so it is not an unsaturated
+                // artefact. This is the coalescing problem S3.4 predicted and
+                // the SLM staging tile it proposed was deliberately NOT built:
+                // for Side::Left the q independent solves run down B's COLUMNS,
+                // so consecutive work-items read addresses ld apart. At order
+                // <= 16 the working set still lands in cache; above it the
+                // over-fetch dominates and cuBLAS SGEMM is fast enough to win.
+                //
+                // Double does not show this cliff (its Left column is
+                // 1.39-6.37x, monotone) because cuBLAS's DOUBLE triangular path
+                // is weak enough that the over-fetch does not decide the race.
+                // Same kernel, same access pattern, opposite verdict -- which
+                // is why this is a per-type predicate and not one number.
+                return order <= 16;
+            }
+            // Side::Right: native wins at every order once there is batch to
+            // work with -- 1.54-4.59x at batch >= 512, all q. The two sub-unit
+            // cells in the whole Right table are n=128 and n=256 at batch=128,
+            // q=256 (0.97x, 1.02x), and the starved profile agrees that large
+            // orders need batch: n=128 at batch 8-32 measures 0.74-0.81x.
+            // Below batch 128, keep only the orders measured to win there.
+            return s.batch >= 128 || order <= 32;
+        } else {
+            // double, complex<float>, complex<double>: NO CELL LOSES anywhere
+            // in the grid, either side, any order, any q. The worst is
+            // complex<float> at 1.01x and it climbs monotonically with order
+            // from there; double's worst is 1.39x.
+            //
+            // Complex is the least surprising of the three. The incumbent
+            // (cublas.cc:1122-1225) is a serial per-column substitution in
+            // which every work-item re-reads the whole triangle from global
+            // memory, so a CTA-resident kernel has no mechanism by which to
+            // lose -- and at order 256, Side::Left it wins 21.9x.
+            //
+            // NO UPPER BOUND ON ORDER, deliberately. Above cta_max_n the
+            // blocked driver takes over and supports() has already routed it;
+            // its ratio at order 256 (double 1.45x, complex<float> 21.1x) is
+            // measured, not extrapolated. The largest measured order is 256
+            // because beyond it the grid does not fit in 24 GB, not because
+            // anything changes in kind.
+            return true;
+        }
+    }
 
     static constexpr const Route* order_begin() { return kTrsmOrder; }
     static constexpr const Route* order_end() {

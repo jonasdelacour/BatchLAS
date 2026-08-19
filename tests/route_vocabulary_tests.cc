@@ -396,21 +396,90 @@ constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
+    // float, Side::Left, order 32 is a real cell of this shape, not a contrived
+    // one: WP3 step 9 measures it at 0.71-0.87x, so it is a CORRECTNESS yes and
+    // a SPEED no. If the two ever collapse into one boolean, this is the cell
+    // that silently loses its vendor-free route.
     const auto s = trsm_shape(/*tri_order=*/32, /*q=*/128, /*batch=*/4096, /*cta_max=*/64);
     EXPECT_TRUE(TrsmTable::supports(kCta, s))
         << "a 32-order solve is inside a 64 capacity; this must be a CORRECTNESS yes";
     EXPECT_FALSE(TrsmTable::preferred(kCta, s))
-        << "nothing has been measured yet, so no cell may be preferred";
+        << "float Side::Left at order 32 measured 0.71-0.87x; it must not be preferred";
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)))
+        << "un-preferred must never mean unroutable when there is no vendor";
 }
 
-TEST(RouteTrsm, VendorPresentKeepsEveryCellOnTheVendor) {
-    // Step 6 of the plan requires that landing the native kernel moves NO
-    // traffic: preferred() is all-false, so Auto must resolve to the vendor.
-    for (int64_t order : {8, 32, 64, 512}) {
-        const auto s = trsm_shape(order, 128, 4096, 64);
-        EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)))
-            << "order " << order << " moved off the vendor with nothing measured";
+// ---------------------------------------------------------------------------
+// The measured window (WP3 step 9). These replace a pair of tests that pinned
+// preferred() as all-false -- correct while nothing had been measured, and
+// actively wrong now: the point of step 9 was to move traffic, so a test
+// asserting that no traffic moves would have to be deleted or the flip
+// abandoned. What is pinned instead is the SHAPE of the measurement, so that a
+// later edit widening a window has to come with its own numbers.
+// ---------------------------------------------------------------------------
+
+TEST(RouteTrsm, FloatLeftCliffAtOrderSixteen) {
+    // The sharpest boundary in the grid, and the only per-side split any type
+    // has: 3.58x at order 8, 1.47x at 16, then 0.73x at 32 and never recovering
+    // (0.61x at 256). Side::Right at the same orders wins throughout, so this
+    // must NOT be spelled as a plain order cap.
+    for (int64_t order : {8, 16}) {
+        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Left)))
+            << "float Side::Left order " << order << " measured a win";
     }
+    for (int64_t order : {32, 64}) {
+        const auto s = trsm_shape(order, 1024, 2048, 32, Side::Left);
+        const Route r = (order <= 32) ? kCta : kBlocked;
+        EXPECT_FALSE(TrsmTable::preferred(r, s))
+            << "float Side::Left order " << order << " measured a LOSS";
+    }
+    // Same orders, other side: all preferred.
+    for (int64_t order : {8, 16, 32}) {
+        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Right)))
+            << "float Side::Right order " << order << " measured 1.54-4.59x";
+    }
+}
+
+TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
+    // batch=1 measured 0.40-0.86x at order >= 32; batch=8 already wins. The
+    // floor therefore sits at 8 -- and it lives in preferred(), so a vendor-free
+    // build at batch=1 still routes native rather than throwing.
+    const auto tiny = trsm_shape(16, 1024, 1, 32, Side::Right);
+    EXPECT_FALSE(TrsmTable::preferred(kCta, tiny));
+    EXPECT_TRUE(TrsmTable::supports(kCta, tiny));
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, tiny, /*vendor_available=*/false)));
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, tiny, /*vendor_available=*/true)));
+
+    EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(16, 1024, 8, 32, Side::Right)));
+}
+
+TEST(RouteTrsm, DoubleAndComplexWinEveryMeasuredCell) {
+    // 32/32, 30/30 and 30/30 cells respectively, both sides, order 8..256.
+    // Spelled as three separate instantiations because the predicate is
+    // `if constexpr` on T -- s.scalar is NOT what it reads, so a test that only
+    // varied s.scalar would pass while testing float three times.
+    for (int64_t order : {8, 32}) {
+        for (Side sd : {Side::Left, Side::Right}) {
+            const auto s = trsm_shape(order, 1024, 2048, 32, sd);
+            EXPECT_TRUE((RouteTable<Op::trsm, double>::preferred(kCta, s)))
+                << "double order " << order << " worst measured cell is 1.39x";
+            EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kCta, s)));
+            EXPECT_TRUE((RouteTable<Op::trsm, std::complex<double>>::preferred(kCta, s)));
+        }
+    }
+    // Above the CTA capacity the blocked driver carries the same verdict.
+    const auto big = trsm_shape(256, 1024, 512, 32, Side::Left);
+    EXPECT_TRUE((RouteTable<Op::trsm, double>::preferred(kBlocked, big)));
+    EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kBlocked, big)))
+        << "complex<float> order 256 Side::Left measured 21.1x";
+}
+
+TEST(RouteTrsm, VendorIsNeverItselfPreferred) {
+    // The vendor route is LAST in kTrsmOrder, so returning true for it would be
+    // indistinguishable from falling through -- until someone reorders the list
+    // and every native cell silently loses.
+    const auto s = trsm_shape(16, 1024, 2048, 32, Side::Right);
+    EXPECT_FALSE(TrsmTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s));
 }
 
 TEST(RouteTrsm, VendorFreeStillFindsANativeRouteAtEveryOrder) {
