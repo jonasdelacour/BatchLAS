@@ -478,10 +478,34 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         // shape in this bucket and lands at 88-102% of cuBLAS; see
         // experiments/sycl_vs_cuda/FINDINGS.md.
         //
-        // Deliberately gated on the fast path rather than on shape alone: the
-        // kernel's predicated path is correct for ragged shapes but has not
-        // been benchmarked against the generic route below, so misaligned
-        // work keeps its existing kernel until that measurement exists.
+        // This used to be gated on the fast path rather than on shape alone,
+        // with the note: "the kernel's predicated path is correct for ragged
+        // shapes but has not been benchmarked against the generic route below,
+        // so misaligned work keeps its existing kernel until that measurement
+        // exists." THAT MEASUREMENT NOW EXISTS (WP2 E4), and the predicated
+        // path wins by a wide margin on every shape tried. Square NN float,
+        // batch 512 (96 for n >= 544), both betas, RTX 4090:
+        //
+        //   n     generic 128x32x32   predicated 128x128   gain
+        //   160          7 892              13 170        1.67x
+        //   192          9 781              18 000        1.84x
+        //   224         11 611              22 467        1.93x
+        //   320         12 188              25 288        2.07x
+        //   544         13 372              27 101        2.03x
+        //   672         14 107              29 715        2.11x
+        //   800         14 654              31 354        2.14x
+        //  1056         15 065              33 314        2.21x
+        //
+        // The gain GROWS with n, which is what a predication cost that is
+        // constant per tile looks like against a route whose throughput has
+        // plateaued. Against cuBLAS this moves the bucket from 0.36-0.51x to
+        // 0.72-0.84x -- still a loss, which is why preferred() no longer
+        // claims this window for float, but it halves the damage for anyone on
+        // a vendor-free build, who has no cuBLAS to fall back to.
+        //
+        // Scope, deliberately narrow: only the GENERIC leg changes. The
+        // aligned leg below is a different tuned route and was never in the
+        // measurement, so it stays. See experiments/wp2_e4/.
         if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
             return KernelVariant::Tiled128x128RegisterK8;
         }
@@ -494,7 +518,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
                 }
                 return KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
             }
-            return KernelVariant::Tiled128x32RegisterK32S2U1Generic;
+            return KernelVariant::Tiled128x128RegisterK8;
         }
         if (m >= 128 && n >= 32 && k >= 128) {
             return KernelVariant::Tiled128x32RegisterK16;

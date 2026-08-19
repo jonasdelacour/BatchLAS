@@ -160,7 +160,15 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
     return out;
 }
 
-// THE ONE INTENDED DIVERGENCE FROM THE LEGACY DECISION (WP2 C2).
+// THE INTENDED DIVERGENCES FROM THE LEGACY DECISION.
+//
+// There are two. They are classified and COUNTED SEPARATELY below, so that
+// neither can quietly stop being reached: a single boolean "is this expected?"
+// would let one divergence's cells disappear from the grid while the other
+// kept the count non-zero, and the test would still pass.
+//
+// (1) WP2 C2 -- heterogeneous batch, a WIDENING.
+// (2) WP2 E4 -- float's measured window, a NARROWING.
 //
 // The legacy predicate rejected a heterogeneous batch as UNSUPPORTED, so a
 // forced native request on one fell through to the vendor. That was a
@@ -180,17 +188,39 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 // gemm_has_heterogeneous_batch BEFORE consulting gemm_use_sycl_custom, so the
 // heterogeneous loop is entered either way. The divergence is visible to this
 // test because it calls the predicate directly.
+enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed };
+
+// (2) WP2 E4. The legacy predicate preferred native for float on two windows
+// that measurement says it loses: every transposed cell (0.34-0.55x of cuBLAS
+// across TN/NT/TT at n=128..512) and NN at 128 <= max_dim <= 512 (0.40-0.98x).
+// preferred() no longer claims either. This costs a vendor-free build nothing --
+// resolve_route still falls back to any supported native route when there is no
+// vendor -- so the divergence is a pure vendor-present improvement.
+// Numbers and conditions in experiments/wp2_e4/.
 template <typename T>
-bool is_intended_divergence(const char* env, const OpShape& s,
-                            bool old_native, bool new_native) {
+Divergence classify_divergence(const char* env, const OpShape& s,
+                               bool old_native, bool new_native) {
     const bool forced_native = env != nullptr &&
         (std::string_view(env) == "sycl" || std::string_view(env) == "custom");
-    return s.heterogeneous_batch && forced_native && !old_native && new_native;
+    if (s.heterogeneous_batch && forced_native && !old_native && new_native) {
+        return Divergence::HeterogeneousWidened;
+    }
+    if constexpr (std::is_same_v<T, float>) {
+        if (old_native && !new_native) {
+            const bool transposed =
+                s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans;
+            const int64_t max_dim = s.max_dim();
+            if (transposed || (max_dim >= 128 && max_dim <= 512)) {
+                return Divergence::FloatWindowNarrowed;
+            }
+        }
+    }
+    return Divergence::None;
 }
 
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
-    size_t compared = 0, native_cases = 0, intended = 0;
+    size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
@@ -198,10 +228,9 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
             ++compared;
             if (old_native) ++native_cases;
 
-            if (is_intended_divergence<T>(env, s, old_native, new_native)) {
-                ++intended;
-                continue;
-            }
+            const Divergence d = classify_divergence<T>(env, s, old_native, new_native);
+            if (d == Divergence::HeterogeneousWidened) { ++het_widened; continue; }
+            if (d == Divergence::FloatWindowNarrowed)  { ++float_narrowed; continue; }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -223,9 +252,20 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
     // that can grow without anyone noticing is a disabled test, and a count of
     // zero would mean the grid stopped reaching the heterogeneous cells and the
     // exception silently stopped guarding anything.
-    EXPECT_GT(intended, 0u)
+    EXPECT_GT(het_widened, 0u)
         << "grid no longer reaches the intended heterogeneous divergence for "
         << type_name << " -- the exception is now vacuous";
+
+    // Counted separately from the heterogeneous one on purpose: a single total
+    // would let this one vanish from the grid while the other kept it non-zero.
+    if constexpr (std::is_same_v<T, float>) {
+        EXPECT_GT(float_narrowed, 0u)
+            << "grid no longer reaches the WP2 E4 float narrowing -- the "
+               "exception is now vacuous";
+    } else {
+        EXPECT_EQ(float_narrowed, 0u)
+            << "the E4 narrowing is float-only but fired for " << type_name;
+    }
 }
 
 } // namespace

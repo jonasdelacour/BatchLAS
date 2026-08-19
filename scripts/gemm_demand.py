@@ -57,13 +57,12 @@ def preferred(t, m, n, k, batch, tA, tB):
         return False
     mx = max(m, n, k)
     if t == "float":
+        # WP2 E4 narrowed float to NN and max_dim <= 32. The transposed window
+        # (0.34-0.55x of cuBLAS) and the 128..512 NN window (0.40-0.98x) were
+        # both measured losses; see experiments/wp2_e4/.
         if tA != NOTRANS or tB != NOTRANS:
-            if tA == CONJTRANS or tB == CONJTRANS:
-                return False               # meaningless for a real type
-            return batch >= 128 and 128 <= mx <= 512
-        if mx <= 32:
-            return True
-        return 128 <= mx <= 512
+            return False
+        return mx <= 32
     if t == "double":
         return mx <= 512
     return False

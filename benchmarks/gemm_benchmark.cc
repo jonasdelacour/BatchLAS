@@ -23,6 +23,17 @@ static double bench_beta() {
     return 1.0;
 }
 
+// Pad added to every leading dimension, so the UNALIGNED-ld case is measurable.
+// It is not an exotic one: a panel is a sub-view carrying its parent's ld, so
+// unaligned ld is what BatchLAS's own factorisations hand to gemm. Default 0
+// keeps the prior behaviour (ld == rows).
+static int bench_ld_pad() {
+    if (const char* p = std::getenv("BATCHLAS_BENCH_LD_PAD")) {
+        return std::atoi(p);
+    }
+    return 0;
+}
+
 template <typename T, Backend B>
 static void BM_GEMM_IMPL(minibench::State& state) {
     const size_t m = state.range(0);
@@ -31,9 +42,13 @@ static void BM_GEMM_IMPL(minibench::State& state) {
     const size_t batch = state.range(3);
     const T beta = static_cast<T>(bench_beta());
 
-    auto A = Matrix<T>::Random(m, k, false, batch);
-    auto Bm = Matrix<T>::Random(k, n, false, batch);
-    auto C = Matrix<T>::Random(m, n, false, batch);
+    const int pad = bench_ld_pad();
+    auto A = pad ? Matrix<T>(m, k, static_cast<int>(batch), static_cast<int>(m) + pad)
+                 : Matrix<T>::Random(m, k, false, batch);
+    auto Bm = pad ? Matrix<T>(k, n, static_cast<int>(batch), static_cast<int>(k) + pad)
+                  : Matrix<T>::Random(k, n, false, batch);
+    auto C = pad ? Matrix<T>(m, n, static_cast<int>(batch), static_cast<int>(m) + pad)
+                 : Matrix<T>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,

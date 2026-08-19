@@ -327,9 +327,21 @@ TEST(GemmDispatchPolicyTest, Selects128x128K8ForPaddedLeadingDimensionFloatNN) {
 
 // An ld that breaks 16-byte alignment must still fall back, since the
 // unpredicated path's 128-bit accesses would be misaligned.
-TEST(GemmDispatchPolicyTest, SelectsGenericS2U1ForUnalignedLeadingDimensionFloatNN) {
+// WP2 E4 moved this. It used to pin the generic 128x32x32 route, on the
+// grounds that the 128x128 kernel's PREDICATED path had never been benchmarked
+// against it. Measured now, at exactly this shape class -- dimensions that tile
+// perfectly but a leading dimension that does not, so both kernels are in their
+// slow mode -- the predicated path wins by a very large margin:
+//
+//   n=256 ld+2  generic 7 237 -> predicated 23 966  (3.31x)
+//   n=512 ld+2  generic 8 399 -> predicated 36 862  (4.39x)
+//
+// This is the shape class that matters most for it, too: a panel is a sub-view
+// carrying its parent's leading dimension, so unaligned ld is what BatchLAS's
+// own factorisations hand to gemm. See experiments/wp2_e4/.
+TEST(GemmDispatchPolicyTest, SelectsPredicated128x128ForUnalignedLeadingDimensionFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 258),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Generic);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
 TEST(GemmDispatchPolicyTest, KeepsTransposeHeavyCasesOnK32TransposeAlias) {
@@ -2208,14 +2220,35 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
     ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
     ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "auto");
 
-    const auto in_window = route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128);
+    // The in-window shape differs per type, and after WP2 E4 that difference is
+    // the point rather than an inconvenience: float's window is now only
+    // max_dim <= 32, while double's still runs to 512.
     if constexpr (test_utils::is_complex<ScalarType>::value) {
-        // Complex is excluded from the window outright. WP2 measured that the
-        // wide-scalar tiles beat both cuBLAS and the in-tree Tiled16 fallback
-        // here, so this is expected to change -- but as a routing change with
-        // its own measurement, not as a side effect of this refactor.
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(in_window));
+        // Complex is excluded outright, and this is NOT merely an unmeasured
+        // window. select_kernel_variant's register ladder for complex is
+        // reachable only through Tiled64x64RegisterK16Wide, which requires
+        // min_dim >= 256 and an aligned NN shape; widening preferred() without
+        // that gate firing routes complex to Tiled16, measured 3.2-7.1x slower
+        // than cuBLAS. See WP2_GEMM_SPEC.md.
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+    } else if constexpr (std::is_same_v<ScalarType, float>) {
+        const auto in_window = route_for<ScalarType>(*(this->ctx), 32, 32, 32, 128);
+        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
+        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
+
+        // WP2 E4 retired float's 128..512 NN window and its whole transposed
+        // window. Both are asserted here in their NEW direction, so the change
+        // is pinned rather than merely absent -- a removed assertion cannot
+        // detect a silent revert. Measured 0.40-0.98x (NN) and 0.34-0.55x
+        // (transposed) of cuBLAS; see experiments/wp2_e4/.
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128, Transpose::Trans,
+                                  Transpose::NoTrans)));
     } else {
+        const auto in_window = route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128);
         EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
         EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
     }

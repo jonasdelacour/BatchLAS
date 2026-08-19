@@ -119,15 +119,48 @@ struct RouteTable<Op::gemm, T> {
             if (s.m != s.n || s.n != s.k || s.batch < 64) return false;
 
             if constexpr (std::is_same_v<T, float>) {
+                // WP2 E4 NARROWED float, and the direction is the interesting
+                // part: this predicate is what the flip (E6) would act on, and
+                // measured against cuBLAS it was claiming windows the native
+                // kernels lose. Every cell below is RTX 4090, square, median of
+                // 3, both betas, at saturation; see experiments/wp2_e4/.
+                //
+                // TRANSPOSED: the whole window is gone. It claimed
+                // batch >= 128 && 128 <= max_dim <= 512, and native loses every
+                // cell of it -- 30 of 30, across TN, NT and TT:
+                //
+                //   n=128  TN 0.40x  NT 0.44x  TT 0.45x
+                //   n=256  TN 0.37x  NT 0.40x  TT 0.40x
+                //   n=512  TN 0.34x  NT 0.35x  TT 0.36x
+                //
+                // That is not a tuning gap in a fallback: TN runs its dedicated
+                // register_128x32_k32_tn kernel, traced and confirmed. The
+                // transposed register family simply plateaus near 15-18 TFLOP/s
+                // while cuBLAS SGEMM reaches 45+.
                 if (s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans) {
-                    // ConjTrans is meaningless for a real type and was rejected.
-                    if (s.transA == Transpose::ConjTrans || s.transB == Transpose::ConjTrans) {
-                        return false;
-                    }
-                    return s.batch >= 128 && max_dim >= 128 && max_dim <= 512;
+                    return false;
                 }
+                // NN, SMALL: kept. Native wins here and cuBLAS is at its worst.
+                //   n=8 1.46x, n=16 1.31x, n=32 1.08x
                 if (max_dim <= 32) return true;
-                return max_dim >= 128 && max_dim <= 512;
+                // NN, 128..512: also gone. It looked like the most defensible
+                // window in the table and it loses in every cell:
+                //   n=128 0.97x, n=192 0.40x, n=256 0.87x, n=384 0.79x,
+                //   n=512 0.91x -- flat across batch 128 / 512 / 1024, so this
+                //   is not an unsaturated artefact.
+                //
+                // Note register_128x128.hh's header still records "43.6 vs
+                // cuBLAS 43.9" at 512^3 b512, i.e. parity. The native half
+                // reproduces exactly (43.5); the cuBLAS half does not -- it now
+                // measures 47.3. The vendor moved, presumably a cuBLAS upgrade,
+                // and the claim of parity aged out with it.
+                //
+                // This costs a vendor-free build NOTHING: preferred() only
+                // orders routes that both exist, and resolve_route falls back to
+                // any supported native route when the vendor is absent
+                // (route_resolve.hh:60-62). It only stops a vendor-PRESENT build
+                // from choosing a slower kernel.
+                return false;
             } else if constexpr (std::is_same_v<T, double>) {
                 return max_dim <= 512;
             } else {

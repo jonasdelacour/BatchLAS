@@ -5,9 +5,20 @@
 
 #include "bench_utils.hh"
 
+#include <cstdlib>
+
 using namespace batchlas;
 
 namespace {
+
+// Same reason as gemm_benchmark.cc: beta decides whether C is READ at all, so a
+// beta=1-only harness cannot see an epilogue defect. Default 1 = prior behaviour.
+inline double bench_beta() {
+    if (const char* p = std::getenv("BATCHLAS_BENCH_BETA")) {
+        return std::atof(p);
+    }
+    return 1.0;
+}
 
 inline Transpose transpose_from_arg(int value) {
     switch (value) {
@@ -64,7 +75,7 @@ static void BM_GEMM_TRANSPOSE(minibench::State& state) {
                     std::move(Bm),
                     bench::pristine(C),
                     T(1),
-                    T(1),
+                    static_cast<T>(bench_beta()),
                     transA,
                     transB,
                     [](Queue& q, auto&&... xs) {

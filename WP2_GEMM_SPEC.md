@@ -226,6 +226,57 @@ double *window as `preferred()` currently defines it* is safe to route natively 
 GEMM generally is. Complex is still refused outright by `preferred()`, and the panel-update
 population (non-square, transposed) is untouched by any of it.
 
+### E4 result — float narrows, and the bigger win was in the selector
+
+E4 was written as *"expect a **narrowing** as much as a widening"*. That was right. Measured
+across all four regions of float's window — RTX 4090, square, median of 3, both betas,
+`gpu_guard`, warm JIT — **40 cells argue to narrow and none argue to widen**.
+
+| window | verdict | measured |
+|---|---|---|
+| NN `max_dim <= 32` | **keep** | n=8 **1.46×**, n=16 **1.31×**, n=32 **1.08×** |
+| NN `128..512` | **removed** | n=128 0.97×, n=192 0.40×, n=256 0.87×, n=384 0.79×, n=512 0.91× |
+| transposed `128..512` | **removed** | all 30 cells 0.34–0.55×, across TN, NT and TT |
+
+The NN result is not an unsaturated artefact — the ratios are flat across batch 128 / 512 /
+1024. The transposed result is not a fallback effect either: TN runs its own
+`register_128x32_k32_tn` kernel, traced and confirmed. That family simply plateaus near 15–18
+TFLOP/s while cuBLAS SGEMM reaches 45+.
+
+**Narrowing costs the vendor-free build nothing.** `preferred()` only orders routes that both
+exist; `resolve_route` falls back to any *supported* native route when the vendor is absent
+(`route_resolve.hh:60-62`). This only stops a vendor-**present** build choosing a slower kernel.
+
+**The selector fix was worth more than the window change.** `select_kernel_variant` sent
+squareish float that could not use the 128×128 fast path to the *generic* 128×32×32 route,
+behind a comment saying the 128×128 **predicated** path "has not been benchmarked against the
+generic route below, so misaligned work keeps its existing kernel until that measurement
+exists." Benchmarked now, the predicated path wins everywhere tried:
+
+| case | generic | predicated | gain |
+|---|---|---|---|
+| n=192 | 9 781 | 18 000 | 1.84× |
+| n=320 | 12 188 | 25 288 | 2.07× |
+| n=1056 | 15 065 | 33 314 | 2.21× |
+| n=256, ld+2 | 7 237 | 23 966 | **3.31×** |
+| n=512, ld+2 | 8 399 | 36 862 | **4.39×** |
+
+The gain grows with n, which is what a per-tile predication cost looks like against a route
+whose throughput has plateaued. **The unaligned-leading-dimension case gains most**, and that
+is the one that matters for real demand: a panel is a sub-view carrying its parent's ld, so
+unaligned ld is exactly what the factorisations hand to `gemm`. This is E5's prerequisite
+("unlock the predicated *kernel* first") answered for float.
+
+**One in-tree claim aged out.** `register_128x128.hh` records "43.6 TFLOP/s against cuBLAS
+SGEMM's 43.9" at 512³ b512 — parity. Re-measured: native **43.5**, which reproduces exactly;
+cuBLAS **47.3**, which does not. The vendor moved, presumably a cuBLAS upgrade, and the parity
+claim did not survive it. Worth noting as a class of hazard: a ratio recorded against a vendor
+is only as durable as that vendor's version.
+
+**Where this leaves E6.** With E3 and E4 applied, the flip's remaining scope is: `double` from
+n=4 to 512 (a 1.05–4.51× win) and `float` NN at `max_dim <= 32` (1.03–1.46×). Everything else
+now prefers the vendor on measurement rather than on assumption.
+
 ## Non-negotiable measurement rules
 
 Every one of these is here because it has already cost this project real time:
