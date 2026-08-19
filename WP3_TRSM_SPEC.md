@@ -1,5 +1,11 @@
 # FINAL SPECIFICATION — Native batched TRSM for BatchLAS
 
+>  **READ `WP3_TRSM_SPEC_CORRECTIONS.md` FIRST.** This spec was written at `aa827f5`, which
+>  predates WP1 and WP2. Its three routing hook points no longer exist, its `TrsmVariant` enum is
+>  the vocabulary WP0 deleted, its SLM size formula writes 127 elements out of bounds, its
+>  `-Xcuda-ptxas -v` gate is not executable per-TU, and its documented `ctest` command runs zero
+>  tests while exiting 0. The corrections document lists what survives and what to do instead.
+
 All paths relative to `/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/`. Every line citation below was re-read from source at `aa827f5`. Nothing was edited.
 
 Notation used throughout: **`n`** is the triangular order (`A.rows() == A.cols()`); **`q`** is the independent extent — `q = B.cols()` for `Side::Left`, `q = B.rows()` for `Side::Right`. `q` is the number of *independent solves*.

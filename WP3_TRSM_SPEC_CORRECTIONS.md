@@ -1,0 +1,207 @@
+# WP3 TRSM — corrections to the spec, before any code is written
+
+`WP3_TRSM_SPEC.md` states that "every line citation below was re-read from source at `aa827f5`".
+**`aa827f5` predates WP1 and WP2**, both of which have since landed and changed the dispatch
+architecture. This document records what a verification pass against `b02e43e` found. Read it
+alongside the spec; where they disagree, this wins.
+
+Method: six independent readers, one per claim-cluster, each finding then adversarially refuted
+by a separate reader instructed to default to "does not hold". 27 findings survived. Every
+`wrong-edit` item below was additionally re-checked by hand — including two where the
+verification pass itself was wrong (marked ✱).
+
+---
+
+## What survives, and is not re-litigated here
+
+- **The rejection of diagonal-block inversion at every tier** (§2.4). Untouched by WP1/WP2, and
+  its argument — that the "free for ortho" licence does not survive restatement in orthogonality
+  currency — stands.
+- **The V1/V2 composition.** V2's dependency is intact: `sycl_gemm::gemm_custom` still has the
+  9-argument signature §2.3 calls, instantiated for all four scalars
+  (`src/sycl/gemm_kernels.hh:66-74`, `gemm_kernels.cc:801,810,819,828`). Note it takes a
+  `ComputePrecision` the spec does not mention; pass `ComputePrecision::Default`.
+- **The 24-case canonicalisation** (§5.2), and §9.3's argument that the two in-tree references
+  are *one* implementation so the test oracle must be an independent multiply-back
+  (`netlib_lapack.cc:445-449` and `cublas.cc:1134-1137` still fold identically).
+- **§3.3's conclusion** that the grid must be `batch × ceil(q/WG)` and not batch-only. This is
+  the repo's recurring starvation defect and the conclusion is right even though two rows of its
+  table are not.
+
+---
+
+## Wrong-edit findings — following the spec here produces incorrect code
+
+### 1. The three hook points no longer exist
+
+The spec routes at `cublas.cc:1594`, `rocblas.cc:138`, `netlib_lapack.cc:404`. All three are
+dead; `cublas.cc:1594` is now a line inside an instantiation macro block. **WP1 left exactly one
+public `trsm`**, the facade at `src/dispatch/entry_points/level3.cc:156-171`; the three backends
+now own `trsm_vendor` only (`cublas.cc:1092`, `rocblas.cc:131`, `netlib_lapack.cc:427`).
+
+One hook, in the facade, **before** the vendor-available test — anything after `level3.cc:165`
+is unreachable in the vendor-free build WP3 exists for. This also fixes netlib's missing
+`trsm_validate_params` for every backend in one edit, since the facade validates nothing today.
+
+### 2. `parse_cublasdx_variant_request` was deleted; `TrsmVariant` is the vocabulary WP0 removed
+
+The spec's §6.4/§8 propose `enum class TrsmVariant {Vendor,Native,Auto}` plus
+`trsm_variant_request()` via `parse_cublasdx_variant_request`. That function no longer exists —
+`src/backends/route_common.hh:35-41` is its tombstone, recording that all four callers now go
+through `dispatch::parse_route_env`. Verified: no definition anywhere in `src/` or `include/`.
+
+Worse, the env variable is wrong. `legacy_variable_for` (`route_env.hh:109-121`) has **no
+`Op::trsm` case**, so `BATCHLAS_TRSM_VARIANT` is read by nothing. The variable is
+**`BATCHLAS_TRSM_ROUTE`**. The spec instructs the implementer to pin and test the native route
+with a variable no code reads (spec:553, :555, :622, :707).
+
+### 3. A single `trsm_use_native()` bool cannot express the state the vendor-free build needs
+
+The spec's §10 predicate mixes env read, structural correctness and speed thresholds into one
+boolean. This is the trap `route_gemm.hh:5-30` is written to prevent: *"supports() ==
+correctness only… preferred() == the measured window… the env read lives in the alias table."*
+
+The consequence is concrete, not stylistic. `route_resolve.hh:60-63` implements the vendor-off
+fallback by re-walking the order testing **only** `is_native(*r) && Table::supports(*r, s)`. With
+the thresholds in the only predicate, every real-type cell and everything below the starvation
+cut has *no route at all* in a vendor-free build, and `level3.cc:165-167` throws — defeating the
+work package's own purpose. **Every number in spec:649-662 belongs in `preferred()`; none of it
+belongs in `supports()`.**
+
+### 4. The SLM size formula writes out of bounds
+
+§3.4 specifies the transpose staging tile with **stride `NB_STAGE + 1`** (to keep SLM column
+reads conflict-free), but §4.1's size formula allocates `NB_STAGE * WG`. Re-derived by hand: at
+`WG=128, NB_STAGE=16` the last index is `15 + 127*17 = 2174` into a 2048-element allocation —
+**127 elements past the end**.
+
+Fix: `+ (side == Left ? (NB_STAGE + 1) * WG : 0)`. Every §4.2 `Side::Left` total gains
+`WG*sizeof(T)`; worst case (cdouble, N=16, Left) goes 35 200 → 37 248 B, still under the 45 056
+budget, so no feasibility row flips. Precedent for putting the padded stride in the size:
+`group_blas_subgroup_common.hh:56,58`.
+
+### 5. `TriangularTransform` is in the wrong namespace
+
+Spec §6.1 cites `batchlas::device::detail::TriangularTransform`. Verified by hand: the struct is
+at `group_blas_common.hh:102`, inside `namespace batchlas::device` (opened at `:19`), and
+`namespace detail` does not open until `:179`. Correct name is
+**`batchlas::device::TriangularTransform`**. The *Tag* form `detail::TriangularTransformTag`
+(`:646`) genuinely is in `detail`. The spec's own body usage at spec:70 is unqualified and
+already correct — only the §6.1 citation is wrong. Compile error if transcribed.
+
+### 6. ✱ The documented test command runs zero tests and exits 0
+
+Spec:573 gives `ctest -L blas -L ortho`. Repeated `-L` is an **AND**, and no test carries two
+component labels (`tests/CMakeLists.txt:171-182` returns on the first matching component). Run
+by hand: **`Total Tests: 0`, exit code 0** — a silent false green, under a spec section whose
+entire correctness argument rests on those targets running.
+
+**✱ The verification pass proposed `ctest -L "blas\|ortho"`, and that is also wrong** — run by
+hand it likewise returns 0 tests. The working form is a bare pipe:
+
+Measured, all four run by hand:
+
+- `ctest -L blas -L ortho` (two `-L` flags) → **0 tests**, exit 0. This is what the spec says.
+- `ctest -L blas` → 15 tests. `ctest -L ortho` → 5 tests.
+- One `-L`, alternation written with a **backslash before the pipe** → **0 tests**. This was the
+  verification pass's proposed correction and it is also broken.
+- One `-L`, alternation written with a **bare pipe**, no backslash → **20 tests** (= 15 + 5).
+
+So: use one `-L` with a bare pipe between the two labels, or use the `-R` form, which the spec
+gets right. Quote the argument so the shell does not treat the pipe as a command separator.
+
+---
+
+## The measurement gate — the spec's first gate is not executable as written
+
+§1 makes `n_cta(T)` a hard gate: "must be *confirmed* with `-Xcuda-ptxas -v` before any other
+code is written". **It cannot be done per-TU.** Device code is AOT-compiled to an sm_89 cubin at
+the *shared-library device link* (`cmake/BatchLASDetectSYCL.cmake:528,544-552`), so the flag on a
+single-TU compile is reported "argument unused". This is not drift — it is identical at
+`aa827f5`, i.e. a pre-existing authoring error.
+
+**And `stack frame == 0` is the wrong gate** (spec:703). Measured on the current TU: 220 of 376
+entry functions have a non-zero stack frame *with* `0 bytes spill stores, 0 bytes spill loads`.
+Gating on stack frame rejects spill-free kernels; worse, grepping a compile log for "spill" finds
+nothing and reads as "no spill" — a phantom measurement.
+
+**Working recipe:** replay `build/src/CMakeFiles/batchlas_sycl.dir/link.txt` verbatim with a
+second `-Xsycl-target-backend=nvptx64-nvidia-cuda -Xcuda-ptxas -v` pair appended and `-o`
+redirected. No reconfigure needed. Gate on:
+
+- `0 bytes spill stores, 0 bytes spill loads` on the `TrsmCtaKernel<...>` lines, **and**
+- `Used N registers × WG <= 65536` — the per-**block** limit, which `gemm_kernels.cc:725-735`
+  records as the real failure mode (a launch abort, not a slowdown).
+
+Each kernel appears twice (`…_with_offset` and not) and the two can differ by a couple of
+registers; take the max, and grep by mangled name.
+
+**The `256 B/thread` cliff the spec derives `n_cta` from does not exist.** `gemm_kernels.cc:725-735`
+records the opposite, measured: at an 8×8 tile double compiles to 208 registers and
+`complex<float>` to 247, *both spill-free*. So `n_cta(double)=32` and `n_cta(cdouble)=16` are
+hypotheses. Put **N=64 double** — the 128-accumulator configuration measured spill-free — in the
+step-3 falsification set before accepting them.
+
+---
+
+## Two budget claims that are already false
+
+- **spec:713** ("if the `batchlas_sycl_obj` link grows past ~30 s, cut the bucket ladders")
+  fires unconditionally with *zero* TRSM code: the link measures **43.9 s**. It also names the
+  wrong target — `batchlas_sycl_obj` is an OBJECT library with no link step
+  (`src/CMakeLists.txt:35`); the link unit is the shared lib (`:180-182`). Make the budget a
+  **delta against 43.9 s**, measured immediately before the step that adds kernels.
+- **spec:477** ("`src/sycl/` is a small, isolated device-link unit"). Still isolated, no longer
+  small — 376 entry functions in the one TU after WP2.
+
+---
+
+## `OpShape::compute_units` is dead, and `preferred()` needs it
+
+`route.hh:240` declares it; verified by hand, it has **zero writers and zero readers** in
+`include/`, `src/` and `tests/`. The starvation guard §3.3 wants (`batch*q` against the SM count)
+cannot be expressed until something populates it — and it must be populated by the *shape
+builder*, not the table, because `route_resolve.hh:19-21` requires the table to stay pure ("no
+getenv, no SYCL query"). Until then it reads 0, so `preferred()` must return false rather than
+divide by it.
+
+---
+
+## What WP3 can and cannot claim
+
+**Unblocked vendor-free:** `trsm` itself — today `level3.cc:165-167` throws for every call — plus
+`trsm_tests`. With WP2's GEMM that makes gemm+trsm the first vendor-free level-3 pair.
+
+**Still red, and trsm cannot help.** Each of these is gated on a *different* missing op:
+
+| suite | actually blocked by |
+|---|---|
+| `ortho_tests` | `potrf` (`ortho.cc:200,288`), `geqrf`/`orgqr` (`:377`), `syev` (`:339`) |
+| `cond_tests` | `syev` (`cond.cc:46,52`), `getrf`/`getri` via `inv` |
+| `inverse_tests` | `getrf`/`getri` |
+
+So the spec's headline end-to-end validation target, `ortho_tests`, **is not available in a
+vendor-free build** — it validates trsm on a vendor-present box only. The honest claim is that
+WP3 removes `trsm` from the vendor-dependency list; it makes no *extension* vendor-free.
+
+**Performance: unclaimed by default.** Step 6 routes nothing; later steps flip cells only where
+measured.
+
+---
+
+## Open questions, each with what settles it
+
+1. **`>=` vs `>` in the WG ladder** (spec:183 vs the table at :209-210) — a spec
+   self-contradiction, not a fact about the tree. Decide, then edit one of the two.
+2. **Should the trsm shape builder populate `compute_units`, or should `Queue` cache it for
+   every op?** `src/util/queue-impl.cc` already queries `max_compute_units`.
+3. **The starvation constant `8` (spec:654) and "complex flips native" (spec:659)** are both
+   hypotheses. `preferred()` must not encode either before the §10 grid exists.
+4. **`n_cta(double)`/`n_cta(cdouble)`** — settled by the register gate above.
+5. **DPC++'s SLM carveout** — `local_accessor` lowering to dynamic shared memory with a quantised
+   Ada carveout could cap CTAs regardless of the register arithmetic. Same `ncu` run as §4.4.
+6. **Does `record_level3_route` accept a trsm-shaped call?** (`level3_coverage.hh`) — trsm's `k`
+   is the triangular order, not a GEMM `k`. One read before step 6, or the route-diff instrument
+   reports nothing for trsm while looking healthy.
+7. **Should `BATCHLAS_TRSM_VARIANT` exist as a legacy alias at all?** It never shipped; not adding
+   it is defensible. A decision, not a measurement.
