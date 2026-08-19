@@ -206,9 +206,11 @@ struct RouteTable<Op::trsm, T> {
     //   complex<double>   1.20x   (30/30 cells win, best 4.66x)
     //   complex<float>    1.01x   (30/30 cells win, best 21.91x)
     //   float, Right      1.54x   (every n wins once batch >= 512)
-    //   float, Left       1.19x   at order <= 128 AFTER the step-12 staging
-    //                             tile; it was 0.57x, and order 256 still
-    //                             loses at 0.76-0.93x
+    //   float, Left       1.18x   at order <= 128 (any work), and at order
+    //                             256-512 below q*batch = 524288. Above that
+    //                             threshold order >= 256 measures 0.76-0.92x
+    //                             and stays with the vendor -- the one cell of
+    //                             this table the native kernel does not win.
     //
     // and end-to-end through the actual caller, ortho at m in {1024,4096},
     // k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: 80 of 80 cells
@@ -260,10 +262,27 @@ struct RouteTable<Op::trsm, T> {
                 // transposes through SLM and brings that to 5.13 on the load
                 // and exactly 4.00 on the store, which is the whole 3.5x.
                 //
-                // ORDER 256 IS STILL THE VENDOR'S, at 0.76-0.93x. The boundary
-                // is placed at the largest order MEASURED to win; the grid
-                // jumps 128 -> 256 and does not say where in between it turns.
-                // Do not round it up to 256 without measuring the gap.
+                // WP3 step 13 REPLACED THE FLAT ORDER CAP WITH A WORK
+                // THRESHOLD, because the two-level blocked driver moved the
+                // boundary and the boundary turned out not to be about order
+                // alone. Measured after that change (float, Side::Left):
+                //
+                //   order 256:  q*b=32768 1.12x  131072 1.40-1.49x
+                //               q*b=524288 0.90-0.92x   2097152 0.86-0.87x
+                //   order 512:  q*b=32768 1.23x  131072 1.05-1.10x
+                //               q*b=524288 0.76-0.77x
+                //
+                // so order 512 WINS at small work and order 256 LOSES at large
+                // work: an order cap cannot express that. The threshold sits
+                // between the two measured decades, at the first work size that
+                // loses, and it reproduces at both orders -- which is why it is
+                // written as one number rather than fitted per order.
+                //
+                // WHY the work matters and not the order: below it the re-read
+                // traffic the blocked driver generates still lands in L2, and
+                // above it that traffic reaches DRAM. Neither side is
+                // bandwidth-bound here (both run at 11-26% of peak), so this is
+                // the amplification escaping cache, not a bandwidth wall.
                 //
                 // Double never had the cliff at all (1.39-6.37x before the
                 // tile, 1.51-8.92x after) because cuBLAS's DOUBLE triangular
@@ -272,7 +291,11 @@ struct RouteTable<Op::trsm, T> {
                 // which is why this stays a per-type predicate. And complex
                 // does not stage at all: see trsm_stage_left() in
                 // src/sycl/trsm_native.cc for the register-residency reason.
-                return order <= 128;
+                if (order <= 128) return true;
+                // rhs_count() is q, the independent extent -- NOT s.n, which is
+                // the triangular order for one of the two sides. See the field
+                // mapping at the top of this file.
+                return static_cast<int64_t>(s.rhs_count()) * s.batch < 524288;
             }
             // Side::Right: native wins at every order once there is batch to
             // work with -- 1.54-4.59x at batch >= 512, all q. The two sub-unit

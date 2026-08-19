@@ -114,6 +114,34 @@ inline int smallest_bucket_ge(int n) {
     return 0;
 }
 
+// THE CAP STAYS AT 32, AND N=64 WAS RE-TESTED RATHER THAN ASSUMED.
+//
+// The original N=64 rejection predates the Side::Left staging tile, which cut
+// float Side::Left from 114 registers to 53 at N=32 -- so the arithmetic that
+// killed it no longer described the kernel and it was worth re-measuring. It
+// still fails, and by more than before (scripts/register_probe.sh, float):
+//
+//   N=64 Left    72 registers, 456 B stack frame, 0 B spill   *** FAIL
+//   N=64 Right  119 registers, 256 B stack frame, 0 B spill   *** FAIL
+//
+// Zero spill with a non-zero frame is the signature of x[] living in local
+// memory, which voids the design. Left is WORSE than Right because the staging
+// tile adds live state of its own, so the tile does not pay for the bigger
+// accumulator -- it competes with it.
+//
+// This matters beyond the kernel: nb is what V2 blocks on, and the traffic
+// model (B elements touched per batch item, units of q, at n=512) is
+//   NB=32 -> 5824    NB=128,nb=32 -> 4096    NB=128,nb=64 -> 3328
+//   NB=128,nb=128 -> 2560, against an ideal of 1024.
+// So the remaining large-order gap is bounded by the CTA capacity, and closing
+// it needs an nb of 64+ that a one-solve-per-work-item design cannot hold. The
+// route to it is a cooperative solve (W work-items per solve exchanging x_s by
+// sub-group broadcast, so each holds nb/W elements), not a bigger array.
+template <typename D>
+constexpr int trsm_max_bucket() {
+    return 32;
+}
+
 // Packed lower-triangle index, row-major by s: N(N+1)/2 elements.
 // All threads read the same Lc(s,t) at the same step, so this is an SLM
 // BROADCAST — bank layout is irrelevant to conflicts here.
@@ -511,11 +539,14 @@ Event trsm_native_v1_buckets(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              T alpha, Uplo uplo, Transpose transA, Diag diag) {
+    using D_ = typename sycl_device::DevMap<T>::type;
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
         case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         case 32: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        default:
+        default: break;
+    }
+    {
             // ENFORCED, not assumed. The router already caps the order via
             // supports(CTA), so reaching here means a direct caller (V2, or a
             // test) exceeded the contract -- and the alternative to throwing is
@@ -523,7 +554,8 @@ Event trsm_native_v1_buckets(Queue& ctx,
             throw std::runtime_error(
                 "BatchLAS: trsm_native_v1 called with triangular order " +
                 std::to_string(A.rows()) +
-                ", which exceeds the CTA register capacity of 32. Orders above the "
+                ", which exceeds this scalar's CTA register capacity of " +
+                std::to_string(trsm_max_bucket<D_>()) + ". Orders above the "
                 "capacity are the blocked driver's (V2's) job; the CTA kernel cannot "
                 "serve them and must not silently solve a leading submatrix.");
     }
@@ -566,6 +598,73 @@ Event trsm_native_v1_buckets(Queue& ctx,
 // every batch item after the first reads the wrong matrix. The parent's ld AND
 // stride are passed explicitly at every call below.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// V2's OUTER block width, which is NOT the CTA capacity.
+//
+// It used to be. `nb = trsm_cta_max_n<T>()` tied the trailing-update block to
+// the register capacity of the diagonal solver, and that single line is what
+// made large orders lose: at n=512 it gives 16 blocks, so
+//
+//   * every trailing GEMM has one dimension pinned at 32. GEMM arithmetic
+//     intensity with one dimension pinned at w tends to 2*w/sizeof(T) flop per
+//     byte -- 16 for float at w=32, against an RTX 4090 machine balance of
+//     ~40 TFLOP/s / ~950 GB/s = 42. So 93.75% of the solve's flops (the GEMM
+//     share is 1 - nb/n) ran in a regime that is bandwidth-bound BY
+//     CONSTRUCTION, on a problem that at n=512 is intrinsically compute-bound
+//     (51 flop/byte). At w=128 the intensity is 64, above the balance.
+//
+//   * the driver is left-looking, so the already-solved prefix of B is re-read
+//     by every later trailing GEMM. The re-read factor is (p-1)/2 for p = n/nb
+//     blocks: 7.5x at n=512, nb=32. Total DRAM amplification over an ideal
+//     trsm works out at 4.75x, and 2.20x at nb=128.
+//
+// Measured consequence before this change (float, Side::Left, vendor/native,
+// >1 means native wins): 1.13x at order 128, 0.74-0.93x at 256, 0.58-0.69x at
+// 512 -- monotonically worse, which is the signature of a per-block cost that
+// grows with the block count rather than a fixed inefficiency.
+//
+// So the outer width is decoupled: the trailing update runs at OUTER_NB, and
+// each OUTER_NB-wide panel is then solved by the old nb = cta_max_n loop
+// against its own, much shorter, prefix. Two levels, same arithmetic.
+//
+// BATCHLAS_TRSM_OUTER_NB overrides it for tuning sweeps. It is a TUNING knob,
+// not a routing one: it never changes which route is chosen, only how V2
+// blocks once chosen, so it does not belong in the Route vocabulary.
+inline int trsm_outer_block_default() { return 128; }
+
+// AND IT DEPENDS ON THE SIDE, which is measured, not aesthetic. Sweeping
+// OUTER_NB over {32,64,128,256} on float (worst cell per order, vendor/native):
+//
+//            Side::Left                     Side::Right
+//   order   nb32  nb64 nb128 nb256    nb32  nb64 nb128 nb256
+//     128   1.18  1.10  1.20  1.17    1.00  0.96  1.00  0.98
+//     256   0.75  0.78  0.87  0.75    1.01  0.94  0.83  1.01
+//     512   0.58  0.74  0.76  0.75    1.07  0.92  0.82  0.91
+//
+// Widening helps Left at every large order and HURTS Right at every large
+// order, turning two Right cells that won into losses. The two sides put the
+// block width on different GEMM dimensions -- Left's trailing update is
+// C(nb x q), Right's is C(q x nb) -- and they therefore land in different
+// clauses of select_kernel_variant. Widening also shortens the inner updates'
+// k, and float's transposed fast paths in gemm_kernels.cc require k >= 128, so
+// for Right the inner GEMMs drop below the gate and fall to Tiled16.
+//
+// So Right keeps the old single-level schedule and Left gets the wide one. One
+// number for both sides would have to be 32, which throws away everything the
+// two-level driver buys at order 256 and 512.
+inline int trsm_outer_block(int cta_nb, Side side) {
+    static const int env = [] {
+        const char* raw = std::getenv("BATCHLAS_TRSM_OUTER_NB");
+        if (!raw || !*raw) return 0;
+        const int v = std::atoi(raw);
+        return v > 0 ? v : 0;
+    }();
+    const int want = env ? env : (side == Side::Left ? trsm_outer_block_default() : cta_nb);
+    // Must be a whole number of CTA blocks, and at least one.
+    const int rounded = (want / cta_nb) * cta_nb;
+    return rounded >= cta_nb ? rounded : cta_nb;
+}
+
 template <typename T>
 Event trsm_native_blocked(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -578,7 +677,8 @@ Event trsm_native_blocked(Queue& ctx,
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
     const int q = static_cast<int>(side == Side::Left ? B.cols() : B.rows());
-    const int nb = trsm_cta_max_n<T>();          // the CTA capacity IS the block size
+    const int nb = trsm_cta_max_n<T>();          // the CTA capacity: the INNER block
+    const int outer_nb = trsm_outer_block(nb, side);  // the trailing-update block; see above
 
     const int lda = A.ld(), ldb = B.ld();
     const int sa = A.stride(), sb = B.stride();
@@ -592,59 +692,96 @@ Event trsm_native_blocked(Queue& ctx,
             nr, nc, ld, stride, batch);
     };
 
-    for (int lo = 0; lo < n; lo += nb) {
-        const int hi = std::min(n, lo + nb);
-        const int m = hi - lo;                    // rows of this block
-        const int k = lo;                         // rows already solved
-        const int r0 = can.fwd ? lo : (n - hi);
-        const int s0 = can.fwd ? 0 : (n - lo);
+    // Canonical range [a, b) -> the stored row offset of that range. rho(s) is
+    // fwd ? s : n-1-s, so a canonical range maps to [a,b) when fwd and to
+    // [n-b, n-a) when not. Every offset below goes through this, which is what
+    // lets the two levels share one index convention -- the old code inlined
+    // the two special cases (prefix [0,lo) and block [lo,hi)) and there are now
+    // four.
+    auto stored_off = [&](int a, int b) { return can.fwd ? a : (n - b); };
 
-        if (k > 0) {
-            // Trailing update. beta = alpha carries the scaling; see the
-            // contract above.
-            const auto C = (side == Side::Left)
-                               ? sub(B, r0, m, 0, q, ldb, sb, bs)
-                               : sub(B, 0, q, r0, m, ldb, sb, bs);
-            const auto X = (side == Side::Left)
-                               ? sub(B, s0, k, 0, q, ldb, sb, bs)
-                               : sub(B, 0, q, s0, k, ldb, sb, bs);
-            // The A block is chosen so that op() lands on the required
-            // sub-block, which is why transA is passed through unchanged.
-            const auto Aoff =
-                (side == Side::Left)
-                    ? (can.do_trans ? sub(A, s0, k, r0, m, lda, sa, bs)
-                                    : sub(A, r0, m, s0, k, lda, sa, bs))
-                    : (can.do_trans ? sub(A, r0, m, s0, k, lda, sa, bs)
-                                    : sub(A, s0, k, r0, m, lda, sa, bs));
+    // Apply the already-solved canonical range [p_lo, p_hi) to the target range
+    // [t_lo, t_hi):  C := -op(A_off) * X + beta*C.
+    auto apply_update = [&](int t_lo, int t_hi, int p_lo, int p_hi, T beta) {
+        const int m = t_hi - t_lo;
+        const int k = p_hi - p_lo;
+        const int r0 = stored_off(t_lo, t_hi);
+        const int s0 = stored_off(p_lo, p_hi);
 
-            if (side == Side::Left) {
-                // C(m x q) := -op(Aoff)(m x k) * X(k x q) + alpha*C
-                sycl_gemm::gemm_custom<T>(ctx, Aoff, X, C, T(-1), alpha,
-                                          transA, Transpose::NoTrans,
-                                          ComputePrecision::Default);
-            } else {
-                // C(q x m) := -X(q x k) * op(Aoff)(k x m) + alpha*C.
-                // X GOES IN THE A POSITION. The obvious single form with the A
-                // block first produces a C of at most nb rows against the
-                // required q and does not conform for any transpose.
-                sycl_gemm::gemm_custom<T>(ctx, X, Aoff, C, T(-1), alpha,
-                                          Transpose::NoTrans, transA,
-                                          ComputePrecision::Default);
-            }
+        const auto C = (side == Side::Left) ? sub(B, r0, m, 0, q, ldb, sb, bs)
+                                            : sub(B, 0, q, r0, m, ldb, sb, bs);
+        const auto X = (side == Side::Left) ? sub(B, s0, k, 0, q, ldb, sb, bs)
+                                            : sub(B, 0, q, s0, k, ldb, sb, bs);
+        // The A block is chosen so that op() lands on the required sub-block,
+        // which is why transA is passed through unchanged.
+        const auto Aoff =
+            (side == Side::Left)
+                ? (can.do_trans ? sub(A, s0, k, r0, m, lda, sa, bs)
+                                : sub(A, r0, m, s0, k, lda, sa, bs))
+                : (can.do_trans ? sub(A, r0, m, s0, k, lda, sa, bs)
+                                : sub(A, s0, k, r0, m, lda, sa, bs));
+
+        if (side == Side::Left) {
+            // C(m x q) := -op(Aoff)(m x k) * X(k x q) + beta*C
+            sycl_gemm::gemm_custom<T>(ctx, Aoff, X, C, T(-1), beta,
+                                      transA, Transpose::NoTrans,
+                                      ComputePrecision::Default);
+        } else {
+            // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C.
+            // X GOES IN THE A POSITION. The obvious single form with the A
+            // block first produces a C of at most nb rows against the required
+            // q and does not conform for any transpose.
+            sycl_gemm::gemm_custom<T>(ctx, X, Aoff, C, T(-1), beta,
+                                      Transpose::NoTrans, transA,
+                                      ComputePrecision::Default);
         }
+    };
 
+    auto solve_diag = [&](int lo, int hi, T alpha_eff) {
+        const int m = hi - lo;
+        const int r0 = stored_off(lo, hi);
         const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
         const auto Bblk = (side == Side::Left) ? sub(B, r0, m, 0, q, ldb, sb, bs)
                                                : sub(B, 0, q, r0, m, ldb, sb, bs);
-        const T alpha_eff = (k == 0) ? alpha : T(1);
         trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+    };
 
-        // Block i+1's GEMM reads what block i's solve just wrote. An in-order
-        // queue gives that for free; an out-of-order one does not, and a caller
-        // may construct either (sycl-device-queue.hh:239 defaults in_order=true
-        // but it is a parameter). This is a correctness requirement, not a
-        // tuning choice, and it costs nothing on the default path.
-        if (!ctx.in_order()) ctx.wait();
+    // TWO LEVELS. The outer one applies the whole solved prefix to a panel in a
+    // SINGLE fat GEMM; the inner one is the old right-looking loop, but its
+    // prefix is now at most OUTER_NB - nb wide instead of the whole matrix.
+    //
+    // ALPHA IS APPLIED EXACTLY ONCE PER ELEMENT OF B, on that element's first
+    // touch, and which operation that is depends on where the block sits:
+    //   panel 0, block 0      -- nothing has touched it, so the CTA solve
+    //                            carries alpha.
+    //   panel 0, block > 0    -- the inner GEMM is the first touch: beta=alpha.
+    //   panel > 0, any block  -- the OUTER GEMM already touched the whole
+    //                            panel with beta=alpha, so the inner GEMM uses
+    //                            beta=1 and the solve uses alpha=1.
+    // Getting this wrong scales part of B twice, which no shape-only test would
+    // catch; tests/trsm_tests.cc drives alpha != 1 through every canonical cell
+    // for exactly this reason.
+    for (int LO = 0; LO < n; LO += outer_nb) {
+        const int HI = std::min(n, LO + outer_nb);
+
+        if (LO > 0) apply_update(LO, HI, 0, LO, alpha);
+
+        for (int lo = LO; lo < HI; lo += nb) {
+            const int hi = std::min(HI, lo + nb);
+            const bool first_touch_is_here = (LO == 0);
+            if (lo > LO) {
+                apply_update(lo, hi, LO, lo, first_touch_is_here ? alpha : T(1));
+            }
+            const T alpha_eff = (LO == 0 && lo == 0) ? alpha : T(1);
+            solve_diag(lo, hi, alpha_eff);
+
+            // Block i+1's GEMM reads what block i's solve just wrote. An
+            // in-order queue gives that for free; an out-of-order one does not,
+            // and a caller may construct either (sycl-device-queue.hh:239
+            // defaults in_order=true but it is a parameter). This is a
+            // correctness requirement, not a tuning choice.
+            if (!ctx.in_order()) ctx.wait();
+        }
     }
 
     return ctx.get_event();

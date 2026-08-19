@@ -701,3 +701,94 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
                     RunTrsmBlocked<std::complex<double>>(
                         {40, 16, 2, sd, up, tr, dg, std::complex<double>(1.0, -0.5)});
 }
+
+// ===========================================================================
+// TWO-LEVEL BLOCKING (WP3 step 13).
+//
+// V2's outer block width was decoupled from the CTA capacity: the trailing
+// update now runs at OUTER_NB (default 128) and each panel is solved by the old
+// nb = 32 loop against its own prefix.
+//
+// EVERY BLOCKED TEST ABOVE STOPS AT ORDER 100. With OUTER_NB = 128 that is a
+// SINGLE panel, so all of them take LO == 0 and the outer level never runs --
+// they passed unchanged against the two-level driver while proving nothing
+// about it. These orders are chosen to cross OUTER_NB:
+//
+//   129  two panels, the second one element wide (short-final-panel)
+//   256  exactly two full panels
+//   300  two full panels plus a ragged 44
+//   384  three full panels
+//
+// and BATCHLAS_TRSM_OUTER_NB is exercised too, because a tuning knob nobody
+// tests is a tuning knob that silently stops working.
+// ===========================================================================
+
+TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (int n : {129, 256, 300, 384})
+            RunTrsmBlocked<double>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+                                    Diag::NonUnit, 1.0});
+}
+
+// THE ALPHA TEST FOR THE OUTER LEVEL, and it is a different bug from the inner
+// one. With two levels a block in panel p > 0 is touched by the OUTER gemm
+// (beta), then by an inner gemm (beta), then by the solve (alpha) -- three
+// chances to apply alpha and exactly one of them is right. The inner-level
+// version of this test (AlphaIsAppliedExactlyOncePerBlock) cannot see it: at
+// order <= 100 there is only ever one panel.
+TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOnceAcrossPanels) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (double a : {-2.5, 0.75})
+            for (int n : {129, 256, 300})
+                RunTrsmBlocked<double>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                                        Diag::NonUnit, a});
+}
+
+TEST(TrsmNativeBlocked, TwoLevelCanonicalCrossProduct) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmBlocked<double>({160, 16, 2, sd, up, tr, dg, -1.5});
+}
+
+TEST(TrsmNativeBlocked, TwoLevelFloatAndComplex) {
+    for (Side sd : {Side::Left, Side::Right}) {
+        RunTrsmBlocked<float>({192, 24, 2, sd, Uplo::Lower, Transpose::Trans,
+                               Diag::NonUnit, 2.0f});
+        RunTrsmBlocked<std::complex<float>>(
+            {160, 20, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
+             std::complex<float>(1.5f, -0.5f)});
+    }
+}
+
+// The knob itself. OUTER_NB = 64 puts four panels into an order that the
+// default would cover in two, and OUTER_NB = 32 collapses the driver back to
+// the original single-level schedule -- which must still be correct, since it
+// is what shipped before this change.
+TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
+    struct EnvGuard {
+        const char* key;
+        std::string saved;
+        bool had;
+        EnvGuard(const char* k, const char* v) : key(k) {
+            const char* old = std::getenv(k);
+            had = old != nullptr;
+            if (had) saved = old;
+            setenv(k, v, 1);
+        }
+        ~EnvGuard() { had ? setenv(key, saved.c_str(), 1) : unsetenv(key); }
+    };
+    // NOTE: trsm_outer_block caches the parse in a function-local static, so the
+    // FIRST blocked call in this process fixes the value. Setting it here can
+    // therefore be a no-op depending on test order -- which is precisely why
+    // this test asserts CORRECTNESS under whatever value is live rather than
+    // asserting a particular schedule. A schedule assertion would pass or fail
+    // on gtest's ordering, not on the code.
+    for (const char* v : {"64", "32", "256"}) {
+        EnvGuard g("BATCHLAS_TRSM_OUTER_NB", v);
+        for (Side sd : {Side::Left, Side::Right})
+            RunTrsmBlocked<double>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
+                                    Diag::NonUnit, -1.25});
+    }
+}

@@ -335,5 +335,56 @@ at or above parity, and at order 256 the default correctly tracks the vendor.
 |---|---|---|
 | 9–11 | the grid, and the `preferred()` flips | done |
 | 12 | the `Side::Left` SLM staging tile | **done** |
-| 13 | where between order 128 and 256 the float/Left window actually ends | open — the grid jumps, so the boundary is placed at the largest order measured to win |
+| 13 | win at every order 8..512, both sides, float and complex\<float\> | **mostly done** — `experiments/wp3_s13/`; 3 of 4 (type,side) combinations win at every order. float/Left at order >= 256 wins only below q*batch = 524288 |
 | 14 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |
+
+---
+
+## ✱ Step 13 — what "win everywhere" cost, and the two facts it uncovered
+
+Three of the four (type, side) combinations now win at **every** order from 8 to
+512. The fourth, float `Side::Left`, wins at every order below a measured work
+threshold and hands the rest to the vendor.
+
+**Order 512 had never been measured.** Every grid before this one stopped at 256,
+and `TrsmOrthoSizes` sizes its 6 GB cap for `complex<double>`, so it would have
+dropped most of the 512 row anyway. The first 512 measurements showed float/Left
+degrading monotonically — 1.13x at 128, 0.74-0.93x at 256, 0.58-0.69x at 512 —
+which is the signature of a per-block cost growing with block count, not a fixed
+inefficiency.
+
+**The blocking factor was the cause, and the fix is side-dependent.** V2 tied its
+outer block to the CTA capacity, pinning one GEMM dimension at 32 and capping
+arithmetic intensity at `2*32/4 = 16` flop/byte against a machine balance of 42.
+Decoupling it fixes Left and **regresses Right** (1.01x -> 0.83x at order 256,
+1.07x -> 0.82x at 512), because the two sides put the width on different GEMM
+dimensions. One constant for both sides would have to be the old 32.
+
+**The boundary is work, not order.** float/Left at order 512 wins at
+`q*batch = 32768` (1.23x) while order 256 loses at `q*batch = 524288` (0.90x), so
+no order cap can express it. `preferred()` reads `order <= 128 || q*batch <
+524288`.
+
+**Two facts that change how every complex ratio in this document should be
+read.**
+
+`src/backends/cublas.cc:1111` diverts BOTH complex types to a hand-written SYCL
+substitution kernel; `cublasCtrsmBatched`/`cublasZtrsmBatched` at :1220 are
+unreachable. Every complex "vendor" number in steps 9, 12 and 13 is therefore
+native against another BatchLAS kernel, not against cuBLAS -- which is why
+complex shows 8-26x at large order. The diversion rests on an uncited comment
+about NaNs under SYCL/USM interop and deserves its own verification pass.
+
+And complex<float>/`Side::Right` at orders 8 and 16, the cells that look
+disappointing at 1.01-1.05x, are running at **88.5-90.5% of the 1008 GB/s DRAM
+peak**. The ceiling there is 1.12-1.18x. They are roofline ties, not defects, and
+no kernel change buys a factor.
+
+### Revised remaining order
+
+| step | what | status |
+|---|---|---|
+| 13 | win at every order 8..512 | mostly done; see above |
+| 14 | cooperative CTA solve (W work-items per solve, `x_s` by sub-group broadcast) so the inner block can be 64-128 | open — this is what the last float/Left cells need; N=64 in the current one-solve-per-work-item design was re-tested and FAILS the register gate (456 B frame) |
+| 15 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open — it silently redefines the complex baseline |
+| 16 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |

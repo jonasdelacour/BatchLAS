@@ -422,7 +422,7 @@ TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
 // later edit widening a window has to come with its own numbers.
 // ---------------------------------------------------------------------------
 
-TEST(RouteTrsm, FloatLeftWindowEndsAtOrder128) {
+TEST(RouteTrsm, FloatLeftWindowIsOrderThenWork) {
     // This test used to pin the boundary at 16, which is where it sat while
     // Side::Left read B's columns one scattered lane at a time. WP3 step 12
     // built the SLM staging tile and the boundary moved to 128: orders 32, 64
@@ -433,8 +433,16 @@ TEST(RouteTrsm, FloatLeftWindowEndsAtOrder128) {
         EXPECT_TRUE(TrsmTable::preferred(r, trsm_shape(order, 1024, 2048, 32, Side::Left)))
             << "float Side::Left order " << order << " wins after the staging tile";
     }
+    // Order 256+ is a WORK threshold, not an order cap: q*batch = 1024*512 =
+    // 524288 loses (0.90x), and the same order at 256*128 = 32768 wins (1.12x).
     EXPECT_FALSE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
-        << "float Side::Left order 256 still measures 0.76-0.93x; the window has a top";
+        << "float Side::Left order 256 at q*batch=524288 measures 0.90x";
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(256, 256, 128, 32, Side::Left)))
+        << "the same order at q*batch=32768 measures 1.12x and must stay native";
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 256, 128, 32, Side::Left)))
+        << "order 512 WINS at small work (1.23x) -- an order cap could not express that";
+    EXPECT_FALSE(TrsmTable::preferred(kBlocked, trsm_shape(512, 1024, 512, 32, Side::Left)))
+        << "order 512 at q*batch=524288 measures 0.76x";
 
     // Same orders, other side: all preferred, and untouched by the tile --
     // Side::Right never stages, and its register counts are byte-identical
