@@ -10,6 +10,7 @@
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/blas/dispatch/route_trsm.hh>
 
 #include <cstdlib>
 #include <string>
@@ -353,4 +354,120 @@ TEST(RouteVocabulary, ShapeClassCollapsesIterationsButNotRegimes) {
     EXPECT_EQ(a.shape_class(), b.shape_class());
     EXPECT_NE(a.shape_class(), c.shape_class());
     EXPECT_EQ(a.max_dim(), 512);
+}
+
+
+// ---------------------------------------------------------------------------
+// WP3 step 1 -- RouteTable<Op::trsm, T>.
+//
+// These pin the one property the vendor-free build depends on and which a
+// single-boolean predicate cannot express: a route may be SUPPORTED while not
+// being PREFERRED. resolve_route (route_resolve.hh:60-63) implements the
+// vendor-off fallback by re-walking the candidate order testing supports()
+// ALONE, so if a speed threshold ever migrates into supports(), trsm stops
+// having any route at all without a vendor and level3.cc throws. That is the
+// exact regression WP3_TRSM_SPEC_CORRECTIONS.md finding 3 is about, and it
+// would otherwise only show up as a vendor-free suite going red much later.
+// ---------------------------------------------------------------------------
+namespace {
+
+TrsmShape trsm_shape(int64_t tri_order, int64_t q, int64_t batch, int cta_max,
+                     Side side = Side::Left) {
+    TrsmShape s;
+    s.op = Op::trsm;
+    s.scalar = ScalarKind::F32;
+    s.k = tri_order;                       // the triangular order n
+    s.m = tri_order;
+    s.n = q;                               // Side::Left -> q = B.cols()
+    if (side == Side::Right) { s.m = q; s.n = tri_order; }
+    s.side = side;
+    s.batch = batch;
+    s.is_gpu = true;
+    s.cta_max_n = cta_max;
+    return s;
+}
+
+using TrsmTable = RouteTable<Op::trsm, float>;
+constexpr Route kCta{Origin::Native, Algorithm::CTA};
+constexpr Route kBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
+
+} // namespace
+
+TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
+    const auto s = trsm_shape(/*tri_order=*/32, /*q=*/128, /*batch=*/4096, /*cta_max=*/64);
+    EXPECT_TRUE(TrsmTable::supports(kCta, s))
+        << "a 32-order solve is inside a 64 capacity; this must be a CORRECTNESS yes";
+    EXPECT_FALSE(TrsmTable::preferred(kCta, s))
+        << "nothing has been measured yet, so no cell may be preferred";
+}
+
+TEST(RouteTrsm, VendorPresentKeepsEveryCellOnTheVendor) {
+    // Step 6 of the plan requires that landing the native kernel moves NO
+    // traffic: preferred() is all-false, so Auto must resolve to the vendor.
+    for (int64_t order : {8, 32, 64, 512}) {
+        const auto s = trsm_shape(order, 128, 4096, 64);
+        EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)))
+            << "order " << order << " moved off the vendor with nothing measured";
+    }
+}
+
+TEST(RouteTrsm, VendorFreeStillFindsANativeRouteAtEveryOrder) {
+    // Below the CTA capacity -> CTA. Above it -> Blocked. Never "no route".
+    const auto small = trsm_shape(32, 128, 4096, 64);
+    const auto big   = trsm_shape(4096, 128, 64, 64);
+
+    const Route rs = resolve_trsm_route<float>(kAuto, small, /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rs));
+    EXPECT_EQ(rs.algo, Algorithm::CTA);
+
+    const Route rb = resolve_trsm_route<float>(kAuto, big, /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rb));
+    EXPECT_EQ(rb.algo, Algorithm::Blocked)
+        << "an order above the register capacity must fall to the blocked driver, not vanish";
+}
+
+TEST(RouteTrsm, AbsentKernelIsUnsupportedRatherThanSelectable) {
+    // cta_max_n == 0 is the state until the kernel TU lands. Both native routes
+    // must report UNSUPPORTED, so this table can be merged before the kernel
+    // exists without ever selecting a launch that is not there.
+    const auto s = trsm_shape(32, 128, 4096, /*cta_max=*/0);
+    EXPECT_FALSE(TrsmTable::supports(kCta, s));
+    EXPECT_FALSE(TrsmTable::supports(kBlocked, s));
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)));
+}
+
+TEST(RouteTrsm, CorrectnessGatesAreNotSpeedGates) {
+    // Every false below must be "would compute a wrong answer", so each has a
+    // structural reason. Large batch and large q are NOT among them.
+    const auto ok = trsm_shape(32, 128, 4096, 64);
+    EXPECT_TRUE(TrsmTable::supports(kCta, ok));
+
+    auto cpu = ok;  cpu.is_gpu = false;
+    EXPECT_FALSE(TrsmTable::supports(kCta, cpu));
+
+    auto het = ok;  het.heterogeneous_batch = true;
+    EXPECT_FALSE(TrsmTable::supports(kCta, het));
+
+    auto empty_tri = ok;  empty_tri.k = 0;
+    EXPECT_FALSE(TrsmTable::supports(kCta, empty_tri));
+
+    auto over = ok;  over.k = 65;   // one past the capacity
+    EXPECT_FALSE(TrsmTable::supports(kCta, over));
+    EXPECT_TRUE(TrsmTable::supports(kBlocked, over))
+        << "the blocked driver splits the order itself, so the cap does not apply to it";
+
+    // A tiny batch is slow, not wrong: it must stay SUPPORTED.
+    auto tiny_batch = ok;  tiny_batch.batch = 1;
+    EXPECT_TRUE(TrsmTable::supports(kCta, tiny_batch))
+        << "batch size is a speed question; putting it in supports() breaks vendor-free trsm";
+}
+
+TEST(RouteTrsm, RhsCountFollowsSide) {
+    const auto left  = trsm_shape(32, 128, 16, 64, Side::Left);
+    const auto right = trsm_shape(32, 128, 16, 64, Side::Right);
+    EXPECT_EQ(left.tri_order(), 32);
+    EXPECT_EQ(right.tri_order(), 32);
+    EXPECT_EQ(left.rhs_count(), 128) << "Side::Left  -> q = B.cols()";
+    EXPECT_EQ(right.rhs_count(), 128) << "Side::Right -> q = B.rows()";
 }
