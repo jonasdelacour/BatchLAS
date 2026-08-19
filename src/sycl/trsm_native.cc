@@ -47,6 +47,7 @@
 #include "trsm_native.hh"
 
 #include "../linalg-impl.hh"
+#include "device_scalar.hh"
 #include "gemm_kernels.hh"
 
 #include <sycl/sycl.hpp>
@@ -135,16 +136,17 @@ class TrsmCtaKernel;
 // ---------------------------------------------------------------------------
 template <typename T, int N, Side SideV>
 Event trsm_native_v1(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B,
-                           T alpha,
-                           Uplo uplo,
-                           Transpose transA,
-                           Diag diag) {
-    static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
-                  "WP3 step 3 is real types only; complex needs a POD device scalar and a "
-                  "guarded complex reciprocal, which GEMM's wide-scalar helpers do not "
-                  "provide (they have no division).");
+                     const MatrixView<T, MatrixFormat::Dense>& A,
+                     const MatrixView<T, MatrixFormat::Dense>& B,
+                     T alpha,
+                     Uplo uplo,
+                     Transpose transA,
+                     Diag diag) {
+    // The whole kernel runs on the POD device scalar. std::complex is re-typed
+    // here, at the pointer boundary, and never crosses into the kernel body --
+    // including alpha, which is reinterpreted exactly as the operands are.
+    using D = typename sycl_device::DevMap<T>::type;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     const Canonical can = canonicalise(SideV, uplo, transA, diag);
 
@@ -152,12 +154,18 @@ Event trsm_native_v1(Queue& ctx,
     const int q = static_cast<int>(SideV == Side::Left ? B.cols() : B.rows());
     const int bs = static_cast<int>(A.batch_size());
 
-    // Work-group sizing. Descending, because a larger work-group amortises the
-    // triangle staging over more solves: A traffic / B traffic = n / (4*WG).
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
 
+    // THE LADDER MUST NOT GO ABOVE 256. The register probe measures the worst
+    // instantiation (complex<double>, N=32) at 226 registers per thread, so
+    // 226 * 256 = 57,856 against the hard 65,536-registers-per-BLOCK limit --
+    // 12% of headroom. At 512 it would be 115,712 and the launch would abort.
+    // This is the constraint that decides the ladder's top, not occupancy.
+    static_assert(256 * 226 <= 65536,
+                  "the work-group ceiling is set by registers per block, not by occupancy; "
+                  "re-run scripts/register_probe.sh before raising it");
     int wg = 32;
     for (int cand : {256, 128, 64, 32}) {
         if (cand > max_wg) continue;
@@ -173,22 +181,24 @@ Event trsm_native_v1(Queue& ctx,
     const size_t tri_elems = static_cast<size_t>(N) * (N + 1) / 2;
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> lc(sycl::range<1>(tri_elems), h);
-        sycl::local_accessor<T, 1> rd(sycl::range<1>(N), h);
-        // Work-group-uniform flag: does any diagonal reciprocal overflow? If so
-        // the whole group reverts to division. See the guard note below.
+        sycl::local_accessor<D, 1> lc(sycl::range<1>(tri_elems), h);
+        sycl::local_accessor<D, 1> rd(sycl::range<1>(N), h);
         sycl::local_accessor<int, 1> use_div(sycl::range<1>(1), h);
 
-        const T* a_ptr = A.data_ptr();
-        T* b_ptr = B.data_ptr();
+        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
+        D* b_ptr = reinterpret_cast<D*>(B.data_ptr());
         const int lda = static_cast<int>(A.ld());
         const int ldb = static_cast<int>(B.ld());
         const int stride_a = static_cast<int>(A.stride());
         const int stride_b = static_cast<int>(B.stride());
 
         const bool do_trans = can.do_trans;
+        const bool do_conj = can.do_conj;
         const bool fwd = can.fwd;
         const bool unit = can.unit;
+
+        D alpha_d;
+        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
         h.parallel_for<TrsmCtaKernel<T, N, SideV>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
@@ -200,33 +210,38 @@ Event trsm_native_v1(Queue& ctx,
                 const int u = (wg_id % groups) * wg + lane;
                 const bool live = (u < q);
 
-                const T* Ab = a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a;
-                T* Bb = b_ptr + static_cast<std::ptrdiff_t>(b) * stride_b;
+                const D* Ab = a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a;
+                D* Bb = b_ptr + static_cast<std::ptrdiff_t>(b) * stride_b;
 
-                T* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
-                T* sRd = rd.template get_multi_ptr<sycl::access::decorated::no>().get();
+                D* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
+                D* sRd = rd.template get_multi_ptr<sycl::access::decorated::no>().get();
                 int* sDiv = use_div.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 if (lane == 0) sDiv[0] = 0;
 
                 // ---- Cooperative staging of the canonical triangle ---------
-                // rho(s) = fwd ? s : n-1-s maps canonical index to stored index.
+                // rho(s) = fwd ? s : n-1-s maps canonical to stored index.
                 // Lc(s,t) = opA(rho(s), rho(t)) for Left, opA(rho(t), rho(s))
-                // for Right -- THE OPERAND ORDER IS SWAPPED between them.
-                // Getting it backwards is invisible on a symmetric triangle and
-                // wrong on every other one, which is why the tests build a
-                // deliberately non-symmetric one.
+                // for Right -- THE OPERAND ORDER IS SWAPPED between them, and
+                // is invisible on a symmetric triangle.
+                //
+                // CONJUGATION. opA(r,c) = do_trans ? conj_if(A(c,r)) : A(r,c),
+                // and do_conj implies do_trans, so the rule is simply: conjugate
+                // iff transA == ConjTrans. It applies to EVERY staged element
+                // INCLUDING THE DIAGONAL -- opA(r,r) = conj(A(r,r)) -- so the
+                // reciprocal below is taken of the conjugated value. alpha and B
+                // are never conjugated. For a real scalar do_conj is dead, which
+                // is why this had no effect until complex arrived.
                 for (size_t idx = lane; idx < tri_elems; idx += static_cast<size_t>(wg)) {
-                    // Recover (s,t) from the packed index.
                     int s = 0;
                     while (tri_idx(s + 1, 0) <= static_cast<int>(idx)) ++s;
                     const int t = static_cast<int>(idx) - tri_idx(s, 0);
 
-                    T v;
+                    D v;
                     if (s >= n || t >= n) {
-                        // Zero padding, with a unit diagonal, so the unrolled
+                        // Zero padding with a unit diagonal, so the unrolled
                         // tail computes zeros instead of branching.
-                        v = (s == t) ? T(1) : T(0);
+                        v = (s == t) ? sycl_device::dev_one<D>() : D{};
                     } else {
                         const int rs = fwd ? s : (n - 1 - s);
                         const int rt = fwd ? t : (n - 1 - t);
@@ -235,30 +250,37 @@ Event trsm_native_v1(Queue& ctx,
                         v = do_trans
                                 ? Ab[c + static_cast<std::ptrdiff_t>(r) * lda]   // A(c,r)
                                 : Ab[r + static_cast<std::ptrdiff_t>(c) * lda];  // A(r,c)
+                        if (do_conj) v = sycl_device::dev_conj(v);
                     }
                     sLc[idx] = v;
                 }
 
                 // ---- Diagonal reciprocals, guarded -------------------------
-                // The recurrence multiplies by rd[s] = 1/Lc(s,s) instead of
+                // The recurrence multiplies by rd[s] = 1/Lc(s,s) rather than
                 // dividing, which is the only arithmetic deviation from the
-                // reference loop nest. It is unsafe in exactly one place: if
-                // Lc(s,s) is small enough that 1/Lc(s,s) overflows, the multiply
-                // produces inf where the division would have produced a finite
-                // number. So the reciprocal is CHECKED, and any thread that sees
-                // a non-finite one flips a work-group-uniform flag that reverts
-                // the whole group to division. BATCHLAS_TRSM_DIAG=div forces
-                // that path unconditionally, for A/B-ing the accuracy claim.
+                // reference loop nest. It is unsafe in exactly one place: if the
+                // reciprocal is not finite the multiply produces inf where a
+                // division would have produced a finite number. So it is
+                // CHECKED, and any thread seeing a non-finite one flips a
+                // work-group-uniform flag reverting the whole group to division.
+                //
+                // For complex the reciprocal is Smith's algorithm, not
+                // conj(d)/|d|^2: the textbook form squares the components and
+                // so overflows to 0 for inputs whose true reciprocal is
+                // perfectly representable. See src/sycl/device_scalar.hh.
+                // BOTH components are tested, since either can go non-finite
+                // independently.
                 for (int s = lane; s < N; s += wg) {
-                    T r = T(1);
+                    D r = sycl_device::dev_one<D>();
                     if (s < n && !unit) {
-                        const T d = sLc[tri_idx(s, s)];
-                        if (!finite_recip(d, r)) {
+                        const D d = sLc[tri_idx(s, s)];
+                        r = sycl_device::dev_recip(d);
+                        if (!sycl_device::dev_isfinite(r)) {
                             sycl::atomic_ref<int, sycl::memory_order::relaxed,
                                              sycl::memory_scope::work_group,
                                              sycl::access::address_space::local_space>(sDiv[0])
                                 .store(1);
-                            r = T(1);
+                            r = sycl_device::dev_one<D>();
                         }
                     }
                     sRd[s] = r;
@@ -269,12 +291,9 @@ Event trsm_native_v1(Queue& ctx,
                 const bool divide = (sDiv[0] != 0);
 
                 // ---- The recurrence, fully unrolled ------------------------
-                // Canonical RHS accessor, §2.1:
+                // Canonical RHS accessor, spec section 2.1:
                 //   Left : b0 = fwd?0:(n-1),      ds = +-1,   du = ldb
                 //   Right: b0 = fwd?0:(n-1)*ldb,  ds = +-ldb, du = 1
-                // Left's du == ldb is the uncoalesced access §3.4 wants a
-                // staging tile for; see the header note on why that is a later,
-                // measured step rather than this one.
                 const std::ptrdiff_t unit_s =
                     (SideV == Side::Left) ? 1 : static_cast<std::ptrdiff_t>(ldb);
                 const std::ptrdiff_t du =
@@ -282,21 +301,23 @@ Event trsm_native_v1(Queue& ctx,
                 const std::ptrdiff_t b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
                 const std::ptrdiff_t ds = fwd ? unit_s : -unit_s;
 
-                T x[N];
+                D x[N];
 #pragma unroll
                 for (int s = 0; s < N; ++s) {
-                    T acc = T(0);
+                    D acc = D{};
 #pragma unroll
                     for (int t = 0; t < N; ++t) {
-                        if (t < s) acc += sLc[tri_idx(s, t)] * x[t];
+                        if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
                     }
-                    T rhs = T(0);
+                    D rhs = D{};
                     if (live && s < n) {
-                        rhs = alpha * Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du];
+                        rhs = sycl_device::dev_mul(
+                            alpha_d, Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du]);
                     }
-                    T v = rhs - acc;
+                    D v = sycl_device::dev_sub(rhs, acc);
                     if (!unit) {
-                        v = divide ? (v / sLc[tri_idx(s, s)]) : (v * sRd[s]);
+                        v = divide ? sycl_device::dev_div(v, sLc[tri_idx(s, s)])
+                                   : sycl_device::dev_mul(v, sRd[s]);
                     }
                     x[s] = v;
                 }
@@ -483,6 +504,14 @@ template Event trsm_native_v1_dispatch<float>(
 template Event trsm_native_v1_dispatch<double>(
     Queue&, const MatrixView<double, MatrixFormat::Dense>&,
     const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
+template Event trsm_native_v1_dispatch<std::complex<float>>(
+    Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+    const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>,
+    Side, Uplo, Transpose, Diag);
+template Event trsm_native_v1_dispatch<std::complex<double>>(
+    Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+    const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
+    Side, Uplo, Transpose, Diag);
 
 // THE REGISTER GATE HAS RUN. scripts/register_probe.sh, sm_89, this TU:
 //
@@ -532,13 +561,24 @@ template Event trsm_native_v1_dispatch<double>(
 // returns 0 because it needs a POD device scalar and a guarded complex
 // RECIPROCAL, and GEMM's wide-scalar helpers provide multiply but no division.
 //
-// 32 x work-group size against the 65,536-per-block register limit: at the
-// largest work-group this launcher picks (256) that is 114 x 256 = 29,184 for
-// float and 153 x 256 = 39,168 for double. Both clear it with room.
+// COMPLEX MEASURED TOO, and the prediction going in was wrong. complex<double>
+// at N=32 holds 32 complex doubles -- 512 bytes of accumulator, the same size
+// that put double N=64 in local memory -- so it was expected to fail the gate.
+// It does not: 0 bytes stack frame, 0 spill, 226 registers. All 24 kernels
+// (4 types x 3 buckets x 2 sides) pass, so n_cta = 32 for every type.
+//
+//   type              N=8   N=16   N=32     regs*256 at N=32
+//   float              44     76    114           29,184
+//   double             59    101    153           39,168
+//   complex<float>     50     86    148           37,888
+//   complex<double>    74    138    226           57,856   <- worst, 12% headroom
+//
+// The binding constraint is registers per BLOCK, not occupancy, and it is what
+// caps the work-group ladder at 256; see the static_assert in the launcher.
 template <> int trsm_cta_max_n<float>()                { return 32; }
 template <> int trsm_cta_max_n<double>()               { return 32; }
-template <> int trsm_cta_max_n<std::complex<float>>()  { return 0; }
-template <> int trsm_cta_max_n<std::complex<double>>() { return 0; }
+template <> int trsm_cta_max_n<std::complex<float>>()  { return 32; }
+template <> int trsm_cta_max_n<std::complex<double>>() { return 32; }
 
 // V2 does not exist yet, for any type. Until it does, an order above
 // trsm_cta_max_n has NO native route, and RouteTable<Op::trsm,T>::supports()
@@ -551,10 +591,18 @@ template Event trsm_native_blocked<float>(
 template Event trsm_native_blocked<double>(
     Queue&, const MatrixView<double, MatrixFormat::Dense>&,
     const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
+template Event trsm_native_blocked<std::complex<float>>(
+    Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+    const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>,
+    Side, Uplo, Transpose, Diag);
+template Event trsm_native_blocked<std::complex<double>>(
+    Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+    const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
+    Side, Uplo, Transpose, Diag);
 
 template <> bool trsm_blocked_available<float>()                { return true; }
 template <> bool trsm_blocked_available<double>()               { return true; }
-template <> bool trsm_blocked_available<std::complex<float>>()  { return false; }
-template <> bool trsm_blocked_available<std::complex<double>>() { return false; }
+template <> bool trsm_blocked_available<std::complex<float>>()  { return true; }
+template <> bool trsm_blocked_available<std::complex<double>>() { return true; }
 
 }  // namespace batchlas::sycl_trsm

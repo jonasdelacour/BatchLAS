@@ -253,6 +253,49 @@ TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
 // ===========================================================================
 namespace {
 
+
+// Host-side conjugate that compiles for real T as well: the drivers below are
+// instantiated for float and double too, so a bare std::conj would not build.
+template <typename T>
+inline T host_conj(const T& v) {
+    if constexpr (batchlas::is_std_complex_v<T>) {
+        return std::conj(v);
+    } else {
+        return v;
+    }
+}
+
+// Test data. THE IMAGINARY PARTS ARE THE POINT: a missing conjugation is
+// invisible on a real-valued complex matrix, and a Hermitian or symmetric
+// triangle hides a transposed-vs-conjugate-transposed confusion as well. This
+// fill is non-real, non-symmetric and non-Hermitian by construction -- the
+// imaginary part is a different function of (r,c) than the real part, and
+// neither is symmetric in r,c.
+template <typename T>
+inline T tri_fill(int r, int c, bool diagonal) {
+    using R = batchlas::float_t<T>;
+    const R re = diagonal ? static_cast<R>(2 + (r % 3))
+                          : static_cast<R>(0.02 * (1 + ((r * 7 + c * 3) % 5)));
+    if constexpr (batchlas::is_std_complex_v<T>) {
+        const R im = diagonal ? static_cast<R>(0.5 + 0.25 * (r % 2))
+                              : static_cast<R>(0.013 * (1 + ((r * 3 + c * 11) % 7)));
+        return T(re, im);
+    } else {
+        return T(re);
+    }
+}
+
+template <typename T>
+inline T rhs_fill(int r, int c) {
+    using R = batchlas::float_t<T>;
+    const R re = static_cast<R>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
+    if constexpr (batchlas::is_std_complex_v<T>) {
+        return T(re, static_cast<R>(0.17 * (1 + ((r * 2 + c * 7) % 6))));
+    } else {
+        return T(re);
+    }
+}
+
 template <typename T>
 struct TrsmNativeCase {
     int n;
@@ -287,18 +330,16 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     for (int b = 0; b < bs; ++b) {
         for (int c = 0; c < n; ++c) {
             for (int r = 0; r < n; ++r) {
-                T v;
                 const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
-                if (r == c)        v = static_cast<T>(2 + (r % 3));
-                else if (in_tri)   v = static_cast<T>(0.05 * (1 + ((r * 7 + c * 3) % 5)));
-                else               v = static_cast<T>(0);
+                T v = (r == c) ? tri_fill<T>(r, c, true)
+                               : (in_tri ? tri_fill<T>(r, c, false) : T(0));
                 Av.at(r, c, b) = v;
                 a_host[(static_cast<size_t>(b) * n + c) * n + r] = v;
             }
         }
         for (int c = 0; c < bcols; ++c) {
             for (int r = 0; r < brows; ++r) {
-                const T v = static_cast<T>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
+                const T v = rhs_fill<T>(r, c);
                 Bv.at(r, c, b) = v;
                 b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
             }
@@ -309,8 +350,14 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    using Acc = double;
-    const Acc tol = std::is_same_v<T, float> ? Acc(2e-3) : Acc(1e-10);
+    // Accumulate complex in complex; a real accumulator would silently drop the
+    // imaginary part of the product and the check would pass on wrong answers.
+    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
+    // float_t<T>, not T: std::is_same_v<T,float> is FALSE for
+    // std::complex<float>, which would judge a single-precision solve at the
+    // double tolerance. base_type is at include/batchlas/blas/enums.hh:19-27.
+    // The tolerance is a MAGNITUDE, so it stays real even when Acc is complex.
+    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 2e-3 : 1e-10;
 
     for (int b = 0; b < bs; ++b) {
         // op(A) built from the DEFINITION, with no reference to the kernel's
@@ -322,10 +369,15 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
                 if (!in_tri) continue;
                 T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
                 if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                if (tc.transA == Transpose::NoTrans)
+                // op(A)(i,j): NoTrans -> A(i,j); Trans -> A(j,i);
+                // ConjTrans -> conj(A(j,i)). Built from the DEFINITION, so it
+                // cannot share a fold error with the kernel's canonicalisation.
+                if (tc.transA == Transpose::NoTrans) {
                     opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
-                else
-                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] = v;
+                } else {
+                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] =
+                        (tc.transA == Transpose::ConjTrans) ? host_conj<T>(v) : v;
+                }
             }
         }
         for (int r = 0; r < brows; ++r) {
@@ -342,7 +394,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
                 }
                 const Acc want =
                     Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
-                ASSERT_NEAR(got, want, tol)
+                ASSERT_LE(std::abs(got - want), tol)
                     << (tc.side == Side::Left ? "op(A)*X != alpha*B at b=" : "X*op(A) != alpha*B at b=") << b << " r=" << r << " c=" << c
                     << "  n=" << n << " q=" << q
                     << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
@@ -464,15 +516,14 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
         for (int c = 0; c < n; ++c)
             for (int r = 0; r < n; ++r) {
                 const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
-                T v = (r == c) ? static_cast<T>(2 + (r % 3))
-                               : (in_tri ? static_cast<T>(0.02 * (1 + ((r * 7 + c * 3) % 5)))
-                                         : static_cast<T>(0));
+                T v = (r == c) ? tri_fill<T>(r, c, true)
+                               : (in_tri ? tri_fill<T>(r, c, false) : T(0));
                 Av.at(r, c, b) = v;
                 a_host[(static_cast<size_t>(b) * n + c) * n + r] = v;
             }
         for (int c = 0; c < bcols; ++c)
             for (int r = 0; r < brows; ++r) {
-                const T v = static_cast<T>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
+                const T v = rhs_fill<T>(r, c);
                 Bv.at(r, c, b) = v;
                 b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
             }
@@ -481,8 +532,10 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    using Acc = double;
-    const Acc tol = std::is_same_v<T, float> ? Acc(5e-3) : Acc(1e-9);
+    // Accumulate complex in complex; a real accumulator would silently drop the
+    // imaginary part of the product and the check would pass on wrong answers.
+    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
+    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 5e-3 : 1e-9;
     for (int b = 0; b < bs; ++b) {
         std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
         for (int c = 0; c < n; ++c)
@@ -491,10 +544,15 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
                 if (!in_tri) continue;
                 T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
                 if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                if (tc.transA == Transpose::NoTrans)
+                // op(A)(i,j): NoTrans -> A(i,j); Trans -> A(j,i);
+                // ConjTrans -> conj(A(j,i)). Built from the DEFINITION, so it
+                // cannot share a fold error with the kernel's canonicalisation.
+                if (tc.transA == Transpose::NoTrans) {
                     opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
-                else
-                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] = v;
+                } else {
+                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] =
+                        (tc.transA == Transpose::ConjTrans) ? host_conj<T>(v) : v;
+                }
             }
         for (int r = 0; r < brows; ++r)
             for (int c = 0; c < bcols; ++c) {
@@ -507,11 +565,11 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
                                      Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
                 const Acc want =
                     Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
-                ASSERT_NEAR(got, want, tol)
+                ASSERT_LE(std::abs(got - want), tol)
                     << "blocked: b=" << b << " r=" << r << " c=" << c << " n=" << n
                     << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
                     << " transA=" << int(tc.transA) << " diag=" << int(tc.diag)
-                    << " alpha=" << double(tc.alpha);
+                    << " |alpha|=" << std::abs(tc.alpha);
             }
     }
 }
@@ -553,4 +611,93 @@ TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
         for (int q : {1, 33, 129})
             RunTrsmBlocked<float>({48, q, 2, sd, Uplo::Lower, Transpose::Trans,
                                    Diag::NonUnit, 2.0f});
+}
+
+
+// ===========================================================================
+// COMPLEX. Two things here are not exercised anywhere above, and each is a
+// silent wrong answer if got wrong:
+//
+//   * ConjTrans. For a real scalar it is identical to Trans, so every existing
+//     cell in this file is blind to it. Canonical::do_conj was written by
+//     canonicalise() and read by nothing until complex arrived.
+//   * The complex reciprocal. The real path divides by a scalar; complex needs
+//     an overflow-safe reciprocal (Smith), and the textbook conj(d)/|d|^2 form
+//     silently returns 0 for inputs whose true reciprocal is representable.
+//
+// The test DATA is what makes these visible. tri_fill gives every element a
+// non-zero imaginary part that is a different function of (r,c) than the real
+// part, so the triangle is neither real, nor symmetric, nor Hermitian. On a
+// real-valued complex matrix a missing conj is invisible; on a Hermitian one a
+// Trans/ConjTrans confusion is invisible.
+// ===========================================================================
+
+// All 24 canonical cells per type: 2 sides x 2 uplo x 3 transA (NoTrans, Trans,
+// ConjTrans) x 2 diag, inside the CTA capacity.
+TEST(TrsmNativeCta, ComplexCanonicalCrossProductFloat) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmNative<std::complex<float>>(
+                        {8, 24, 3, sd, up, tr, dg, std::complex<float>(1.0f, 0.0f)});
+}
+
+TEST(TrsmNativeCta, ComplexCanonicalCrossProductDouble) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmNative<std::complex<double>>(
+                        {8, 24, 3, sd, up, tr, dg, std::complex<double>(1.0, 0.0)});
+}
+
+// A COMPLEX alpha with a non-zero imaginary part. A real alpha cannot catch an
+// error that drops the imaginary cross-terms of the alpha*B product.
+TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::ConjTrans}) {
+            RunTrsmNative<std::complex<double>>(
+                {16, 40, 2, sd, Uplo::Lower, tr, Diag::NonUnit,
+                 std::complex<double>(-1.25, 0.75)});
+            RunTrsmNative<std::complex<float>>(
+                {16, 40, 2, sd, Uplo::Upper, tr, Diag::NonUnit,
+                 std::complex<float>(0.5f, -2.0f)});
+        }
+}
+
+TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
+    for (Side sd : {Side::Left, Side::Right}) {
+        for (int n : {5, 13, 17, 31, 32})
+            RunTrsmNative<std::complex<double>>(
+                {n, 33, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
+                 std::complex<double>(1.0, 0.0)});
+        for (int q : {1, 7, 33, 129})
+            RunTrsmNative<std::complex<float>>(
+                {8, q, 2, sd, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit,
+                 std::complex<float>(1.0f, 0.0f)});
+    }
+}
+
+// V2 with complex: the blocked driver's trailing GEMM is a complex GEMM, and
+// its beta carries a complex alpha.
+TEST(TrsmNativeBlocked, ComplexCrossoverAndAlpha) {
+    for (Side sd : {Side::Left, Side::Right}) {
+        for (int n : {33, 64, 70, 96})
+            RunTrsmBlocked<std::complex<double>>(
+                {n, 20, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
+                 std::complex<double>(-1.5, 0.5)});
+        RunTrsmBlocked<std::complex<float>>(
+            {48, 24, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit,
+             std::complex<float>(2.0f, -0.75f)});
+    }
+}
+
+TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmBlocked<std::complex<double>>(
+                        {40, 16, 2, sd, up, tr, dg, std::complex<double>(1.0, -0.5)});
 }

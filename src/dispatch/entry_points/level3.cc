@@ -180,13 +180,9 @@ Event trsm(Queue& ctx,
         ctx, A, B, side, uplo, transA, diag,
         /*vendor_available=*/dispatch::level3_vendor_available<Back>);
 
-    // REAL TYPES ONLY, and `if constexpr` rather than a throwing complex stub:
-    // complex has no native trsm kernel at all, so the call site should not
-    // exist for it. trsm_cta_max_n<complex>() returns 0, so supports() already
-    // reports both native routes unsupported for complex and this branch is
-    // dead anyway -- but a dead branch still needs a symbol to link against,
-    // and inventing one would claim a capability that is not there.
-    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+    // All four scalar types now have a native kernel. The guard that used to
+    // stand here excluded complex, which had no kernel to link against.
+    {
         if (dispatch::is_native(route)) {
             if (route.algo == dispatch::Algorithm::CTA) {
                 return sycl_trsm::trsm_native_v1_dispatch<T>(

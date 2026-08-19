@@ -57,6 +57,7 @@
 //   5. Shared strides exactly TileM / TileN, and m fastest-varying in the
 //      epilogue.
 
+#include "../device_scalar.hh"
 #include "../gemm_kernels.hh"
 
 #include "../../linalg-impl.hh"
@@ -75,59 +76,23 @@ namespace wide_scalar {
 // (4) Device scalar types
 // ---------------------------------------------------------------------------
 //
-// std::complex is deliberately kept out of device code. Its operator* is
-// Annex-G conformant, which means an isnan branch and a call to __mulsc3 /
-// __muldc3 in the inner loop. Verified in the PTX of every instantiation:
-// zero __mulsc3, zero __muldc3, zero call.uni.
+// LIFTED to src/sycl/device_scalar.hh when TRSM needed the same types. They are
+// aliased back into this namespace so every use below is unchanged; the move was
+// verified with scripts/register_probe.sh, which still reports 56 / 76 / 80 /
+// 132 registers and zero spill for the four instantiations of this kernel.
+//
+// std::complex is still deliberately kept out of device code -- see the note in
+// that header. lin_epi stays here because it is this kernel's epilogue, not a
+// general scalar operation.
 
-template <typename R>
-struct Cx {
-    R re;
-    R im;
-};
+using batchlas::sycl_device::Cx;
+using batchlas::sycl_device::DevMap;
+using batchlas::sycl_device::dev_is_zero;
+using batchlas::sycl_device::fma_acc;
 
-template <typename T>
-struct DevMap {
-    using type = T;
-    using real = T;
-    static constexpr bool is_complex = false;
-};
-
-template <typename R>
-struct DevMap<std::complex<R>> {
-    using type = Cx<R>;
-    using real = R;
-    static constexpr bool is_complex = true;
-};
-
-static_assert(sizeof(Cx<float>) == sizeof(std::complex<float>), "layout");
-static_assert(sizeof(Cx<double>) == sizeof(std::complex<double>), "layout");
-static_assert(alignof(Cx<float>) == alignof(std::complex<float>), "layout");
-static_assert(alignof(Cx<double>) == alignof(std::complex<double>), "layout");
-
-template <typename R>
-inline bool dev_is_zero(R x) {
-    return x == R(0);
-}
-template <typename R>
-inline bool dev_is_zero(Cx<R> x) {
-    return x.re == R(0) && x.im == R(0);
-}
-
-// The multiply-accumulate, written out. Real is one FMA; complex is four,
-// with no branches and no libcall.
-inline void fma_acc(float& acc, float a, float b) { acc = sycl::fma(a, b, acc); }
-inline void fma_acc(double& acc, double a, double b) { acc = sycl::fma(a, b, acc); }
-
-template <typename R>
-inline void fma_acc(Cx<R>& acc, Cx<R> a, Cx<R> b) {
-    acc.re = sycl::fma(a.re, b.re, acc.re);
-    acc.re = sycl::fma(-a.im, b.im, acc.re);
-    acc.im = sycl::fma(a.re, b.im, acc.im);
-    acc.im = sycl::fma(a.im, b.re, acc.im);
-}
-
-// alpha * acc + beta * prior.
+// alpha * acc + beta * prior. Stays here: it is this kernel's epilogue form,
+// not a general scalar operation, and it is where the beta == 0 branch that
+// once cost 15 TFLOP/s lives.
 inline float lin_epi(float alpha, float beta, float acc, float prior) {
     return alpha * acc + beta * prior;
 }

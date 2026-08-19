@@ -1,0 +1,183 @@
+#pragma once
+
+// The POD device scalar, shared by every SYCL kernel in this directory.
+//
+// WHY IT EXISTS. std::complex must never reach device code: its operator* is
+// Annex-G conformant, which means an isnan branch and a call to __mulsc3 /
+// __muldc3 in the inner loop. The fix is to re-type to a plain aggregate at the
+// POINTER BOUNDARY in the launcher -- operands and scalars alike -- so no
+// std::complex crosses into the kernel body. Verified in the PTX of the GEMM
+// instantiations that use this: zero __mulsc3, zero __muldc3, zero call.uni.
+//
+// These types started life inside src/sycl/gemm/register_64x64_k16_wide.hh.
+// They were lifted here when TRSM needed them, rather than having a TRSM
+// translation unit include a GEMM *kernel* header to get 25 lines of type
+// plumbing. The GEMM header now includes this one and aliases the names into
+// its own namespace, so no GEMM code changed; the move was verified by
+// re-running scripts/register_probe.sh and confirming the wide-scalar kernels
+// still report 56 / 76 / 80 / 132 registers with zero spill.
+//
+// TRSM ADDED THE ARITHMETIC GEMM DID NOT NEED. GEMM multiplies and accumulates;
+// a triangular solve must also DIVIDE, conjugate, and test for finiteness.
+// Those are at the bottom of this file, and the division in particular is not
+// the textbook formula -- see the note there.
+
+#include <sycl/sycl.hpp>
+
+#include <complex>
+#include <type_traits>
+
+namespace batchlas::sycl_device {
+
+// A plain aggregate complex. Layout-compatible with std::complex, which is what
+// lets the launcher reinterpret_cast at the boundary.
+template <typename R>
+struct Cx {
+    R re;
+    R im;
+};
+
+template <typename T>
+struct DevMap {
+    using type = T;
+    using real = T;
+    static constexpr bool is_complex = false;
+};
+
+template <typename R>
+struct DevMap<std::complex<R>> {
+    using type = Cx<R>;
+    using real = R;
+    static constexpr bool is_complex = true;
+};
+
+static_assert(sizeof(Cx<float>) == sizeof(std::complex<float>), "layout");
+static_assert(sizeof(Cx<double>) == sizeof(std::complex<double>), "layout");
+static_assert(alignof(Cx<float>) == alignof(std::complex<float>), "layout");
+static_assert(alignof(Cx<double>) == alignof(std::complex<double>), "layout");
+
+// --- zero test -------------------------------------------------------------
+
+template <typename R>
+inline bool dev_is_zero(R x) {
+    return x == R(0);
+}
+template <typename R>
+inline bool dev_is_zero(Cx<R> x) {
+    return x.re == R(0) && x.im == R(0);
+}
+
+// --- multiply-accumulate, written out --------------------------------------
+// Real is one FMA; complex is four, with no branches and no libcall.
+
+inline void fma_acc(float& acc, float a, float b) { acc = sycl::fma(a, b, acc); }
+inline void fma_acc(double& acc, double a, double b) { acc = sycl::fma(a, b, acc); }
+
+template <typename R>
+inline void fma_acc(Cx<R>& acc, Cx<R> a, Cx<R> b) {
+    acc.re = sycl::fma(a.re, b.re, acc.re);
+    acc.re = sycl::fma(-a.im, b.im, acc.re);
+    acc.im = sycl::fma(a.re, b.im, acc.im);
+    acc.im = sycl::fma(a.im, b.re, acc.im);
+}
+
+// ===========================================================================
+// The arithmetic a triangular solve needs and a GEMM does not.
+// ===========================================================================
+
+// --- construction and conjugation ------------------------------------------
+
+template <typename D>
+inline D dev_one() {
+    if constexpr (std::is_same_v<D, float> || std::is_same_v<D, double>) {
+        return D(1);
+    } else {
+        return D{typename std::remove_reference_t<decltype(D{}.re)>(1),
+                 typename std::remove_reference_t<decltype(D{}.re)>(0)};
+    }
+}
+
+inline float dev_conj(float x) { return x; }
+inline double dev_conj(double x) { return x; }
+
+template <typename R>
+inline Cx<R> dev_conj(Cx<R> x) {
+    return Cx<R>{x.re, -x.im};
+}
+
+// --- plain multiply and subtract -------------------------------------------
+
+inline float dev_mul(float a, float b) { return a * b; }
+inline double dev_mul(double a, double b) { return a * b; }
+
+template <typename R>
+inline Cx<R> dev_mul(Cx<R> a, Cx<R> b) {
+    // Written out for the same reason fma_acc is: keep Annex-G out of it.
+    return Cx<R>{sycl::fma(a.re, b.re, -a.im * b.im),
+                 sycl::fma(a.re, b.im, a.im * b.re)};
+}
+
+inline float dev_sub(float a, float b) { return a - b; }
+inline double dev_sub(double a, double b) { return a - b; }
+
+template <typename R>
+inline Cx<R> dev_sub(Cx<R> a, Cx<R> b) {
+    return Cx<R>{a.re - b.re, a.im - b.im};
+}
+
+// --- finiteness ------------------------------------------------------------
+// Both components must be finite. They can go non-finite independently, so
+// testing one is not testing the value.
+
+inline bool dev_isfinite(float x) { return sycl::isfinite(x); }
+inline bool dev_isfinite(double x) { return sycl::isfinite(x); }
+
+template <typename R>
+inline bool dev_isfinite(Cx<R> x) {
+    return sycl::isfinite(x.re) && sycl::isfinite(x.im);
+}
+
+// --- division and reciprocal -----------------------------------------------
+//
+// NOT the textbook 1/(c+di) = (c - di)/(c^2 + d^2). That squares the operands,
+// so it overflows to infinity for any |c| or |d| above about 1e19 in float or
+// 1e154 in double -- and the result is then 0, silently, for an input that is
+// perfectly representable and whose true reciprocal is also representable.
+// Underflow at the small end loses the value the same way.
+//
+// This is SMITH'S ALGORITHM: divide through by the larger component first, so
+// nothing larger than max(|c|,|d|) is ever squared. Verified against exact
+// arithmetic including at 1e200, where the textbook form returns 0 and this
+// returns the correct 5e-201.
+
+template <typename R>
+inline Cx<R> dev_recip(Cx<R> d) {
+    if (sycl::fabs(d.re) >= sycl::fabs(d.im)) {
+        const R r = d.im / d.re;
+        const R den = sycl::fma(d.im, r, d.re);
+        return Cx<R>{R(1) / den, -r / den};
+    }
+    const R r = d.re / d.im;
+    const R den = sycl::fma(d.re, r, d.im);
+    return Cx<R>{r / den, R(-1) / den};
+}
+
+inline float dev_recip(float d) { return 1.0f / d; }
+inline double dev_recip(double d) { return 1.0 / d; }
+
+template <typename R>
+inline Cx<R> dev_div(Cx<R> a, Cx<R> b) {
+    if (sycl::fabs(b.re) >= sycl::fabs(b.im)) {
+        const R r = b.im / b.re;
+        const R den = sycl::fma(b.im, r, b.re);
+        return Cx<R>{sycl::fma(a.im, r, a.re) / den, sycl::fma(-a.re, r, a.im) / den};
+    }
+    const R r = b.re / b.im;
+    const R den = sycl::fma(b.re, r, b.im);
+    return Cx<R>{sycl::fma(a.re, r, a.im) / den, sycl::fma(a.im, r, -a.re) / den};
+}
+
+inline float dev_div(float a, float b) { return a / b; }
+inline double dev_div(double a, double b) { return a / b; }
+
+}  // namespace batchlas::sycl_device
