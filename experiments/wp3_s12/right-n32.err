@@ -1,0 +1,12 @@
+trsm ortho grid: 9 of 54 cells dropped, over the 6.0 GB cap:
+    n=32 q=4096 batch=2048 (8.6 GB)
+    n=64 q=4096 batch=2048 (17.3 GB)
+    n=128 q=1024 batch=2048 (9.1 GB)
+    n=128 q=4096 batch=512 (8.7 GB)
+    n=128 q=4096 batch=2048 (34.9 GB)
+    n=256 q=256 batch=2048 (6.4 GB)
+    n=256 q=1024 batch=2048 (19.3 GB)
+    n=256 q=4096 batch=512 (17.7 GB)
+    n=256 q=4096 batch=2048 (70.9 GB)
+trsm route forced: native -> native:auto
+double free or corruption (!prev)

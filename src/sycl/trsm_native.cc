@@ -119,6 +119,74 @@ inline int smallest_bucket_ge(int n) {
 // BROADCAST — bank layout is irrelevant to conflicts here.
 constexpr int tri_idx(int s, int t) { return s * (s + 1) / 2 + t; }
 
+// ---------------------------------------------------------------------------
+// Side::Left staging tile height, in ELEMENTS (spec S3.4).
+//
+// WHY THIS EXISTS. B is column-major, and for Side::Left thread u owns COLUMN u
+// -- so at step s the lanes of a warp read B(rho(s), u0+lane), addresses ldb
+// apart. Measured with ncu on float, n=32, q=1024, batch=512:
+//
+//        load sectors/request   store sectors/request   dram vs floor   time
+//   Left       31.39                   32.00                0.85x      0.517 ms
+//   Right       5.13                    4.00                0.75x      0.141 ms
+//
+// A fully coalesced 32-lane float load moves 128 B = 4 sectors in one request,
+// so 31.4 is 7.85x over-fetch -- almost exactly the 8x the spec predicted.
+//
+// BUT NOT AT THE LEVEL THE SPEC SAID. S3.4 calls it "8x over-fetch on both the
+// read and the write-allocate", which reads as DRAM traffic; DRAM is measured
+// at 0.75-0.85x of the analytic floor 2*q*n*sizeof(T)*batch, i.e. BELOW it. The
+// bytes lane u skips at step s are the bytes lane u wants at steps s+1..s+7,
+// and they are still in cache when it gets there. The defect is entirely LSU/L1
+// transaction COUNT, and the fix is the same one either way -- but "we are
+// short of DRAM bandwidth" would have been the wrong thing to optimise, and the
+// same misreading has already cost this repo one panel kernel.
+//
+// HOW BIG. One 32 B sector holds 32/sizeof(T) elements, so a tile that is at
+// least that tall makes each lane-group's read exactly fill its sectors. That
+// is 8 for float and only 2 for complex<double> -- which is itself the reason
+// float is the ONLY type that loses this race: a 16-byte scalar is already
+// 2-lanes-per-sector and can over-fetch by at most 2x.
+//
+// The value is one past that, 2 sectors' worth, because 64 B contiguous per
+// lane-group also fills half a 128 B cache line and costs nothing extra in SLM
+// terms at these sizes. SLM is (rows+1) * wg * sizeof(T), and only the two real
+// types stage (see trsm_stage_left below): 17.4 KB for float and 18.4 KB for
+// double at wg=256. Neither is the binding occupancy limit -- that stays
+// registers, see the static_assert in the launcher.
+template <typename D>
+constexpr int trsm_stage_rows() {
+    return sizeof(D) <= 4 ? 16 : 8;
+}
+
+// WHICH TYPES STAGE, and this is a MEASURED exclusion, not a guess.
+//
+// Staging costs the complex instantiations their register residency. The round
+// structure makes x[] live across a work-group barrier and indexed by
+// s = k*STEP + j, and for the wide bodies the compiler stops fully unrolling
+// the nested loop, so the array goes to local memory. From
+// scripts/register_probe.sh, Side::Left, with staging applied to all four:
+//
+//   type              N=8        N=16       N=32          verdict
+//   float           27 / 0 B   36 / 0 B   53 /   0 B      fine (was 114 regs)
+//   double          40 / 0 B   60 / 0 B   90 /   0 B      fine (was 153 regs)
+//   complex<float>  40 / 0 B   56 / 0 B   72 / 464 B      *** x[] IN LOCAL MEM
+//   complex<double> 70 / 16 B 104 / 16 B 170 / 232 B      *** x[] IN LOCAL MEM
+//
+// (registers / stack frame; spill stores and loads are zero in every row, which
+// is exactly why the frame and not the spill counter is the gate -- a frame
+// with no spill IS the accumulator array sitting in local memory.)
+//
+// And they do not need it. The over-fetch factor is 32/sizeof(T) lanes per
+// sector, so a 16-byte scalar can be at most 2x off; the step-9 grid has
+// complex winning Side::Left at every order (2.27-21.91x) and double winning at
+// every order too. float is the only type that loses, and it loses precisely
+// because 32/4 = 8.
+template <typename D>
+constexpr bool trsm_stage_left() {
+    return sizeof(D) <= 8 && !sycl_device::dev_is_complex_v<D>;
+}
+
 template <typename T>
 inline bool finite_recip(T d, T& out) {
     const T r = T(1) / d;
@@ -185,6 +253,27 @@ Event trsm_native_v1(Queue& ctx,
         sycl::local_accessor<D, 1> rd(sycl::range<1>(N), h);
         sycl::local_accessor<int, 1> use_div(sycl::range<1>(1), h);
 
+        // The Side::Left staging tile, and NOTHING for Side::Right -- its reads
+        // already measure 5.13 sectors/request against a coalesced floor of 4,
+        // so staging there would buy nothing and spend SLM.
+        //
+        // Row stride is NB_STAGE + 1, not NB_STAGE, and that padding is the
+        // whole reason the tile is conflict-free on the way OUT: thread `lane`
+        // reads sTile[lane*(NB+1) + j] for its own column, so at fixed j the 32
+        // lanes are 17 (or 9) words apart. gcd(odd, 32) == 1, so the 32 lanes
+        // land in 32 distinct banks. With a stride of NB itself they would land
+        // in gcd(16,32)=16 banks and every read would be 2-way conflicted.
+        // Never taller than the system itself: an N=8 bucket staging 16 rows
+        // would allocate twice the SLM it can ever fill.
+        constexpr bool kStageLeft = (SideV == Side::Left) && trsm_stage_left<D>();
+        constexpr int NB_STAGE  = trsm_stage_rows<D>();
+        constexpr int TILE_ROWS = (NB_STAGE < N) ? NB_STAGE : N;
+        sycl::local_accessor<D, 1> tile(
+            sycl::range<1>(kStageLeft
+                               ? static_cast<size_t>(TILE_ROWS + 1) * wg
+                               : size_t{0}),
+            h);
+
         const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
         D* b_ptr = reinterpret_cast<D*>(B.data_ptr());
         const int lda = static_cast<int>(A.ld());
@@ -216,6 +305,8 @@ Event trsm_native_v1(Queue& ctx,
                 D* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
                 D* sRd = rd.template get_multi_ptr<sycl::access::decorated::no>().get();
                 int* sDiv = use_div.template get_multi_ptr<sycl::access::decorated::no>().get();
+                D* sTile = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
+                const int u0 = (wg_id % groups) * wg;   // this group's first column
 
                 if (lane == 0) sDiv[0] = 0;
 
@@ -301,31 +392,111 @@ Event trsm_native_v1(Queue& ctx,
                 const std::ptrdiff_t b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
                 const std::ptrdiff_t ds = fwd ? unit_s : -unit_s;
 
+                // The address of canonical step s for column `col`. For
+                // Side::Left the row is rho(s) and the column is col, so a
+                // ROUND of consecutive canonical steps is a contiguous run of
+                // rows -- ascending when fwd, descending when not, and the
+                // coalescer does not care which.
+                const auto left_addr = [&](int s_can, int col) -> std::ptrdiff_t {
+                    const int row = fwd ? s_can : (n - 1 - s_can);
+                    return static_cast<std::ptrdiff_t>(row) +
+                           static_cast<std::ptrdiff_t>(col) * ldb;
+                };
+
+                // Rounds. Side::Right keeps ONE round covering every step and
+                // reads global memory directly, exactly as before -- the
+                // staging code below is all inside `if constexpr`, so its
+                // barriers and SLM traffic do not exist in that instantiation.
+                constexpr int STEP   = kStageLeft ? TILE_ROWS : N;
+                constexpr int ROUNDS = (N + STEP - 1) / STEP;
+
                 D x[N];
 #pragma unroll
-                for (int s = 0; s < N; ++s) {
-                    D acc = D{};
-#pragma unroll
-                    for (int t = 0; t < N; ++t) {
-                        if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
+                for (int k = 0; k < ROUNDS; ++k) {
+                    if constexpr (kStageLeft) {
+                        // Barrier BEFORE overwriting the tile: the previous
+                        // round's per-thread reads must have retired. Both
+                        // barriers are outside every `live` test, because a
+                        // work-group barrier that only some lanes reach is
+                        // undefined -- and lanes with u >= q are exactly the
+                        // ones a `live` guard would drop.
+                        sycl::group_barrier(it.get_group());
+                        // COALESCED FILL. i runs over NB_STAGE*wg elements with
+                        // r = i % TILE_ROWS varying fastest, so consecutive
+                        // lanes read consecutive ROWS of one column: 16 floats
+                        // = 64 B = two fully-used sectors per lane-group.
+                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
+                            const int r = i % TILE_ROWS;
+                            const int c = i / TILE_ROWS;
+                            const int s_can = k * TILE_ROWS + r;
+                            const int col = u0 + c;
+                            D v{};
+                            if (s_can < n && col < q) v = Bb[left_addr(s_can, col)];
+                            sTile[c * (TILE_ROWS + 1) + r] = v;
+                        }
+                        sycl::group_barrier(it.get_group());
                     }
-                    D rhs = D{};
-                    if (live && s < n) {
-                        rhs = sycl_device::dev_mul(
-                            alpha_d, Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du]);
-                    }
-                    D v = sycl_device::dev_sub(rhs, acc);
-                    if (!unit) {
-                        v = divide ? sycl_device::dev_div(v, sLc[tri_idx(s, s)])
-                                   : sycl_device::dev_mul(v, sRd[s]);
-                    }
-                    x[s] = v;
-                }
 
 #pragma unroll
-                for (int s = 0; s < N; ++s) {
-                    if (live && s < n) {
-                        Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];
+                    for (int j = 0; j < STEP; ++j) {
+                        const int s = k * STEP + j;
+                        if (s >= N) continue;    // folds away when STEP divides N
+                        D acc = D{};
+#pragma unroll
+                        for (int t = 0; t < N; ++t) {
+                            if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
+                        }
+                        D rhs = D{};
+                        if (live && s < n) {
+                            if constexpr (kStageLeft) {
+                                rhs = sycl_device::dev_mul(
+                                    alpha_d, sTile[lane * (TILE_ROWS + 1) + j]);
+                            } else {
+                                rhs = sycl_device::dev_mul(
+                                    alpha_d,
+                                    Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du]);
+                            }
+                        }
+                        D v = sycl_device::dev_sub(rhs, acc);
+                        if (!unit) {
+                            v = divide ? sycl_device::dev_div(v, sLc[tri_idx(s, s)])
+                                       : sycl_device::dev_mul(v, sRd[s]);
+                        }
+                        x[s] = v;
+                    }
+                }
+
+                // ---- Write-back, the mirror image --------------------------
+                if constexpr (kStageLeft) {
+#pragma unroll
+                    for (int k = 0; k < ROUNDS; ++k) {
+                        sycl::group_barrier(it.get_group());
+                        // Each thread drops its own round of results into its
+                        // own tile column; the guard is on the STEP, not on
+                        // `live`, because a non-live lane's column is one the
+                        // coalesced store below already refuses to write.
+#pragma unroll
+                        for (int j = 0; j < TILE_ROWS; ++j) {
+                            const int s = k * TILE_ROWS + j;
+                            if (s < N) sTile[lane * (TILE_ROWS + 1) + j] = x[s];
+                        }
+                        sycl::group_barrier(it.get_group());
+                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
+                            const int r = i % TILE_ROWS;
+                            const int c = i / TILE_ROWS;
+                            const int s_can = k * TILE_ROWS + r;
+                            const int col = u0 + c;
+                            if (s_can < n && col < q) {
+                                Bb[left_addr(s_can, col)] = sTile[c * (TILE_ROWS + 1) + r];
+                            }
+                        }
+                    }
+                } else {
+#pragma unroll
+                    for (int s = 0; s < N; ++s) {
+                        if (live && s < n) {
+                            Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];
+                        }
                     }
                 }
             });

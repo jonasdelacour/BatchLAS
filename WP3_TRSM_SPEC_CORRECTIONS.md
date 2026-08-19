@@ -291,5 +291,49 @@ tile has a known prize and a ready-made A/B.
 | 9 | the §10 grid | **done** — `experiments/wp3_s9/` |
 | 10 | widen `preferred()` for complex | **done, and wider than planned** — folded into step 9; complex, double, and float-Right all flipped together because the grid ranked them in one pass |
 | 11 | per-cell real flips | **done** — same commit; the per-cell structure is the `float`/`Side::Left` split |
-| 12 | the `Side::Left` SLM staging tile (§3.4) | open, and now justified by measurement rather than predicted |
+| 12 | the `Side::Left` SLM staging tile (§3.4) | **done** — `experiments/wp3_s12/`; float/Left window moved from `order <= 16` to `order <= 128` |
 | 13 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched — needs its own verification pass |
+
+---
+
+## ✱ What step 12 built, and the fourth spec claim it corrected
+
+The §3.4 staging tile exists. `float`, `Side::Left`, orders 32–128 went from
+0.70–0.79× to 1.19–3.20×, and `preferred()`'s clause widened accordingly. Order
+256 stays the vendor's at 0.76–0.93×.
+
+**§3.4 named the right factor at the wrong level.** It predicts "8× over-fetch
+on both the read and the write-allocate", which reads as DRAM traffic. Measured
+with ncu: the factor is right (31.4 load sectors per request against a coalesced
+floor of 4, i.e. 7.85×) but DRAM is at **0.75–0.85× of the analytic floor**, i.e.
+*below* it. The bytes a lane skips at step `s` are the bytes it wants at steps
+`s+1..s+7` and they are still in cache. The defect is entirely LSU/L1
+transaction count. The tile fixes it either way — 31.39 → 5.13 on the load,
+32.00 → 4.00 on the store, 0.517 → 0.145 ms — but had this been read as a
+bandwidth problem the obvious responses (vectorised loads, wider tiles) would
+have been aimed at the wrong resource.
+
+**Staging is gated to the real types, and that is a measurement, not a
+simplification.** Applied to complex it costs those kernels their register
+residency: `complex<float>` N=32 Left gains a 464-byte stack frame and
+`complex<double>` N=32 a 232-byte one, both with zero spill, because the nested
+round loop stops fully unrolling for the wide bodies. They also cannot benefit —
+over-fetch is `32/sizeof(T)` lanes per sector, so a 16-byte scalar is capped at
+2×, and float loses precisely because 32/4 = 8. Measured after gating: complex
+is 1.00–1.01×, i.e. untouched, and all 24 kernels are back to zero frame.
+
+**The end-to-end check had a hole this step also closed.** `ortho_benchmark`
+hardcoded `Transpose::NoTrans`, and `ortho.cc:205,289` select the trsm side from
+exactly that flag — so step 9's caller-level validation covered `Side::Right`
+only, and the entire `Side::Left` half of the table had never been exercised
+through a real caller. `arg4` now selects it: with the route unset, 80/80 cells
+at or above parity, and at order 256 the default correctly tracks the vendor.
+
+### Revised remaining order
+
+| step | what | status |
+|---|---|---|
+| 9–11 | the grid, and the `preferred()` flips | done |
+| 12 | the `Side::Left` SLM staging tile | **done** |
+| 13 | where between order 128 and 256 the float/Left window actually ends | open — the grid jumps, so the boundary is placed at the largest order measured to win |
+| 14 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |

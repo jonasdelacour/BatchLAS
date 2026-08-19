@@ -396,15 +396,19 @@ constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
-    // float, Side::Left, order 32 is a real cell of this shape, not a contrived
-    // one: WP3 step 9 measures it at 0.71-0.87x, so it is a CORRECTNESS yes and
-    // a SPEED no. If the two ever collapse into one boolean, this is the cell
-    // that silently loses its vendor-free route.
-    const auto s = trsm_shape(/*tri_order=*/32, /*q=*/128, /*batch=*/4096, /*cta_max=*/64);
-    EXPECT_TRUE(TrsmTable::supports(kCta, s))
-        << "a 32-order solve is inside a 64 capacity; this must be a CORRECTNESS yes";
-    EXPECT_FALSE(TrsmTable::preferred(kCta, s))
-        << "float Side::Left at order 32 measured 0.71-0.87x; it must not be preferred";
+    // float, Side::Left, order 256 is a real cell, not a contrived one: it
+    // measures 0.76-0.93x even after the staging tile, so it is a CORRECTNESS
+    // yes and a SPEED no. If the two ever collapse into one boolean, this is
+    // the cell that silently loses its vendor-free route.
+    //
+    // It used to be order 32 here. The tile turned that cell into a win, which
+    // is exactly why this test names a cell by its MEASUREMENT rather than
+    // asserting that some cell somewhere is unpreferred -- the boundary moves.
+    const auto s = trsm_shape(/*tri_order=*/256, /*q=*/1024, /*batch=*/512, /*cta_max=*/32);
+    EXPECT_TRUE(TrsmTable::supports(kBlocked, s))
+        << "the blocked driver splits the order itself; this must be a CORRECTNESS yes";
+    EXPECT_FALSE(TrsmTable::preferred(kBlocked, s))
+        << "float Side::Left at order 256 measured 0.76-0.93x; it must not be preferred";
     EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)))
         << "un-preferred must never mean unroutable when there is no vendor";
 }
@@ -418,22 +422,23 @@ TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
 // later edit widening a window has to come with its own numbers.
 // ---------------------------------------------------------------------------
 
-TEST(RouteTrsm, FloatLeftCliffAtOrderSixteen) {
-    // The sharpest boundary in the grid, and the only per-side split any type
-    // has: 3.58x at order 8, 1.47x at 16, then 0.73x at 32 and never recovering
-    // (0.61x at 256). Side::Right at the same orders wins throughout, so this
-    // must NOT be spelled as a plain order cap.
-    for (int64_t order : {8, 16}) {
-        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Left)))
-            << "float Side::Left order " << order << " measured a win";
-    }
-    for (int64_t order : {32, 64}) {
-        const auto s = trsm_shape(order, 1024, 2048, 32, Side::Left);
+TEST(RouteTrsm, FloatLeftWindowEndsAtOrder128) {
+    // This test used to pin the boundary at 16, which is where it sat while
+    // Side::Left read B's columns one scattered lane at a time. WP3 step 12
+    // built the SLM staging tile and the boundary moved to 128: orders 32, 64
+    // and 128 went from 0.70-0.79x to 1.19-3.20x. Order 256 did NOT follow
+    // (0.76-0.93x), so there is still a window and it still has a top.
+    for (int64_t order : {8, 16, 32, 64, 128}) {
         const Route r = (order <= 32) ? kCta : kBlocked;
-        EXPECT_FALSE(TrsmTable::preferred(r, s))
-            << "float Side::Left order " << order << " measured a LOSS";
+        EXPECT_TRUE(TrsmTable::preferred(r, trsm_shape(order, 1024, 2048, 32, Side::Left)))
+            << "float Side::Left order " << order << " wins after the staging tile";
     }
-    // Same orders, other side: all preferred.
+    EXPECT_FALSE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
+        << "float Side::Left order 256 still measures 0.76-0.93x; the window has a top";
+
+    // Same orders, other side: all preferred, and untouched by the tile --
+    // Side::Right never stages, and its register counts are byte-identical
+    // before and after (114/153/144/226 at N=32).
     for (int64_t order : {8, 16, 32}) {
         EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Right)))
             << "float Side::Right order " << order << " measured 1.54-4.59x";

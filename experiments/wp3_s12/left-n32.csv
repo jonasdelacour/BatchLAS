@@ -1,0 +1,13 @@
+==PROF== Connected to process 1062325 (/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/build/benchmarks/trsm_benchmark)
+[1;36mName                                              Arg0    Arg1    Arg2    Iter        Avg(ms)     Std(ms)     GFLOPS      Time (us) / matrix[0m
+[1m(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)[0m32      1024    512     1           0.20454     0.0000      2624.8      0.39948     
+==PROF== Disconnected from process 1062325
+==ERROR== The application returned an error code (6).
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_read.sum","byte","68,462,464"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes_write.sum","byte","38,728,320"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","144,960"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum","","559,104"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","l1tex__t_requests_pipe_lsu_mem_global_op_st.sum","","524,288"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum","sector","2,869,248"
+"0","1062325","trsm_benchmark","127.0.0.1","Typeinfo name for unnamed>::TrsmCtaKernel<float, 32, 0>","1","15","(256, 1, 1)","(2048, 1, 1)","0","8.9","Command line profiler metrics","l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum","sector","2,097,152"

@@ -51,6 +51,14 @@ struct DevMap<std::complex<R>> {
     static constexpr bool is_complex = true;
 };
 
+// The same question asked of the DEVICE type rather than the source type.
+// DevMap<T>::is_complex keys on T, which a kernel body templated on D cannot
+// see; and sizeof is no substitute, since Cx<float> and double are both 8
+// bytes. Callers that must branch on "is this scalar two components" need this.
+template <typename D> struct IsDevComplex           : std::false_type {};
+template <typename R> struct IsDevComplex<Cx<R>>    : std::true_type  {};
+template <typename D> inline constexpr bool dev_is_complex_v = IsDevComplex<D>::value;
+
 static_assert(sizeof(Cx<float>) == sizeof(std::complex<float>), "layout");
 static_assert(sizeof(Cx<double>) == sizeof(std::complex<double>), "layout");
 static_assert(alignof(Cx<float>) == alignof(std::complex<float>), "layout");

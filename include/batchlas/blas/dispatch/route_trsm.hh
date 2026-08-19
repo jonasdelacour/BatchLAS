@@ -206,7 +206,9 @@ struct RouteTable<Op::trsm, T> {
     //   complex<double>   1.20x   (30/30 cells win, best 4.66x)
     //   complex<float>    1.01x   (30/30 cells win, best 21.91x)
     //   float, Right      1.54x   (every n wins once batch >= 512)
-    //   float, Left       0.57x   AT n >= 32 -- the one losing region
+    //   float, Left       1.19x   at order <= 128 AFTER the step-12 staging
+    //                             tile; it was 0.57x, and order 256 still
+    //                             loses at 0.76-0.93x
     //
     // and end-to-end through the actual caller, ortho at m in {1024,4096},
     // k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: 80 of 80 cells
@@ -243,25 +245,34 @@ struct RouteTable<Op::trsm, T> {
             // FLOAT IS THE ONLY TYPE WHERE THE VENDOR IS STILL COMPETITIVE,
             // and it splits by SIDE, which no other type does.
             if (s.side == Side::Left) {
-                // A cliff between order 16 and order 32, and it is sharp:
+                // WP3 step 12 BUILT the S3.4 staging tile, and this clause
+                // moved from `order <= 16` to `order <= 128` because of it.
+                // Worst cell per order, vendor/native, before -> after:
                 //
-                //   order   8   16    32    64   128   256
-                //   ratio 3.58 1.47  0.73  0.80  0.77  0.61     (batch 2048/512)
+                //   order      8      16      32      64     128     256
+                //   before  1.61x   1.34x   0.70x   0.79x   0.71x   0.57x
+                //   after   1.60x   1.73x   1.79x   1.49x   1.19x   0.76x
                 //
-                // flat across q and across batch, so it is not an unsaturated
-                // artefact. This is the coalescing problem S3.4 predicted and
-                // the SLM staging tile it proposed was deliberately NOT built:
-                // for Side::Left the q independent solves run down B's COLUMNS,
-                // so consecutive work-items read addresses ld apart. At order
-                // <= 16 the working set still lands in cache; above it the
-                // over-fetch dominates and cuBLAS SGEMM is fast enough to win.
+                // The mechanism, measured with ncu rather than assumed: for
+                // Side::Left the q independent solves run down B's COLUMNS, so
+                // consecutive work-items read addresses ldb apart -- 31.4 load
+                // sectors per request against a coalesced floor of 4. The tile
+                // transposes through SLM and brings that to 5.13 on the load
+                // and exactly 4.00 on the store, which is the whole 3.5x.
                 //
-                // Double does not show this cliff (its Left column is
-                // 1.39-6.37x, monotone) because cuBLAS's DOUBLE triangular path
-                // is weak enough that the over-fetch does not decide the race.
-                // Same kernel, same access pattern, opposite verdict -- which
-                // is why this is a per-type predicate and not one number.
-                return order <= 16;
+                // ORDER 256 IS STILL THE VENDOR'S, at 0.76-0.93x. The boundary
+                // is placed at the largest order MEASURED to win; the grid
+                // jumps 128 -> 256 and does not say where in between it turns.
+                // Do not round it up to 256 without measuring the gap.
+                //
+                // Double never had the cliff at all (1.39-6.37x before the
+                // tile, 1.51-8.92x after) because cuBLAS's DOUBLE triangular
+                // path is weak enough that the over-fetch never decided the
+                // race -- same kernel, same access pattern, opposite verdict,
+                // which is why this stays a per-type predicate. And complex
+                // does not stage at all: see trsm_stage_left() in
+                // src/sycl/trsm_native.cc for the register-residency reason.
+                return order <= 128;
             }
             // Side::Right: native wins at every order once there is batch to
             // work with -- 1.54-4.59x at batch >= 512, all q. The two sub-unit
