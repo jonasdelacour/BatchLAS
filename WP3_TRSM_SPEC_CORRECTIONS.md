@@ -385,6 +385,45 @@ no kernel change buys a factor.
 | step | what | status |
 |---|---|---|
 | 13 | win at every order 8..512 | mostly done; see above |
-| 14 | cooperative CTA solve (W work-items per solve, `x_s` by sub-group broadcast) so the inner block can be 64-128 | open — this is what the last float/Left cells need; N=64 in the current one-solve-per-work-item design was re-tested and FAILS the register gate (456 B frame) |
+| 14 | cooperative CTA solve (W work-items per solve, `x_s` by sub-group shuffle) | **BUILT AND REJECTED** — `experiments/wp3_s14/`. It passes the register gate at N=128 in 106 registers (fewer than V1 at N=32) and still measures 0.39x at order 64 and 0.80x at order 128, with no gain at 256 or 512 |
 | 15 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open — it silently redefines the complex baseline |
 | 16 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |
+
+---
+
+## ✱ Step 14 — the cooperative solve was built, and the measurement rejected it
+
+The redesign the step-13 note called for exists, works, and does not pay. It is
+not in the tree. `experiments/wp3_s14/README.md` has the full record; the two
+things worth carrying forward:
+
+**The register premise was right and irrelevant.** Splitting the accumulator
+across W=8 work-items with cyclic row ownership and a sub-group shuffle puts a
+128-order solve in **106 registers with zero stack frame** -- fewer than V1 needs
+for order 32. The mechanism works. Getting there needed the local index
+outermost in the loop nest, because a runtime `acc[t/W]` forces local memory, a
+scan costs 2x, and block distribution is 7x load-imbalanced at W=8.
+
+**And the traffic model that justified it was wrong about the bottleneck.** At
+order 128, where V3 fits exactly and wastes nothing, it measures 0.80x against
+the 1.18x of V1-plus-blocking -- so the kernel itself is ~1.5x slower at equal
+order. At orders 256 and 512, where it removes the entire inner blocking level
+and the model predicts 4096 -> 2560 q-units of traffic (1.6x), the measurement
+moves by 0.02x. The model counts bytes and does not count the critical path:
+V3's recurrence is N dependent shuffle-scale-FMA steps, while V1 fills 32 steps
+with independent FMAs and lets well-tuned parallel GEMMs carry the rest. Trading
+parallel GEMM work for serial in-kernel recurrence loses even when it removes
+DRAM traffic -- the same shape as the earlier CTA-large-n rejection.
+
+CONSEQUENCE FOR ANYONE PICKING THIS UP: the residual float/Side::Left gap is NOT
+in the diagonal solve and NOT in the inner blocking level, because removing that
+level entirely changed nothing. Measure the outer trailing GEMM first.
+
+### Revised remaining order
+
+| step | what | status |
+|---|---|---|
+| 14 | cooperative CTA solve | built, measured, **rejected** |
+| 15 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open — it silently redefines the complex baseline |
+| 16 | the outer trailing GEMM at order >= 256, which step 14 localised the remaining gap to | open |
+| 17 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |

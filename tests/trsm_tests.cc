@@ -792,3 +792,63 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
                                     Diag::NonUnit, -1.25});
     }
 }
+
+// ===========================================================================
+// float / Side::Left ACROSS THE WHOLE BLOCKED RANGE (WP3 step 14).
+//
+// These were written to cover V3, a cooperative CTA solve in which eight
+// work-items shared one solve so the order could reach 128 in registers. V3
+// WORKED and was REJECTED: it passes the register gate at N=128 in 106
+// registers -- fewer than V1 needs for N=32 -- and then measures 0.39x at order
+// 64 and 0.80x at order 128 against the V1-plus-blocking schedule it replaced,
+// with no gain at all at 256 and 512. See experiments/wp3_s14/README.md.
+//
+// The tests outgrew the kernel. They are kept because nothing else covered
+// float / Side::Left at this density of orders, and every one of them exercises
+// the blocked driver's real path: 33 is one past V1's capacity, 128 and 129
+// straddle the outer panel width, and the ragged q values drive the `live`
+// guard. The suite name is retained so the history stays greppable.
+// ===========================================================================
+
+TEST(TrsmFloatLeftOrders, SpanningTheBlockedRange) {
+    for (int n : {33, 40, 64, 100, 127, 128, 129, 200})
+        RunTrsmBlocked<float>({n, 24, 2, Side::Left, Uplo::Lower, Transpose::NoTrans,
+                               Diag::NonUnit, 1.0f});
+}
+
+TEST(TrsmFloatLeftOrders, CanonicalCrossProduct) {
+    for (Uplo up : {Uplo::Lower, Uplo::Upper})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+            for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                for (int n : {64, 129})
+                    RunTrsmBlocked<float>({n, 20, 2, Side::Left, up, tr, dg, -1.5f});
+}
+
+// alpha is applied exactly once per element of B, and with the two-level driver
+// which operation carries it depends on the panel: see the note on
+// AlphaIsAppliedExactlyOnceAcrossPanels.
+TEST(TrsmFloatLeftOrders, AlphaAcrossOrders) {
+    for (float a : {-2.5f, 0.75f, 3.0f})
+        for (int n : {64, 129, 200})
+            RunTrsmBlocked<float>({n, 20, 2, Side::Left, Uplo::Upper, Transpose::NoTrans,
+                                   Diag::NonUnit, a});
+}
+
+// q is the number of independent solves, and a q that is not a multiple of the
+// work-group's solve count exercises the `live` guard on both the load and the
+// store.
+TEST(TrsmFloatLeftOrders, RaggedSolveCount) {
+    for (int q : {1, 7, 31, 33, 129, 257})
+        RunTrsmBlocked<float>({96, q, 2, Side::Left, Uplo::Lower, Transpose::Trans,
+                               Diag::NonUnit, 1.25f});
+}
+
+// The same orders on the other side. The two sides take DIFFERENT schedules
+// (Side::Left blocks at 128, Side::Right at 32; see trsm_outer_block), which is
+// the thing a later "simplification" to one constant would quietly break.
+TEST(TrsmFloatLeftOrders, RightSideAlso) {
+    for (int n : {64, 129, 200})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+            RunTrsmBlocked<float>({n, 24, 2, Side::Right, Uplo::Lower, tr,
+                                   Diag::NonUnit, -0.75f});
+}
