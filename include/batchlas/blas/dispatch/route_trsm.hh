@@ -95,6 +95,19 @@ struct TrsmShape : OpShape {
     // rather than selectable-but-unimplemented.
     int cta_max_n = 0;
 
+    // Whether the BLOCKED driver (V2) exists in this build. Separate from
+    // cta_max_n because the two are independent capabilities: V2 is what serves
+    // orders ABOVE cta_max_n, and until it is written those orders have no
+    // native route at all.
+    //
+    // This is not belt-and-braces. Reporting Blocked as supported while it does
+    // not exist makes resolve_route hand a vendor-free caller a route the facade
+    // cannot service, and the call falls through to a NoRouteError whose message
+    // says "no native kernel for it yet" -- true, but only after the resolver
+    // claimed otherwise. Same class of defect as a kernel being LINKED but not
+    // REACHABLE: the table must describe the build, not the design.
+    bool blocked_available = false;
+
     int64_t tri_order() const { return k; }
     int64_t rhs_count() const { return side == Side::Left ? n : m; }
 };
@@ -158,8 +171,9 @@ struct RouteTable<Op::trsm, T> {
             case Algorithm::Blocked:
                 // The blocked driver's diagonal-block solver IS the CTA kernel,
                 // so it inherits the presence gate but not the cap -- it splits
-                // the order into blocks of at most cta_max_n itself.
-                return s.cta_max_n >= 1;
+                // the order into blocks of at most cta_max_n itself. It also
+                // needs to exist, which is a separate question.
+                return s.blocked_available && s.cta_max_n >= 1;
 
             default:
                 // Including Algorithm::Auto. trsm has two native routes, so a

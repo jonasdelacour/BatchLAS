@@ -258,6 +258,7 @@ struct TrsmNativeCase {
     int n;
     int q;
     int batch;
+    Side side;
     Uplo uplo;
     Transpose transA;
     Diag diag;
@@ -265,12 +266,16 @@ struct TrsmNativeCase {
 };
 
 template <typename T>
-void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
+void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
     Matrix<T, MatrixFormat::Dense> A(n, n, bs);
-    Matrix<T, MatrixFormat::Dense> B(q, n, bs);   // Side::Right: B is q x n
+    // Side::Right solves X op(A) = alpha B with B q x n; Side::Left solves
+    // op(A) X = alpha B with B n x q.
+    const int brows = (tc.side == Side::Left) ? n : q;
+    const int bcols = (tc.side == Side::Left) ? q : n;
+    Matrix<T, MatrixFormat::Dense> B(brows, bcols, bs);
     auto Av = A.view();
     auto Bv = B.view();
 
@@ -278,7 +283,7 @@ void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
     // operand order (the Side::Right trap, spec section 2.1) is invisible on a
     // symmetric triangle and wrong on this one.
     std::vector<T> a_host(static_cast<size_t>(n) * n * bs);
-    std::vector<T> b_in(static_cast<size_t>(q) * n * bs);
+    std::vector<T> b_in(static_cast<size_t>(brows) * bcols * bs);
     for (int b = 0; b < bs; ++b) {
         for (int c = 0; c < n; ++c) {
             for (int r = 0; r < n; ++r) {
@@ -291,17 +296,17 @@ void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
                 a_host[(static_cast<size_t>(b) * n + c) * n + r] = v;
             }
         }
-        for (int c = 0; c < n; ++c) {
-            for (int r = 0; r < q; ++r) {
+        for (int c = 0; c < bcols; ++c) {
+            for (int r = 0; r < brows; ++r) {
                 const T v = static_cast<T>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
                 Bv.at(r, c, b) = v;
-                b_in[(static_cast<size_t>(b) * n + c) * q + r] = v;
+                b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
             }
         }
     }
 
-    batchlas::sycl_trsm::trsm_native_v1_right_dispatch<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.uplo, tc.transA, tc.diag);
+    batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
+        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
     using Acc = double;
@@ -323,16 +328,22 @@ void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
                     opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] = v;
             }
         }
-        for (int r = 0; r < q; ++r) {
-            for (int c = 0; c < n; ++c) {
+        for (int r = 0; r < brows; ++r) {
+            for (int c = 0; c < bcols; ++c) {
                 Acc got = Acc(0);
                 for (int t = 0; t < n; ++t) {
-                    got += Acc(Bv.at(r, t, b)) *
-                           Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
+                    // Left : (op(A) X)(r,c) = sum_t opA(r,t) * X(t,c)
+                    // Right: (X op(A))(r,c) = sum_t X(r,t) * opA(t,c)
+                    got += (tc.side == Side::Left)
+                               ? Acc(opA[static_cast<size_t>(r) + static_cast<size_t>(t) * n]) *
+                                     Acc(Bv.at(t, c, b))
+                               : Acc(Bv.at(r, t, b)) *
+                                     Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
                 }
-                const Acc want = Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * n + c) * q + r]);
+                const Acc want =
+                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
                 ASSERT_NEAR(got, want, tol)
-                    << "X*op(A) != alpha*B at b=" << b << " r=" << r << " c=" << c
+                    << (tc.side == Side::Left ? "op(A)*X != alpha*B at b=" : "X*op(A) != alpha*B at b=") << b << " r=" << r << " c=" << c
                     << "  n=" << n << " q=" << q
                     << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
                     << " diag=" << int(tc.diag);
@@ -343,41 +354,57 @@ void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
 
 }  // namespace
 
-// The eight (uplo, transA, diag) combinations Side::Right reaches with a real
-// scalar, at a size inside the smallest bucket.
-TEST(TrsmNativeCta, RightCanonicalCrossProductFloat) {
-    for (Uplo up : {Uplo::Lower, Uplo::Upper})
-        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
-            for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                RunTrsmNativeRight<float>({8, 24, 3, up, tr, dg, 1.0f});
+// The full canonical cross product: BOTH sides x uplo x transA x diag = 16
+// cells per scalar type. This is the table WP3_TRSM_SPEC.md section 2.1 folds
+// into one recurrence, and folding it wrongly is the failure mode the whole
+// design is exposed to.
+TEST(TrsmNativeCta, CanonicalCrossProductFloat) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmNative<float>({8, 24, 3, sd, up, tr, dg, 1.0f});
 }
 
-TEST(TrsmNativeCta, RightCanonicalCrossProductDouble) {
-    for (Uplo up : {Uplo::Lower, Uplo::Upper})
-        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
-            for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                RunTrsmNativeRight<double>({8, 24, 3, up, tr, dg, 1.0});
+TEST(TrsmNativeCta, CanonicalCrossProductDouble) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Uplo up : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+                for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                    RunTrsmNative<double>({8, 24, 3, sd, up, tr, dg, 1.0});
 }
 
-// alpha != 1 is easy to get wrong: it scales B, not X, and it must be applied
-// once, before the subtraction, not after the divide.
-TEST(TrsmNativeCta, RightAlphaIsAppliedOnce) {
-    RunTrsmNativeRight<double>({16, 40, 2, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
-    RunTrsmNativeRight<double>({16, 40, 2, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
+// alpha != 1 is easy to get wrong: it scales B, once, before the subtraction,
+// not after the divide.
+TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
+    for (Side sd : {Side::Left, Side::Right}) {
+        RunTrsmNative<double>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
+        RunTrsmNative<double>({16, 40, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
+    }
 }
 
 // n strictly inside its bucket exercises the zero-padded tail: rows n..N-1 must
 // contribute nothing, which is what makes the fully unrolled loop legal.
-TEST(TrsmNativeCta, RightPartialBucketIsZeroPadded) {
-    for (int n : {5, 9, 13, 17, 30}) {
-        RunTrsmNativeRight<double>({n, 33, 2, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
-    }
+TEST(TrsmNativeCta, PartialBucketIsZeroPadded) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (int n : {5, 9, 13, 17, 30})
+            RunTrsmNative<double>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
 // q not a multiple of the work-group size: the tail lanes must be inert, not
 // merely harmless -- they must not store.
-TEST(TrsmNativeCta, RightRaggedRhsCount) {
-    for (int q : {1, 7, 31, 33, 129, 257}) {
-        RunTrsmNativeRight<double>({8, q, 2, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
+TEST(TrsmNativeCta, RaggedRhsCount) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (int q : {1, 7, 31, 33, 129, 257})
+            RunTrsmNative<double>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
+}
+
+// The largest bucket the register probe cleared. n=32 keeps x[] in registers
+// (114 float / 153 double registers, zero stack frame); n=64 does not, which is
+// why there is no 64 bucket and why n > 32 is V2's job.
+TEST(TrsmNativeCta, LargestResidentOrder) {
+    for (Side sd : {Side::Left, Side::Right}) {
+        RunTrsmNative<float>({32, 64, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0f});
+        RunTrsmNative<double>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
     }
 }

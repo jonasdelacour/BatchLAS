@@ -30,6 +30,8 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/gemv.hh>
 #include <batchlas/blas/functions/trsm.hh>
+
+#include "../../backends/trsm_route.hh"
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
@@ -162,6 +164,40 @@ Event trsm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
+    // VALIDATION FIRST, and hoisted to here on purpose. The facade validated
+    // nothing before, so cublas.cc:1104 and rocblas.cc:148 each called
+    // trsm_validate_params themselves and netlib_lapack.cc never did at all.
+    // One call here covers every backend and fixes netlib's long-missing check;
+    // the two backend calls become harmless duplicates of a throw-only test.
+    // It must precede the shape builder, which reads A.rows()/B.rows()/B.cols()
+    // and would otherwise index a non-conforming shape.
+    trsm_validate_params(A, B, side, uplo, transA, diag);
+
+    // THE GATE RUNS BEFORE THE VENDOR-AVAILABLE TEST, for the reason recorded
+    // at the top of this file: anything below that test is unreachable in the
+    // vendor-free build, which is the build WP3 exists for.
+    const dispatch::Route route = backend::trsm_route<T>(
+        ctx, A, B, side, uplo, transA, diag,
+        /*vendor_available=*/dispatch::level3_vendor_available<Back>);
+
+    // REAL TYPES ONLY, and `if constexpr` rather than a throwing complex stub:
+    // complex has no native trsm kernel at all, so the call site should not
+    // exist for it. trsm_cta_max_n<complex>() returns 0, so supports() already
+    // reports both native routes unsupported for complex and this branch is
+    // dead anyway -- but a dead branch still needs a symbol to link against,
+    // and inventing one would claim a capability that is not there.
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if (dispatch::is_native(route)) {
+            // Only Algorithm::CTA exists so far; Blocked (V2) is a later step
+            // and supports() still reports it unsupported, so it cannot be
+            // selected here.
+            if (route.algo == dispatch::Algorithm::CTA) {
+                return sycl_trsm::trsm_native_v1_dispatch<T>(
+                    ctx, A, B, alpha, side, uplo, transA, diag);
+            }
+        }
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::trsm, Back, dispatch::kLevel3Library<Back>);

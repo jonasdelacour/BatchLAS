@@ -384,6 +384,7 @@ TrsmShape trsm_shape(int64_t tri_order, int64_t q, int64_t batch, int cta_max,
     s.batch = batch;
     s.is_gpu = true;
     s.cta_max_n = cta_max;
+    s.blocked_available = (cta_max > 0);
     return s;
 }
 
@@ -456,6 +457,11 @@ TEST(RouteTrsm, CorrectnessGatesAreNotSpeedGates) {
     EXPECT_FALSE(TrsmTable::supports(kCta, over));
     EXPECT_TRUE(TrsmTable::supports(kBlocked, over))
         << "the blocked driver splits the order itself, so the cap does not apply to it";
+
+    // ...but only when it exists. A table that advertises a tier the build does
+    // not contain hands the vendor-free caller a route nothing can service.
+    auto no_v2 = over;  no_v2.blocked_available = false;
+    EXPECT_FALSE(TrsmTable::supports(kBlocked, no_v2));
 
     // A tiny batch is slow, not wrong: it must stay SUPPORTED.
     auto tiny_batch = ok;  tiny_batch.batch = 1;

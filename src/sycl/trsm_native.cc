@@ -1,6 +1,6 @@
 // Native batched TRSM — the kernel translation unit.
 //
-// WP3 step 3: V1, Side::Right, real types. See WP3_TRSM_SPEC_CORRECTIONS.md
+// WP3 steps 3-4: V1, both sides, real types. See WP3_TRSM_SPEC_CORRECTIONS.md
 // first, then WP3_TRSM_SPEC.md §2-§3.
 //
 // NOT ROUTED. trsm_cta_max_n<T>() still returns 0 for every type, so
@@ -20,11 +20,29 @@
 // (Lc(s,t)=0, Lc(s,s)=1, rd[s]=1) so the unrolled tail computes zeros rather
 // than branching — the sytrd_cta idiom.
 //
-// WHY Side::Right FIRST. The canonical RHS accessor for Right has du == 1, so
-// threads differing in u touch consecutive addresses and both the load and the
-// store are coalesced. Left has du == ldb and needs the transpose staging tile
-// of §3.4; it is a separate step so that this one has zero barriers after the
-// single staging barrier and the register question is answered on its own.
+// THE TWO SIDES DIFFER IN EXACTLY THREE PLACES, and the kernel is templated on
+// Side rather than duplicated so they cannot drift apart:
+//
+//   1. q            Left: B.cols()          Right: B.rows()
+//   2. Lc(s,t)      Left: opA(rho(s),rho(t))  Right: opA(rho(t),rho(s))
+//                   -- THE OPERAND ORDER IS SWAPPED. Invisible on a symmetric
+//                      triangle, wrong on every other one.
+//   3. the RHS accessor stride pair (ds, du):
+//                   Left:  b0 = fwd?0:(n-1),      ds = +-1,   du = ldb
+//                   Right: b0 = fwd?0:(n-1)*ldb,  ds = +-ldb, du = 1
+//
+// Right went first because its du == 1 makes lanes touch consecutive addresses,
+// so the register question was answered without the coalescing question in the
+// way. Left has du == ldb, i.e. lanes stride by ldb, and §3.4 specifies an SLM
+// transpose staging tile to fix that.
+//
+// THAT TILE IS DELIBERATELY NOT IN THIS STEP. It is a performance mitigation
+// for a cost the spec PREDICTS ("8x over-fetch") and has never measured, and
+// its own sizing formula in §4.1 is off by a factor that writes 127 elements
+// out of bounds (WP3_TRSM_SPEC_CORRECTIONS.md finding 4). Correctness first,
+// then measure the over-fetch, then add the tile if the measurement asks for
+// it. Landing an unmeasured optimisation alongside a new kernel would make both
+// unattributable.
 
 #include "trsm_native.hh"
 
@@ -99,8 +117,8 @@ class TrsmCtaKernel;
 // ---------------------------------------------------------------------------
 // V1 launcher. Direct-call only at this step; nothing routes here.
 // ---------------------------------------------------------------------------
-template <typename T, int N>
-Event trsm_native_v1_right(Queue& ctx,
+template <typename T, int N, Side SideV>
+Event trsm_native_v1(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
                            const MatrixView<T, MatrixFormat::Dense>& B,
                            T alpha,
@@ -112,10 +130,10 @@ Event trsm_native_v1_right(Queue& ctx,
                   "guarded complex reciprocal, which GEMM's wide-scalar helpers do not "
                   "provide (they have no division).");
 
-    const Canonical can = canonicalise(Side::Right, uplo, transA, diag);
+    const Canonical can = canonicalise(SideV, uplo, transA, diag);
 
     const int n = static_cast<int>(A.rows());
-    const int q = static_cast<int>(B.rows());   // Side::Right -> q = B.rows()
+    const int q = static_cast<int>(SideV == Side::Left ? B.cols() : B.rows());
     const int bs = static_cast<int>(A.batch_size());
 
     // Work-group sizing. Descending, because a larger work-group amortises the
@@ -156,7 +174,7 @@ Event trsm_native_v1_right(Queue& ctx,
         const bool fwd = can.fwd;
         const bool unit = can.unit;
 
-        h.parallel_for<TrsmCtaKernel<T, N, Side::Right>>(
+        h.parallel_for<TrsmCtaKernel<T, N, SideV>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -177,11 +195,11 @@ Event trsm_native_v1_right(Queue& ctx,
 
                 // ---- Cooperative staging of the canonical triangle ---------
                 // rho(s) = fwd ? s : n-1-s maps canonical index to stored index.
-                // Lc(s,t) = opA(rho(t), rho(s)) for Side::Right -- note the
-                // OPERAND ORDER IS SWAPPED relative to Side::Left. Getting that
-                // backwards is invisible on the symmetric cells and wrong on the
-                // rest, which is the sort of defect a residual test catches only
-                // if the test uses a non-symmetric triangle.
+                // Lc(s,t) = opA(rho(s), rho(t)) for Left, opA(rho(t), rho(s))
+                // for Right -- THE OPERAND ORDER IS SWAPPED between them.
+                // Getting it backwards is invisible on a symmetric triangle and
+                // wrong on every other one, which is why the tests build a
+                // deliberately non-symmetric one.
                 for (size_t idx = lane; idx < tri_elems; idx += static_cast<size_t>(wg)) {
                     // Recover (s,t) from the packed index.
                     int s = 0;
@@ -196,9 +214,8 @@ Event trsm_native_v1_right(Queue& ctx,
                     } else {
                         const int rs = fwd ? s : (n - 1 - s);
                         const int rt = fwd ? t : (n - 1 - t);
-                        // opA(r,c) with (r,c) = (rho(t), rho(s)) for Right.
-                        const int r = rt;
-                        const int c = rs;
+                        const int r = (SideV == Side::Left) ? rs : rt;
+                        const int c = (SideV == Side::Left) ? rt : rs;
                         v = do_trans
                                 ? Ab[c + static_cast<std::ptrdiff_t>(r) * lda]   // A(c,r)
                                 : Ab[r + static_cast<std::ptrdiff_t>(c) * lda];  // A(r,c)
@@ -236,14 +253,18 @@ Event trsm_native_v1_right(Queue& ctx,
                 const bool divide = (sDiv[0] != 0);
 
                 // ---- The recurrence, fully unrolled ------------------------
-                // Canonical RHS accessor for Side::Right:
-                //   b0 = fwd ? 0 : (n-1)*ldb ; ds = fwd ? +ldb : -ldb ; du = 1
-                // du == 1 is why Right goes first: lanes differ in u, so the
-                // load and the store are both coalesced.
-                const std::ptrdiff_t b0 =
-                    fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * ldb;
-                const std::ptrdiff_t ds =
-                    fwd ? static_cast<std::ptrdiff_t>(ldb) : -static_cast<std::ptrdiff_t>(ldb);
+                // Canonical RHS accessor, §2.1:
+                //   Left : b0 = fwd?0:(n-1),      ds = +-1,   du = ldb
+                //   Right: b0 = fwd?0:(n-1)*ldb,  ds = +-ldb, du = 1
+                // Left's du == ldb is the uncoalesced access §3.4 wants a
+                // staging tile for; see the header note on why that is a later,
+                // measured step rather than this one.
+                const std::ptrdiff_t unit_s =
+                    (SideV == Side::Left) ? 1 : static_cast<std::ptrdiff_t>(ldb);
+                const std::ptrdiff_t du =
+                    (SideV == Side::Left) ? static_cast<std::ptrdiff_t>(ldb) : 1;
+                const std::ptrdiff_t b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
+                const std::ptrdiff_t ds = fwd ? unit_s : -unit_s;
 
                 T x[N];
 #pragma unroll
@@ -255,7 +276,7 @@ Event trsm_native_v1_right(Queue& ctx,
                     }
                     T rhs = T(0);
                     if (live && s < n) {
-                        rhs = alpha * Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u];
+                        rhs = alpha * Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du];
                     }
                     T v = rhs - acc;
                     if (!unit) {
@@ -267,7 +288,7 @@ Event trsm_native_v1_right(Queue& ctx,
 #pragma unroll
                 for (int s = 0; s < N; ++s) {
                     if (live && s < n) {
-                        Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u] = x[s];
+                        Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];
                     }
                 }
             });
@@ -277,33 +298,46 @@ Event trsm_native_v1_right(Queue& ctx,
 }
 
 // Runtime bucket dispatch. Direct-call entry used by tests at this step.
-template <typename T>
-Event trsm_native_v1_right_dispatch(Queue& ctx,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& B,
-                                    T alpha,
-                                    Uplo uplo,
-                                    Transpose transA,
-                                    Diag diag) {
+template <typename T, Side SideV>
+Event trsm_native_v1_buckets(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& B,
+                             T alpha, Uplo uplo, Transpose transA, Diag diag) {
+    // Buckets stop at 32: the register probe measured x[64] landing in local
+    // memory for both real types (256 B / 512 B stack frame, zero spill), which
+    // voids V1's register residency. n > 32 is V2's job.
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
-        case 8:  return trsm_native_v1_right<T, 8>(ctx, A, B, alpha, uplo, transA, diag);
-        case 16: return trsm_native_v1_right<T, 16>(ctx, A, B, alpha, uplo, transA, diag);
-        case 32: return trsm_native_v1_right<T, 32>(ctx, A, B, alpha, uplo, transA, diag);
-        default: return trsm_native_v1_right<T, 64>(ctx, A, B, alpha, uplo, transA, diag);
+        case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        default: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
     }
 }
 
-template Event trsm_native_v1_right_dispatch<float>(
+template <typename T>
+Event trsm_native_v1_dispatch(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& A,
+                              const MatrixView<T, MatrixFormat::Dense>& B,
+                              T alpha,
+                              Side side,
+                              Uplo uplo,
+                              Transpose transA,
+                              Diag diag) {
+    return (side == Side::Left)
+               ? trsm_native_v1_buckets<T, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
+               : trsm_native_v1_buckets<T, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
+}
+
+template Event trsm_native_v1_dispatch<float>(
     Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-    const MatrixView<float, MatrixFormat::Dense>&, float, Uplo, Transpose, Diag);
+    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag);
 // double is instantiated deliberately, as the FALSIFICATION PROBE for the
 // spec's n_cta(double) = 32. That number comes from a "256 B/thread register
 // cliff" which gemm_kernels.cc:725-735 records as measured false, so N=64 double
 // -- 64 doubles of accumulator per thread -- is exactly the configuration the
 // hypothesis says must spill. The register probe decides it, not the spec.
-template Event trsm_native_v1_right_dispatch<double>(
+template Event trsm_native_v1_dispatch<double>(
     Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-    const MatrixView<double, MatrixFormat::Dense>&, double, Uplo, Transpose, Diag);
+    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
 
 // THE REGISTER GATE HAS RUN. scripts/register_probe.sh, sm_89, this TU:
 //
@@ -342,14 +376,33 @@ template Event trsm_native_v1_right_dispatch<double>(
 // to 32 before writing anything else" -- reached the right answer by the wrong
 // mechanism, which is why the gate had to be run rather than reasoned about.
 //
-// STILL ZERO, THOUGH, and that is not the register result. Only Side::Right
-// exists in this step; a non-zero capacity would make supports() accept
-// Side::Left too, for which there is no kernel. The capacities become
-// {32, 32, ...} in the step that adds Side::Right's counterpart, together with a
-// side gate in RouteTable<Op::trsm,T>::supports().
-template <> int trsm_cta_max_n<float>()                { return 0; }
-template <> int trsm_cta_max_n<double>()               { return 0; }
+// STEP 4 re-ran the gate with Side::Left added. All 24 trsm kernels (2 types x
+// 3 buckets x 2 sides, each in its plain and _with_offset flavour) report
+// `0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads`, and
+// Side::Left matches Side::Right register-for-register (float N=32: 114 both).
+// The N=64 buckets are gone, so the one configuration that failed the gate is
+// no longer built.
+//
+// So the capacities are now the measured ones. Real types only: complex still
+// returns 0 because it needs a POD device scalar and a guarded complex
+// RECIPROCAL, and GEMM's wide-scalar helpers provide multiply but no division.
+//
+// 32 x work-group size against the 65,536-per-block register limit: at the
+// largest work-group this launcher picks (256) that is 114 x 256 = 29,184 for
+// float and 153 x 256 = 39,168 for double. Both clear it with room.
+template <> int trsm_cta_max_n<float>()                { return 32; }
+template <> int trsm_cta_max_n<double>()               { return 32; }
 template <> int trsm_cta_max_n<std::complex<float>>()  { return 0; }
 template <> int trsm_cta_max_n<std::complex<double>>() { return 0; }
+
+// V2 does not exist yet, for any type. Until it does, an order above
+// trsm_cta_max_n has NO native route, and RouteTable<Op::trsm,T>::supports()
+// must say so -- otherwise a vendor-free caller at n > 32 is handed a Blocked
+// route the facade cannot service and the call dies further downstream with a
+// message that blames the wrong thing.
+template <> bool trsm_blocked_available<float>()                { return false; }
+template <> bool trsm_blocked_available<double>()               { return false; }
+template <> bool trsm_blocked_available<std::complex<float>>()  { return false; }
+template <> bool trsm_blocked_available<std::complex<double>>() { return false; }
 
 }  // namespace batchlas::sycl_trsm

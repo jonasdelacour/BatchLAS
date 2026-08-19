@@ -56,17 +56,25 @@ namespace batchlas::sycl_trsm {
 template <typename T>
 int trsm_cta_max_n();
 
-// V1, Side::Right. Direct-call entry: nothing in the library routes here yet.
+// Whether V2, the blocked driver for orders above trsm_cta_max_n<T>(), exists.
+// False until it is written. Kept symmetric with the capacity above so that
+// "the kernel is not in this build" is expressed the same way for both tiers
+// and cannot be forgotten when one of them lands.
+template <typename T>
+bool trsm_blocked_available();
+
+// V1, both sides. Direct-call entry: nothing in the library routes here yet.
 // Exposed so tests can exercise the kernel before it is reachable through
 // dispatch, which is what lets the register gate be answered before any routing
 // decision depends on it.
 template <typename T>
-Event trsm_native_v1_right_dispatch(Queue& ctx,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& B,
-                                    T alpha,
-                                    Uplo uplo,
-                                    Transpose transA,
-                                    Diag diag);
+Event trsm_native_v1_dispatch(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& A,
+                              const MatrixView<T, MatrixFormat::Dense>& B,
+                              T alpha,
+                              Side side,
+                              Uplo uplo,
+                              Transpose transA,
+                              Diag diag);
 
 } // namespace batchlas::sycl_trsm
