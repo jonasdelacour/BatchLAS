@@ -56,4 +56,17 @@ namespace batchlas::sycl_trsm {
 template <typename T>
 int trsm_cta_max_n();
 
+// V1, Side::Right. Direct-call entry: nothing in the library routes here yet.
+// Exposed so tests can exercise the kernel before it is reachable through
+// dispatch, which is what lets the register gate be answered before any routing
+// decision depends on it.
+template <typename T>
+Event trsm_native_v1_right_dispatch(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& B,
+                                    T alpha,
+                                    Uplo uplo,
+                                    Transpose transA,
+                                    Diag diag);
+
 } // namespace batchlas::sycl_trsm

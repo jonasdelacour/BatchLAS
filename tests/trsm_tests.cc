@@ -9,6 +9,7 @@
 #include <random>
 #include <type_traits>
 #include "test_utils.hh"
+#include "../src/sycl/trsm_native.hh"
 
 using namespace batchlas;
 
@@ -231,4 +232,152 @@ TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveNoTrans) {
 // Test batched TRSM operation with upper triangular (transpose)
 TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
     this->performTrsmTest(Uplo::Upper, Transpose::Trans, this->batch_size);
+}
+
+// ===========================================================================
+// WP3 step 3 -- the native CTA kernel, Side::Right, called DIRECTLY.
+//
+// Nothing routes here yet (trsm_cta_max_n<T>() returns 0, so
+// RouteTable<Op::trsm,T>::supports() reports both native routes unsupported).
+// These call the kernel by hand so its correctness is settled before any
+// routing decision depends on it.
+//
+// THE ORACLE IS AN INDEPENDENT MULTIPLY-BACK, not a comparison against
+// batchlas::trsm. That is not fussiness: src/backends/netlib_lapack.cc:445-449
+// and src/backends/cublas.cc:1134-1137 perform the SAME canonical fold, so they
+// are one implementation with two spellings, and a kernel that reproduced a
+// shared fold error would agree with both. Multiplying the answer back through
+// op(A) and comparing to alpha*B tests the thing that actually matters.
+//
+// Side::Right solves X op(A) = alpha B, so the check is X op(A) == alpha B.
+// ===========================================================================
+namespace {
+
+template <typename T>
+struct TrsmNativeCase {
+    int n;
+    int q;
+    int batch;
+    Uplo uplo;
+    Transpose transA;
+    Diag diag;
+    T alpha;
+};
+
+template <typename T>
+void RunTrsmNativeRight(const TrsmNativeCase<T>& tc) {
+    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+
+    const int n = tc.n, q = tc.q, bs = tc.batch;
+    Matrix<T, MatrixFormat::Dense> A(n, n, bs);
+    Matrix<T, MatrixFormat::Dense> B(q, n, bs);   // Side::Right: B is q x n
+    auto Av = A.view();
+    auto Bv = B.view();
+
+    // Well-conditioned triangle, and deliberately NOT symmetric: a swapped Lc
+    // operand order (the Side::Right trap, spec section 2.1) is invisible on a
+    // symmetric triangle and wrong on this one.
+    std::vector<T> a_host(static_cast<size_t>(n) * n * bs);
+    std::vector<T> b_in(static_cast<size_t>(q) * n * bs);
+    for (int b = 0; b < bs; ++b) {
+        for (int c = 0; c < n; ++c) {
+            for (int r = 0; r < n; ++r) {
+                T v;
+                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
+                if (r == c)        v = static_cast<T>(2 + (r % 3));
+                else if (in_tri)   v = static_cast<T>(0.05 * (1 + ((r * 7 + c * 3) % 5)));
+                else               v = static_cast<T>(0);
+                Av.at(r, c, b) = v;
+                a_host[(static_cast<size_t>(b) * n + c) * n + r] = v;
+            }
+        }
+        for (int c = 0; c < n; ++c) {
+            for (int r = 0; r < q; ++r) {
+                const T v = static_cast<T>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
+                Bv.at(r, c, b) = v;
+                b_in[(static_cast<size_t>(b) * n + c) * q + r] = v;
+            }
+        }
+    }
+
+    batchlas::sycl_trsm::trsm_native_v1_right_dispatch<T>(
+        *ctx, A.view(), B.view(), tc.alpha, tc.uplo, tc.transA, tc.diag);
+    ctx->wait();
+
+    using Acc = double;
+    const Acc tol = std::is_same_v<T, float> ? Acc(2e-3) : Acc(1e-10);
+
+    for (int b = 0; b < bs; ++b) {
+        // op(A) built from the DEFINITION, with no reference to the kernel's
+        // canonicalisation, so the two cannot share a fold error.
+        std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
+        for (int c = 0; c < n; ++c) {
+            for (int r = 0; r < n; ++r) {
+                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
+                if (!in_tri) continue;
+                T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
+                if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
+                if (tc.transA == Transpose::NoTrans)
+                    opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
+                else
+                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] = v;
+            }
+        }
+        for (int r = 0; r < q; ++r) {
+            for (int c = 0; c < n; ++c) {
+                Acc got = Acc(0);
+                for (int t = 0; t < n; ++t) {
+                    got += Acc(Bv.at(r, t, b)) *
+                           Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
+                }
+                const Acc want = Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * n + c) * q + r]);
+                ASSERT_NEAR(got, want, tol)
+                    << "X*op(A) != alpha*B at b=" << b << " r=" << r << " c=" << c
+                    << "  n=" << n << " q=" << q
+                    << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
+                    << " diag=" << int(tc.diag);
+            }
+        }
+    }
+}
+
+}  // namespace
+
+// The eight (uplo, transA, diag) combinations Side::Right reaches with a real
+// scalar, at a size inside the smallest bucket.
+TEST(TrsmNativeCta, RightCanonicalCrossProductFloat) {
+    for (Uplo up : {Uplo::Lower, Uplo::Upper})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+            for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                RunTrsmNativeRight<float>({8, 24, 3, up, tr, dg, 1.0f});
+}
+
+TEST(TrsmNativeCta, RightCanonicalCrossProductDouble) {
+    for (Uplo up : {Uplo::Lower, Uplo::Upper})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+            for (Diag dg : {Diag::NonUnit, Diag::Unit})
+                RunTrsmNativeRight<double>({8, 24, 3, up, tr, dg, 1.0});
+}
+
+// alpha != 1 is easy to get wrong: it scales B, not X, and it must be applied
+// once, before the subtraction, not after the divide.
+TEST(TrsmNativeCta, RightAlphaIsAppliedOnce) {
+    RunTrsmNativeRight<double>({16, 40, 2, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
+    RunTrsmNativeRight<double>({16, 40, 2, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
+}
+
+// n strictly inside its bucket exercises the zero-padded tail: rows n..N-1 must
+// contribute nothing, which is what makes the fully unrolled loop legal.
+TEST(TrsmNativeCta, RightPartialBucketIsZeroPadded) {
+    for (int n : {5, 9, 13, 17, 30}) {
+        RunTrsmNativeRight<double>({n, 33, 2, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
+    }
+}
+
+// q not a multiple of the work-group size: the tail lanes must be inert, not
+// merely harmless -- they must not store.
+TEST(TrsmNativeCta, RightRaggedRhsCount) {
+    for (int q : {1, 7, 31, 33, 129, 257}) {
+        RunTrsmNativeRight<double>({8, q, 2, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
+    }
 }
