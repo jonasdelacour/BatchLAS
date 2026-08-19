@@ -69,12 +69,68 @@ def preferred(t, m, n, k, batch, tA, tB):
     return False
 
 
-def main(path, check=False):
-    rows = [r for r in csv.reader(open(path))
+def _gemm_rows(path):
+    return [r for r in csv.reader(open(path))
             if r and r[0] == "reached" and r[1] == "gemm"]
+
+
+def _shape_key(r):
+    g = lambda name: r[COL[name]]
+    return (g("scalar"), g("m"), g("n"), g("k"), g("batch"), g("transA"), g("transB"))
+
+
+def subtract_probes(rows, probe_path):
+    """Remove a probe suite's rows from a full-suite capture.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT OPTIONAL FOR A DEMAND FIGURE.
+
+    tests/route_gemm_equivalence_tests.cc pins routing against a replica of the legacy
+    behaviour by sweeping a synthetic `dims[] x batches[]` cross-product (lines 119-120)
+    straight through resolve_gemm_route. Those calls never execute a GEMM. They are
+    probes of what the resolver CAN be asked, not demand for what the library ISSUES --
+    and they are the large majority of the table: 2312 of 2795 gemm rows, 71051 of
+    113526 calls, on the 2026-08-19 capture.
+
+    Counting them does not merely add noise, it inverts conclusions. The wide-scalar
+    kernel's routing gate looks like it fires on 3.56% of non-float calls with the
+    probes in and 0.64% with them out, and every probe hit is a large square aligned
+    shape -- exactly the cells a new tile wants to claim credit for.
+
+    Subtraction is per (scalar, m, n, k, batch, transA, transB) on the call COUNT, not
+    row removal: a shape the probe suite touches may also be issued for real.
+    """
+    probe = collections.Counter()
+    for r in _gemm_rows(probe_path):
+        probe[_shape_key(r)] += int(r[COL["calls"]] or 0)
+
+    out, dropped_rows, dropped_calls = [], 0, 0
+    for r in rows:
+        key = _shape_key(r)
+        calls = int(r[COL["calls"]] or 0)
+        take = calls - probe.get(key, 0)
+        if take <= 0:
+            dropped_rows += 1
+            dropped_calls += calls
+            continue
+        dropped_calls += calls - take
+        r = list(r)
+        r[COL["calls"]] = str(take)
+        out.append(r)
+    print(f"subtracted probe capture {probe_path}: dropped {dropped_rows} rows / "
+          f"{dropped_calls} calls, {len(out)} rows remain")
+    if not out:
+        sys.exit("every row was accounted for by the probe capture -- that is not a "
+                 "demand table, check that the two captures are from different runs")
+    return out
+
+
+def main(path, check=False, minus=None):
+    rows = _gemm_rows(path)
     if not rows:
         sys.exit(f"{path}: no gemm 'reached' rows -- was BATCHLAS_COVERAGE_OUT set, and were "
                  f"the per-pid shards merged?")
+    if minus:
+        rows = subtract_probes(rows, minus)
 
     g = lambda r, name: r[COL[name]]
     by_type = collections.Counter(g(r, "scalar") for r in rows)
@@ -131,6 +187,11 @@ def main(path, check=False):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
         sys.exit(__doc__)
-    main(sys.argv[1], check="--check" in sys.argv)
+    minus = None
+    for a in sys.argv[1:]:
+        if a.startswith("--minus="):
+            minus = a.split("=", 1)[1]
+    main(args[0], check="--check" in sys.argv, minus=minus)
