@@ -468,6 +468,86 @@ not a detail of the harness.
 | step | what | status |
 |---|---|---|
 | 16 | the trailing-update GEMM | **done** |
-| 17 | the native GEMM's strided-`ld` collapse, which is now a known defect with a named mechanism and affects every panel-update caller in the tree, not just trsm | open — this is what a vendor-free build still pays |
+| 17 | the native GEMM's strided-`ld` collapse | **partly done, and it corrected this document** — see the step 17 section at the end. The routing half landed (`3f0afbd`, 1.74x, vendor-free only); the residual latency slope is unexplained and two candidate fixes are measured dead |
 | 18 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open |
 | 19 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |
+
+---
+
+## ✱✱ Step 17 CORRECTED STEP 16's MECHANISM — the named cause was in a file that does not run
+
+Step 16's MEASUREMENT stands: the native GEMM is at parity at `ld == rows` and
+~2x off at the `ld` a sub-view carries, and that is the only case a panel update
+issues. Re-checked after fixing a harness defect (padded operands were allocated
+UNINITIALIZED while unpadded ones used `::Random`), the reference cell moved
+0.34% — so it is not a data artifact either.
+
+**But the mechanism step 16 named is wrong.** It blamed
+`register_tiled_common.hh`: odd tile strides (`TileM+1`, `TileK+1`) defeating
+16-byte alignment, B staged `[n][k]`, an epilogue writing columns 4096 B apart as
+read-modify-write, and `can_use_*_fast_path` requiring `is_contiguous_dense_matrix`
+which every sub-view fails.
+
+**That file is not on the path.** `select_kernel_variant`
+(`src/sycl/gemm_kernels.cc:509-511`) sends those shapes to
+`Tiled128x128RegisterK8`, launched with `AlignedFastPath = TRUE` in **both**
+columns of step 16's table. `can_use_128x128_fast_path`
+(`src/sycl/gemm/register_128x128.hh:71-91`) never calls
+`is_contiguous_dense_matrix`; it requires `m%128`, `n%128`, `k%8`, a 16-byte base
+and `ld%4==0` — all of which a strided sub-view satisfies. So the strided call
+took the *aligned* leg of a kernel with none of the named defects.
+
+**What ncu measures instead.** Every transaction counter is byte-identical
+between packed and strided: 16.00 load sectors/request (the ideal), 16.00 on
+stores, identical DRAM sectors, identical instructions, 119 registers, zero
+spill. `dram__cycles_active` differs by 0.3% — the memory system does identical
+work at identical efficiency and then sits idle 45% of the time. The regression
+is **entirely exposed global-load latency**: barrier stall 1.552 → 7.703 (68% of
+it) and long_scoreboard 8.755 → 11.740 (33%).
+
+Three facts that narrow it, none of them visible from reading the code:
+
+* **It is one operand.** Padding A alone costs 1.003x, C alone 1.056x, **B alone
+  1.552x** — the entire effect.
+* **It is a slope, not a cliff**, monotonic in stride magnitude from 512 B to
+  4096 B. So no predicate flip explains it.
+* **It is beta-independent** (+0.564 ms at beta=1, +0.603 ms at beta=0), which
+  refutes the read-modify-write epilogue story directly.
+
+**Two fixes were BUILT and MEASURED DEAD.** Neither should be re-proposed:
+
+* **Double-buffering / register-prefetching the k-loop** — 127 registers, zero
+  spill, occupancy preserved, barriers halved, and it incidentally fixed a
+  split-`LDG` defect (global load sectors 33.55M → 25.17M, *exactly* cuBLAS's
+  count). It recovered **no time at all** (1.564 ms vs a 1.547 baseline). This
+  also refutes the natural reading of the stall data — that cuBLAS pipelines and
+  we do not.
+* **Packing B into contiguous scratch** — the kernel is at 89% of the roofline
+  when packed, so the pack is paid at that same roofline. It loses everywhere and
+  loses harder as `m` grows. The one unpriced variant is a pack *fused into a
+  producer kernel that already writes B*.
+
+**And relaxing `is_contiguous_dense_matrix` — the fix step 16 implied — is
+correct but useless here.** `ld()==rows()` is necessary for nothing, but neither
+measured family reaches that predicate, and relaxing it would silently reroute
+every squareish sub-view to a variant that has never been measured.
+
+### What actually worked: routing (commit `3f0afbd`)
+
+`can_use_128x128_fast_path` is a **LEG** predicate — the dispatcher at
+`gemm_kernels.cc:737-741` evaluates it again and picks the leg itself. Used as a
+**ROUTING** gate at `:509`, failing it did not demote the call to the predicated
+leg; it handed the call to an entirely different, much slower kernel. Routing by
+what the kernel can *run* is worth geomean **1.74x/1.75x**, moving native from
+0.58x → 0.99x of cuBLAS packed and 0.54x → 0.93x strided.
+
+**With cuBLAS present this changes no runtime at all** — `route_gemm.hh`'s float
+NN window requires `m==n==k`, so every shape it captures resolves to the vendor
+(79 native float gemm calls against 102,791 vendor). It is a vendor-free and
+ROCm win, and it makes a future `preferred()` flip arguable rather than winning
+one. At 0.93x it is not yet arguable.
+
+**The general lesson, for the second time in this work package:** confirm WHICH
+kernel runs before theorising about why it is slow. Step 14 attributed a cost to
+the inner blocking level that was not there, and step 16 attributed one to a file
+that was not executing.

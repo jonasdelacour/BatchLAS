@@ -104,3 +104,30 @@ isolated GEMM shapes at `ld == rows`; `outerpad-*.csv` / `innerpad-*.csv` the
 same at the real `ld` (`trailing_shapes.sh`, `outer_ld.sh`). `quick-*.csv` is
 the first check of the formerly-losing cells; `recheck-*` the three repeats of
 the one cell that still ties.
+
+---
+
+## ✱✱ CORRECTED by the step-17 pass (commit `3f0afbd`)
+
+**The measurements on this page stand. The mechanism section above is wrong.**
+
+The four bullets blaming `src/sycl/gemm/register_tiled_common.hh` describe a file
+these shapes never execute. `select_kernel_variant` (`gemm_kernels.cc:509-511`)
+routes them to `Tiled128x128RegisterK8` with `AlignedFastPath = **true**` in BOTH
+columns of the table above; `can_use_128x128_fast_path` never tests contiguity,
+only `ld%4` and a 16-byte base, which a strided sub-view satisfies.
+
+ncu says every transaction counter is byte-identical between the two configs —
+16.00 load sectors/request (the ideal), same DRAM sectors, same instructions,
+119 registers, 0 spill. The loss is entirely exposed global-load latency at the
+k-loop barrier, it belongs to operand **B** alone (A 1.003x, C 1.056x, B 1.552x),
+it is a slope rather than a cliff, and it is beta-independent — so the
+read-modify-write epilogue argument above is refuted directly.
+
+Double-buffering the k-loop and packing B were both BUILT and measured to recover
+nothing. What worked was routing. See the step 17 section of
+`WP3_TRSM_SPEC_CORRECTIONS.md` and `experiments/wp4_gemm_ld/`.
+
+One caveat on the numbers here: the padded operands were allocated uninitialized
+while unpadded ones used `::Random`, so cross-pad ratios were confounded. Fixed
+in `3f0afbd`; the reference cell moved 0.34%, so the effect is real.

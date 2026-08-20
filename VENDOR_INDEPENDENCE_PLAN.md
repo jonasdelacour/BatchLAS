@@ -301,11 +301,60 @@ Four results from WP3 that generalise beyond `trsm`:
    operand `trsm` hands GEMM is a sub-view carrying its parent's `ld` — a 128-row `C` with
    `ld = 512`. The same six shapes measure 0.86–0.98× at `ld == rows` and **0.43–0.62×** at the
    real `ld`; cuBLAS barely moves. This is a **defect in the native GEMM that every panel-update
-   caller in the tree pays**, and it is now named down to the mechanism in
-   `register_tiled_common.hh` (odd tile strides defeating 16-byte alignment, B staged `[n][k]`,
-   and an epilogue whose adjacent lanes write columns 4096 B apart as read-modify-write).
+   caller in the tree pays**. *(The mechanism WP3 originally named for it was **wrong** — it
+   blamed `register_tiled_common.hh`, which those shapes never execute. See "The strided-`ld`
+   defect, re-diagnosed" below.)*
 
 Item 4 is the next work item and is **not** a `trsm` item.
+
+### The strided-`ld` defect, re-diagnosed — and a routing fix worth 1.74×
+
+A 17-agent measurement pass (commit `3f0afbd`) re-examined the defect WP3 left open. The
+measurement survived; **the explanation did not**, and correcting it changed which fix was worth
+building.
+
+WP3 blamed `register_tiled_common.hh` — odd tile strides, `[n][k]` B staging, a read-modify-write
+epilogue, and a contiguity predicate every sub-view fails. **Those shapes never execute that
+file.** `select_kernel_variant` (`gemm_kernels.cc:509-511`) routes them to
+`Tiled128x128RegisterK8` with `AlignedFastPath = true` in *both* the packed and strided columns;
+`can_use_128x128_fast_path` never tests contiguity, only `ld%4` and a 16-byte base, which a
+strided sub-view satisfies.
+
+What ncu measures instead: **every transaction counter is byte-identical** between the two
+configurations — 16.00 load sectors/request (the ideal), identical DRAM sectors, identical
+instructions, 119 registers, zero spill. The DRAM does the same work and then idles 45% of the
+time. The entire regression is exposed global-load latency at the k-loop barrier (barrier stall
+1.552 → 7.703). It is attributable to **one operand, B** (A alone 1.003×, C alone 1.056×, B alone
+1.552×), it is a **slope** rather than a cliff, and it is **beta-independent** — which refutes the
+epilogue story directly.
+
+Two candidate fixes were **built and measured dead**, and are recorded so they are not
+re-proposed: double-buffering the k-loop (127 registers, zero spill, barriers halved, and it
+incidentally fixed a split-`LDG` defect to *exactly* cuBLAS's sector count — for **zero** time
+recovered), and packing B into contiguous scratch (paid at the same roofline the kernel already
+achieves; loses harder as `m` grows).
+
+**What did work was routing.** `can_use_128x128_fast_path` is a *leg* predicate — the dispatcher
+evaluates it again and chooses the leg itself — but `:509` used it as a *routing* gate, where
+failing it did not demote the call to the predicated leg but handed it to a different, much slower
+kernel. Routing by what the kernel can run is worth geomean **1.74×**, moving native from 0.58× →
+0.99× of cuBLAS packed and 0.54× → 0.93× strided.
+
+**With cuBLAS present it changes no runtime at all**, and that is stated in the code: the float NN
+`preferred()` window requires `m==n==k`, so every shape the new gate captures resolves to the
+vendor (coverage: 79 native float `gemm` calls against 102,791 vendor). It is a vendor-free and
+ROCm win, and it makes a future `preferred()` flip *arguable* rather than winning one — at 0.93×
+it is not yet arguable.
+
+Two process points this pass established, both of which cost real time before they were learned:
+
+1. **Confirm which kernel runs before theorising about why it is slow.** This is the second time
+   in this campaign a named mechanism belonged to code that was not executing (the first was
+   WP3 step 14's inner blocking level).
+2. **A benchmark's own hygiene is part of the measurement.** The padded operands were allocated
+   *uninitialized* while the unpadded ones used `::Random`, so every cross-`ld` ratio compared
+   data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
+   defect is real, but nobody knew that until it was checked.
 
 ### The burn-down number, and why it stopped moving
 
