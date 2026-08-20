@@ -644,6 +644,64 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         }
     }
 
+    // ROUTE BY WHAT THE KERNEL CAN RUN, NOT BY WHAT ITS FAST LEG NEEDS --
+    // but only where it can actually FILL THE MACHINE.
+    //
+    // can_use_64x64_k16_wide_fast_path (used just above) is the aligned LEG's
+    // predicate. The dispatcher at :801-807 re-evaluates it and picks
+    // <true>/<false> itself, so a call that fails it still runs THIS kernel on
+    // its predicated leg; the only hard predicate is NN, at :802. Consulting it
+    // as a ROUTING gate did not demote such a call to that leg -- it handed the
+    // call to Tiled16 (:638). Identical defect to the float 128x128 case fixed
+    // in 3f0afbd. Reaching this line already implies NN, since :460 returns for
+    // every transposed form.
+    //
+    // Forced-wide vs the route it replaces, at SATURATION, geomean over 116
+    // refused cells: cfloat 3.98x, cdouble 2.90x. THAT NUMBER IS NOT THE GATE.
+    // It is measured in a regime these call sites never enter: every shape this
+    // relaxation newly captures runs at batch 1-8, and there the wide kernel
+    // LOSES in 12 of 12 measured cells -- cfloat 0.60-0.80x, cdouble as bad as
+    // 0.17x, a 5.7x regression. See experiments/wp4_complex/README.md.
+    //
+    // THE GATE IS A CTA COUNT, BECAUSE THAT IS WHAT THE CROSSOVER TRACKS.
+    // A 180-cell ladder over batch 1..256 x 5 shapes x 2 types shows the
+    // crossover is NOT a constant batch (it moves 8 -> 128 by shape) but is very
+    // nearly a constant number of work-groups. This kernel launches
+    // ceil(m/64)*ceil(n/64) CTAs of 256 threads per batch item, against Tiled16's
+    // ceil(m/16)*ceil(n/16) -- up to 16x fewer -- so on a 128-SM part it cannot
+    // fill the machine at small batch while Tiled16 can. cdouble needs twice the
+    // CTAs of cfloat because its 32 KB of shared memory caps it at 3 blocks/SM
+    // (register_64x64_k16_wide.hh:271-272 allocates 2*1024*sizeof(D)).
+    //
+    // Over every clean cell of the ladder (relative sd <= 10%):
+    //   cfloat  ctas >= 64 : 26 cells admitted, WORST 1.08x, zero losses
+    //   cdouble ctas >= 128: 24 cells admitted, WORST 1.08x, zero losses
+    //
+    // EVERY BOUND HAS A MEASURED COUNTEREXAMPLE ON THE OTHER SIDE:
+    //   * cfloat below 64 CTAs : 129x96x129 b8 = 48 CTAs, 0.79x LOSS.
+    //   * cdouble below 128    : 33x61x33 b64 = 64 CTAs, 0.93x LOSS. Note 64
+    //     CTAs also holds a cdouble WIN (96x64x96 b32, 1.31x), so the count does
+    //     not separate cleanly there -- 128 is chosen to admit no loss, and it
+    //     costs a real 1.37x (129x96x129 b16). Conservative on purpose.
+    //   * min_dim >= 32 : the CTA gate alone would admit tiny shapes at huge
+    //     batch. 16x16x16 loses 0.71x (cfloat) and 0.28x (cdouble); 32^3 wins
+    //     2.28x / 1.05x. The floor is the crossover, not a round number.
+    //
+    // A REGRESSION HERE WOULD BE SILENT: nothing in ctest asserts on kernel
+    // choice or throughput, and route_diff.sh records resolver Routes, not
+    // KernelVariant, so it is structurally blind to this change. That is why the
+    // gate is set to admit no measured loss rather than to maximise the geomean.
+    if constexpr (is_std_complex_v<T>) {
+        using Real = typename T::value_type;
+        constexpr int64_t kMinCtas = std::is_same_v<Real, float> ? 64 : 128;
+        const int64_t ctas = static_cast<int64_t>((m + 63) / 64) *
+                             static_cast<int64_t>((n + 63) / 64) *
+                             static_cast<int64_t>(A.batch_size());
+        if (min_dim >= 32 && ctas >= kMinCtas) {
+            return KernelVariant::Tiled64x64RegisterK16Wide;
+        }
+    }
+
     if constexpr (std::is_same_v<T, double>) {
         // The Direct/Tiled16 crossover for double is at 24, not 32. Measured on
         // RTX 4090 / sm_89, median of 3, both betas, at saturation:
