@@ -1,0 +1,18 @@
+{
+  "displayTimeUnit": "ms",
+  "traceEvents": [
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":0,"dur":2781.18,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":1}},
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":2841.66,"dur":2090.21,"pid":1,"tid":2,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":2}},
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":4963.52,"dur":3271.48,"pid":1,"tid":3,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":3}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":13010.9,"dur":6737.91,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":4}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":19749.9,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":5}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":26478.6,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":6}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":33207.3,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":7}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":39936,"dur":6727.77,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":8}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":46673.9,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":9}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":53402.6,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":10}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":60132.4,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":11}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":66861.1,"dur":6727.69,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":12}},
+    {"name":"gemm_sycl_register_64x64_k16_wide","cat":"sycl","ph":"X","ts":73589.8,"dur":6727.68,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":13}}
+  ]
+}

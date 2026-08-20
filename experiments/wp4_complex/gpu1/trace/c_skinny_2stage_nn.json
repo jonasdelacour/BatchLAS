@@ -1,0 +1,18 @@
+{
+  "displayTimeUnit": "ms",
+  "traceEvents": [
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":0,"dur":174.08,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":1}},
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":227.33,"dur":199.68,"pid":1,"tid":2,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":2}},
+    {"name":"sycl_parallel_for","cat":"sycl","ph":"X","ts":502.785,"dur":197.632,"pid":1,"tid":3,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":3}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5277.69,"dur":90.241,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":4}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5369.86,"dur":32.799,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":5}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5403.65,"dur":33.79,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":6}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5438.46,"dur":33.798,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":7}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5473.28,"dur":32.769,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":8}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5515.27,"dur":33.79,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":9}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5550.08,"dur":32.768,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":10}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5583.87,"dur":33.799,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":11}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5618.69,"dur":32.768,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":12}},
+    {"name":"gemm_sycl_direct","cat":"sycl","ph":"X","ts":5652.48,"dur":33.79,"pid":1,"tid":4,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":13}}
+  ]
+}

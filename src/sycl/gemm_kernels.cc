@@ -105,6 +105,16 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_64x64";
     case KernelVariant::Tiled64x64RegisterK16:
         return "gemm_sycl_register_64x64_k16";
+    // GUARD: these launchers hard-wire OpA/OpB (register_launchers.hh), so an
+    // unguarded case computes the WRONG ANSWER for any transpose combination
+    // other than the one it was instantiated for -- ConjTrans most of all, which
+    // silently drops the conjugation. Transpose::ConjTrans is a distinct enum
+    // value (enums.hh: NoTrans=0, Trans=1, ConjTrans=2), so `Trans` does not
+    // cover it. The Tiled128x32RegisterK16 family below already had this guard;
+    // nine other variants did not. Not reachable from select_kernel_variant
+    // today, but all of them are FORCEABLE by name via
+    // BATCHLAS_GEMM_SYCL_KERNEL, which is exactly how a benchmark would compare
+    // them -- producing a valid-looking timing for an incorrect result.
     case KernelVariant::Tiled64x64RegisterK16TN:
         return "gemm_sycl_register_64x64_k16_tn";
     case KernelVariant::Tiled64x64RegisterK16NT:
@@ -699,11 +709,20 @@ Event gemm_custom(Queue& ctx,
     case KernelVariant::Tiled64x64RegisterK16:
         return launch_register_64x64_k16(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled64x64RegisterK16TN:
-        return launch_register_64x64_k16_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
+            return launch_register_64x64_k16_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled64x64RegisterK16NT:
-        return launch_register_64x64_k16_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
+            return launch_register_64x64_k16_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled64x64RegisterK16TT:
-        return launch_register_64x64_k16_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::Trans) {
+            return launch_register_64x64_k16_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x32RegisterK16:
         return launch_register_128x32_k16(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK16TN:
@@ -722,17 +741,35 @@ Event gemm_custom(Queue& ctx,
         }
         return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x32RegisterK32TN:
-        return launch_register_128x32_k32_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
+            return launch_register_128x32_k32_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x32RegisterK32NT:
-        return launch_register_128x32_k32_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
+            return launch_register_128x32_k32_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x32RegisterK32TT:
-        return launch_register_128x32_k32_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::Trans) {
+            return launch_register_128x32_k32_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x64RegisterK16TN:
-        return launch_register_128x64_k16_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
+            return launch_register_128x64_k16_tn(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x64RegisterK16NT:
-        return launch_register_128x64_k16_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
+            return launch_register_128x64_k16_nt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x64RegisterK16TT:
-        return launch_register_128x64_k16_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (transA == Transpose::Trans && transB == Transpose::Trans) {
+            return launch_register_128x64_k16_tt(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled128x32RegisterK32:
         return launch_register_128x32_k32(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x32RegisterK32S1U1:
