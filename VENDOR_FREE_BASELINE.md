@@ -95,6 +95,59 @@ fires on **46 of 7223 non-float gemm calls, 0.64%**. BatchLAS's own GEMM is domi
 updates — large m, large n, small k, usually transposed — and `min_dim >= 256` takes the min
 over k, which is a blocking constant. See `WP2_GEMM_SPEC.md`.
 
+## After WP3 — and why the suite number did not move
+
+The suite is **still 25/53**, and `trsm_tests` is still in the failing set. That is not a
+disappointing result; it is the burn-down instrument failing to measure what changed.
+
+Vendor-free `trsm_tests` is **59 passing / 32 failing**, and **all 32 failures are the host
+(NETLIB) backend**:
+
+    BatchLAS: no route for trsm<float> on this backend
+      (built without netlib CBLAS/LAPACKE).
+
+Not one CUDA-backend case fails. On the GPU, vendor-free `trsm` is complete — every order, both
+sides, all four scalar types — which is exactly what WP3 set out to deliver, and the suite-level
+pass count cannot show it, because `ctest` runs each level-3 suite against the host backend as
+well and a vendor-free build has no netlib LAPACK either.
+
+Classifying every vendor-free failure by which library its `NoRouteError` names:
+
+| suite | host (netlib) | GPU (cuBLAS/cuSOLVER/cuSPARSE) |
+|---|---|---|
+| `trsm_tests` | **32** | **0** |
+| `sytrd_blocked_tests` | 12 | 0 |
+| `syev_tests` | 4 | 0 |
+| `ormqr_cta_tests` | 2 | 0 |
+| `symm_tests` | 2 | 5 |
+| `hemm_tests` | 6 | 6 |
+| `herk_tests` | 8 | 8 |
+| `her2k_tests` | 6 | 6 |
+| `syrk_tests` | 6 | 6 |
+| `syr2k_tests` | 4 | 6 |
+| `trmm_tests` | 8 | 8 |
+| `gemv_tests` | 20 | 20 |
+| `ortho_tests` | 8 | 8 |
+| `orgqr_tests` | 8 | 8 |
+| `ormqr_tests` | 12 | 12 |
+| `ormqr_blocked_tests` | 10 | 20 |
+| `cond_tests` | 20 | 22 |
+| `syev_blocked_tests` | 36 | 24 |
+| `syevx_tests` | 0 | 67 |
+| `syev_two_stage_tests` | 0 | 16 |
+| `linalg_layer_tests` | 0 | 7 |
+| `options_api_tests` | 0 | 8 |
+| `iluk_tests` | 0 | 4 |
+| `inverse_tests`, `sytrd_sy2sb_tests`, `lanczos_tests`, `backend_dispatch_tests`, `syev_cta_tests` | 0 | 1–2 each |
+
+**Four suites now fail only because of the host path.** That is WP9 (the CPU story), not a
+missing GPU kernel, and BatchLAS's stated purpose is batched GPU work.
+
+**Action for whoever picks this up: split the burn-down by backend.** A single pass count over
+a suite that exercises two backends with different coverage cannot distinguish "we shipped a
+kernel" from "we shipped nothing". This is the same lesson as `linked` vs `reachable` above,
+one level up.
+
 ## The same gap, per op
 
 `cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose

@@ -11,13 +11,27 @@ quietly edited.
 
 ## Status
 
+**WP0, WP1, WP2 and WP3 are complete. WP4–WP9 are not started.**
+
+| | state |
+|---|---|
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **25/53** |
+| Vendor-present build | **52/53**, the one failure pre-existing and unrelated |
+| `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
+| `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
+| level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
+| M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
+| M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
+
 **Companion specifications** (each the output of a multi-agent design pass with adversarial
 critique, and each superseding the sketch in §5 of this document):
 
 | Document | Covers | Agents |
 |---|---|---|
 | `WP0_DISPATCH_SPEC.md` | the dispatch axes, the vendor gate, the coverage instrument | 14 |
-| `WP3_TRSM_SPEC.md` | native batched `trsm` | 19 (shared) |
+| `WP1_LEVEL3_SPEC.md` | freeing the four level-3 dispatchers from the CUDA backend | 12 |
+| `WP2_GEMM_SPEC.md` | closing the GEMM envelope; the two-track split | multi-pass |
+| `WP3_TRSM_SPEC.md` | native batched `trsm` — **read with `WP3_TRSM_SPEC_CORRECTIONS.md`, which supersedes it** | 19 (shared) |
 | `WP4_POTRF_SPEC.md` | native batched `potrf` | 19 (shared) |
 
 **Implemented and verified** (each step built clean and passed the tests named):
@@ -53,6 +67,21 @@ critique, and each superseding the sketch in §5 of this document):
 | WP1 S5 | the facade's `gemm` gains a native arm | vendor-free `gemm_tests` 48/184 → 167/184; suite 20/53 → 24/53 |
 | WP1 S6 | the level-3 gates move to the facade | tile kernels **reached** vendor-free for the first time (measured, 41 native rows) |
 | WP1 S7 | the tile predicate gains a scalar parameter instead of flipping | vendor-present unchanged by construction; failing set byte-identical |
+| WP2 prep | measure what GEMM shapes the library actually **issues**, before tuning any of them | 23 134 non-float calls captured; with probe rows removed, 7 223 are real demand — and the wide-scalar gate fires on 0.64% of them, not 3.56% |
+| WP2 C1–C3 | heterogeneous batch: the per-item loop becomes portable and the facade gains a vendor-free arm | vendor-free `gemm_tests` 167/184 → **184/184**; suite 24/53 → 25/53; vendor-present route diff moves **zero** decisions |
+| WP2 E1–E2 | three in-tree claims corrected; the 64×64×16 t4×4 wide-scalar tile ported into `src/` | first register-tiled GEMM kernel for a non-float scalar; two of the three claims would have caused a wrong edit |
+| WP2 E3 | double's window, settled first because it is 85% of the flip | native 1.05–4.51× at n=4..512; one misplaced `Direct`/`Tiled16` boundary fixed |
+| WP2 E4 | float's window **narrows** on measurement | two regions `preferred()` claimed measure 0.34–0.97× and are removed; the predicated path it was gating on is worth 2–4.4× |
+| WP2 E6 | **the flip** — GEMM's unset default goes `Vendor` → `Auto` | route diff field by field: 262 decisions moved, **0** regressions, **0** complex; the pre-flip prediction caught an unmeasured transposed-double window |
+| WP2 E5 | double widened to non-square, any size, `k >= 2` | the demand table's own shapes, 36/36 cells 1.10–1.41×; 81 decisions moved, zero regressions; `k=1` is the single losing double shape in the package |
+| WP3 S1–S2 | `RouteTable<Op::trsm, T>` and the native TRSM translation unit | correctness split only — nothing `preferred()` yet, so no route moves |
+| WP3 S3–S6 | V1, the one-work-item-per-solve CTA kernel, both sides; the facade hook | the register gate (`scripts/register_probe.sh`) rejected the first bucket ladder; **vendor-free `trsm` runs for the first time** |
+| WP3 S7–S8 | V2, the blocked driver, and complex support | native `trsm` covers **every** order; the conjugation test that was blind by construction is replaced |
+| WP3 S9–S11 | the benchmark grid the spec asked for, and `preferred()` flipped onto what it says | 9 of the spec's 54 cells are not physical on 24 GB and are dropped explicitly; complex, double and float-Right all flip together |
+| WP3 S12 | the `Side::Left` SLM staging tile | float/Left window moves `order <= 16` → `order <= 128`; staging **gated to real types** after it cost complex a 464 B stack frame |
+| WP3 S13 | win at every order 8..512, both sides, float and `complex<float>` | 3 of 4 (type, side) combinations win at every order; `complex<float>`/Right at order 8–16 shown to be a roofline tie at 88.5–90.5% of DRAM peak |
+| WP3 S14 | the cooperative CTA solve (W work-items per solve) | **built, measured and rejected** — passes the register gate at N=128 in fewer registers than V1 needs at N=32, and still measures 0.39× at order 64, 0.80× at 128 |
+| WP3 S16 | the trailing-update GEMM goes through the **route table** instead of the native kernel unconditionally | **167 of 168 cells win**; the n=512 solve 18.8 ms → **11.19 ms** against a 14.28 ms vendor; `trsm_tests` 91/91, vendor-free failing set byte-identical |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -199,17 +228,118 @@ Five plan claims were wrong and are corrected in the spec:
 And `route_compiled.hh`'s own prediction — that the flag would simply flip `true` — was
 wrong in two directions; it took a scalar parameter instead (S7).
 
-**Not implemented:** WP2–WP4.
+### WP2 is complete, and it flipped GEMM's default
 
-Next is WP2 (GEMM: close the envelope), whose first burn-down item is now named precisely:
-every one of the 17 remaining vendor-free `gemm` failures is **heterogeneous batch**. The
-native register-tiled kernel rejects it, and `gemm_heterogeneous_vendor_impl` — which also
-carries the `m==0`/`n==0` skip and the `k==0 → scale(beta)` substitution — lives only inside
-cuBLAS-gated code.
+Full design, measurements and corrections in `WP2_GEMM_SPEC.md`. WP2 ran as **two tracks that
+do not share commits**, because they have different acceptance criteria: a correctness track
+(C1–C3) closing the vendor-free gap, and an envelope track (E1–E6) moving the default.
 
-Two failures are present in the suite and are **not** from this work — both were reproduced
-by rebuilding with the relevant change reverted: `lanczos_tests` (2 cases) and `steqr_tests`
-(4 cases, all host-backend, 3 of them double, matching the known bad OpenBLAS kernel).
+- **Vendor-free `gemm` is complete.** `gemm_tests` 167/184 → **184/184**. The 17 remaining
+  failures were all heterogeneous batch, and `gemm_heterogeneous_vendor_impl` — which also
+  carries the `m==0`/`n==0` skip and the `k==0 → scale(beta)` substitution — lived only inside
+  cuBLAS-gated code. Vendor-freedom costs **nothing measurable** there (C3): both paths pay the
+  same dominant cost, one launch per batch member.
+- **GEMM's default is now `Auto`.** This was the one op whose native kernel never ran by
+  default. 262 decisions moved, **zero** regressions, verified field by field.
+- **The measurement narrowed the window as often as it widened it.** E4 found `preferred()`
+  claiming two float regions it *loses* — all 30 transposed cells at 0.34–0.55×. Had that not
+  been measured first, E6 would have moved float in all nine transpose forms instead of NN only.
+
+Three things WP2 established that later work depends on:
+
+1. **Measure demand before tuning.** The E2-prep capture found that 16 000 of 23 134 non-float
+   GEMM calls were the test suite's own probe rows. On real demand the wide-scalar gate fires on
+   **0.64%**, not 3.56% — which reframed every step after it.
+2. **Predict the flip before making it.** Enumerating the intended moves found `preferred()`'s
+   `double` branch was a bare `max_dim <= 512` with *no transpose test at all*, which would have
+   shipped an unmeasured transposed-double window.
+3. **Complex is what is still vendor-dependent**, and that is the honest headline: `preferred()`
+   refuses it, because the complex register ladder is reachable only through a gate needing
+   `min_dim >= 256` and an aligned NN shape. The panel-update population that dominates real
+   demand needs a **transposed and predicated wide-scalar kernel** — a new kernel, not a routing
+   change.
+
+### WP3 is complete: `trsm` is native, and faster than the vendor almost everywhere
+
+`WP3_TRSM_SPEC.md` is the design; **`WP3_TRSM_SPEC_CORRECTIONS.md` supersedes it** — the spec
+was written against a pre-WP1/WP2 tree and a verification pass found six edits that would have
+produced incorrect code, including three hook points that no longer exist and an SLM size
+formula that writes 127 elements past the end of its allocation.
+
+`trsm` was the only genuine hole in level 3 and had no native implementation of any kind. It now
+has two tiers — V1, a CTA kernel with one work-item per solve, and V2, a blocked driver — and
+across the measured grid (orders 8–512, both sides, `float` and `complex<float>`, at saturating
+batch) **native beats the vendor in 167 of 168 cells**:
+
+| vendor_ms / native_ms | 8 | 16 | 32 | 64 | 128 | 256 | 512 |
+|---|---|---|---|---|---|---|---|
+| float, Left | 1.60 | 1.72 | 1.69 | 1.65 | 1.42 | 1.25 | 1.21 |
+| float, Right | 1.62 | 2.37 | 2.23 | 2.01 | 1.60 | 1.23 | 1.00 |
+| `complex<float>`, Left | 1.05 | 1.41 | 2.64 | 4.69 | 11.21 | 16.62 | 51.70 |
+| `complex<float>`, Right | 1.01 | 1.03 | 1.35 | 1.90 | 8.49 | 15.31 | 19.64 |
+
+The single cell that does not clear parity is float / `Side::Right` / order 512 / q=256 /
+batch=128 at **0.978–0.983×** over three repeats — the smallest-work cell at that order, whose
+neighbours win 1.30–1.38×. It is published rather than papered over, and no router clause was
+fitted to it: the clause would be narrower than the noise floor of most of that table.
+
+Four results from WP3 that generalise beyond `trsm`:
+
+1. **The accuracy risk the plan flagged never materialised, because the design was rejected.**
+   §2.4 of the spec rejects diagonal-block inversion at every tier on its own argument, so the
+   substitution-based backward error bound is preserved and Risk 4 below is retired for `trsm`.
+2. **A cooperative CTA solve was built, measured and rejected** (step 14). It passes the
+   register gate at N=128 in *fewer* registers than V1 needs at N=32 and still measures 0.39× at
+   order 64. The traffic model that motivated it was right about DRAM and silent about the
+   serial recurrence it introduced. Kept as a patch, not as code.
+3. **The residual gap was never in the triangular solve.** V2's trailing update called
+   `sycl_gemm::gemm_custom`, the *native kernel entry point*, which bypasses
+   `RouteTable<Op::gemm>` entirely — so every update took the native GEMM whether or not it was
+   better. Routing it took the n=512 solve from 18.8 ms to **11.19 ms** against a 14.28 ms
+   vendor, with no change to the kernel.
+4. **The leading dimension is the whole effect, and no square benchmark can see it.** Every
+   operand `trsm` hands GEMM is a sub-view carrying its parent's `ld` — a 128-row `C` with
+   `ld = 512`. The same six shapes measure 0.86–0.98× at `ld == rows` and **0.43–0.62×** at the
+   real `ld`; cuBLAS barely moves. This is a **defect in the native GEMM that every panel-update
+   caller in the tree pays**, and it is now named down to the mechanism in
+   `register_tiled_common.hh` (odd tile strides defeating 16-byte alignment, B staged `[n][k]`,
+   and an epilogue whose adjacent lanes write columns 4096 B apart as read-modify-write).
+
+Item 4 is the next work item and is **not** a `trsm` item.
+
+### The burn-down number, and why it stopped moving
+
+The vendor-free suite is **25/53**, unchanged by WP3 — and the reason is worth stating, because
+the headline number now conflates two different gaps.
+
+`ctest` runs each level-3 suite against the **host (NETLIB) backend as well as CUDA**, and a
+vendor-free build has no netlib LAPACK either. Classifying every vendor-free failure by which
+library its `NoRouteError` names:
+
+| suite | failures on host (netlib) | failures on GPU (cuBLAS/cuSOLVER) |
+|---|---|---|
+| `trsm_tests` | **32** | **0** (59 pass) |
+| `sytrd_blocked_tests` | 12 | 0 |
+| `syev_tests` | 4 | 0 |
+| `ormqr_cta_tests` | 2 | 0 |
+| `symm_tests` / `hemm_tests` / `herk_tests` / `her2k_tests` / `syrk_tests` / `syr2k_tests` / `trmm_tests` | 2–8 each | 5–8 each |
+| `syevx_tests` / `syev_two_stage_tests` / `iluk_tests` / `inverse_tests` / `linalg_layer_tests` | 0 | 1–67 each |
+
+**Every vendor-free `trsm` failure is the host backend.** On the GPU, vendor-free `trsm` is
+complete — which is exactly what WP3 set out to deliver, and the suite-level number cannot show
+it. Four suites now fail *only* because of the host path, which is WP9 (the CPU story) and not
+a missing GPU kernel.
+
+The lesson is the same one S7 taught with `linked` vs `reachable`: **a suite-level pass count is
+the wrong instrument**, and the coverage table is the right one. A future step should split the
+burn-down by backend so a GPU kernel landing is visible in the number.
+
+**Not implemented:** WP4–WP9.
+
+The vendor-present suite stands at **52/53**. Its one failure, `lanczos_tests`, is **not** from
+this work and was reproduced by rebuilding with the relevant change reverted. (At the time WP1
+closed there were two: the other was `steqr_tests`, 4 host-backend cases, 3 of them `double`,
+matching the known bad OpenBLAS kernel on this machine. It has since been fixed.)
 
 ---
 
@@ -250,8 +380,8 @@ Three numbers frame the size of the job:
 
 | | count |
 |---|---|
-| Public dense ops with **no** native implementation anywhere | **9** (`gemv`, `trsm`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `spmm`) |
-| Portable level-3 kernels compiled **only** into the CUDA object library | **4** files (`symm`, `syrk`, `syr2k`, `trmm` custom dispatch) |
+| Public dense ops with **no** native implementation anywhere | **9** at the time of writing (`gemv`, `trsm`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `spmm`) — **now 8**: WP3 delivered `trsm` |
+| Portable level-3 kernels compiled **only** into the CUDA object library | **4** files (`symm`, `syrk`, `syr2k`, `trmm` custom dispatch) — **now 0**: WP1 freed all four |
 | Backends `with_backend` can dispatch to | **4** (CUDA, ROCM, MKL, NETLIB) — `Backend::SYCL` is in the enum and throws |
 
 ---
@@ -521,6 +651,13 @@ coverage table rather than quietly papered over.
 M1 is a correctness and packaging milestone. M2 is a performance campaign that can then
 proceed cell by cell, indefinitely, without ever regressing the guarantee M1 established.
 
+**Status after WP3.** Separating them was the right call, and the reason is visible in the
+numbers: **M2 has been reached for two ops while M1 is still open.** `gemm`'s default is `Auto`
+and `trsm` is preferred over the vendor in 167 of 168 cells — both shipped and both measured —
+while the vendor-free suite is 25/53 because `potrf`, `getrf`, `geqrf` and the rest still have no
+native kernel at all. Under the conflated version of these milestones, none of that would have
+shipped yet.
+
 ---
 
 ## 5. Work packages
@@ -528,7 +665,7 @@ proceed cell by cell, indefinitely, without ever regressing the guarantee M1 est
 Ordered by (value ÷ risk), not by dependency. WP0 and WP1 unblock measurement; WP2 is the
 linchpin; WP3–WP7 are the genuinely new numerics.
 
-### WP0 — Unify dispatch, add the gate
+### WP0 — Unify dispatch, add the gate — **COMPLETE**
 
 *No kernels. Pure enabling work.*
 
@@ -550,7 +687,7 @@ which is a fixed-size array in four places (`provider.hh:26`, `env.hh:58,99,111`
 not fail to compile if one is missed — it will silently truncate an order. Introduce a
 single `kProviderCount` constant rather than bumping four literals.
 
-### WP1 — Free the level-3 kernels from the CUDA backend
+### WP1 — Free the level-3 kernels from the CUDA backend — **COMPLETE**
 
 Move `symm_custom_dispatch`, `syrk_custom_dispatch`, `syr2k_custom_dispatch`,
 `trmm_custom_dispatch`, `triangular_expand.hh`, and the `*_triangular_tiles.hh` /
@@ -603,7 +740,13 @@ and available on ROCm for the first time.
 change on a path with measured crossovers, not a code move. **Depends on WP0**, because the
 routing it should defer to is what WP0 defines.
 
-### WP2 — GEMM: close the envelope
+### WP2 — GEMM: close the envelope — **COMPLETE**
+
+> **Superseded by `WP2_GEMM_SPEC.md`.** The sketch below is the original estimate and is kept
+> for the record; where it and the spec disagree, the spec wins. Delivered: vendor-free `gemm`
+> complete (184/184), the default flipped to `Auto`, double widened to non-square real-demand
+> shapes. **Complex remains vendor-dependent** and needs a transposed, predicated wide-scalar
+> kernel — the largest single remaining item in this area.
 
 Everything downstream is expand-then-gemm or blocked-panel-plus-gemm, so every gap in the
 GEMM envelope propagates into every op above it. The float-NN-large-square cell is already
@@ -632,7 +775,14 @@ Two traps that must be in the acceptance criteria:
 **Effort:** large. **Risk:** medium — this is tuning-heavy and the retune cycle is ~12 min,
 with a known trap that the CMake tuning-header target is a no-op.
 
-### WP3 — `trsm`
+### WP3 — `trsm` — **COMPLETE**
+
+> **Superseded by `WP3_TRSM_SPEC.md`, itself corrected by `WP3_TRSM_SPEC_CORRECTIONS.md`.**
+> The sketch below is the original estimate. Two of its three design guesses did not survive
+> measurement: **the diagonal-block-inverse formulation was rejected outright** (so the accuracy
+> caveat below is moot, and Risk 4 is retired for `trsm`), and the delivered large-`n` tier is a
+> two-level blocked driver whose inner blocks are solved by substitution, not inverted.
+> Delivered: native `trsm` beating the vendor in **167 of 168** measured cells.
 
 The only genuine hole in level 3, and `ortho`'s Cholesky-QR path needs it
 (`ortho.cc:194,281`). There is no device-level `trsv`/`trsm` in `group_blas` either, so this
@@ -799,6 +949,14 @@ shape variants (route more shapes through fewer kernels), not more parallel link
    stays vendor-preferred and complex `syev`/`gesvd` inherit that — a large fraction of the
    library. *Mitigate:* prototype the complex tile early, in WP2's first week, before
    committing to the WP3–WP6 schedule that assumes it.
+   **Outcome after WP2: this risk partly materialised and is the package's honest headline.**
+   The wide-scalar tile landed and wins for `double` (1.01–4.51×), but complex GEMM **stays
+   vendor-preferred** — `preferred()` refuses it, because the complex ladder is reachable only
+   through a gate needing `min_dim >= 256` and an aligned NN shape, which fires on 0.64% of real
+   demand. Closing it needs a transposed, predicated wide-scalar kernel. Note this did **not**
+   propagate to `trsm` as feared: WP3's complex column wins 1.01–51.70×, because the complex
+   "vendor" baseline there is not cuBLAS at all but a hand-written substitution kernel
+   (`cublas.cc:1111`).
 2. **Silent numerical failure in the QR/panel work (WP5).** This family has produced exactly
    this failure mode before, and the guarding tests did not catch it. *Mitigate:* write the
    discriminating test first and confirm it *can* fail; use the `-UNDEBUG` device-assert
@@ -806,6 +964,10 @@ shape variants (route more shapes through fewer kernels), not more parallel link
 3. **Build time (WP1, WP2).** See above.
 4. **Accuracy regression from inversion-based `trsm` and Cholesky-QR (WP3, WP4).**
    *Mitigate:* gate on the existing orthogonality accuracy benchmarks before defaulting.
+   **Retired for `trsm`:** the design was rejected before it was built. `WP3_TRSM_SPEC.md` §2.4
+   declines diagonal-block inversion at every tier on its own argument, and the delivered kernels
+   solve by substitution throughout, so the backward-error bound is unchanged. Still live for
+   WP4's Cholesky-QR.
 5. **Tuning surface explosion.** Every new kernel family adds a tuning axis; the retune cycle
    is ~12 min and previously a 2.16× kernel win turned into an 11% `gesvd` loss. *Mitigate:*
    validate every tuning change end-to-end at the algorithm level, never at the kernel level
@@ -815,6 +977,10 @@ shape variants (route more shapes through fewer kernels), not more parallel link
    implemented and measured 85–211× *slower* than the path it replaced. Implementation cost
    already spent is not evidence of value. Every WP in this document should be killed
    without ceremony if its first measurement says so.
+   **Exercised once so far, successfully:** WP3's cooperative CTA solve was designed, built,
+   proved correct, shown to pass the register gate in fewer registers than the kernel it would
+   replace — and then deleted, because it measured 0.39× at order 64. The traffic model that
+   motivated it was right about DRAM and silent about the serial recurrence it introduced.
 
 ---
 
@@ -848,12 +1014,27 @@ WP0 (gate + coverage table)  ──┬──> WP1 (level-3 unchained)  ──┐
 WP3–WP8 all consume WP2's GEMM, which is why WP2 is the linchpin and why its complex-tile
 prototype should be the first *numerical* thing attempted.
 
-**The first step is WP0, and specifically the coverage table.** It costs little, it is pure
-enabling work, and it converts this document from an argued estimate into a mechanically
-verified list. Every effort figure above should be re-derived from that table before any
-schedule is committed to.
+**The first step was WP0, and specifically the coverage table.** That is done, and it did what
+it was supposed to: it converted this document from an argued estimate into a mechanically
+verified list, and every claim since has been re-derived from it rather than from the prose above.
 
-A reasonable definition of "done" for the first iteration:
+**Where the next step is now.** WP0–WP3 are complete. The candidates, in the order the
+measurements argue for:
+
+1. **The native GEMM's strided-`ld` collapse.** Not a work package in the original list, because
+   it was not known. It is a defect, not a gap: the kernel is at parity when `ld == rows` and
+   0.43–0.62× at the `ld` a sub-view actually carries, and **every panel-update caller in the
+   tree passes sub-views**. It is what a vendor-free build still pays, everywhere, and the
+   mechanism is already localised to `register_tiled_common.hh`. Highest value per unit of risk.
+2. **WP4 (`potrf`).** The listed successor, small and low-risk, and it now has WP3's in-SLM
+   triangular solve to build on. `ortho` and `syevx_lobpcg` both need it.
+3. **Complex GEMM** — the transposed, predicated wide-scalar kernel WP2 identified. Larger, and
+   it is a new kernel rather than a routing change.
+4. **Splitting the burn-down by backend**, so a landing GPU kernel is visible in the number. Four
+   suites now fail vendor-free *only* on the host path; the suite-level count cannot show that
+   `trsm` is finished on the GPU.
+
+The original definition of "done" for the first iteration —
 
 ```bash
 cmake -B build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF .
@@ -861,4 +1042,6 @@ cmake --build build-novendor -j"$(nproc)"
 ctest --test-dir build-novendor
 ```
 
-green, with no performance claim attached. That is M1, and it is worth shipping on its own.
+green, with no performance claim attached — is **M1, and it is not yet reached**: the build
+configures, compiles, links, loads and runs, but the suite is 25/53. What has changed is that
+the remaining gap is now a named list of missing kernels rather than an unknown.
