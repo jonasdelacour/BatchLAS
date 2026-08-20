@@ -2358,6 +2358,110 @@ TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
                               /*vendor_available=*/false)));
 }
 
+// ---------------------------------------------------------------------------
+// The 128x128x8 kernel on genuine SUB-VIEWS.
+//
+// Every operand a blocked/panel algorithm hands to gemm is a sub-view carrying
+// its PARENT's leading dimension: a 128-row A with lda=512. No other test in
+// this file produces one -- they all build standalone Matrix objects, where
+// ld == rows by construction. That matters for two separate reasons:
+//
+//   * can_use_128x128_fast_path (register_128x128.hh:71-91) tests ld % 4 and a
+//     16-byte base pointer, NOT contiguity, so the ALIGNED leg can and does
+//     fire on a strided sub-view. Nothing has ever checked that it is right
+//     there.
+//   * MatrixView::operator()(Slice, Slice) offsets the base by
+//     c_start*ld + r_start (matrix.hh:1129-1141), so an odd r_start breaks the
+//     16-byte alignment and drops the same call onto the PREDICATED leg.
+//
+// Both legs are exercised below, and the comparison is over the WHOLE parent,
+// not just the sub-block, so a write that escapes the view's logical extent
+// fails the test rather than going unnoticed.
+// ---------------------------------------------------------------------------
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+
+    constexpr int P = 512;          // parent order
+    constexpr int batch_size = 2;
+    constexpr int m = 128, n = 128, k = 128;
+    constexpr int r0 = 128;         // multiple of 4: base stays 16-byte aligned
+
+    auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+    auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+    auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+
+    ASSERT_EQ(Asub(PA).ld(), P);    // the point of the test
+    ASSERT_NE(Asub(PA).ld(), Asub(PA).rows());
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+    }
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+
+    constexpr int P = 512;
+    constexpr int batch_size = 2;
+    constexpr int m = 200, n = 130, k = 70;   // ragged in all three
+    constexpr int r0 = 3;                     // NOT a multiple of 4
+
+    auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+    auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+    auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+    }
+}
+
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

@@ -1,0 +1,13 @@
+{
+  "displayTimeUnit": "ms",
+  "traceEvents": [
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":0,"dur":3184.65,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":1}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":4420.61,"dur":3168.44,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":2}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":8793.09,"dur":3164.15,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":3}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":13152.3,"dur":3189.76,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":4}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":17540.1,"dur":3189.76,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":5}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":21930,"dur":3171.34,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":6}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":26297.3,"dur":3170.3,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":7}},
+    {"name":"gemm_sycl_register_64x64","cat":"sycl","ph":"X","ts":30667.8,"dur":3171.34,"pid":1,"tid":1,"args":{"device":"NVIDIA GeForce RTX 4090","submit_id":8}}
+  ]
+}

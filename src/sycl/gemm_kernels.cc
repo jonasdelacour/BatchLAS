@@ -520,6 +520,54 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
             }
             return KernelVariant::Tiled128x128RegisterK8;
         }
+        // can_use_128x128_fast_path is a LEG predicate, not a KERNEL predicate.
+        // The dispatcher at :737-741 evaluates the identical predicate again and
+        // picks <true>/<false> itself, so a call that fails it still runs this
+        // kernel -- on its predicated leg. Used as a ROUTING gate above (:509),
+        // failing it did not demote the call to that leg; it handed the call to
+        // an entirely different, much slower kernel:
+        //
+        //   1000x1024x128  auto -> register_128x32_k16   forced -> register_128x128_k8
+        //   1024x1024x64   auto -> register_64x64        forced -> register_128x128_k8
+        //   1024x1024x128  auto -> register_128x128_k8   forced -> same  (null control)
+        //
+        // Measured native-vs-native (forced 128x128 vs the route it replaces),
+        // float NN beta=1, RTX 4090, 12 shapes, at pad 0 and pad 384:
+        // geomean 1.74x / 1.75x. Native goes 0.58x -> 0.99x of cuBLAS at
+        // ld==rows and 0.54x -> 0.93x strided.
+        //   1024x1024x64  b128 ld1408  3.187 -> 1.337 ms  2.38x
+        //   1000x1024x128 b128 ld1384  2.954 -> 1.569 ms  1.88x
+        //   1024x1024x16  b128         2.622 -> 1.232 ms  2.13x
+        //   128x128x8     b512         0.074 -> 0.030 ms  2.43x
+        // This also subsumes the ld%4 != 0 cliff (pad 1: 1.874 -> 1.003 ms),
+        // because this branch does not consult the alignment predicate at all.
+        // See experiments/wp4_gemm_ld/routing/.
+        //
+        // EVERY BOUND BELOW HAS A MEASURED COUNTEREXAMPLE. Do not round them.
+        //  * mn_min >= 64 : m=32 is a wash-to-loss (32x1024x32 0.97x).
+        //  * mn_min >= 128 when k >= 128 : the grid at register_128x128.hh:124-130
+        //    fixes a 128x128 output tile, so a 64-wide output wastes 2-4x of
+        //    every CTA. At k >= 128 the routes this would displace
+        //    (Tiled64x64RegisterK16 :529, Tiled32x128RegisterK16 :526) are tuned
+        //    and WIN -- forced/auto at pad0 and pad384:
+        //        64x64x512   b512  0.77 / 0.69   (forced 1.3-1.45x SLOWER)
+        //        64x64x1024  b256  0.58 / 0.62   (1.6-1.7x SLOWER)
+        //        64x1024x512 b256  0.64 / 0.62   (1.6x SLOWER)
+        //    At k < 128 those routes are not tuned and 128x128 wins even at
+        //    mn_min = 64: 1024x64x64 1.80x, 64x1024x64 1.59-1.81x.
+        //  * max_dim >= 128 : 64x64x64 is a wash (1.02x).
+        //  * k >= 8 : it is the kernel's TileK; 1024x1024x8 wins 2.00x.
+        //
+        // NOTE ON REACH: with cuBLAS present this changes no runtime at all --
+        // route_gemm.hh's float NN window requires m==n==k, so every shape this
+        // gate captures resolves to the vendor (coverage: 79 native float gemm
+        // calls against 102 791 vendor). The deliverable is the vendor-free and
+        // ROCm builds, and making a future preferred() flip arguable. At 0.93x
+        // it is not yet arguable.
+        const int mn_min = std::min(m, n);
+        if (max_dim >= 128 && k >= 8 && mn_min >= 64 && (mn_min >= 128 || k < 128)) {
+            return KernelVariant::Tiled128x128RegisterK8;
+        }
         if (m >= 128 && n >= 32 && k >= 128) {
             return KernelVariant::Tiled128x32RegisterK16;
         }
