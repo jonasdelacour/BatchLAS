@@ -206,11 +206,15 @@ struct RouteTable<Op::trsm, T> {
     //   complex<double>   1.20x   (30/30 cells win, best 4.66x)
     //   complex<float>    1.01x   (30/30 cells win, best 21.91x)
     //   float, Right      1.54x   (every n wins once batch >= 512)
-    //   float, Left       1.18x   at order <= 128 (any work), and at order
-    //                             256-512 below q*batch = 524288. Above that
-    //                             threshold order >= 256 measures 0.76-0.92x
-    //                             and stays with the vendor -- the one cell of
-    //                             this table the native kernel does not win.
+    //   float, Left       1.21x   at EVERY order 8..512 and every size, since
+    //                             WP3 step 16 routed the trailing-update GEMM
+    //
+    // After step 16, 167 of the 168 measured cells win. The one that does not
+    // is float / Side::Right / order 512 / q=256 / batch=128, reproducibly
+    // 0.978-0.983x over three repeats -- the smallest-work cell at that order
+    // (1.0 ms total; its neighbours win 1.30-1.38x). A 2% deficit on one cell
+    // is not worth a fitted special case here: the clause would be narrower
+    // than the noise floor of most of this table.
     //
     // and end-to-end through the actual caller, ortho at m in {1024,4096},
     // k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: 80 of 80 cells
@@ -262,40 +266,34 @@ struct RouteTable<Op::trsm, T> {
                 // transposes through SLM and brings that to 5.13 on the load
                 // and exactly 4.00 on the store, which is the whole 3.5x.
                 //
-                // WP3 step 13 REPLACED THE FLAT ORDER CAP WITH A WORK
-                // THRESHOLD, because the two-level blocked driver moved the
-                // boundary and the boundary turned out not to be about order
-                // alone. Measured after that change (float, Side::Left):
+                // WP3 step 16 REMOVED THE WORK THRESHOLD THAT USED TO LIVE
+                // HERE. Side::Left is now preferred at every order and every
+                // size, because the thing that lost the large cells was never
+                // the triangular solve -- it was the trailing-update GEMM
+                // taking the native kernel unconditionally.
                 //
-                //   order 256:  q*b=32768 1.12x  131072 1.40-1.49x
-                //               q*b=524288 0.90-0.92x   2097152 0.86-0.87x
-                //   order 512:  q*b=32768 1.23x  131072 1.05-1.10x
-                //               q*b=524288 0.76-0.77x
+                // V2 called sycl_gemm::gemm_custom directly, bypassing
+                // RouteTable<Op::gemm>. It now calls the ROUTED gemm (injected
+                // by the facade; see TrsmTrailingGemm in src/sycl/trsm_native.hh),
+                // so each trailing update goes wherever it is actually fastest.
+                // Measured effect on the cells that used to lose:
                 //
-                // so order 512 WINS at small work and order 256 LOSES at large
-                // work: an order cap cannot express that. The threshold sits
-                // between the two measured decades, at the first work size that
-                // loses, and it reproduces at both orders -- which is why it is
-                // written as one number rather than fitted per order.
+                //   order 256, q*batch 524288    0.92x -> 1.32x
+                //   order 256, q*batch 2097152   0.87x -> 1.28x
+                //   order 512, q*batch 524288    0.76x -> 1.28x
                 //
-                // WHY the work matters and not the order: below it the re-read
-                // traffic the blocked driver generates still lands in L2, and
-                // above it that traffic reaches DRAM. Neither side is
-                // bandwidth-bound here (both run at 11-26% of peak), so this is
-                // the amplification escaping cache, not a bandwidth wall.
+                // and worst clean cell per order, Side::Left, after:
+                //   8    16    32    64   128   256   512
+                // 1.60  1.72  1.69  1.65  1.42  1.25  1.21
                 //
-                // Double never had the cliff at all (1.39-6.37x before the
-                // tile, 1.51-8.92x after) because cuBLAS's DOUBLE triangular
-                // path is weak enough that the over-fetch never decided the
-                // race -- same kernel, same access pattern, opposite verdict,
-                // which is why this stays a per-type predicate. And complex
-                // does not stage at all: see trsm_stage_left() in
-                // src/sycl/trsm_native.cc for the register-residency reason.
-                if (order <= 128) return true;
-                // rhs_count() is q, the independent extent -- NOT s.n, which is
-                // the triangular order for one of the two sides. See the field
-                // mapping at the top of this file.
-                return static_cast<int64_t>(s.rhs_count()) * s.batch < 524288;
+                // WHY THE GEMM WAS THE PROBLEM, since it is not obvious: every
+                // operand V2 hands gemm is a SUB-VIEW carrying its parent's
+                // leading dimension -- a 128-row C with ld=512. On those shapes
+                // with ld == rows the native kernel is at parity (0.86-0.98x);
+                // with the real ld it measures 0.43-0.62x, while cuBLAS barely
+                // moves. Strided is the only case trsm ever issues, so a
+                // square-matrix GEMM benchmark could not have shown it.
+                return true;
             }
             // Side::Right: native wins at every order once there is batch to
             // work with -- 1.54-4.59x at batch >= 512, all q. The two sub-unit

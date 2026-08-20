@@ -425,5 +425,49 @@ level entirely changed nothing. Measure the outer trailing GEMM first.
 |---|---|---|
 | 14 | cooperative CTA solve | built, measured, **rejected** |
 | 15 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open — it silently redefines the complex baseline |
-| 16 | the outer trailing GEMM at order >= 256, which step 14 localised the remaining gap to | open |
+| 16 | the trailing-update GEMM | **done** — `experiments/wp3_s16/`; 167 of 168 cells now win, and the float/Left work threshold is gone |
 | 17 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |
+
+---
+
+## ✱ Step 16 — the trailing GEMM was taking the native kernel unconditionally
+
+float/Side::Left now wins at EVERY order 8..512 and every size, so
+`preferred()`'s `q*batch < 524288` threshold is deleted. 167 of the 168 measured
+cells win; the exception is float/Side::Right/order 512/q=256/batch=128 at
+0.978-0.983x over three repeats, the smallest-work cell at that order.
+
+**THE CAUSE WAS NOT IN TRSM AT ALL.** V2 called `sycl_gemm::gemm_custom`, the
+native kernel entry point, which bypasses `RouteTable<Op::gemm>` -- so every
+trailing update got the native GEMM regardless of whether it was better. The
+facade now injects the ROUTED gemm (`TrsmTrailingGemm` in
+`src/sycl/trsm_native.hh`), and at n=512, q=1024, batch=512 the solve goes
+18.8 ms -> 11.19 ms against the vendor's 14.28 ms.
+
+**AND THE REASON IT MATTERED IS THE LEADING DIMENSION.** Every operand trsm
+hands gemm is a SUB-VIEW carrying its parent's ld -- a 128-row C with ld=512.
+The same six shapes measure near parity with ld == rows (0.86-0.98x on the inner
+three) and 0.43-0.62x with the real ld. cuBLAS barely moves. Strided is the ONLY
+case trsm issues, so a square-matrix GEMM benchmark structurally could not have
+found this. The native-side mechanism is in
+`src/sycl/gemm/register_tiled_common.hh`: odd tile strides (TileM+1, TileK+1)
+that defeat 16-byte alignment, B staged `[n][k]` so a thread's values never
+vectorize, and an epilogue whose adjacent lanes write columns 4096 B apart at
+ldc=512 -- as read-modify-write, since the trailing update always has beta != 0.
+
+**TWO CORRECTIONS TO EARLIER CONCLUSIONS.** Step 14 said the inner blocking
+level did not matter because removing it changed nothing; that was masked by the
+cooperative solve being slow in its own way. nsys puts the inner GEMMs at 7.83
+ms, 42% of the solve for 20% of the flops. And my own first measurement in this
+step used ld == rows and led me to write that the inner GEMMs were "not a
+routing problem" -- at the real ld they are 0.48-0.58x. The ld is the effect,
+not a detail of the harness.
+
+### Revised remaining order
+
+| step | what | status |
+|---|---|---|
+| 16 | the trailing-update GEMM | **done** |
+| 17 | the native GEMM's strided-`ld` collapse, which is now a known defect with a named mechanism and affects every panel-update caller in the tree, not just trsm | open — this is what a vendor-free build still pays |
+| 18 | settle whether cuBLAS complex trsm actually misbehaves, or whether `cublas.cc:1111` is stale | open |
+| 19 | `MatrixView::operator()(Slice,Slice)` passing the parent pointer array (`matrix.hh:1140`) | open, reported, deliberately untouched |

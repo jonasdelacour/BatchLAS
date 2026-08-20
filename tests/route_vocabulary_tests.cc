@@ -396,21 +396,22 @@ constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
-    // float, Side::Left, order 256 is a real cell, not a contrived one: it
-    // measures 0.76-0.93x even after the staging tile, so it is a CORRECTNESS
-    // yes and a SPEED no. If the two ever collapse into one boolean, this is
-    // the cell that silently loses its vendor-free route.
-    //
-    // It used to be order 32 here. The tile turned that cell into a win, which
-    // is exactly why this test names a cell by its MEASUREMENT rather than
-    // asserting that some cell somewhere is unpreferred -- the boundary moves.
-    const auto s = trsm_shape(/*tri_order=*/256, /*q=*/1024, /*batch=*/512, /*cta_max=*/32);
-    EXPECT_TRUE(TrsmTable::supports(kBlocked, s))
-        << "the blocked driver splits the order itself; this must be a CORRECTNESS yes";
-    EXPECT_FALSE(TrsmTable::preferred(kBlocked, s))
-        << "float Side::Left at order 256 measured 0.76-0.93x; it must not be preferred";
+    // The supports/preferred split must stay visible even now that float wins
+    // everywhere measured, so this names a cell that is structurally supported
+    // and un-preferred for a NON-speed reason: batch below the measured floor.
+    // At batch=1 the native kernel measured 0.40-0.86x (experiments/wp3_s9),
+    // and that floor lives in preferred(), so a vendor-free build still routes
+    // it natively rather than throwing.
+    const auto s = trsm_shape(/*tri_order=*/32, /*q=*/1024, /*batch=*/1, /*cta_max=*/32,
+                              Side::Left);
+    EXPECT_TRUE(TrsmTable::supports(kCta, s))
+        << "batch size is a speed question; it must not gate CORRECTNESS";
+    EXPECT_FALSE(TrsmTable::preferred(kCta, s))
+        << "batch=1 measured 0.40-0.86x and must not be preferred";
     EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)))
         << "un-preferred must never mean unroutable when there is no vendor";
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)))
+        << "and with a vendor present it must take it";
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +423,7 @@ TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
 // later edit widening a window has to come with its own numbers.
 // ---------------------------------------------------------------------------
 
-TEST(RouteTrsm, FloatLeftWindowIsOrderThenWork) {
+TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
     // This test used to pin the boundary at 16, which is where it sat while
     // Side::Left read B's columns one scattered lane at a time. WP3 step 12
     // built the SLM staging tile and the boundary moved to 128: orders 32, 64
@@ -433,16 +434,17 @@ TEST(RouteTrsm, FloatLeftWindowIsOrderThenWork) {
         EXPECT_TRUE(TrsmTable::preferred(r, trsm_shape(order, 1024, 2048, 32, Side::Left)))
             << "float Side::Left order " << order << " wins after the staging tile";
     }
-    // Order 256+ is a WORK threshold, not an order cap: q*batch = 1024*512 =
-    // 524288 loses (0.90x), and the same order at 256*128 = 32768 wins (1.12x).
-    EXPECT_FALSE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
-        << "float Side::Left order 256 at q*batch=524288 measures 0.90x";
-    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(256, 256, 128, 32, Side::Left)))
-        << "the same order at q*batch=32768 measures 1.12x and must stay native";
+    // THE WORK THRESHOLD IS GONE (WP3 step 16). It existed because the large
+    // cells lost, and they lost on the trailing-update GEMM rather than on the
+    // solve; routing that GEMM turned 0.76-0.92x into 1.21-1.32x, so Side::Left
+    // is preferred at every order and every size. These two cells are the ones
+    // the old threshold excluded.
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
+        << "float Side::Left order 256 at q*batch=524288 now measures 1.32x";
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 1024, 512, 32, Side::Left)))
+        << "float Side::Left order 512 at q*batch=524288 now measures 1.28x";
     EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 256, 128, 32, Side::Left)))
-        << "order 512 WINS at small work (1.23x) -- an order cap could not express that";
-    EXPECT_FALSE(TrsmTable::preferred(kBlocked, trsm_shape(512, 1024, 512, 32, Side::Left)))
-        << "order 512 at q*batch=524288 measures 0.76x";
+        << "and the small-work cells it always won stay won";
 
     // Same orders, other side: all preferred, and untouched by the tile --
     // Side::Right never stages, and its register counts are byte-identical

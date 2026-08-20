@@ -189,8 +189,42 @@ Event trsm(Queue& ctx,
                     ctx, A, B, alpha, side, uplo, transA, diag);
             }
             if (route.algo == dispatch::Algorithm::Blocked) {
+                // THE TRAILING UPDATE GOES THROUGH THE ROUTER, not straight to
+                // the native kernel. V2 used to call sycl_gemm::gemm_custom
+                // itself, which bypasses RouteTable<Op::gemm> -- so the blocked
+                // driver always got the native GEMM even on the shapes WP2 had
+                // already measured it losing.
+                //
+                // It loses them badly, because of a property of the shapes trsm
+                // issues that a square-matrix GEMM benchmark never sees: every
+                // operand is a SUB-VIEW carrying its parent's leading dimension.
+                // Measured on the six shapes V2 issues at order 512 (float,
+                // q=1024, batch=512), with those real leading dimensions:
+                //
+                //   outer  m=128 n=1024 k=128/256/384  native 8.05 ms  vendor 3.89 ms
+                //   inner  m=32  n=1024 k=32/64/96     native 7.89 ms  vendor 3.98 ms
+                //
+                // The same shapes with ld == rows are near parity (0.86-0.98x on
+                // the inner three). The native GEMM collapses on a strided ld
+                // and cuBLAS does not, and strided is the ONLY case trsm issues.
+                //
+                // Injection rather than an include: the kernel TU stays free of
+                // the dispatch layer, tests keep calling it directly and get the
+                // native GEMM, and a VENDOR-FREE build is unaffected because
+                // resolve_route falls back to the native GEMM there anyway
+                // (route_resolve.hh:60-63). The signatures of gemm_custom and
+                // this gemm are identical, so nothing adapts.
                 return sycl_trsm::trsm_native_blocked<T>(
-                    ctx, A, B, alpha, side, uplo, transA, diag);
+                    ctx, A, B, alpha, side, uplo, transA, diag,
+                    [](Queue& c,
+                       const MatrixView<T, MatrixFormat::Dense>& ga,
+                       const MatrixView<T, MatrixFormat::Dense>& gb,
+                       const MatrixView<T, MatrixFormat::Dense>& gc,
+                       T galpha, T gbeta, Transpose gta, Transpose gtb,
+                       ComputePrecision gp) {
+                        return gemm<Back, T>(c, ga, gb, gc, galpha, gbeta,
+                                             gta, gtb, gp);
+                    });
             }
         }
     }

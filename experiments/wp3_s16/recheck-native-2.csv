@@ -1,0 +1,2 @@
+name,arg0,arg1,arg2,iterations,avg_ms,stddev_ms,GFLOPS,Time (us) / matrix
+"(BM_TRSM_OrthoRight<float, batchlas::Backend::CUDA>)",512,256,128,500,1.00276,0.0217335,8566.28,7.83408

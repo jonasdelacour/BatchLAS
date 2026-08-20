@@ -673,7 +673,23 @@ Event trsm_native_blocked(Queue& ctx,
                           Side side,
                           Uplo uplo,
                           Transpose transA,
-                          Diag diag) {
+                          Diag diag,
+                          TrsmTrailingGemm<T> trailing_gemm) {
+    // Default to the native kernel so this TU stands alone: a direct caller
+    // (the tests) gets gemm_custom with no dispatch dependency. The facade
+    // passes the ROUTED gemm instead -- see the note on TrsmTrailingGemm in
+    // trsm_native.hh for the measurement that motivates it.
+    if (!trailing_gemm) {
+        trailing_gemm = [](Queue& c,
+                           const MatrixView<T, MatrixFormat::Dense>& ga,
+                           const MatrixView<T, MatrixFormat::Dense>& gb,
+                           const MatrixView<T, MatrixFormat::Dense>& gc,
+                           T galpha, T gbeta, Transpose gta, Transpose gtb,
+                           ComputePrecision gp) {
+            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta,
+                                             gta, gtb, gp);
+        };
+    }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
     const int q = static_cast<int>(side == Side::Left ? B.cols() : B.rows());
@@ -723,17 +739,17 @@ Event trsm_native_blocked(Queue& ctx,
 
         if (side == Side::Left) {
             // C(m x q) := -op(Aoff)(m x k) * X(k x q) + beta*C
-            sycl_gemm::gemm_custom<T>(ctx, Aoff, X, C, T(-1), beta,
-                                      transA, Transpose::NoTrans,
-                                      ComputePrecision::Default);
+            trailing_gemm(ctx, Aoff, X, C, T(-1), beta,
+                          transA, Transpose::NoTrans,
+                          ComputePrecision::Default);
         } else {
             // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C.
             // X GOES IN THE A POSITION. The obvious single form with the A
             // block first produces a C of at most nb rows against the required
             // q and does not conform for any transpose.
-            sycl_gemm::gemm_custom<T>(ctx, X, Aoff, C, T(-1), beta,
-                                      Transpose::NoTrans, transA,
-                                      ComputePrecision::Default);
+            trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
+                          Transpose::NoTrans, transA,
+                          ComputePrecision::Default);
         }
     };
 
@@ -895,18 +911,18 @@ template <> int trsm_cta_max_n<std::complex<double>>() { return 32; }
 // message that blames the wrong thing.
 template Event trsm_native_blocked<float>(
     Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag);
+    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag, TrsmTrailingGemm<float>);
 template Event trsm_native_blocked<double>(
     Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
+    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag, TrsmTrailingGemm<double>);
 template Event trsm_native_blocked<std::complex<float>>(
     Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
     const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>,
-    Side, Uplo, Transpose, Diag);
+    Side, Uplo, Transpose, Diag, TrsmTrailingGemm<std::complex<float>>);
 template Event trsm_native_blocked<std::complex<double>>(
     Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
-    Side, Uplo, Transpose, Diag);
+    Side, Uplo, Transpose, Diag, TrsmTrailingGemm<std::complex<double>>);
 
 template <> bool trsm_blocked_available<float>()                { return true; }
 template <> bool trsm_blocked_available<double>()               { return true; }

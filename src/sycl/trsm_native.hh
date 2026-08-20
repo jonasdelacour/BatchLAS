@@ -30,6 +30,8 @@
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
+
+#include <functional>
 #include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas::sycl_trsm {
@@ -77,8 +79,40 @@ Event trsm_native_v1_dispatch(Queue& ctx,
                               Transpose transA,
                               Diag diag);
 
+// The trailing-update GEMM, injected rather than hardcoded.
+//
+// WHY. V2 called sycl_gemm::gemm_custom directly, which is the NATIVE kernel
+// entry point and bypasses RouteTable<Op::gemm> entirely -- so the trailing
+// updates always got the native kernel whether or not it was the better one.
+// Measured, float, the six shapes V2 actually issues at order 512 (q=1024,
+// batch=512), with the leading dimensions it actually passes (sub-views
+// carrying the parent's ld=512, not ld==rows):
+//
+//   outer  m=128 n=1024 k=128/256/384   native 8.05 ms   vendor 3.89 ms
+//   inner  m=32  n=1024 k=32/64/96      native 7.89 ms   vendor 3.98 ms  (x4 panels)
+//
+// i.e. cuBLAS is 1.6-2.3x faster on every one of them. The native GEMM is at
+// parity when ld == rows and collapses when it is not; cuBLAS barely notices.
+// Since a panel is ALWAYS a sub-view, the strided case is the only one trsm
+// ever issues.
+//
+// The signature is deliberately identical to both sycl_gemm::gemm_custom and
+// the routed batchlas::gemm, so the caller chooses without either side
+// adapting. An EMPTY function means "use gemm_custom", which is what keeps the
+// kernel layer standalone: tests and any direct caller get the native kernel
+// with no dispatch dependency, and a vendor-free build is unaffected because
+// the resolver falls back to native there anyway.
+template <typename T>
+using TrsmTrailingGemm = std::function<Event(
+    Queue&,
+    const MatrixView<T, MatrixFormat::Dense>&,
+    const MatrixView<T, MatrixFormat::Dense>&,
+    const MatrixView<T, MatrixFormat::Dense>&,
+    T, T, Transpose, Transpose, ComputePrecision)>;
+
 // V2, the blocked driver, for orders above trsm_cta_max_n<T>(). Calls V1 on
-// each diagonal block and sycl_gemm::gemm_custom for the trailing update.
+// each diagonal block and `trailing_gemm` (default: sycl_gemm::gemm_custom)
+// for the trailing update.
 template <typename T>
 Event trsm_native_blocked(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -87,6 +121,7 @@ Event trsm_native_blocked(Queue& ctx,
                           Side side,
                           Uplo uplo,
                           Transpose transA,
-                          Diag diag);
+                          Diag diag,
+                          TrsmTrailingGemm<T> trailing_gemm = {});
 
 } // namespace batchlas::sycl_trsm
