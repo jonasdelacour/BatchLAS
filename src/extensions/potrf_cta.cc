@@ -3,8 +3,8 @@
 //
 // This TU sits in EXTENSIONS_CTA_SOURCES (src/extensions/CMakeLists.txt), which
 // is W12: a source must sit with the sources whose device symbols it calls, and
-// the blocked driver's diagonal leaf will BE potrf_cta_body -- so when Phase 2
-// lands, potrf_blocked.cc goes in this same list. Splitting a device-code
+// the blocked driver's diagonal leaf IS potrf_cta_body -- so potrf_blocked.cc
+// sits in that same list. Splitting a device-code
 // cluster across libraries is a hard `ptxas fatal: Unresolved extern function`
 // today and, while every helper stays an inline template, a latent one: the link
 // succeeds by duplicating the body into both TUs, and breaks the first time
@@ -41,7 +41,9 @@
 //   tests' oracle is a host multiply-back residual, which is independent of
 //   every other implementation in this tree; a device::herk A/B would compare
 //   the kernel against another BatchLAS path.
-// * No blocked driver. potrf_blocked_available<T>() is false for every type.
+// * No blocked driver IN THIS FILE. It is WP4 Phase 2 and lives in
+//   src/extensions/potrf_blocked.cc, which calls potrf_cta_dispatch below as
+//   its diagonal-block leaf, handed a sub-view.
 
 #include "potrf_native.hh"
 #include "potrf_cta_device.hh"
@@ -477,11 +479,10 @@ int potrf_cta_max_n() {
     return potrf_cta_max_n_for_slm<T>(kPotrfReferenceSlmBudget);
 }
 
-// Phase 2. Not written. See potrf_native.hh.
-template <> bool potrf_blocked_available<float>()                { return false; }
-template <> bool potrf_blocked_available<double>()               { return false; }
-template <> bool potrf_blocked_available<std::complex<float>>()  { return false; }
-template <> bool potrf_blocked_available<std::complex<double>>() { return false; }
+// potrf_blocked_available<T>() IS NOT HERE. It moved to
+// src/extensions/potrf_blocked.cc with WP4 Phase 2, so that "the flag is true"
+// and "the driver is compiled into this build" are the same fact; see
+// potrf_native.hh for why that placement is load-bearing.
 
 // ---------------------------------------------------------------------------
 // Workspace.

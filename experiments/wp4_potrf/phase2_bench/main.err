@@ -1,0 +1,55 @@
+INFONZ blocked float n=256 batch=1024 nz=39: [34]=129 [38]=129 [50]=129 [54]=129 [78]=129 [128]=129 [152]=129 [162]=129 resid[34]=3.617e+02
+INFONZ blocked float n=256 batch=1024 nz=28: [3]=129 [5]=129 [7]=129 [39]=129 [87]=129 [103]=129 [113]=129 [123]=129 resid[3]=1.766e+08
+INFONZ blocked float n=512 batch=512 nz=47: [20]=385 [33]=385 [63]=385 [64]=257 [74]=257 [78]=257 [100]=385 [110]=257 resid[20]=2.459e+05
+INFONZ blocked float n=512 batch=512 nz=53: [26]=129 [37]=257 [75]=257 [79]=257 [83]=257 [91]=257 [129]=257 [133]=257 resid[26]=1.002e+02
+INFONZ blocked float n=1024 batch=128 nz=1: [73]=129 resid[73]=2.607e+08
+INFONZ blocked float n=1024 batch=128 nz=14: [64]=641 [65]=130 [66]=385 [67]=899 [68]=900 [69]=385 [71]=133 [73]=642 resid[64]=2.606e+03
+INFONZ blocked float n=1024 batch=256 nz=30: [81]=513 [99]=897 [139]=897 [153]=897 [154]=513 [188]=513 [190]=385 [192]=385 resid[81]=3.654e+02
+INFONZ blocked float n=1024 batch=256 nz=63: [73]=129 [85]=770 [86]=129 [88]=897 [92]=129 [96]=513 [97]=258 [98]=769 resid[73]=4.178e+04
+INFONZ blocked float n=2048 batch=64 nz=13: [32]=385 [33]=385 [34]=642 [35]=129 [36]=1665 [37]=385 [38]=385 [39]=1410 resid[32]=4.881e-04
+INFONZ blocked double n=128 batch=2048 nz=59: [0]=97 [1]=97 [2]=97 [3]=98 [4]=97 [7]=97 [10]=97 [11]=97 resid[0]=6.809e+05
+INFONZ blocked double n=128 batch=2048 nz=46: [2]=97 [3]=98 [6]=97 [7]=97 [8]=100 [15]=97 [16]=97 [26]=97 resid[2]=5.364e+05
+INFONZ blocked double n=256 batch=1024 nz=86: [0]=97 [1]=98 [4]=97 [6]=193 [7]=193 [8]=99 [10]=97 [11]=100 resid[0]=4.888e+00
+INFONZ blocked double n=256 batch=1024 nz=72: [0]=97 [2]=97 [3]=97 [4]=193 [5]=97 [8]=97 [11]=97 [13]=97 resid[0]=1.940e+01
+INFONZ blocked double n=512 batch=512 nz=89: [1]=97 [2]=289 [3]=385 [4]=289 [6]=289 [7]=289 [8]=289 [9]=289 resid[1]=7.823e+02
+INFONZ blocked double n=512 batch=512 nz=75: [1]=193 [6]=193 [7]=289 [10]=354 [11]=289 [12]=193 [13]=97 [14]=289 resid[1]=2.126e+00
+INFONZ blocked double n=1024 batch=128 nz=1: [13]=451 resid[13]=4.824e-03
+INFONZ blocked double n=1024 batch=256 nz=14: [3]=577 [7]=289 [8]=577 [9]=577 [15]=289 [21]=577 [35]=931 [43]=577 resid[3]=1.296e-01
+INFONZ blocked double n=1024 batch=256 nz=18: [1]=577 [3]=385 [9]=673 [10]=577 [12]=673 [20]=833 [23]=97 [25]=289 resid[1]=9.470e+00
+INFONZ blocked double n=2048 batch=64 nz=3: [55]=1185 [60]=1281 [62]=1156 resid[55]=4.880e-04
+INFONZ blocked double n=2048 batch=64 nz=7: [10]=1121 [29]=1762 [53]=1954 [55]=547 [57]=1313 [58]=545 [59]=1153 resid[10]=8.631e-03
+INFONZ blocked cfloat n=128 batch=2048 nz=68: [0]=97 [1]=97 [4]=97 [5]=97 [6]=97 [10]=97 [12]=97 [21]=98 resid[0]=1.408e+01
+INFONZ blocked cfloat n=128 batch=2048 nz=44: [1]=97 [4]=97 [11]=97 [20]=97 [24]=97 [25]=97 [27]=97 [31]=97 resid[1]=7.480e-03
+INFONZ blocked cfloat n=256 batch=256 nz=4: [203]=226 [237]=98 [238]=97 [239]=97 resid[203]=2.378e-03
+INFONZ blocked cfloat n=256 batch=1024 nz=93: [0]=97 [1]=196 [3]=97 [4]=193 [5]=97 [6]=97 [7]=193 [8]=97 resid[0]=2.012e-02
+INFONZ blocked cfloat n=256 batch=1024 nz=84: [0]=97 [1]=193 [5]=98 [7]=97 [8]=97 [9]=97 [10]=97 [12]=193 resid[0]=3.567e+01
+INFONZ blocked cfloat n=512 batch=128 nz=3: [102]=354 [103]=97 [117]=225 resid[102]=1.949e-03
+INFONZ blocked cfloat n=512 batch=512 nz=93: [0]=97 [1]=385 [2]=100 [3]=97 [6]=193 [7]=97 [8]=385 [9]=97 resid[0]=3.845e-01
+INFONZ blocked cfloat n=512 batch=512 nz=89: [3]=385 [4]=289 [5]=289 [8]=289 [9]=289 [10]=193 [11]=97 [13]=289 resid[3]=2.716e-03
+INFONZ blocked cfloat n=1024 batch=128 nz=34: [8]=97 [10]=97 [14]=353 [17]=193 [25]=193 [30]=193 [65]=289 [69]=289 resid[8]=1.384e+07
+INFONZ blocked cfloat n=1024 batch=128 nz=9: [3]=353 [11]=193 [66]=801 [74]=673 [77]=290 [80]=673 [90]=609 [115]=770 resid[3]=1.764e-01
+INFONZ blocked cfloat n=1024 batch=256 nz=68: [0]=289 [1]=193 [2]=289 [3]=481 [4]=673 [5]=577 [6]=289 [7]=385 resid[0]=4.543e+00
+INFONZ blocked cfloat n=1024 batch=256 nz=32: [0]=577 [1]=577 [2]=577 [3]=577 [5]=481 [6]=641 [16]=673 [19]=577 resid[0]=2.547e-01
+INFONZ blocked cfloat n=2048 batch=32 nz=2: [24]=97 [25]=1761 resid[24]=4.881e-04
+INFONZ blocked cfloat n=2048 batch=32 nz=3: [24]=1251 [25]=2017 [28]=1922 resid[24]=1.348e-03
+INFONZ blocked cfloat n=2048 batch=64 nz=33: [0]=97 [3]=705 [6]=193 [9]=353 [15]=97 [31]=418 [32]=612 [34]=289 resid[0]=1.394e+08
+INFONZ blocked cfloat n=2048 batch=64 nz=14: [29]=1889 [31]=1442 [35]=289 [37]=1442 [40]=386 [41]=801 [43]=1409 [45]=1825 resid[29]=4.880e-04
+INFONZ blocked cdouble n=128 batch=512 nz=6: [8]=65 [16]=65 [43]=65 [92]=65 [104]=65 [106]=65 resid[8]=4.494e-02
+INFONZ blocked cdouble n=128 batch=2048 nz=49: [0]=65 [1]=66 [2]=65 [4]=65 [10]=65 [13]=65 [16]=65 [17]=65 resid[0]=3.478e-01
+INFONZ blocked cdouble n=128 batch=2048 nz=33: [0]=66 [1]=66 [3]=65 [4]=65 [7]=65 [8]=65 [10]=65 [14]=65 resid[0]=1.225e-02
+INFONZ blocked cdouble n=256 batch=256 nz=5: [28]=131 [81]=131 [117]=65 [123]=193 [243]=65 resid[28]=1.280e-02
+INFONZ blocked cdouble n=256 batch=256 nz=4: [11]=131 [144]=65 [177]=131 [195]=131 resid[11]=1.752e-02
+INFONZ blocked cdouble n=256 batch=1024 nz=80: [0]=193 [2]=65 [3]=65 [4]=65 [6]=129 [10]=193 [11]=65 [12]=193 resid[0]=2.063e-02
+INFONZ blocked cdouble n=256 batch=1024 nz=67: [0]=193 [2]=129 [5]=65 [6]=193 [12]=131 [14]=129 [15]=65 [17]=193 resid[0]=4.262e-02
+INFONZ blocked cdouble n=512 batch=128 nz=3: [4]=66 [64]=65 [115]=65 resid[4]=3.508e-02
+INFONZ blocked cdouble n=512 batch=128 nz=3: [71]=65 [75]=65 [122]=66 resid[71]=1.730e-01
+INFONZ blocked cdouble n=512 batch=512 nz=91: [0]=193 [1]=193 [2]=321 [3]=65 [4]=65 [5]=257 [6]=321 [7]=129 resid[0]=4.695e+01
+INFONZ blocked cdouble n=512 batch=512 nz=91: [0]=321 [1]=257 [2]=257 [3]=66 [4]=66 [5]=129 [6]=257 [7]=65 resid[0]=9.455e-02
+INFONZ blocked cdouble n=1024 batch=128 nz=37: [0]=193 [1]=193 [2]=257 [3]=322 [7]=323 [10]=66 [12]=129 [18]=193 resid[0]=3.447e+05
+INFONZ blocked cdouble n=1024 batch=128 nz=34: [0]=193 [8]=643 [11]=193 [12]=450 [14]=578 [18]=193 [19]=449 [23]=449 resid[0]=1.521e+00
+INFONZ blocked cdouble n=1024 batch=256 nz=57: [0]=705 [1]=193 [2]=642 [3]=577 [4]=578 [6]=577 [7]=386 [8]=513 resid[0]=2.123e-04
+INFONZ blocked cdouble n=1024 batch=256 nz=43: [1]=513 [2]=257 [3]=257 [5]=322 [6]=449 [7]=705 [8]=257 [9]=514 resid[1]=2.096e-01
+INFONZ blocked cdouble n=2048 batch=32 nz=5: [10]=1026 [19]=1730 [20]=385 [24]=1601 [30]=1090 resid[10]=4.882e-04
+INFONZ blocked cdouble n=2048 batch=32 nz=9: [20]=1729 [21]=1921 [23]=705 [24]=1066 [25]=1475 [26]=641 [27]=897 [28]=962 resid[20]=4.880e-04
+INFONZ blocked cdouble n=2048 batch=64 nz=35: [15]=1089 [18]=769 [19]=1921 [20]=449 [21]=1089 [23]=1281 [24]=641 [26]=1473 resid[15]=1.109e-02
+INFONZ blocked cdouble n=2048 batch=64 nz=32: [9]=1025 [19]=1537 [20]=449 [21]=513 [26]=1281 [27]=714 [29]=834 [34]=513 resid[9]=8.143e-01

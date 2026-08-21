@@ -374,6 +374,43 @@ Event trsm_native_v1(Queue& ctx,
                     sLc[idx] = v;
                 }
 
+                // THE BARRIER THAT WAS MISSING, and it is a WRONG ANSWER, not a
+                // tuning nicety. Two independent read-after-writes cross this
+                // line, and until WP4 Phase 2 triage neither was ordered:
+                //
+                //  (1) sLc. The staging loop above is strided by `lane`, so
+                //      element `idx` is written by lane `idx % wg`. The
+                //      reciprocal loop below has lane `s` READ sLc[tri_idx(s,s)]
+                //      == sLc[s*(s+1)/2 + s], which is a different lane's write
+                //      for every s where (s*(s+1)/2 + s) % wg != s -- i.e. for
+                //      nearly all of them. Reading an unwritten local word gives
+                //      a garbage diagonal, hence a garbage reciprocal, hence a
+                //      wrong solve.
+                //  (2) sDiv[0]. Lane 0 zeroes it at :339; every lane may
+                //      atomically store 1 into it in the loop below. Unordered,
+                //      lane 0's zero can land after the store and silently
+                //      discard the revert-to-division flag.
+                //
+                // WHY IT SURVIVED WP3'S TEST SUITE AND ITS BENCHMARKS. wg is
+                // chosen at :266-274 as the FIRST candidate in {256,128,64,32}
+                // that keeps bs*ceil(q/wg) >= 4*CU, so it is 32 -- a single
+                // sub-group, executing the two loops in lock step, where the
+                // race cannot express itself -- for every shape below roughly
+                // q*bs = 65k. Every trsm test and every WP3 A/B cell sits in
+                // that regime. The blocked POTRF panel solve does not: at
+                // n=1024, batch=256 the first panel has q = 896, wg = 256, eight
+                // sub-groups, and the race fires.
+                //
+                // MEASURED, vendor-free potrf (build-novendor, no env), float
+                // and double, n=1024 batch=256, a diagonally dominant SPD input
+                // that cuSOLVER factors to 1e-8/1e-16: before this barrier
+                // 61-75 of 256 items came back info != 0, non-deterministically,
+                // and the reported failing column was always == 1 (mod nb) --
+                // the first column of a panel, i.e. a diagonal block that the
+                // previous panel's bad L21 had already destroyed. After it,
+                // 0/256 over every rep, both types, at batch up to 1024.
+                sycl::group_barrier(it.get_group());
+
                 // ---- Diagonal reciprocals, guarded -------------------------
                 // The recurrence multiplies by rd[s] = 1/Lc(s,s) rather than
                 // dividing, which is the only arithmetic deviation from the

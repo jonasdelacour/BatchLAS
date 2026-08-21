@@ -60,21 +60,35 @@
 // and cannot express non-squareness. order() below is the only spelling this
 // file uses for the order, so a later predicate cannot pick the wrong field.
 //
-// STATUS. The CTA kernel is LINKED (src/extensions/potrf_cta.cc, both Uplo, all
-// four scalar types, order <= potrf_cta_max_n_for_slm<T>(runtime local_mem -
-// 4096) == 155/109/109/77 on this box). The BLOCKED driver is not written, so
-// potrf_blocked_available<T>() is false and that arm stays unsupported.
+// STATUS. BOTH native tiers are LINKED. The CTA kernel is
+// src/extensions/potrf_cta.cc (both Uplo, all four scalar types, order <=
+// potrf_cta_max_n_for_slm<T>(runtime local_mem - 4096) == 155/109/109/77 on this
+// box); the BLOCKED driver is src/extensions/potrf_blocked.cc (WP4 Phase 2,
+// Uplo::Lower only, any order, all four types), so potrf_blocked_available<T>()
+// is now true and the Blocked arm below is supported wherever its gates pass.
 //
 // preferred() is still FALSE EVERYWHERE, so in a vendor-present build
 // Origin::Auto keeps taking cuSOLVER for every shape and no existing decision
-// moves: scripts/route_diff.sh across the kernel landing shows ZERO changed
+// moves: scripts/route_diff.sh across either landing shows ZERO changed
 // non-potrf rows, and the only new native decisions are the ones
-// tests/potrf_tests.cc FORCES with BATCHLAS_POTRF_ROUTE=cta. What did change is
-// the native_route_supported column on potrf's rows, 0 -> 1, which is the point.
+// tests/potrf_tests.cc FORCES with BATCHLAS_POTRF_ROUTE=cta|blocked. What did
+// change is the native_route_supported column on potrf's rows, 0 -> 1, which is
+// the point.
+//
+// WARNING FOR ANYONE USING route_diff.sh AS THE MERGE GATE ON THE PHASE 2 FLIP:
+// no test in the suite issues a potrf ABOVE the CTA ceiling through the facade
+// (ortho_tests runs at k=5 and dim=12; potrf_tests' order sweep tops out at the
+// ceiling and its one over-ceiling case calls supports() and the direct entry
+// point, neither of which records a coverage row). So the capture will report
+// IDENTICAL across this change, and that is not evidence of anything -- it is
+// the exact failure mode that script's own header warns about. Write the
+// facade-routed over-ceiling test first, capture second, and give it an `n` in a
+// shape_class bucket no CTA-sized call touches (route.hh:254-261 buckets by
+// power of two and coverage.cc:277 is first-writer-wins).
 //
 // In a VENDOR-FREE build the same table now hands a caller the CTA route at
-// order <= the ceiling (route_resolve.hh:60-63) instead of throwing
-// NoRouteError. That is the whole of WP4 Phase 1.
+// order <= the ceiling and the Blocked route above it (route_resolve.hh:60-63)
+// instead of throwing NoRouteError. That is the whole of WP4 Phases 1 and 2.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>

@@ -578,6 +578,74 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
 // The crossover and the block structure. 33 is one past the capacity (two
 // blocks, the second of width 1 -- the short-final-block case); 64 is exactly
 // two full blocks; 96 is three; 100 is three plus a ragged 4.
+// ---------------------------------------------------------------------------
+// THE WORK-GROUP LADDER ABOVE ONE SUB-GROUP -- the missing-barrier regression.
+//
+// V1 stages its canonical triangle into SLM with a loop strided by `lane`
+// (trsm_native.cc:355-376), so element `idx` is written by lane `idx % wg`. The
+// reciprocal loop immediately after has lane `s` READ sLc[tri_idx(s,s)], which
+// is a DIFFERENT lane's write for nearly every s. Until WP4 Phase 2 there was
+// no barrier between the two, and sDiv[0] had the same problem: lane 0 zeroes
+// it before the staging loop and any lane may store 1 into it after.
+//
+// WHY THE WHOLE SUITE WAS GREEN OVER IT. trsm_native.cc:266-274 walks
+// {256,128,64,32} and takes the FIRST candidate with
+// bs*ceil(q/cand) >= 4*MAX_COMPUTE_UNITS (512 on this box). Every other cell in
+// this file uses bs <= 3 and q <= 257, so every one of them lands on 32 -- a
+// single sub-group, which executes the two loops in lock step and is the one
+// width where the race cannot express itself.
+//
+// WHAT THIS TEST HAD TO BE, AND WHAT IT IS NOT. The first version of this test
+// called V1 DIRECTLY at n=16, q=1024, bs=128. That clears the ladder (wg=256)
+// and the anti-vacuity assertion below passes -- but with the barrier deleted
+// and the library rebuilt it still came back GREEN, twice. Clearing the ladder
+// is necessary and NOT sufficient; do not trust a version of this test that
+// only asserts wg > 32.
+//
+// The configuration that does reproduce is the one WP4's blocked POTRF panel
+// solve actually issues, through V2: order 48 -- so the FINAL V1 block is order
+// 16 -- with q = 976 and batch = 128. Measured on this box, barrier deleted and
+// rebuilt: worst relative difference against the vendor 6.05e+16 with 127 of
+// 128 items wrong, host residual 8.0e+05 for the native answer against 2.4e-07
+// for the vendor. Barrier restored, same binary path: 4.27e-07 and 0 items.
+// That A/B is the evidence this test encodes; RunTrsmBlocked's independent
+// multiply-back oracle is what turns it into a pass/fail.
+// ---------------------------------------------------------------------------
+namespace {
+int trsm_expected_wg(const Queue& ctx, int q, int bs) {
+    const auto dev = ctx.device();
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    int wg = 32;
+    for (int cand : {256, 128, 64, 32}) {
+        if (cand > max_wg) continue;
+        wg = cand;
+        const int64_t groups_c = (q + cand - 1) / cand;
+        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
+    }
+    return wg;
+}
+}  // namespace
+
+TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
+    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int q = 976, bs = 128;
+    ASSERT_GT(trsm_expected_wg(*probe, q, bs), 32)
+        << "this device's ladder still picks a single sub-group at q=" << q
+        << " batch=" << bs << ", so this test cannot see the defect it exists "
+           "for; raise q or batch";
+
+    // Order 48 = one full N=32 block plus a final N=16 one. The ragged final
+    // block is not incidental: orders whose final V1 block lands in the N=16
+    // bucket (48, 77, 80, 109) failed 90-128 of 128 items deterministically,
+    // while 32, 33, 64, 65, 96 and 155 were clean -- so an order that divides
+    // evenly would have been another silent pass.
+    RunTrsmBlocked<float>({48, q, bs, Side::Right, Uplo::Lower,
+                           Transpose::Trans, Diag::NonUnit, 1.0f});
+    RunTrsmBlocked<double>({48, q, bs, Side::Right, Uplo::Lower,
+                            Transpose::Trans, Diag::NonUnit, 1.0});
+}
+
 TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {33, 40, 64, 96, 100})

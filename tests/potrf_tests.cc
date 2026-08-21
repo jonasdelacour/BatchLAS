@@ -72,7 +72,9 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
+#include <batchlas/blas/functions/trsm.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -86,6 +88,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <string>
@@ -1129,5 +1132,1122 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
     EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
               sycl_potrf::potrf_cta_max_n_for_slm<T>(101376));
 }
+
+// ===========================================================================
+// WP4 PHASE 2 -- THE BLOCKED DRIVER
+// ===========================================================================
+//
+// Everything above this line is the CTA leaf. Everything below is the
+// right-looking blocked driver that serves orders above potrf_cta_max_n<T>().
+//
+// THE SAME TWO RULES APPLY, AND FOR SHARPER REASONS.
+//
+//   * THE ORACLE IS NEVER THE VENDOR. Every numerical test below calls
+//     sycl_potrf::potrf_blocked_dispatch<T> DIRECTLY and checks a host
+//     multiply-back residual. Exactly one test (FacadeReachesTheBlockedDriver)
+//     is about routing.
+//
+//   * THE ROUTE IS NEVER TRUSTED. BATCHLAS_POTRF_ROUTE=blocked at a shape the
+//     Blocked arm rejects -- Uplo::Upper, say -- falls through to automatic()
+//     (route_resolve.hh:101, :111) and runs cuSOLVER, which factors Upper
+//     perfectly well. Such a test passes GREEN over a driver that threw the
+//     request away. The routing test therefore pins AND bit-compares.
+//
+// A THIRD RULE THIS TIER ADDS: THE RESIDUAL CANNOT SEE THE FOLD. The driver's
+// trailing update is gemm-into-scratch plus an explicit triangular fold,
+// because a plain square gemm over A22 would write the UPPER triangle that
+// LAPACK potrf(Lower) must leave alone. Delete the fold, aim that gemm straight
+// at A, and the lower triangle comes out BIT-IDENTICAL -- a correct
+// factorisation that also scribbles on the caller's other half. Measured inside
+// this work package, not argued, and it is also 11% FASTER, which is exactly
+// the shape of change that ships. See B2, which is the only test that can see it.
+//
+// THE BLOCKING IS ASKED FOR, NEVER HARDCODED. nb and W are measured per-type
+// constants, clamped by the DEVICE's SLM ceiling and then rounded down to a
+// whole number of trsm_cta_max_n<T>() blocks. A test that hardcoded
+// {128, 96, 96, 64} would keep passing after any of those three moved while
+// silently no longer straddling a block boundary -- this repository's recorded
+// blind-guard shape. sycl_potrf::potrf_blocked_debug_params exists for that, and
+// every structural claim below ("this n has a short final block") is ASSERTED of
+// the n the test actually uses.
+
+// The blocked driver's residual bound, which is NOT the leaf's.
+//
+// residual_tol above is 4 * n * eps and its own comment says that "a future
+// BLOCKED driver has a different error constant and should get its own bound
+// rather than slackening this one". It does: the blocked factor composes n/nb
+// leaf factorisations, one triangular solve and one trailing GEMM per panel, so
+// the backward error accumulates across panels in a way a single resident tile's
+// does not.
+//
+// MEASURED THE SAME WAY THE LEAF'S 4 WAS, by printing residual/(n*eps) for every
+// cell of ResidualAboveTheCtaCeiling with the bound set to zero. The per-type
+// WORST over that whole sweep, on this box:
+//
+//     float            0.0070  (n=156)      double           0.0091  (n=110)
+//     complex<float>   0.0077  (n=110)      complex<double>  0.0104  (n=78)
+//
+// and the ratio falls monotonically with n (float 0.0070 at n=156 down to
+// 0.0027 at n=391), because the true growth is closer to sqrt(n) than to n.
+// The smallest order in the sweep is therefore the binding one, which is the
+// opposite of what a bound written as C*n*eps suggests -- worth knowing before
+// anyone "relaxes it for large n".
+//
+// 0.05 is the measured worst rounded up by two binary orders: ~4.8x of margin,
+// deliberately far tighter than the leaf's shipped 4 (which carries 4-20x), and
+// the reason it can be tighter is that this tier has no n < 64 cell to widen it.
+// EXECUTED, not asserted: at 0.005 the sweep turns red for all four types.
+#ifndef BLKTOL
+#define BLKTOL 0.05
+#endif
+template <typename T>
+RealOf<T> blocked_residual_tol(int n) {
+    using R = RealOf<T>;
+    return R(BLKTOL) * R(n) * std::numeric_limits<R>::epsilon();
+}
+
+template <typename Config>
+class PotrfBlockedTest : public PotrfCtaTest<Config> {
+protected:
+    using T = typename Config::ScalarType;
+    using R = RealOf<T>;
+    static constexpr Backend BackendType = Config::BackendVal;
+
+    struct Blocking { int nb; int W; };
+
+    // The blocking the driver WOULD use, asked of the driver's own pure
+    // parameter function. `n` is passed because nb is clamped by it.
+    Blocking blocking(int n) const {
+        const unsigned p = sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
+        return Blocking{static_cast<int>(p & 0xffffu), static_cast<int>(p >> 16)};
+    }
+
+    // Run the blocked driver DIRECTLY -- a call no vendor can serve.
+    //
+    // info is seeded with -12345, which is options_api_tests.cc:498's seed and
+    // is load-bearing rather than decorative: the driver READS info to decide
+    // whether an earlier panel already failed, so caller garbage that is not
+    // zeroed makes every item look already-failed, quenches every one of them to
+    // the identity and returns a silent wrong answer with no error raised.
+    // Seeding zero here would hide that.
+    //
+    // info_len < 0 means "a full-length span"; 0 means the EMPTY span (the "not
+    // requested" contract); anything else is a SHORT span, which the driver must
+    // also treat as not-requested rather than writing past its end.
+    std::vector<int32_t> run_blocked(const MatrixView<T, MatrixFormat::Dense>& V,
+                                     Uplo uplo, int info_len = -1) {
+        const int batch = static_cast<int>(V.batch_size());
+        UnifiedVector<std::byte> ws(
+            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, V, uplo));
+        const int len = (info_len < 0) ? batch : info_len;
+        UnifiedVector<int32_t> info(static_cast<size_t>(std::max(len, 1)), int32_t(-12345));
+        if (len > 0) {
+            sycl_potrf::potrf_blocked_dispatch<T>(
+                *this->ctx, V, uplo, ws.to_span(),
+                Span<int32_t>(info.data(), static_cast<size_t>(len)));
+        } else {
+            sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+                                                  Span<int32_t>{});
+        }
+        this->ctx->wait();
+        return std::vector<int32_t>(info.begin(), info.end());
+    }
+};
+
+TYPED_TEST_SUITE(PotrfBlockedTest, PotrfTestTypes);
+
+// ---------------------------------------------------------------------------
+// B1. Residual above the CTA ceiling, at every structurally distinct blocking.
+//
+// FIVE SIZES, FOUR STRUCTURES, EACH ASSERTED OF THE n THE TEST ACTUALLY USES
+// rather than stated in a comment:
+//
+//   cap + 1        the first order the CTA tier cannot serve -- the tier
+//                  boundary, and the one order at which "the blocked driver
+//                  exists" is the difference between an answer and a
+//                  NoRouteError in a vendor-free build.
+//   2 * nb         an EXACT multiple of nb: every block is full.
+//   2 * nb + nb/2  a SHORT FINAL BLOCK (ib < nb). The driver relies on
+//                  `ib < nb implies m2 == 0` -- a short block issues neither a
+//                  panel solve nor a trailing update -- and that implication is
+//                  load-bearing twice over, since it is also why nb may be
+//                  rounded to a trsm-safe multiple at all.
+//   nb + 2W + 6    a SHORT FINAL TRAILING COLUMN PANEL (m2 % W != 0), where the
+//                  W x W scratch is addressed with ld == W but extent w < W.
+//   3 * nb + 7     several panels AND a short final block together.
+//
+// batch > 1 everywhere and every item DIFFERENT, so a stride bug is a wrong
+// answer rather than the right answer computed from the wrong matrix.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int cap = this->ceiling();
+    ASSERT_GT(cap, 0) << "no CTA capacity for this type -- the leaf is not linked";
+    const auto bp = this->blocking(1 << 20);   // the unclamped blocking
+    const int nb = bp.nb, W = bp.W;
+    ASSERT_GT(nb, 0);
+    ASSERT_GT(W, 0);
+    ASSERT_LE(nb, cap) << "nb is above the leaf's own capacity: the leaf would throw";
+
+    std::vector<int> sizes = {cap + 1, 2 * nb, 2 * nb + nb / 2, nb + 2 * W + 6, 3 * nb + 7};
+    std::sort(sizes.begin(), sizes.end());
+    sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+
+    int saw_short_block = 0, saw_exact_multiple = 0, saw_short_panel = 0;
+    for (int n : sizes) {
+        ASSERT_GT(n, cap) << "n=" << n << " is inside the CTA tier; this case proves "
+                             "nothing the leaf's own tests do not";
+        if (n % nb == 0) ++saw_exact_multiple; else ++saw_short_block;
+        const int m2_first = n - nb;
+        if (m2_first > W && (m2_first % W) != 0) ++saw_short_panel;
+
+        const int batch = 3;
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        std::vector<std::vector<T>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            ref[b] = make_spd<T>(n, 6100u + 29u * b + 7u * static_cast<unsigned>(n));
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower,
+                                make_scalar<T>(R(-999), R(777)));
+        }
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
+            const auto L = this->extract_L(A, b, n, Uplo::Lower);
+            const R res = multiply_back_residual<T>(ref[b], L, n);
+            EXPECT_LE(res, blocked_residual_tol<T>(n))
+                << "n=" << n << " b=" << b << " nb=" << nb << " W=" << W
+                << " residual/(n*eps)="
+                << (res / (R(n) * std::numeric_limits<R>::epsilon()));
+        }
+    }
+
+    // ANTI-VACUITY. Each structure the driver special-cases must actually have
+    // occurred, or the test silently stopped covering it when nb or W moved.
+    ASSERT_GT(saw_exact_multiple, 0) << "no n in the sweep was an exact multiple of nb";
+    ASSERT_GT(saw_short_block, 0)    << "no n in the sweep had a short final block";
+    ASSERT_GT(saw_short_panel, 0)    << "no n in the sweep had a short trailing column panel";
+}
+
+// ---------------------------------------------------------------------------
+// B2. The other triangle is neither read nor written -- THE FOLD'S ONLY GUARD.
+//
+// The single most important test in the Phase 2 set, because it is the ONLY one
+// that can fail when the trailing update's triangular fold is removed. The
+// driver computes A22 -= L21 L21^H by cutting A22 into column panels and sending
+// each W x W DIAGONAL block to scratch, then folding only the named triangle
+// back. Remove the fold, aim that gemm at A with alpha=-1, beta=1, and the lower
+// triangle comes out bit-identical while the caller's upper triangle fills with
+// the symmetric product.
+//
+// EXECUTED, not predicted: with that substitution the whole of potrf_tests goes
+// 100 passed -> 96 passed, and the four failures are the four scalar types of
+// THIS test, reporting 3021 changed words each. Every residual test, the info
+// tests, the padded-ld test and the facade test all stayed green.
+//
+// Two passes, as in the leaf's T2: a finite sentinel compared bit for bit proves
+// NOT WRITTEN; a quiet NaN proves NOT READ. The second is the stronger claim and
+// the one src/extensions/ortho.cc:156-161 depends on -- it forms only half of
+// its Gram matrix and hands potrf the other half uninitialised, so a blocked
+// route that READ the upper triangle would turn ortho into NaN for every k above
+// the CTA ceiling in exactly the vendor-free build this work package exists for.
+//
+// n has a full-width AND a short trailing column panel, so the diagonal-block
+// fold runs at both w == W and w < W.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const auto bp = this->blocking(1 << 20);
+    const int n = bp.nb + 2 * bp.W + 6;
+    const int batch = 3;
+    ASSERT_GT(n, this->ceiling());
+    ASSERT_GT(n - bp.nb, bp.W) << "no full-width trailing panel at this n";
+    ASSERT_NE((n - bp.nb) % bp.W, 0) << "no short trailing panel at this n";
+
+    // A SECOND n, AND IT IS NOT DECORATION. The gemm the trailing RECTANGLE
+    // reaches depends on its m: gemm_kernels.cc:472-480 gives float's transposed
+    // register kernels only when m >= 128 && n >= 32 && k >= 128, and at the n
+    // above the rectangle has m = 38 and 6, so BOTH fall through to Tiled16.
+    // Every size this driver actually exists for (n >= 512) puts the same gemm
+    // on Tiled128x32RegisterK32NT instead -- a different epilogue and a
+    // different index map. With only the small n, the sole upper-triangle guard
+    // in this file never exercises the store path production uses, and a
+    // store-side regression there (an alignment fast path enabled for a non-NN
+    // case, a dropped `row >= m` predicate) would clobber the caller's upper
+    // triangle at every real size with the suite still green -- B1's residual is
+    // computed over the LOWER triangle only and cannot see it.
+    //
+    // n_big is built so the FIRST rectangle has m = m2 - W >= 128 while the
+    // trailing panel is still short, and both properties are asserted rather
+    // than trusted.
+    const int n_big = bp.nb + 3 * bp.W + 134;
+    ASSERT_GE(n_big - bp.nb - bp.W, 128)
+        << "n_big does not give a rectangle gemm with m >= 128, so it does not "
+           "reach float's register ladder and adds nothing over n";
+    ASSERT_NE((n_big - bp.nb) % bp.W, 0) << "no short trailing panel at n_big";
+
+    // Pass 1: NOT WRITTEN.
+    for (int nn : {n, n_big}) {
+        Matrix<T, MatrixFormat::Dense> A(nn, nn, batch);
+        const T poison = make_scalar<T>(R(-3.5), R(11.25));
+        for (int b = 0; b < batch; ++b) {
+            this->load_triangle(A, b, nn, make_spd<T>(nn, 771u + b), Uplo::Lower, poison);
+        }
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        int changed = 0;
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "n=" << nn;
+            for (int i = 0; i < nn; ++i) {
+                for (int j = i + 1; j < nn; ++j) {
+                    const T v = A(i, j, b);
+                    if (host_real(v) != host_real(poison) ||
+                        host_imag(v) != host_imag(poison)) ++changed;
+                }
+            }
+        }
+        ASSERT_EQ(changed, 0)
+            << changed << " words of the UPPER triangle were written at n=" << nn
+            << ". The trailing update's triangular fold is the only thing that "
+               "stops this, and no residual test in this file can see it.";
+    }
+
+    // Pass 2: NOT READ.
+    {
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        const R nan = std::numeric_limits<R>::quiet_NaN();
+        const T poison = make_scalar<T>(nan, nan);
+        std::vector<std::vector<T>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            ref[b] = make_spd<T>(n, 771u + b);
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower, poison);
+        }
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0);
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j <= i; ++j) {
+                    const T v = A(i, j, b);
+                    ASSERT_FALSE(std::isnan(host_real(v)))
+                        << "NaN leaked out of the untouched upper triangle into ("
+                        << i << "," << j << ") b=" << b;
+                    ASSERT_FALSE(std::isnan(host_imag(v)));
+                }
+            }
+            const auto L = this->extract_L(A, b, n, Uplo::Lower);
+            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B3. `info` names the 1-based GLOBAL column, not the leaf's local one.
+//
+// The leaf reports an index LOCAL to the ib x ib sub-view it was handed
+// (potrf_cta_device.hh:195-199), so the driver adds j. Nothing in the CTA suite
+// can see that addition, because there j is always 0 -- which is exactly why an
+// omitted offset survives a full green run of everything above this line.
+//
+// The oracle is make_planted_ldl's A = L0 D L0^H, whose k-th Cholesky pivot IS
+// D_kk exactly. Its row-prefix normalisation additionally makes the ORIGINAL
+// diagonal at the failure column POSITIVE, so a driver reporting a stale or
+// un-updated pivot names a different column; the test asserts that property of
+// its own input, for the same reason the leaf's InfoIndexIsExact does.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedInfoIsTheGlobalColumn) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb + 8;                // two full blocks plus a short one
+    ASSERT_GT(n, this->ceiling());
+
+    int discriminating = 0;
+    for (int c : {0, 1, nb - 1, nb, nb + 1, 2 * nb, n - 1}) {
+        if (c < 0 || c >= n) continue;
+        if (c >= nb) ++discriminating;       // only these can see a missing offset
+        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
+        const auto ref = make_planted_ldl<T>(n, {c}, 5150u + static_cast<unsigned>(c));
+        if (c >= 1) {
+            ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+                << "the planted matrix is not discriminating at column " << c;
+        }
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        EXPECT_EQ(info[0], c + 1)
+            << "planted a non-positive pivot at GLOBAL column " << c << " of " << n
+            << " (nb=" << nb << ", i.e. local column " << (c % nb) << " of block "
+            << (c / nb) << ")";
+    }
+    // ANTI-VACUITY: at least one failure had to be planted outside the FIRST
+    // block, or the local->global translation was never exercised.
+    ASSERT_GT(discriminating, 0)
+        << "every planted failure was in block 0, where local == global; this test "
+           "cannot see a missing info offset";
+}
+
+// ---------------------------------------------------------------------------
+// B4. FIRST FAILURE WINS across panels -- the info MERGE.
+//
+// The leaf writes info UNCONDITIONALLY and re-zeroes its own flag on every
+// launch (potrf_cta.cc:614-615, potrf_cta_device.hh:488). Point every panel's
+// leaf at the caller's info and you get LAST-PANEL-WINS: a healthy later panel
+// overwrites a real earlier failure with 0 and the call reports SUCCESS on a
+// matrix that is not positive definite. That is worse than a wrong index.
+//
+// Case (a) is the one that catches it, and it is NOT the two-failure case: it is
+// ONE failure in block 0 followed by healthy blocks.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedInfoFirstFailureWinsAcrossPanels) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb + 8;
+
+    struct Case { std::vector<int> cols; int expect; const char* why; };
+    const std::vector<Case> cases = {
+        {{5}, 6, "one failure in block 0 followed by HEALTHY blocks -- a last-panel-wins "
+                 "merge reports SUCCESS here"},
+        {{5, nb + 9}, 6, "failures in two different blocks: the earlier wins"},
+        {{nb + 3, 2 * nb + 2}, nb + 4, "both failures outside block 0"},
+    };
+
+    for (const auto& cs : cases) {
+        bool fits = true;
+        for (int c : cs.cols) if (c >= n) fits = false;
+        if (!fits) continue;
+        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
+        const auto ref =
+            make_planted_ldl<T>(n, cs.cols, 913u + static_cast<unsigned>(cs.expect));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        EXPECT_EQ(info[0], cs.expect) << cs.why;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B5. `info` at batch scale, and the QUENCH.
+//
+// Some items fail and some do not, at DIFFERENT global columns, so a single
+// shared flag or a shared quench is visible. The healthy items must report 0 and
+// still factorise correctly next to failed neighbours.
+//
+// THE QUENCH IS TESTED WITH A NaN PIVOT, AND THAT IS A MEASUREMENT RATHER THAN A
+// PREFERENCE. A merely NEGATIVE planted pivot divides to a finite number, so the
+// rest of the schedule stays finite whether or not the failed item is quenched;
+// the implementation's own A/B found that deleting the quench entirely left a
+// negative-pivot check GREEN. Only a NaN or an exactly-zero pivot propagates. So
+// one bad item here carries a planted NaN on the diagonal, in the SECOND block,
+// which also re-exercises the global offset.
+//
+// Finiteness of a failed item is not a contract claim -- LAPACK leaves a failed
+// A undefined, and this file says so at T4/T9 -- but it IS a property the CTA
+// tier has, and losing it silently at the tier boundary would be a surprise for
+// anyone who inspects A before testing info.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb + 8;
+    const int batch = 32;
+    ASSERT_GT(n, this->ceiling());
+
+    // THE NaN GOES IN THE MIDDLE BLOCK, AND THAT PLACEMENT IS A MEASUREMENT.
+    // It was first written into the FINAL block, where m2 == 0 and no panel
+    // solve or trailing update follows -- so with the quench deleted exactly ONE
+    // word came back non-finite (the planted NaN itself) and nothing propagated.
+    // The test was red, but for a reason far weaker than its own claim. In block
+    // 1 of three there is a panel solve to divide by the failed pivot and a
+    // trailing update to smear the result across the rest of the matrix, which
+    // is the failure the quench actually prevents. Re-measured there, with the
+    // quench deleted: 1045 non-finite words for float, 789 for double and
+    // complex<float>, 533 for complex<double>. The three NEGATIVE-pivot items
+    // stayed finite in both placements, which is the whole point of planting a
+    // NaN at all.
+    const int nan_item = 11;
+    const int nan_col = nb + 2;              // second of three blocks: local != global
+    const std::vector<int> neg_items = {0, 19, batch - 1};
+    const std::vector<int> neg_cols  = {0, nb - 1, 2 * nb + 1};
+
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        auto it = std::find(neg_items.begin(), neg_items.end(), b);
+        if (it != neg_items.end()) {
+            ref[b] = make_planted_ldl<T>(
+                n, {neg_cols[static_cast<size_t>(it - neg_items.begin())]},
+                140u + static_cast<unsigned>(b));
+        } else {
+            ref[b] = make_spd<T>(n, 400u + 5u * b);
+        }
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+    }
+    // The NaN pivot, planted directly into the loaded matrix.
+    A(nan_col, nan_col, nan_item) =
+        make_scalar<T>(std::numeric_limits<R>::quiet_NaN(), R(0));
+
+    const auto info = this->run_blocked(A.view(), Uplo::Lower);
+
+    for (size_t k = 0; k < neg_items.size(); ++k) {
+        EXPECT_EQ(info[neg_items[k]], neg_cols[k] + 1) << "item " << neg_items[k];
+    }
+    EXPECT_EQ(info[nan_item], nan_col + 1) << "the NaN-pivot item";
+
+    // Every failed item stays FINITE everywhere in the lower triangle. This is
+    // the quench, and only the NaN item can falsify it.
+    std::vector<int> bad = neg_items;
+    bad.push_back(nan_item);
+    for (int b : bad) {
+        int nonfinite = 0;
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j <= i; ++j) {
+                const T v = A(i, j, b);
+                if (!std::isfinite(host_real(v)) || !std::isfinite(host_imag(v))) ++nonfinite;
+            }
+        }
+        EXPECT_EQ(nonfinite, 0) << "failed item " << b << " has " << nonfinite
+                                << " non-finite entries; the quench did not hold";
+    }
+
+    for (int b = 0; b < batch; ++b) {
+        if (std::find(bad.begin(), bad.end(), b) != bad.end()) continue;
+        ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
+        const auto L = this->extract_L(A, b, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            << "healthy item " << b << " next to failed ones";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B6. T7 AT A BLOCKED SIZE -- corrections Open question 9.
+//
+// The open question is whether the trailing update's fold needs a real-part
+// projection on the diagonal: the fold computes C = product + beta*C with no
+// such projection (symmetric_product_fold.hh:68), so imag(diag(A22)) is whatever
+// L21 L21^H's rounding leaves there and it is carried into the NEXT panel's
+// leaf. Absorbed, or accumulated across panels?
+//
+// The end-state answer is the shippable claim and it is what this test pins:
+// imag(diag(L)) is EXACTLY zero after a multi-panel factorisation, because the
+// leaf reloads the diagonal as T(real(A(c,c)), 0) before any sqrt. That is
+// necessary and not sufficient -- a residue would have to get past a forcing
+// point that runs once per panel to be visible -- so (c) supplies the
+// sensitivity that makes the residual able to see a dropped conjugate at all.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    if constexpr (!test_utils::is_complex<T>::value) {
+        GTEST_SKIP() << "real scalar: no imaginary part to check";
+    } else {
+        const int nb = this->blocking(1 << 20).nb;
+        const int n = 2 * nb + 8;            // three panels
+        ASSERT_GT(n, this->ceiling());
+        const auto ref = make_spd<T>(n, 24601u);
+
+        // (a) the input must actually be complex, or nothing below proves anything.
+        R max_imag = R(0);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < i; ++j)
+                max_imag = std::max(
+                    max_imag, std::abs(host_imag(ref[i + static_cast<size_t>(j) * n])));
+        ASSERT_GT(max_imag, R(0.01)) << "the generated matrix is effectively real";
+
+        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        ASSERT_EQ(this->run_blocked(A.view(), Uplo::Lower)[0], 0);
+
+        // (b) EXACTLY zero, past every panel boundary, not merely small.
+        for (int i = 0; i < n; ++i) {
+            ASSERT_EQ(host_imag(A(i, i, 0)), R(0))
+                << "imag(L(" << i << "," << i << ")) != 0 at nb=" << nb;
+        }
+        const auto L = this->extract_L(A, 0, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(ref, L, n)), blocked_residual_tol<T>(n));
+
+        // (c) THE SENSITIVITY. conj(A) is a different Hermitian matrix, so it
+        //     must give a different factor. In this tier the conjugate that
+        //     matters is the trailing update's transB: substituting
+        //     Transpose::Trans for ConjTrans is free and worth 1.81x for float,
+        //     and for a complex type it computes L21 L21^T -- a different matrix.
+        std::vector<T> refc(ref);
+        for (auto& v : refc) v = host_conj(v);
+        Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
+        this->load_triangle(Ac, 0, n, refc, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        ASSERT_EQ(this->run_blocked(Ac.view(), Uplo::Lower)[0], 0);
+        bool differs = false;
+        for (int i = 1; i < n && !differs; ++i)
+            for (int j = 0; j < i && !differs; ++j)
+                if (host_imag(A(i, j, 0)) != host_imag(Ac(i, j, 0))) differs = true;
+        EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
+        const auto Lc = this->extract_L(Ac, 0, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(refc, Lc, n)), blocked_residual_tol<T>(n));
+
+        // (d) imag(diag(A)) IS IGNORED end to end, bit for bit. Across panels
+        //     this is a stronger statement than in the leaf: the trailing update
+        //     ADDS to A22's diagonal, so a caller's imaginary garbage there
+        //     survives the fold and reaches the NEXT panel's leaf, where the
+        //     load transform is the only thing that discards it.
+        Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
+        this->load_triangle(Ap, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        for (int i = 0; i < n; ++i)
+            Ap(i, i, 0) = make_scalar<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
+        ASSERT_EQ(this->run_blocked(Ap.view(), Uplo::Lower)[0], 0);
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j <= i; ++j) {
+                ASSERT_EQ(host_real(Ap(i, j, 0)), host_real(A(i, j, 0)))
+                    << "imag(diag(A)) was not ignored, at (" << i << "," << j << ")";
+                ASSERT_EQ(host_imag(Ap(i, j, 0)), host_imag(A(i, j, 0)));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B7. THE PARENT LEADING DIMENSION AND A STRIDE THAT IS NOT ld * cols.
+//
+// The most consequential test in this set after B2, because EVERY operand the
+// driver hands the leaf, the trsm and the gemm is a SUB-VIEW that must carry the
+// PARENT's ld, stride and batch. Two independent traps, both recorded in the
+// tree rather than hypothetical:
+//
+//   * MatrixView's 6-arg constructor DEFAULTS stride to ld * cols when 0 is
+//     passed (matrix.cc:1839-1842). A sub-view of ib columns built without an
+//     explicit stride therefore gets stride = ld * ib, and every batch item
+//     after the first reads the wrong matrix -- trsm_native.cc:590-599 records
+//     exactly that happening.
+//   * Passing the sub-view's own row count as its ld reads an interleaved,
+//     shifted window of the parent.
+//
+// Neither is visible in a Matrix<T>(n, n, batch), where ld == rows == n and
+// stride == ld * cols, which is what every test above builds. The padding here
+// is filled with a NON-PD poison so that reading outside the intended window is
+// a wrong answer and not merely a different one.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb + 8;
+    const int batch = 4;
+    const int ld = n + 7;                    // != rows
+    const int stride = ld * n + 13;          // != ld * cols
+    ASSERT_GT(n, this->ceiling());
+
+    UnifiedVector<T> buf(static_cast<size_t>(stride) * batch,
+                         make_scalar<T>(R(-11), R(5)));    // non-PD poison
+    MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
+
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        ref[b] = make_spd<T>(n, 8291u + 13u * b);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j <= i; ++j)
+                buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld] =
+                    ref[b][i + static_cast<size_t>(j) * n];
+    }
+
+    const auto info = this->run_blocked(V, Uplo::Lower);
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(info[b], 0) << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
+        std::vector<T> L(static_cast<size_t>(n) * n, T{});
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j <= i; ++j)
+                L[i + static_cast<size_t>(j) * n] =
+                    buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
+        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B8. THE INFO SPAN, in all three of its states -- and the ZERO PRE-PASS.
+//
+// The leaf's T8 says in as many words that it "passes by construction today" and
+// exists because "Phase 2's blocked driver is where the trap is". This is that
+// test. The driver READS info to decide whether an earlier panel already failed,
+// so:
+//
+//  (a) a FULL span arrives with caller garbage (-12345, options_api_tests.cc's
+//      own seed). Without the zero pre-pass every item looks already-failed,
+//      every item is quenched to the identity, and the call returns a SILENT
+//      WRONG ANSWER with info unchanged and no error raised.
+//  (b) an EMPTY span means "not requested" and falls back to pool scratch, which
+//      is UNINITIALISED -- the same trap one level down.
+//  (c) a SHORT span (size < batch) ALSO means not-requested. The recorded trap
+//      (corrections :938-943) is to zero info_out rather than the span the
+//      driver actually reads: a short caller span silently becomes pool scratch
+//      and the zeroing lands on the wrong buffer.
+//
+// All three must produce the same correct factor.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = nb + nb / 2;
+    const int batch = 4;
+    ASSERT_GT(n, this->ceiling());
+
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) ref[b] = make_spd<T>(n, 3300u + b);
+
+    struct Mode { int len; const char* why; };
+    const std::vector<Mode> modes = {
+        {-1,        "a FULL span seeded with caller garbage"},
+        {0,         "the EMPTY span (not requested)"},
+        {batch - 1, "a SHORT span (also not requested)"},
+    };
+
+    for (const auto& m : modes) {
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        const auto info = this->run_blocked(A.view(), Uplo::Lower, m.len);
+        if (m.len < 0) {
+            for (int b = 0; b < batch; ++b)
+                ASSERT_EQ(info[b], 0)
+                    << m.why << ": info[" << b << "] came back as the caller's garbage, "
+                                "so the zero pre-pass did not run";
+        }
+        for (int b = 0; b < batch; ++b) {
+            const auto L = this->extract_L(A, b, n, Uplo::Lower);
+            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+                << m.why << " b=" << b;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B9. THE TIER OVERLAP, and the single-block path.
+//
+// supports()'s Blocked arm deliberately carries NO LOWER BOUND on order -- a
+// lower bound would be a FIT judgement between two native routes wearing a
+// correctness gate, and a forced `blocked` below it would resolve to the VENDOR
+// instead (route_resolve.hh:101-111). So the driver must be correct at orders
+// the CTA tier also serves, including:
+//
+//   n == nb   ONE block, m2 == 0, no panel solve, no trailing update -- and the
+//             W x W x batch scratch is NOT DRAWN at all. That branch exists for
+//             src/extensions/ortho.cc:78, a real caller of the public query at
+//             k = 5..256, where it is the whole difference between a 2.5 KB and
+//             a 68 KB lease. It is asserted directly, because no residual can
+//             see whether a buffer was allocated.
+//   n == cap  the CTA ceiling itself, where both tiers are supported and the
+//             blocked driver runs more than one block.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAtOneBlock) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int cap = this->ceiling();
+    const int nb = this->blocking(1 << 20).nb;
+    ASSERT_LE(nb, cap);
+
+    // The single-block branch really is a branch: one more column draws the
+    // trailing scratch and the reported size must jump.
+    Matrix<T, MatrixFormat::Dense> One(nb, nb, 8);
+    Matrix<T, MatrixFormat::Dense> Two(nb + 1, nb + 1, 8);
+    const std::size_t s1 =
+        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, One.view(), Uplo::Lower);
+    const std::size_t s2 =
+        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, Two.view(), Uplo::Lower);
+    EXPECT_LT(s1, s2)
+        << "the n <= nb single-block case draws the same workspace as the multi-block "
+           "case, so the W x W x batch trailing scratch is being allocated for callers "
+           "that never reach the trailing update (ortho.cc:78 is one)";
+
+    for (int n : {nb, cap}) {
+        if (n < 1) continue;
+        const int batch = 3;
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        std::vector<std::vector<T>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            ref[b] = make_spd<T>(n, 1717u + 11u * b + static_cast<unsigned>(n));
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower,
+                                make_scalar<T>(R(-999), R(777)));
+        }
+        const auto info = this->run_blocked(A.view(), Uplo::Lower);
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
+            const auto L = this->extract_L(A, b, n, Uplo::Lower);
+            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+                << "n=" << n << " b=" << b << " (nb=" << nb << ", cap=" << cap << ")";
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B10. The direct entry point's correctness gates throw rather than launch.
+//
+// Uplo::Upper is the one that matters, and it is the reason this cannot be
+// tested through the facade: BATCHLAS_POTRF_ROUTE=blocked with an Upper view is
+// REJECTED by supports() (route_potrf.hh:278), so resolve_route falls through to
+// automatic() and cuSOLVER factors it correctly. A facade-level "Upper works"
+// test would be green today and green again after the driver grew a broken Upper
+// path.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = nb + nb / 2;
+    UnifiedVector<int32_t> info(8, int32_t(0));
+
+    // (a) Uplo::Upper -- CORRECTNESS, not fit. The schedule is Lower-shaped.
+    {
+        Matrix<T, MatrixFormat::Dense> A(n, n, 2);
+        A.fill(make_scalar<T>(R(0), R(0)));
+        for (int b = 0; b < 2; ++b)
+            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
+        UnifiedVector<std::byte> ws(
+            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
+        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
+                                                           ws.to_span(), info.to_span()),
+                     std::invalid_argument);
+    }
+
+    // (b) not square.
+    {
+        Matrix<T, MatrixFormat::Dense> A(n, n - 3, 1);
+        A.fill(make_scalar<T>(R(1), R(0)));
+        UnifiedVector<std::byte> ws(64);
+        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+                                                           ws.to_span(), info.to_span()),
+                     std::invalid_argument);
+    }
+
+    // (c) heterogeneous batch -- the silent-wrong-answer one. One schedule
+    //     covers the batch with a single (order, ld, stride) tuple.
+    {
+        Matrix<T, MatrixFormat::Dense> A(n, n, 4);
+        A.fill(make_scalar<T>(R(0), R(0)));
+        for (int b = 0; b < 4; ++b)
+            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
+        UnifiedVector<int> act_r(4), act_c(4);
+        for (int b = 0; b < 4; ++b) { act_r[b] = n - b; act_c[b] = n - b; }
+        auto V = A.view().with_active_dims(act_r.to_span(), act_c.to_span());
+        ASSERT_TRUE(V.is_heterogeneous())
+            << "the view is not actually heterogeneous; this case would prove nothing";
+        UnifiedVector<std::byte> ws(
+            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
+        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, Uplo::Lower,
+                                                           ws.to_span(), info.to_span()),
+                     std::invalid_argument);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B11. The route table above the CTA ceiling -- INCLUDING THE VENDOR-FREE
+// FALLBACK, which is the entire point of WP4.
+//
+// A pure-table test: no kernel runs. It asserts the facts the vendor-free build
+// depends on, and the one that keeps a vendor-present build unchanged.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    static constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
+    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+    const dispatch::Route blk{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
+
+    const int n = this->ceiling() + 1;
+    Matrix<T, MatrixFormat::Dense> A(n, n, 4);
+    A.fill(T{});
+    for (int b = 0; b < 4; ++b)
+        for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(1), R(0));
+
+    const auto lower = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    const auto upper = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Upper);
+    ASSERT_TRUE(lower.has_value());
+    ASSERT_TRUE(upper.has_value());
+
+    // (1) Above the ceiling the CTA tier is gone and the Blocked tier is there.
+    EXPECT_FALSE(Tbl::supports(cta, *lower));
+    EXPECT_TRUE(Tbl::supports(blk, *lower));
+
+    // (2) Uplo::Upper is a CORRECTNESS gate on the Blocked arm and must stay one
+    //     until the driver mirrors. This assertion is what keeps a forced
+    //     `blocked` on an Upper view from silently becoming cuSOLVER.
+    EXPECT_FALSE(Tbl::supports(blk, *upper));
+
+    // (3) preferred() is still ALL FALSE, so a vendor-present build takes the
+    //     vendor for this shape and Phase 2 moves ZERO traffic. When step 3.x
+    //     measures the grid, this is the line it deliberately changes.
+    EXPECT_FALSE(Tbl::preferred(blk, *lower));
+    EXPECT_FALSE(Tbl::preferred(cta, *lower));
+
+    // (4) THE POINT OF THE WORK PACKAGE. With no vendor in the build,
+    //     route_resolve.hh:60-63 hands over any SUPPORTED native route -- and
+    //     before Phase 2 there was none at this order, so this resolution threw
+    //     NoRouteError.
+    const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
+                                                       /*vendor_available=*/false);
+    EXPECT_TRUE(dispatch::is_native(free_route));
+    EXPECT_EQ(free_route.algo, dispatch::Algorithm::Blocked)
+        << "a vendor-free build does not reach the blocked driver above the CTA ceiling";
+}
+
+// ---------------------------------------------------------------------------
+// B12. potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL.
+//
+// options.hh:546-552 resolves the route TWICE -- once for the size at :550 and
+// once for the call at :551 -- and both reads hit getenv afresh. With two native
+// tiers whose workspaces differ by orders of magnitude (the CTA tier draws one
+// int32 per item; the blocked tier adds a W x W x batch product buffer), a query
+// that sizes only the route IT resolved is the recorded ormqr under-allocation
+// one level down: 2560 bytes reported, 276480 demanded.
+//
+// This test IS that disagreement, executed rather than described: pin `cta`,
+// take the size, pin `blocked`, make the call. It must not throw.
+//
+// Run at an order INSIDE the CTA tier and above nb, so both arms are supported
+// AND the two sizes genuinely differ -- asserted, because if they did not the
+// max would be doing nothing and this test would be vacuous.
+//
+// EXECUTED: restricting the max to the resolved route turns this red for all
+// four types at 512 bytes reported against 68,096 demanded (float,
+// complex<double>) and 133,632 (double, complex<float>) -- and the vendor term
+// does NOT mask it, because cuSOLVER's own potrf workspace for this shape is
+// the 512 bytes.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    static constexpr Backend B = TestFixture::BackendType;
+
+    const int cap = this->ceiling();
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = cap;                       // inside the CTA tier
+    const int batch = 16;
+    ASSERT_GT(n, nb) << "at this order the blocked driver is a single block and draws no "
+                        "trailing scratch, so the two tiers cost the same and this test "
+                        "would be vacuous";
+
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        ref[b] = make_spd<T>(n, 5959u + b);
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+    }
+
+    // ANTI-VACUITY: the two tiers must actually want different amounts.
+    const std::size_t cta_need = sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view());
+    const std::size_t blk_need =
+        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
+    ASSERT_GT(blk_need, cta_need)
+        << "the blocked tier does not need more workspace than the CTA tier here, so a "
+           "chosen-route-only query would pass this test by accident";
+
+    struct EnvGuard {
+        std::string saved; bool had = false;
+        EnvGuard() {
+            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
+        }
+        void set(const char* v) { ::setenv("BATCHLAS_POTRF_ROUTE", v, 1); }
+        ~EnvGuard() {
+            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
+            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
+        }
+    } guard;
+
+    guard.set("cta");
+    const std::size_t queried = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    ASSERT_GE(queried, blk_need)
+        << "potrf_buffer_size resolved `cta` and sized only that tier; a caller whose "
+           "environment changes between the query and the call (options.hh:546-552 reads "
+           "getenv twice) under-allocates by " << (blk_need - queried) << " bytes";
+
+    guard.set("blocked");
+    UnifiedVector<std::byte> ws(queried);
+    UnifiedVector<int32_t> info(batch, int32_t(-12345));
+    ASSERT_NO_THROW(
+        (potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span())));
+    this->ctx->wait();
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(info[b], 0) << "b=" << b;
+        const auto L = this->extract_L(A, b, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            << "b=" << b;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B13. The facade actually reaches the BLOCKED driver.
+//
+// The only routing test in this set, and it is built the way the leaf's T6 had
+// to be rebuilt after the adversarial review found its predecessor GREEN over
+// cuSOLVER: asserting that the TABLE answers {Native, Blocked} says what the
+// table would decide and nothing about what potrf<B,T> executed. The guard is a
+// BIT-EXACT comparison against the direct entry point, which no vendor can
+// satisfy.
+//
+// THE DIRECT SIDE INJECTS THE ROUTED gemm AND trsm -- the same two lambdas the
+// facade passes (entry_points/factorization.cc). That is deliberate, and it
+// makes this test guard the INJECTION SEAM as well as the arm: if the facade
+// passed empty seams the driver would fall back to sycl_gemm::gemm_custom and
+// sycl_trsm::trsm_native_blocked, which in a VENDOR-PRESENT build are not the
+// routed choices for these shapes, so the two answers separate. Calling
+// gemm_custom straight from a driver is a recorded defect (WP3 step 16), and
+// this is what catches its recurrence here.
+//
+// HONEST LIMIT, stated because this file's history is a list of guards that
+// could not fail: in a VENDOR-FREE build the routed gemm IS the native gemm, so
+// the SEAM half of this guard is vacuous there. The ARM half is not -- a facade
+// that never reached the driver would throw NoRouteError at this order.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    static constexpr Backend B = TestFixture::BackendType;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb;
+    const int batch = 3;
+    ASSERT_GT(n, this->ceiling());
+
+    struct EnvGuard {
+        std::string saved; bool had = false;
+        EnvGuard() {
+            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
+            ::setenv("BATCHLAS_POTRF_ROUTE", "blocked", 1);
+        }
+        ~EnvGuard() {
+            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
+            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
+        }
+    } guard;
+
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) ref[b] = make_spd<T>(n, 4040u + b);
+
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    for (int b = 0; b < batch; ++b)
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+
+    // The route assertion LOCALISES a failure -- it says which link broke -- but
+    // it is NOT the guard.
+    const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
+                                                  /*vendor_available=*/true);
+    ASSERT_TRUE(dispatch::is_native(route))
+        << "BATCHLAS_POTRF_ROUTE=blocked did not resolve to a native route";
+    ASSERT_EQ(route.algo, dispatch::Algorithm::Blocked);
+
+    UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
+    UnifiedVector<int32_t> info(batch, int32_t(-7));
+    potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
+    this->ctx->wait();
+
+    // THE GUARD.
+    Matrix<T, MatrixFormat::Dense> direct(n, n, batch);
+    for (int b = 0; b < batch; ++b)
+        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+    UnifiedVector<std::byte> dws(
+        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct.view(), Uplo::Lower));
+    UnifiedVector<int32_t> dinfo(batch, int32_t(-7));
+    sycl_potrf::potrf_blocked_dispatch<T>(
+        *this->ctx, direct.view(), Uplo::Lower, dws.to_span(), dinfo.to_span(),
+        [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
+           const MatrixView<T, MatrixFormat::Dense>& gb,
+           const MatrixView<T, MatrixFormat::Dense>& gc,
+           T galpha, T gbeta, Transpose gta, Transpose gtb, ComputePrecision gp) {
+            return gemm<B, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+        },
+        [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ta,
+           const MatrixView<T, MatrixFormat::Dense>& tb,
+           T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
+            return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
+        });
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(info[b], 0);
+        ASSERT_EQ(dinfo[b], 0);
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j <= i; ++j) {
+                ASSERT_EQ(host_real(A(i, j, b)), host_real(direct(i, j, b)))
+                    << "the facade did not run the blocked driver with the routed seams: "
+                       "its answer differs from potrf_blocked_dispatch's at ("
+                    << i << "," << j << ") b=" << b;
+                ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
+            }
+        }
+        const auto L = this->extract_L(A, b, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            << "b=" << b;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B14. A POISONED WORKSPACE. The driver must not read scratch it has not
+// written.
+//
+// WHY EVERY OTHER TEST IN THIS FILE IS BLIND TO IT, which is the whole point.
+// They all hand the driver a fresh UnifiedVector<std::byte>, and
+// src/util/sycl-util-impl.cc:37-46 is a bare malloc_shared whose pages the CUDA
+// driver hands back ZEROED on first touch. Real callers do not: options.hh:550
+// leases the SAME arena bytes a previous, unrelated lease just used, so in
+// production this scratch arrives holding whatever the last op left in it.
+//
+// The defect this catches, found in WP4 Phase 2 triage and reproduced through
+// the ordinary public API: the W x W diagonal-block gemm is issued with
+// beta = T(0), and a comment claimed that meant the scratch was never read.
+// beta == 0 means "C is not read" in the FOLD (symmetric_product_fold.hh:49)
+// and in cuBLAS; it does NOT mean that in any native gemm here, where
+// LinearEpilogue::apply is alpha*accum + beta*prior with prior read
+// unconditionally. 0 * NaN = NaN. Before the fix this returned info != 0 for
+// 8/8 items with relative residual 9.9e-01 on a well-conditioned SPD input,
+// under BATCHLAS_GEMM_ROUTE=native -- i.e. exactly the vendor-free build.
+//
+// 0xFF over the whole workspace is a NaN/Inf bit pattern for all four scalar
+// types, which is what makes one memset a valid poison for the whole suite.
+// ---------------------------------------------------------------------------
+TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const auto bp = this->blocking(1 << 20);
+    const int n = 2 * bp.nb;          // > nb, so the W x W product IS drawn
+    const int batch = 4;
+    ASSERT_GT(n, bp.nb) << "at n <= nb the scratch is not allocated at all "
+                           "(potrf_blocked_layout), so this test would be vacuous";
+
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        ref[b] = make_spd<T>(n, 9001u + b);
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+    }
+
+    const std::size_t bytes =
+        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
+    ASSERT_GT(bytes, 0u);
+    UnifiedVector<std::byte> ws(bytes);
+    std::memset(ws.data(), 0xFF, bytes);
+
+    UnifiedVector<int32_t> info(batch, int32_t(-12345));
+    sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+                                          ws.to_span(), info.to_span());
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(info[b], 0)
+            << "a positive-definite matrix was reported not positive definite from a "
+               "POISONED workspace, b=" << b;
+        const auto L = this->extract_L(A, b, n, Uplo::Lower);
+        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            << "b=" << b;
+    }
+}
+
 
 }  // namespace

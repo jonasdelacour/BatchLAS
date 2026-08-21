@@ -69,7 +69,19 @@ LINE="$LINE -Xsycl-target-backend=nvptx64-nvidia-cuda -Xcuda-ptxas -v"
 rc=$?
 echo "exit=$rc  target=$TARGET  log=$OUT"
 grep -c 'Compiling entry function' "$OUT" | sed 's/^/entry functions: /'
-echo "kernels with non-zero spill:"
+# ENTRY FUNCTIONS AND EVERYTHING ELSE, COUNTED SEPARATELY. ptxas emits
+# "Function properties" for non-inlined DEVICE functions as well as for entry
+# functions, and the two used to be summed into one number. On
+# batchlas_extensions_cta that reads "16 kernels with non-zero spill" when every
+# entry function is clean and all 16 belong to gesvdj_cta_impl<complex<double>>,
+# a pre-existing 255-register kernel -- i.e. it reports a regression that is not
+# there, on a library where nothing changed. The gate is the ENTRY-FUNCTION line.
+echo "entry functions with non-zero spill (THIS IS THE GATE):"
+awk '/Compiling entry function/ {e=1; next}
+     /Function properties for/ {e=0}
+     e && /spill stores/ && !/0 bytes spill stores, 0 bytes spill loads/ {n++}
+     END {print n+0}' "$OUT"
+echo "all functions (entry + non-inlined device) with non-zero spill:"
 grep -E 'spill (stores|loads)' "$OUT" | grep -vE '0 bytes spill stores, 0 bytes spill loads' | wc -l
 if [ -n "$PAT" ]; then
   echo "=== matching '$PAT' ==="

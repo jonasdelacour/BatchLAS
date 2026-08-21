@@ -1,0 +1,43 @@
+--- per-item fill (the ORIGINAL, which failed) ---
+vendor  float n=512:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 10: 2159228 Aborted                 (core dumped) PHASE2_FILL=peritem BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2159229 Done                    | tail -1
+blocked float n=512 nb=32: blocked,float,512,32,128,128,2.413416,2.412913,0.0001,2372.83,2.664991,0.389405,0.350242,1.925201,4.369e-07,0
+blocked float n=512 nb=48: blocked,float,512,48,128,128,1.972859,1.972257,0.0002,2902.70,2.138690,0.363352,0.451802,1.323379,4.369e-07,0
+vendor  float n=1024:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 10: 2159380 Aborted                 (core dumped) PHASE2_FILL=peritem BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2159381 Done                    | tail -1
+blocked float n=1024 nb=32: blocked,float,1024,32,128,128,12.647932,12.643917,0.0002,3622.17,13.166135,0.804701,0.985849,11.374820,7.653e-07,0
+blocked float n=1024 nb=48: blocked,float,1024,48,128,128,9.654807,9.652807,0.0001,4745.10,10.009172,0.743087,1.449648,7.816276,inf,68
+vendor  double n=512:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 10: 2159666 Aborted                 (core dumped) PHASE2_FILL=peritem BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2159667 Done                    | tail -1
+blocked double n=512 nb=32: blocked,double,512,32,128,128,9.258616,9.245511,0.0007,618.52,9.121428,0.726427,0.827991,7.566837,8.137e-16,0
+blocked double n=512 nb=48: blocked,double,512,48,128,128,8.413538,8.411092,0.0001,680.64,8.570586,0.736355,1.019651,6.814412,1.013e-15,0
+vendor  double n=1024:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 10: 2159821 Aborted                 (core dumped) PHASE2_FILL=peritem BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2159822 Done                    | tail -1
+blocked double n=1024 nb=32: blocked,double,1024,32,128,128,52.316418,52.315315,0.0000,875.69,52.885140,1.446925,2.711167,48.726836,1.018e-15,1
+blocked double n=1024 nb=48: blocked,double,1024,48,128,128,50.351492,50.328325,0.0002,909.86,50.660825,1.319756,5.490106,43.850794,inf,127
+--- shared-Gram fill (the replacement) ---
+vendor  float n=512:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 21: 2160109 Aborted                 (core dumped) BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2160110 Done                    | tail -1
+blocked float n=512 nb=32: blocked,float,512,32,128,128,2.263095,2.262979,0.0000,2530.44,2.521389,0.367438,0.333982,1.819809,4.369e-07,0
+blocked float n=512 nb=48: blocked,float,512,48,128,128,1.970146,1.969075,0.0003,2906.70,2.141146,0.363608,0.452127,1.325245,4.369e-07,0
+vendor  float n=1024:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 21: 2160245 Aborted                 (core dumped) BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2160246 Done                    | tail -1
+blocked float n=1024 nb=32: blocked,float,1024,32,128,128,12.653607,12.641803,0.0005,3620.55,13.175102,0.805209,0.988664,11.381059,5.462e-07,1
+blocked float n=1024 nb=48: blocked,float,1024,48,128,128,9.663229,9.658870,0.0002,4740.96,9.708797,0.704967,1.402015,7.601650,inf,67
+vendor  double n=512:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 21: 2160389 Aborted                 (core dumped) BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2160390 Done                    | tail -1
+blocked double n=512 nb=32: blocked,double,512,32,128,128,8.662090,8.643371,0.0011,661.11,8.893304,0.717766,0.808518,7.366845,8.137e-16,0
+blocked double n=512 nb=48: blocked,double,512,48,128,128,7.766143,7.756641,0.0006,737.38,7.923216,0.683834,0.945286,6.293945,8.137e-16,0
+vendor  double n=1024:   what():  data_ptrs target is null
+experiments/wp4_potrf/phase2_ab/run_fillcheck.sh: line 21: 2160525 Aborted                 (core dumped) BENCH_WARM_S=0.02 ./phase2 vendorpotrf "$t" "$n" 128 2 2>&1
+     2160526 Done                    | tail -1
+blocked double n=1024 nb=32: blocked,double,1024,32,128,128,53.463330,52.367677,0.0104,856.90,53.011538,1.494710,2.758806,48.757536,1.137e-15,2
+blocked double n=1024 nb=48: blocked,double,1024,48,128,128,50.358571,50.354029,0.0000,909.74,50.670142,1.393810,5.438199,43.837952,inf,127
+gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)

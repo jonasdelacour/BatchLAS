@@ -11,7 +11,7 @@ quietly edited.
 
 ## Status
 
-**WP0, WP1, WP2 and WP3 are complete. WP4 Phase 1 has landed; Phase 2 and WP5–WP9 are not started.**
+**WP0, WP1, WP2 and WP3 are complete. WP4 is complete (Phases 1 and 2). WP5–WP9 are not started.**
 
 | | state |
 |---|---|
@@ -20,7 +20,7 @@ quietly edited.
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
 | level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
-| `potrf` | native CTA kernel, all four types, both triangles, up to a measured SLM ceiling; **vendor-free potrf works** (50/50). Route-neutral: `preferred()` false everywhere, because it is 2–3× slower than cuSOLVER above n≈64 |
+| `potrf` | native CTA kernel **and** a blocked driver above its ceiling, all four types, both triangles; **vendor-free potrf works at every order** and, for `float`, is **1.13–1.40× FASTER than cuSOLVER** at n≥1024. Still route-neutral: `preferred()` false everywhere, because complex is 0.31–0.51× and small `n` loses |
 | M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
 | M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
 
@@ -356,6 +356,73 @@ Two process points this pass established, both of which cost real time before th
    *uninitialized* while the unpadded ones used `::Random`, so every cross-`ld` ratio compared
    data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
    defect is real, but nobody knew that until it was checked.
+
+### WP4 Phase 2: the blocked driver, and the wrong answer it uncovered in WP3
+
+The blocked driver (`src/extensions/potrf_blocked.cc`) factorises above the CTA
+ceiling: the Phase 1 leaf on each diagonal block, the **routed** `trsm` for the
+panel solve, and the **routed** `gemm` plus an explicit triangular fold for the
+trailing update, both injected through a seam modelled on `TrsmTrailingGemm`
+(`trsm_native.hh:105-111`) so the kernel TU never sees the dispatch layer.
+
+**Two design questions were settled by measurement before any code was written.**
+
+*The panel solve needed no new kernel.* The spec's step 2.1 lists a
+`PotrfPanelSolveKernel`; WP3's routed `trsm(Right, Lower, ConjTrans, NonUnit)`
+already serves that exact shape and wins every cell tried. It would also have
+been aimed at the wrong stage: the panel is 5–22% of a vendor-free blocked
+potrf against 65–95% for the trailing update.
+
+*The trailing update cannot use a rank-k update.* `herk` (`level3.cc:295-306`)
+has **no native arm at all** and calls `throw_no_vendor_route` vendor-free, so
+routing potrf's hot loop through it would throw on exactly the shapes WP4 exists
+to serve; and `syrk`'s custom fallback **writes both triangles**, which is a
+wrong answer for a `Lower` factorisation rather than a slowdown. Hence gemm plus
+`fold_symmetric_product_into_triangle`, with the diagonal block at
+`alpha = -1, beta = 0` into scratch and the sub-diagonal rectangle straight into
+`A` at `alpha = -1, beta = 1`.
+
+**The result, re-measured by the orchestrator on the public API in both builds
+(no forced routes):** vendor-free `float` is **1.13×** cuSOLVER at n=1024 and
+**1.40×** at n=2048; `double` is at parity (1.03×); `float n=256` loses at
+0.60×, and complex loses 0.31–0.51× with the gap widening in `n`. The complex
+cause is outside this driver and is now the highest-value follow-on in the whole
+campaign: `route_gemm.hh:113-114` returns false for complex and
+`gemm_kernels.cc:471` keeps the register ladder float-only, so every complex
+trailing gemm lands on the `Tiled16` fallback — 97% of a `cdouble` call, 2.95×
+slower than cuBLAS. **A register-tiled complex GEMM is worth ~2.7× on
+vendor-free `cdouble` potrf on its own.**
+
+It still ships route-neutral, because `preferred()` is a *measured* window and
+two of four types lose.
+
+#### The finding that outranks the phase: WP3's trsm returned wrong answers
+
+Phase 2 was not looking for this. The V1 CTA kernel stages its canonical
+triangle into local memory with a loop strided by `lane`, then reads the
+diagonal back from a **different lane's** write with no barrier in between — an
+unsynchronised cross-sub-group read-after-write, plus the same problem on the
+`sDiv[0]` revert flag. One `sycl::group_barrier` is the entire functional fix.
+
+It survived WP3's suite and every WP3 benchmark because the launcher's ladder
+picks `wg = 32` — one sub-group, in lock step, the single width where the race
+cannot express itself — for every shape below roughly `q·batch = 65k`, **and
+every trsm test and A/B cell in the tree sat there.** The blocked potrf panel
+solve does not: at n=1024, batch=256 the first panel has q=896 and wg=256.
+A/B, deleting the barrier and rebuilding: worst relative difference against the
+vendor **6.05e+16** with 127 of 128 items wrong, host residual 8.0e+05 against
+the vendor's 2.4e-07; restored, 4.27e-07 and 0 items.
+
+**Consequence for the record: WP3's `preferred()` windows above `q·batch ≈ 65k`
+were measured on a racing kernel and have not been re-run.** Nothing above that
+threshold in the WP3 tables should be trusted until it is.
+
+And the guard shipped with the fix **was itself vacuous** — it called V1
+directly, cleared the work-group ladder, asserted that it had, and still passed
+with the barrier deleted. It now drives the configuration that reproduces
+(order 48 through V2, so the final V1 block is order 16, q=976, batch=128) and
+was verified red. That is the fifth recorded blind guard in this repository, and
+the first written in the same change as the fix it guards.
 
 ### WP4 Phase 1 has landed, and the spec's foundation was wrong
 

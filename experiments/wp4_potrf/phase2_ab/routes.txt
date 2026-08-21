@@ -1,0 +1,84 @@
+===== type=float n=256 nb=64 W=128 batch=32 pin=default =====
+blocked,float,256,64,128,32,0.414315,0.414315,0.0000,431.93,0.510548,0.199731,0.172216,0.138433,4.346e-07,0
+  n=28     us_total=2413.9       sycl_parallel_for
+  n=70     us_total=2396.7       sycl_submit
+===== type=float n=256 nb=64 W=128 batch=32 pin=vendorgemm =====
+blocked,float,256,64,128,32,0.412665,0.412665,0.0000,433.66,0.508914,0.200011,0.168157,0.140560,4.346e-07,0
+  n=80     us_total=2769.6       sycl_submit
+  n=32     us_total=1768.1       sycl_parallel_for
+===== type=float n=256 nb=64 W=128 batch=32 pin=nativegemm =====
+blocked,float,256,64,128,32,0.436334,0.436334,0.0000,410.14,0.530735,0.196192,0.169946,0.164436,4.346e-07,0
+  n=80     us_total=2175.2       sycl_submit
+  n=32     us_total=1597.0       sycl_parallel_for
+  n=40     us_total=1059.1       gemm_sycl_tiled16
+===== type=float n=256 nb=64 W=128 batch=32 pin=vendortrsm =====
+blocked,float,256,64,128,32,0.411097,0.411097,0.0000,435.32,0.502249,0.198959,0.165399,0.137758,4.346e-07,0
+  n=80     us_total=2551.1       sycl_submit
+  n=32     us_total=2314.8       sycl_parallel_for
+===== type=float n=256 nb=64 W=128 batch=32 pin=nativetrsm =====
+blocked,float,256,64,128,32,0.412306,0.412306,0.0000,434.04,0.502415,0.196765,0.174164,0.131361,4.346e-07,0
+  n=70     us_total=2918.9       sycl_submit
+  n=28     us_total=1173.6       sycl_parallel_for
+===== type=double n=256 nb=64 W=128 batch=32 pin=default =====
+blocked,double,256,64,128,32,0.825824,0.825824,0.0000,216.70,0.909159,0.385647,0.244451,0.278883,8.101e-16,0
+  n=70     us_total=5650.8       sycl_submit
+  n=28     us_total=3021.2       sycl_parallel_for
+===== type=double n=256 nb=64 W=128 batch=32 pin=vendorgemm =====
+blocked,double,256,64,128,32,0.825784,0.825784,0.0000,216.71,0.910166,0.385466,0.245112,0.279450,8.101e-16,0
+  n=70     us_total=5366.7       sycl_submit
+  n=28     us_total=3898.4       sycl_parallel_for
+===== type=double n=256 nb=64 W=128 batch=32 pin=nativegemm =====
+blocked,double,256,64,128,32,0.808647,0.808647,0.0000,221.30,0.893632,0.383740,0.235184,0.274515,8.101e-16,0
+  n=70     us_total=5426.8       sycl_submit
+  n=56     us_total=2343.1       gemm_sycl_tiled16
+  n=28     us_total=1983.5       sycl_parallel_for
+===== type=double n=256 nb=64 W=128 batch=32 pin=vendortrsm =====
+blocked,double,256,64,128,32,0.911604,0.911604,0.0000,196.31,0.988168,0.389844,0.317026,0.281138,8.101e-16,0
+  n=70     us_total=4904.8       sycl_submit
+  n=28     us_total=3473.4       sycl_parallel_for
+===== type=double n=256 nb=64 W=128 batch=32 pin=nativetrsm =====
+blocked,double,256,64,128,32,0.826006,0.826006,0.0000,216.65,0.908184,0.385268,0.244278,0.278467,8.101e-16,0
+  n=70     us_total=5245.5       sycl_submit
+  n=28     us_total=2975.1       sycl_parallel_for
+===== type=cfloat n=256 nb=64 W=128 batch=32 pin=default =====
+blocked,cfloat,256,64,128,32,0.492146,0.492146,0.0000,1454.50,0.580865,0.234448,0.197267,0.149005,4.037e-07,0
+  n=70     us_total=4516.2       sycl_submit
+  n=28     us_total=1939.8       sycl_parallel_for
+===== type=cfloat n=256 nb=64 W=128 batch=32 pin=vendorgemm =====
+blocked,cfloat,256,64,128,32,0.491697,0.491697,0.0000,1455.83,0.583459,0.236352,0.196596,0.150343,4.037e-07,0
+  n=28     us_total=3576.0       sycl_parallel_for
+  n=70     us_total=3282.5       sycl_submit
+===== type=cfloat n=256 nb=64 W=128 batch=32 pin=nativegemm =====
+blocked,cfloat,256,64,128,32,0.590912,0.590912,0.0000,1211.40,0.677779,0.234500,0.199647,0.243447,4.037e-07,0
+  n=70     us_total=3345.2       sycl_submit
+  n=56     us_total=2415.0       gemm_sycl_tiled16
+  n=28     us_total=2059.4       sycl_parallel_for
+===== type=cfloat n=256 nb=64 W=128 batch=32 pin=vendortrsm =====
+blocked,cfloat,256,64,128,32,1.412255,1.412255,0.0000,506.87,1.502441,0.239631,1.111501,0.151175,4.037e-07,0
+  n=42     us_total=8262.9       sycl_parallel_for
+  n=24     us_total=3147.5       sycl_submit
+===== type=cfloat n=256 nb=64 W=128 batch=32 pin=nativetrsm =====
+blocked,cfloat,256,64,128,32,0.490851,0.490851,0.0000,1458.34,0.584695,0.237128,0.196971,0.150440,4.037e-07,0
+  n=28     us_total=3625.5       sycl_parallel_for
+  n=70     us_total=3088.6       sycl_submit
+===== type=cdouble n=256 nb=64 W=128 batch=32 pin=default =====
+blocked,cdouble,256,64,128,32,1.801304,1.801304,0.0000,397.39,1.882132,0.582091,0.456681,0.843212,7.470e-16,0
+  n=60     us_total=6691.9       sycl_submit
+  n=24     us_total=3268.7       sycl_parallel_for
+===== type=cdouble n=256 nb=64 W=128 batch=32 pin=vendorgemm =====
+blocked,cdouble,256,64,128,32,1.798728,1.798728,0.0000,397.96,1.884190,0.583577,0.456188,0.844286,7.470e-16,0
+  n=60     us_total=6402.3       sycl_submit
+  n=24     us_total=3302.6       sycl_parallel_for
+===== type=cdouble n=256 nb=64 W=128 batch=32 pin=nativegemm =====
+blocked,cdouble,256,64,128,32,3.523931,3.523931,0.0000,203.13,3.609893,0.582173,0.636048,2.391531,7.470e-16,0
+  n=48     us_total=16274.9      gemm_sycl_tiled16
+  n=60     us_total=7960.0       sycl_submit
+  n=24     us_total=2713.6       sycl_parallel_for
+===== type=cdouble n=256 nb=64 W=128 batch=32 pin=vendortrsm =====
+blocked,cdouble,256,64,128,32,22.771677,22.771677,0.0000,31.44,22.961897,0.594430,21.449136,0.917804,7.470e-16,0
+  n=42     us_total=132953.4     sycl_parallel_for
+  n=24     us_total=6137.4       sycl_submit
+===== type=cdouble n=256 nb=64 W=128 batch=32 pin=nativetrsm =====
+blocked,cdouble,256,64,128,32,1.635900,1.635900,0.0000,437.57,1.703565,0.525266,0.411327,0.766835,7.470e-16,0
+  n=60     us_total=5718.9       sycl_submit
+  n=24     us_total=4594.8       sycl_parallel_for

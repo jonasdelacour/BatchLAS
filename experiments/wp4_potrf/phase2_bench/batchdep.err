@@ -1,0 +1,27 @@
+INFONZ facade float n=512 batch=256 nz=1: [174]=129 resid[174]=2.876e+00
+INFONZ facade float n=512 batch=256 nz=1: [217]=129 resid[217]=3.095e+00
+INFONZ facade float n=512 batch=256 nz=3: [173]=385 [196]=130 [227]=130 resid[173]=1.839e+02
+INFONZ facade float n=1024 batch=128 nz=1: [79]=129 resid[79]=1.883e+01
+INFONZ facade float n=1024 batch=128 nz=1: [100]=385 resid[100]=9.741e-04
+INFONZ facade float n=1024 batch=256 nz=30: [92]=897 [98]=641 [144]=257 [149]=513 [159]=769 [162]=513 [184]=498 [187]=897 resid[92]=7.958e-02
+INFONZ facade float n=1024 batch=256 nz=24: [61]=513 [112]=385 [122]=385 [161]=513 [192]=385 [193]=641 [194]=385 [201]=897 resid[61]=3.379e+02
+INFONZ facade float n=1024 batch=256 nz=25: [87]=257 [93]=641 [169]=897 [186]=769 [187]=897 [191]=641 [193]=641 [199]=641 resid[87]=9.064e+00
+INFONZ facade cdouble n=512 batch=96 nz=2: [93]=194 [95]=257 resid[93]=1.938e-03
+INFONZ facade cdouble n=512 batch=128 nz=6: [5]=449 [8]=449 [14]=65 [93]=66 [100]=193 [101]=65 resid[5]=1.101e-02
+INFONZ facade cdouble n=512 batch=128 nz=3: [64]=193 [68]=65 [94]=133 resid[64]=8.623e-03
+INFONZ facade cdouble n=512 batch=128 nz=5: [22]=259 [34]=68 [79]=193 [92]=193 [99]=193 resid[22]=1.943e-03
+INFONZ facade cdouble n=512 batch=256 nz=46: [0]=193 [1]=65 [2]=193 [7]=65 [8]=130 [9]=129 [11]=131 [12]=193 resid[0]=3.028e+00
+INFONZ facade cdouble n=512 batch=256 nz=47: [1]=66 [2]=257 [7]=193 [9]=193 [10]=129 [11]=129 [13]=193 [15]=129 resid[1]=1.219e-01
+INFONZ facade cdouble n=512 batch=256 nz=52: [6]=193 [7]=257 [8]=257 [9]=385 [10]=193 [11]=193 [15]=193 [16]=193 resid[6]=1.111e+00
+INFONZ facade cdouble n=1024 batch=64 nz=6: [39]=769 [54]=771 [55]=897 [56]=129 [57]=515 [61]=705 resid[39]=9.630e-04
+INFONZ facade cdouble n=1024 batch=64 nz=4: [1]=258 [48]=513 [58]=578 [62]=962 resid[1]=9.710e-04
+INFONZ facade cdouble n=1024 batch=64 nz=4: [15]=194 [37]=257 [43]=194 [62]=904 resid[15]=1.640e-01
+INFONZ facade cdouble n=1024 batch=96 nz=22: [37]=194 [43]=258 [50]=769 [51]=385 [53]=325 [65]=65 [67]=642 [74]=194 resid[37]=9.723e-04
+INFONZ facade cdouble n=1024 batch=96 nz=25: [2]=66 [21]=323 [28]=577 [33]=67 [44]=641 [45]=513 [47]=705 [52]=325 resid[2]=2.599e-02
+INFONZ facade cdouble n=1024 batch=96 nz=28: [6]=897 [15]=257 [40]=643 [42]=580 [44]=194 [45]=129 [46]=129 [51]=961 resid[6]=2.240e-04
+INFONZ facade cdouble n=1024 batch=128 nz=33: [1]=706 [3]=385 [5]=193 [8]=193 [11]=646 [16]=386 [19]=193 [20]=65 resid[1]=6.990e-03
+INFONZ facade cdouble n=1024 batch=128 nz=21: [2]=65 [3]=193 [6]=513 [7]=193 [8]=705 [12]=65 [26]=385 [28]=65 resid[2]=9.705e+00
+INFONZ facade cdouble n=1024 batch=128 nz=37: [1]=321 [3]=324 [10]=513 [15]=705 [18]=129 [19]=770 [20]=194 [25]=386 resid[1]=4.241e-01
+INFONZ facade cdouble n=1024 batch=256 nz=85: [0]=450 [1]=131 [2]=449 [4]=321 [5]=449 [6]=321 [7]=321 [8]=321 resid[0]=3.410e-02
+INFONZ facade cdouble n=1024 batch=256 nz=86: [0]=385 [1]=65 [2]=65 [3]=513 [4]=641 [5]=642 [6]=513 [7]=130 resid[0]=2.936e-01
+INFONZ facade cdouble n=1024 batch=256 nz=85: [0]=641 [1]=65 [2]=513 [3]=641 [5]=322 [6]=257 [7]=577 [8]=513 resid[0]=1.028e-01
