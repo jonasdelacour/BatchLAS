@@ -1,0 +1,13 @@
+device 0: NVIDIA GeForce RTX 4090  sm_89
+  multiProcessorCount                 = 128
+  sharedMemPerMultiprocessor          = 102400
+  sharedMemPerBlock                   = 49152
+  sharedMemPerBlockOptin              = 101376
+  reservedSharedMemPerBlock           = 1024
+  regsPerBlock                        = 65536
+  regsPerMultiprocessor               = 65536
+  maxThreadsPerMultiProcessor         = 1536
+  maxThreadsPerBlock                  = 1024
+  maxBlocksPerMultiProcessor          = 24
+  warpSize                            = 32
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)

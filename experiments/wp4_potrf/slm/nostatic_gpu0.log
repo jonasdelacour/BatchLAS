@@ -1,0 +1,6 @@
+wg=32    hole in [48800,49152] : NONE
+wg=32    CEILING = 101376 bytes
+wg=128   hole in [48800,49152] : NONE
+wg=128   CEILING = 101376 bytes
+wg=256   hole in [48800,49152] : NONE
+wg=256   CEILING = 101376 bytes

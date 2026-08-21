@@ -174,7 +174,22 @@ struct Device{
     std::string get_name() const;
     Vendor get_vendor() const;
     size_t get_property(DeviceProperty property) const;
-    
+
+    // Does this device offer `size` as a sub-group size -- ENUMERATED from
+    // sycl::info::device::sub_group_sizes.
+    //
+    // This is NOT get_property(MAX_SUB_GROUP_SIZE). That case returns
+    // sub_group_sizes()[0] (src/util/queue-impl.cc:325), the FIRST supported
+    // size, not the maximum, so `>= 32` is wrong in both directions: a device
+    // reporting {8,16,32} reads 8 and is refused although it supports 32, and a
+    // device reporting {64} reads 64 and is ACCEPTED although it has no 32 at
+    // all. For a kernel carrying [[sycl::reqd_sub_group_size(32)]] the second is
+    // a launch abort -- exactly what a supports() predicate must never claim.
+    // src/extensions/sytrd_cta.cc:319-333 already enumerates by hand for the
+    // same question; this is that loop, once.
+    bool supports_sub_group_size(size_t size) const;
+
+
 
     size_t     idx  = 0;
     DeviceType type = DeviceType::HOST;

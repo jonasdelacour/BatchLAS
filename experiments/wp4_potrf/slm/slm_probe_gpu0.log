@@ -1,0 +1,444 @@
+# device                         : NVIDIA GeForce RTX 4090
+# vendor                         : NVIDIA Corporation
+# driver                         : CUDA 13.2
+# local_mem_size   (DeviceProperty::LOCAL_MEM_SIZE) : 101376
+# local_mem_type                 : 1
+# max_work_group_size            : 1024
+# max_compute_units              : 128
+# max_num_sub_groups             : 32
+# sub_group_sizes                : 32 
+wg=32    probe=45056    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        enqueueKernelLaunch
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:439
+
+wg=32    probe=49152    FAIL : unknown internal error
+wg=32    probe=65536    OK
+wg=32    probe=71744    OK
+wg=32    probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=32    probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=32    CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+wg=64    probe=45056    OK
+wg=64    probe=49152    OK
+wg=64    probe=65536    OK
+wg=64    probe=71744    OK
+wg=64    probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=64    probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=64    CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+wg=128   probe=45056    OK
+wg=128   probe=49152    OK
+wg=128   probe=65536    OK
+wg=128   probe=71744    OK
+wg=128   probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=128   probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=128   CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+wg=256   probe=45056    OK
+wg=256   probe=49152    OK
+wg=256   probe=65536    OK
+wg=256   probe=71744    OK
+wg=256   probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=256   probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=256   CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+wg=512   probe=45056    OK
+wg=512   probe=49152    OK
+wg=512   probe=65536    OK
+wg=512   probe=71744    OK
+wg=512   probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=512   probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=512   CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+wg=1024  probe=45056    OK
+wg=1024  probe=49152    OK
+wg=1024  probe=65536    OK
+wg=1024  probe=71744    OK
+wg=1024  probe=97280    OK
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=1024  probe=101376   FAIL : unknown internal error
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        setKernelParams
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:267
+
+wg=1024  CEILING = 101120 bytes  (first failure at 101121: unknown internal error)
+gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)

@@ -53,7 +53,18 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        auto Lwork = potrf_buffer_size<B>(ctx, descrA, uplo) - BumpAllocator::allocation_size<int>(ctx, 1);
+        // THE VENDOR PATH SIZES ITSELF FROM THE VENDOR QUERY, never from the
+        // public one. Unqualified lookup here escaped `batchlas::backend` and
+        // found `batchlas::potrf_buffer_size` -- the FACADE (potrf.hh:44-47,
+        // src/dispatch/entry_points/factorization.cc). While facade == vendor
+        // the loop was invisible; the moment the public query starts returning
+        // max(native, vendor) it hands a batch-1 cuSOLVER call the NATIVE
+        // workspace size, and it does so SILENTLY: the pool was sized by the
+        // same public query and both terms are alignment multiples, so
+        // `pool.allocate` below fits exactly and only cusolverDnXpotrf sees the
+        // wrong number -- as its workspace-size argument.
+        auto Lwork = backend::potrf_vendor_buffer_size<B, T>(ctx, descrA, uplo)
+                     - BumpAllocator::allocation_size<int>(ctx, 1);
         if (descrA.batch_size() == 1) {
             auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
             auto info = detail::info_target(ctx, pool, info_out, 1);

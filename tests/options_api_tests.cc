@@ -372,6 +372,45 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
         << "omitting the workspace should lease one from the queue's arena";
 }
 
+
+// WP4 step 0.6. potrf validated NOTHING on the positional path.
+//
+// require_square / require_info_span are attached only to the OPTION overloads
+// (options.hh:548-549, :557-558, :565-566); the workspace-taking <Backend B>
+// overload at :539-543 -- the spelling src/extensions/ortho.cc:200 uses -- has
+// neither, and there was no potrf_validate_params anywhere in the tree. So a
+// non-square view reached the backend and cuSOLVER factorised A.rows() x
+// A.rows() out of it, reading past the columns it was given.
+//
+// The facade now validates before it resolves a route, because the shape
+// builder reads A.rows()/A.cols() and must not describe a non-conforming view.
+// Both entry points do it, and they must agree: potrf_buffer_size resolves the
+// route a second time (options.hh:550 then :551), and the two disagreeing is
+// the ormqr defect class -- buffer size 2560 bytes, call demanded 276480.
+TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
+    Queue q;
+    Matrix<float, MatrixFormat::Dense> oblong(8, 5, 2);
+
+    EXPECT_THROW(potrf_buffer_size(q, oblong.view(), Uplo::Lower),
+                 std::invalid_argument)
+        << "the buffer-size query reads A.rows()/A.cols() too";
+
+    EXPECT_THROW(potrf(q, oblong.view(), Uplo::Lower, Span<std::byte>{},
+                       Span<int32_t>{}),
+                 std::invalid_argument)
+        << "the POSITIONAL overload is the one that had no validation at all";
+
+    // GUARD: the same calls on a square view must NOT throw, or the two
+    // assertions above would pass for a reason that has nothing to do with
+    // squareness.
+    auto square = spd(8, 2);
+    size_t bytes = 0;
+    EXPECT_NO_THROW(bytes = potrf_buffer_size(q, square.view(), Uplo::Lower));
+    auto ws = q.workspace(bytes);
+    EXPECT_NO_THROW(potrf(q, square.view(), Uplo::Lower, ws.span(), Span<int32_t>{}));
+    q.wait();
+}
+
 // An empty option struct must be written with its type named, never as `{}`.
 //
 // Regression test for a silent wrong answer. `potrf`'s option overload
