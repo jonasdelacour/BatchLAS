@@ -11,15 +11,16 @@ quietly edited.
 
 ## Status
 
-**WP0, WP1, WP2 and WP3 are complete. WP4–WP9 are not started.**
+**WP0, WP1, WP2 and WP3 are complete. WP4 Phase 1 has landed; Phase 2 and WP5–WP9 are not started.**
 
 | | state |
 |---|---|
-| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **25/53** |
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **26/54** |
 | Vendor-present build | **52/53**, the one failure pre-existing and unrelated |
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
 | level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
+| `potrf` | native CTA kernel, all four types, both triangles, up to a measured SLM ceiling; **vendor-free potrf works** (50/50). Route-neutral: `preferred()` false everywhere, because it is 2–3× slower than cuSOLVER above n≈64 |
 | M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
 | M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
 
@@ -355,6 +356,48 @@ Two process points this pass established, both of which cost real time before th
    *uninitialized* while the unpadded ones used `::Random`, so every cross-`ld` ratio compared
    data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
    defect is real, but nobody knew that until it was checked.
+
+### WP4 Phase 1 has landed, and the spec's foundation was wrong
+
+`WP4_POTRF_SPEC_CORRECTIONS.md` (108 findings surviving adversarial refutation) supersedes
+`WP4_POTRF_SPEC.md`. The single most consequential correction was not a dispatch item — it was
+the number every capacity in the spec is derived from.
+
+The spec sizes its SLM budget from "49152 / 45056 on this box", presented as re-verified device
+facts. `cmake/BatchLASDetectSYCL.cmake:44-45` **hardcodes** 49152 for any `nvidia_gpu_sm_*`
+pattern, and the detection routine never queries `local_mem_size` at all — while
+`src/extensions/gesvdj_cta.cc` already allocates **71,744 B in production**. Shipping the spec's
+ceilings would have left float `n` in 106..155 with no route at all in a vendor-free build. The
+implementation measured the ceiling instead of inheriting it.
+
+**`potrf` now factorises with no vendor present** — `potrf_tests` 50/50 in the vendor-free build,
+byte-identical to the vendor-present run — and the burn-down moves 25/53 → 26/54 with the failing
+set unchanged.
+
+It ships **route-neutral**: `supports()` is correctness only and `preferred()` returns false
+everywhere, so nothing routes here by default. That is not caution, it is measurement: **the CTA
+kernel is 2–3× slower than cuSOLVER above n≈64, at 8.3% achieved occupancy.** The vendor-free
+story for larger `n` is Phase 2's blocked driver calling a small CTA leaf, not this kernel
+stretched to its fit ceiling — so planning the routing step as "cut the preferred window" would be
+planning around the wrong problem.
+
+Three things this phase established that generalise:
+
+1. **A test can assert the route table and still prove nothing.** The routing test originally
+   asserted on a *re-resolution* of the table, which is not evidence that the facade executed the
+   kernel. It now asserts **bit-exact** agreement with the direct entry point — cuSOLVER does not
+   reproduce this kernel's reduction order, so a residual check would have been satisfied by
+   either arm. Removing the facade's native arm turns it red while the two answers *print
+   identically*.
+2. **The register probe was blind to half the tree.** `scripts/register_probe.sh` replayed only
+   `batchlas_sycl.dir/link.txt`, which links two objects — so it could report "424 entry
+   functions, 0 with spill" over a set containing no potrf kernel at all. A clean report from the
+   wrong library is indistinguishable from a clean one from the right library. It now takes a
+   target and fails loudly on an unknown one.
+3. **Five deliberate breaks were run and two turned nothing red** — recorded rather than hidden,
+   because it located a *fourth* instance of this repository's blind-guard pattern: a planted
+   factorisation left the original diagonal negative at the failure column, so a stale-pivot
+   reader named the same column and the `info` tests stayed green.
 
 ### The burn-down number, and why it stopped moving
 
