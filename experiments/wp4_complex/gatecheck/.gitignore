@@ -1,0 +1,6 @@
+# Kernel-trace captures. Each is ~129,000 lines of BATCHLAS_KERNEL_TRACE JSON,
+# and 13 of them accounted for 448,702 of this PR's additions -- more than the
+# rest of the repository put together. They are the RAW EVIDENCE for "which
+# kernel actually ran"; the conclusion drawn from each is the one-line .txt
+# beside it, which IS committed. Re-capture by re-running the gate script.
+*.json
