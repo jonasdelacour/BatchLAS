@@ -356,10 +356,26 @@ is mistaken for a claim.
    wrong answer, and **not measured**. Fix is to hoist the shape out of
    `geqrf_route` or memoize `Device::supports_sub_group_size`, which
    `queue-impl.cc:333-338` already invites. Measure before acting.
-10. **No suite closed on the burn-down, and none will until WP9.** All four QR
-    suites still carry `Backend::NETLIB` rows. The WP5 brief's "worth up to FOUR
-    suites" does not survive contact with the test code; the honest movement is
-    **16 test rows and zero suites**.
+10. **CORRECTED BY THE ORCHESTRATOR -- three suites closed, not zero.** The
+    claim originally recorded here ("no suite closed, and none will until WP9")
+    came from reading `25 tests failed out of 55` as a PASS count. It is a
+    failure count: the burn-down is **30 of 55**, against **26 of 54** before
+    WP5. Diffing the two failing sets:
+
+    | | |
+    |---|---|
+    | now passing, was failing | `backend_dispatch_tests`, `syev_two_stage_tests`, `sytrd_sy2sb_tests` |
+    | newly failing | none |
+    | plus | the new `geqrf_tests`, passing vendor-free (72/0) |
+
+    The half that WAS right: the four QR suites themselves are still red, and
+    they stay red until WP9, because every one carries `Backend::NETLIB` rows
+    that no CUDA kernel can fix. So the brief's "worth up to FOUR suites" was
+    wrong about WHICH suites -- the beneficiaries are three DOWNSTREAM algorithm
+    suites that call `geqrf` on CUDA and could not run vendor-free at all
+    before. Verified by re-running each directly in `build-novendor/`:
+    `backend_dispatch_tests` 13/13, `syev_two_stage_tests` 20/20,
+    `sytrd_sy2sb_tests` 2/2.
 
 ---
 
@@ -376,7 +392,7 @@ is mistaken for a claim.
 | `ctest -L "blas\|ortho"` in `build/` | **100% passed, 0 failed of 22** |
 | `ctest -L "blas\|ortho"` in `build-novendor/` | 16 failed of 22 — unchanged set |
 | `ctest -LE slow` in `build/` | 1 failed of 55 — `lanczos_tests`, pre-existing and proven independent of WP5 |
-| **`ctest -LE slow` in `build-novendor/` (burn-down)** | **25 failed of 55 — identical count and identical failing set to before the repair** |
+| **`ctest -LE slow` in `build-novendor/` (burn-down)** | **25 FAILED of 55, i.e. 30 PASSING** — unchanged by the repair pass, but **up from 26 of 54 before WP5**. See §5.10: that 25 is a failure count and was misread as a pass count when this file was first written |
 | register probe, `batchlas_extensions_cta` | 848 entry functions, **spill(entry) = 0**, spill(all) = 16 (all pre-existing gesvdj / ormqx / syev_cta complex-double) |
 | register probe, `batchlas_extensions_factorization` | 424 entry functions, **spill(entry) = 0, spill(all) = 0** |
 | `route_diff.sh compare wp5-structural wp5-repair` | 1 substitution + 1 addition, **both attributed to the new test**, zero vendor-present decisions moved |

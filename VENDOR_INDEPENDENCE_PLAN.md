@@ -11,11 +11,11 @@ quietly edited.
 
 ## Status
 
-**WP0, WP1, WP2 and WP3 are complete. WP4 is complete (Phases 1 and 2). WP5–WP9 are not started.**
+**WP0–WP5 are complete. WP6–WP9 are not started.**
 
 | | state |
 |---|---|
-| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **26/54** |
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **30/55** |
 | Vendor-present build | **52/53**, the one failure pre-existing and unrelated |
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
@@ -398,14 +398,27 @@ build takes cuSOLVER for every shape and only a vendor-free build (or an explici
    matrix leaves the residual bit-identical (tau = 0 for a 1x1 real reflector) and
    turns complex red; at m > n it turns EVERY type red. Test with m > n.
 
-**The burn-down moved by 16 test rows and by ZERO suites**, which is the honest
-number. In `build-novendor/`: `orgqr_tests` 16 -> 8 failures and `ormqr_tests`
-24 -> 16, both losing exactly their CUDA rows; `ormqr_cta_tests` (2) and
-`ormqr_blocked_tests` (30) are unchanged, because their references are netlib
-`geqrf`/`ormqr` on a host queue and `ormqr_vendor_or_throw` respectively. No
-suite closed, because every one of the four still has `Backend::NETLIB` rows that
-need WP9. The WP5 brief's "worth up to FOUR suites" claim does not survive
-contact with the test code.
+**The burn-down moved 26/54 -> 30/55: three suites closed and none broke.**
+Diffing the failing sets, `backend_dispatch_tests`, `syev_two_stage_tests` and
+`sytrd_sy2sb_tests` now pass in `build-novendor/` (re-verified directly: 13/13,
+20/20, 2/2), and the new `geqrf_tests` passes there too (72/0). Nothing newly
+failed.
+
+They are not the suites the WP5 brief predicted, and the brief's reasoning was
+half right in an instructive way. The four QR suites it named are still red and
+stay red until WP9: `orgqr_tests` went 16 -> 8 failures and `ormqr_tests`
+24 -> 16, each losing exactly its CUDA rows, while `ormqr_cta_tests` (2) and
+`ormqr_blocked_tests` (30) are unchanged because their references are netlib
+`geqrf`/`ormqr` on a host queue and `ormqr_vendor_or_throw`. Every one of the
+four still carries `Backend::NETLIB` rows that no CUDA kernel can fix. The
+beneficiaries were instead three DOWNSTREAM algorithm suites that call `geqrf`
+on CUDA and could not run vendor-free at all before it existed.
+
+*(This paragraph originally read "ZERO suites, which is the honest number",
+because `25 tests failed out of 55` was read as a pass count. It is a failure
+count. Recorded rather than silently corrected, because a burn-down number that
+moves the wrong way is exactly the kind of result this document exists to
+protect against.)*
 
 Full write-up, the harness, and both break sweeps (5 reference breaks, 7 kernel
 breaks, two of which turned nothing red and are reported as such) are in
