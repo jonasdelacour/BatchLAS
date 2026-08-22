@@ -1,0 +1,116 @@
+== geqrf_float_1024
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_1024.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_1024.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_1024.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+-----------+-----------+----------+-----------+-------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances | Avg (ns)  | Med (ns)  | Min (ns) | Max (ns)  | StdDev (ns) |                                                 Name                                                 |
++----------+-----------------+-----------+-----------+-----------+----------+-----------+-------------+------------------------------------------------------------------------------------------------------+
+|     46.6 |      99,832,423 |       244 | 409,149.3 |  71,057.0 |    6,081 | 3,367,527 |   597,089.9 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<float, (int)16, (batchlas::Transpose)… |
+|     24.3 |      52,020,155 |       116 | 448,449.6 | 356,132.0 |   16,993 | 1,160,910 |   359,859.6 | Typeinfo name for batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>                     |
+|     12.3 |      26,406,285 |        96 | 275,065.5 | 269,939.0 |  246,947 |   428,772 |    33,454.5 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, float, (int)256, (bool)0>      |
+|      4.7 |      10,026,677 |        92 | 108,985.6 | 108,321.0 |   50,113 |   177,410 |    37,586.8 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<float>                   |
+|      4.6 |       9,828,434 |        36 | 273,012.1 | 262,179.0 |  212,738 |   406,053 |    44,062.2 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelGlobalKernel<float>                     |
+|      4.5 |       9,739,153 |       124 |  78,541.6 |  63,729.0 |    8,192 | 2,170,585 |   191,893.2 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::GeqrfWyTag, float>                         |
+|      2.9 |       6,139,848 |        28 | 219,280.3 | 214,914.0 |  213,666 |   234,562 |     8,334.2 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, float, (int)128, (bool)0>      |
+|      0.0 |          73,697 |         8 |   9,212.1 |   9,184.0 |    6,080 |    12,992 |     3,217.2 | Typeinfo name for batchlas::sycl_gemm::GemmRegisterTiledKernel<float, (int)32, (int)32, (int)8, (in… |
+|      0.0 |          26,016 |         4 |   6,504.0 |   6,368.0 |    6,240 |     7,040 |       362.4 | Typeinfo name for batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<float>                            |
++----------+-----------------+-----------+-----------+-----------+----------+-----------+-------------+------------------------------------------------------------------------------------------------------+
+
+== geqrf_cdouble_1024
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_1024.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_1024.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_1024.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |  Med (ns)   | Min (ns)  |  Max (ns)  | StdDev (ns)  |                                                 Name                                                 |
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+|     69.7 |   2,901,368,382 |       183 | 15,854,472.0 | 2,496,414.0 |   176,578 | 84,798,880 | 23,153,404.1 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<std::complex<double>, (int)16, (batch… |
+|     21.4 |     889,298,595 |        93 |  9,562,350.5 | 7,476,248.0 |   101,826 | 26,833,020 |  8,139,878.8 | Typeinfo name for batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0> |
+|      5.2 |     216,285,196 |        72 |  3,003,961.1 | 3,018,291.5 | 2,420,125 |  3,563,753 |    326,787.4 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, std::complex<double>, (int)25… |
+|      2.4 |      98,907,876 |        81 |  1,221,084.9 | 1,211,150.0 |   526,438 |  2,002,391 |    429,858.6 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelGlobalKernel<std::complex<double>>      |
+|      0.9 |      35,450,399 |        21 |  1,688,114.2 | 1,706,452.0 | 1,513,362 |  1,937,719 |    154,093.9 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, std::complex<double>, (int)12… |
+|      0.4 |      16,120,738 |        93 |    173,341.3 |   126,113.0 |    16,064 |  4,813,368 |    490,286.9 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::GeqrfWyTag, std::complex<double>>          |
+|      0.1 |       5,796,610 |        15 |    386,440.7 |   384,932.0 |   302,243 |    473,445 |     62,465.5 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<std::complex<double>>    |
+|      0.0 |         314,243 |         3 |    104,747.7 |   104,737.0 |   104,673 |    104,833 |         80.5 | Typeinfo name for batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<std::complex<double>>             |
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+
+== geqrf_float_64
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_64.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_64.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_float_64.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+-------------+-------------+-----------+-----------+-------------+------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |  Avg (ns)   |  Med (ns)   | Min (ns)  | Max (ns)  | StdDev (ns) |                                        Name                                        |
++----------+-----------------+-----------+-------------+-------------+-----------+-----------+-------------+------------------------------------------------------------------------------------+
+|    100.0 |     164,214,558 |        52 | 3,157,972.3 | 3,174,694.0 | 2,910,242 | 3,317,127 |    75,339.1 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<float> |
++----------+-----------------+-----------+-------------+-------------+-----------+-----------+-------------+------------------------------------------------------------------------------------+
+
+== geqrf_cdouble_64
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |   Med (ns)   |  Min (ns)  |  Max (ns)  | StdDev (ns) |                                               Name                                                |
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+|    100.0 |     244,730,385 |         4 | 61,182,596.3 | 60,983,394.0 | 58,843,928 | 63,919,669 | 2,708,940.2 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<std::complex<double>> |
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+
+== orgqr_float_1024
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_float_1024.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_float_1024.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_float_1024.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |  Med (ns)   | Min (ns)  |  Max (ns)  | StdDev (ns)  |                                                 Name                                                 |
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+|     33.0 |     103,813,269 |        96 |  1,081,388.2 | 1,101,805.5 |    96,289 |  2,053,049 |    579,152.2 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<float, (int)16, (batchlas::Transpose)… |
+|     18.4 |      57,915,250 |        98 |    590,971.9 |   576,599.0 |    18,688 |  1,191,086 |    356,077.8 | Typeinfo name for batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>                     |
+|     13.2 |      41,330,060 |         3 | 13,776,686.7 | 3,467,209.0 | 3,466,506 | 34,396,345 | 17,857,147.9 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrIdentityKernel<float>                        |
+|      9.4 |      29,410,462 |        61 |    482,138.7 |    72,609.0 |     6,688 |  4,487,989 |    777,559.2 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<float, (int)16, (batchlas::Transpose)… |
+|      6.1 |      19,259,588 |        72 |    267,494.3 |   251,251.0 |   247,651 |    324,516 |     26,033.8 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, float, (int)256, (bool)0>      |
+|      5.1 |      16,072,412 |        24 |    669,683.8 |   672,088.0 |   142,978 |  1,187,438 |    348,341.1 | Typeinfo name for batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>                     |
+|      4.5 |      14,037,992 |         3 |  4,679,330.7 | 4,679,160.0 | 4,678,552 |  4,680,280 |        876.6 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrCopyBackKernel<float>                        |
+|      2.2 |       6,995,152 |        24 |    291,464.7 |   270,627.0 |   268,675 |    420,293 |     37,168.1 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, float, (int)256, (bool)0>      |
+|      2.0 |       6,257,095 |        96 |     65,178.1 |    64,481.0 |     5,120 |    612,039 |     63,986.8 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::OrmqrWyTag, float>                         |
+|      1.7 |       5,259,837 |        24 |    219,159.9 |   215,266.0 |   202,754 |    333,476 |     24,611.0 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, float, (int)128, (bool)0>      |
+|      1.3 |       3,952,753 |        31 |    127,508.2 |    68,417.0 |     9,216 |  2,056,857 |    359,436.0 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::GeqrfWyTag, float>                         |
+|      0.9 |       2,788,160 |        96 |     29,043.3 |    25,824.0 |    17,952 |    474,502 |     46,018.1 | Typeinfo name for batchlas::backend::detail::TrmmTriangularTilesKernel<float, (int)32>               |
+|      0.8 |       2,646,115 |        23 |    115,048.5 |   116,514.0 |    54,817 |    177,346 |     39,183.4 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<float>                   |
+|      0.8 |       2,572,383 |         9 |    285,820.3 |   273,283.0 |   231,459 |    401,156 |     53,948.6 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelGlobalKernel<float>                     |
+|      0.5 |       1,633,715 |         7 |    233,387.9 |   233,379.0 |   232,387 |    234,498 |        755.1 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, float, (int)128, (bool)0>      |
+|      0.1 |         168,003 |         5 |     33,600.6 |    49,281.0 |     6,720 |     49,569 |     21,775.8 | Typeinfo name for batchlas::sycl_gemm::GemmRegisterTiledKernel<float, (int)32, (int)32, (int)8, (in… |
+|      0.0 |           7,040 |         1 |      7,040.0 |     7,040.0 |     7,040 |      7,040 |          0.0 | Typeinfo name for batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<float>                            |
++----------+-----------------+-----------+--------------+-------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+
+== orgqr_cdouble_1024
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |   Med (ns)   | Min (ns)  |  Max (ns)  | StdDev (ns)  |                                                 Name                                                 |
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+|     69.2 |   5,254,042,055 |       157 | 33,465,236.0 | 29,790,857.0 |   176,866 | 86,520,030 | 28,034,073.3 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<std::complex<double>, (int)16, (batch… |
+|     14.8 |   1,126,537,042 |       175 |  6,437,354.5 |  1,609,363.0 |   101,890 | 26,686,496 |  7,638,902.4 | Typeinfo name for batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0> |
+|      9.1 |     690,558,560 |        48 | 14,386,636.7 | 14,396,942.5 | 1,720,724 | 27,115,434 |  7,851,990.4 | Typeinfo name for batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)1> |
+|      2.8 |     216,512,283 |        72 |  3,007,115.0 |  3,022,580.0 | 2,423,101 |  3,490,283 |    325,798.0 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, std::complex<double>, (int)25… |
+|      1.3 |      97,096,720 |         3 | 32,365,573.3 |  6,900,948.0 | 6,894,932 | 83,300,840 | 44,111,235.0 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrIdentityKernel<std::complex<double>>         |
+|      1.0 |      72,208,771 |        24 |  3,008,698.8 |  3,020,788.0 | 2,417,245 |  3,602,315 |    338,426.5 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, std::complex<double>, (int)25… |
+|      0.5 |      40,163,015 |        24 |  1,673,459.0 |  1,694,917.0 | 1,488,786 |  1,937,848 |    154,217.6 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, std::complex<double>, (int)12… |
+|      0.4 |      32,915,499 |        27 |  1,219,092.6 |  1,211,982.0 |   527,047 |  1,977,176 |    431,066.9 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelGlobalKernel<std::complex<double>>      |
+|      0.4 |      28,502,843 |         3 |  9,500,947.7 |  9,500,244.0 | 9,498,548 |  9,504,051 |      2,818.2 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrCopyBackKernel<std::complex<double>>         |
+|      0.2 |      15,678,423 |        96 |    163,316.9 |    129,377.0 |     9,152 |  3,815,598 |    382,093.2 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::OrmqrWyTag, std::complex<double>>          |
+|      0.2 |      11,819,118 |         7 |  1,688,445.4 |  1,708,469.0 | 1,513,490 |  1,933,720 |    161,953.8 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::GeqrfWyTag, std::complex<double>, (int)12… |
+|      0.1 |       8,861,611 |        31 |    285,858.4 |    127,106.0 |    16,033 |  5,243,199 |    922,034.5 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::GeqrfWyTag, std::complex<double>>          |
+|      0.0 |       1,932,471 |         5 |    386,494.2 |    384,901.0 |   302,563 |    473,382 |     67,415.6 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<std::complex<double>>    |
+|      0.0 |         104,641 |         1 |    104,641.0 |    104,641.0 |   104,641 |    104,641 |          0.0 | Typeinfo name for batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<std::complex<double>>             |
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+

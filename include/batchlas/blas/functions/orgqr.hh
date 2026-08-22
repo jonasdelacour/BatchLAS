@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -36,6 +39,28 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&,
                                         Span<T>);
 }  // namespace sig
+
+// Validation for the POSITIONAL entry point, which had none.
+//
+// Runs in the facade ahead of the shape builder, for the same reason as
+// geqrf_validate_params and potrf_validate_params (potrf.hh:66-84).
+//
+// SCOPE IS DELIBERATELY MINIMAL. In particular this does NOT check `n <= m`,
+// although RouteTable<Op::orgqr,T>::supports() does. Q's columns live in R^m, so
+// n > m is meaningless -- but every backend in this tree currently accepts such a
+// view and hands it to a vendor, and turning that into a throw is a user-visible
+// behaviour change that belongs in its own commit with its own test
+// (potrf.hh:59-65). In supports() the same condition merely routes the view to
+// the vendor, which is what happens today. It also does not check tau's length:
+// options.hh:731-732 already does require_span_at_least on the arena spellings.
+template <typename T>
+inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+    if (A.rows() < 0 || A.cols() < 0) {
+        throw std::invalid_argument(
+            "ORGQR: Matrix dimensions cannot be negative (rows=" +
+            std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
+    }
+}
 
 
 template <Backend B, typename T>

@@ -1,0 +1,13 @@
+# Compiled harnesses. Rebuild with build_v.sh / build_nv.sh / build_gt_v.sh /
+# build_gt_nv.sh, or `g++ -O1 -std=c++20 -I include -I build/include` for routeq_qr.
+wp5qr_v
+wp5qr_nv
+gemmtrail_v
+gemmtrail_nv
+routeq_qr
+# Kernel-trace JSON, if any ever lands here by accident. run_variant_trace.sh
+# writes it to the scratch dir and deletes it; 13 of these were once 83% of a PR
+# diff on this branch.
+*.json
+*.nsys-rep
+*.sqlite

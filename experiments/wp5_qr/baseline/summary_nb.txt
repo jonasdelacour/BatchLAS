@@ -1,0 +1,56 @@
+PART 1 -- trailing GEMM pair, vendor-free, N=1024 batch=128.
+Effective GFLOP/s of G1+G3 together (higher is better). Total trailing
+flops barely move with nb, so the peak here is the width the BLAS-3 core wants.
+
+  panel j0=0
+    nb         float      double      cfloat     cdouble
+     8          1835         728        3476         244
+    16          3626        1265        6055         377
+    24          3914        1121        5819         328
+    32          5211        1323       10033         602
+    48          5982        1342       11371         604
+    56          5611        1247       10732         525
+    64          6418        1329       12169         612
+    96          6896        1360       12868         610
+   128         18906        1353       13187         615
+
+  panel j0=512
+    nb         float      double      cfloat     cdouble
+     8          1744         705        3355         242
+    16          3361        1247        5953         376
+    24          3762        1104        5736         325
+    32          4976        1313        9754         594
+    48          5726        1331       11047         595
+    56          5372        1232       10382         514
+    64          6148        1320       11884         610
+    96          6600        1354       12531         603
+   128         16667        1348       13033         614
+
+PART 2 -- end-to-end WY apply (ormqr on an identity), vendor-free build.
+median ms, LOWER is better; * marks the best nb, [] the SHIPPED width.
+
+  n=256 batch=512   (shipped ormqr width for this n: 24)
+    nb         float      double      cfloat     cdouble
+     8        10.44       28.83       24.74      307.98 
+    16         6.29*      18.44*      14.69*     217.56 
+    24         7.00]      24.26]      18.57]     271.95]
+    32         6.79       24.37       14.97      175.60*
+    48         8.80       40.91       19.80      224.72 
+    56        10.11       46.65       23.26      267.14 
+    64        11.46       54.32       28.32      274.34 
+    96        15.70       72.85       44.67      378.54 
+    best: float=16 (6.29 ms)  double=16 (18.44 ms)  cfloat=16 (14.69 ms)  cdouble=32 (175.60 ms)
+    cost of the shipped width vs best: float=1.11x  double=1.32x  cfloat=1.26x  cdouble=1.55x
+
+  n=1024 batch=64   (shipped ormqr width for this n: 56)
+    nb         float      double      cfloat     cdouble
+     8        84.99      219.11      193.69     2302.60 
+    16        45.36      123.65*     101.53     1547.54 
+    24        43.31      150.67      120.80     1818.16 
+    32        36.82*     135.65       81.54*    1061.24*
+    48        40.09      155.28       96.67     1144.85 
+    56        45.48]     174.82]     113.18]    1333.81]
+    64        46.63      181.25      122.95     1243.43 
+    96        62.46      231.67      192.70     1544.61 
+    best: float=32 (36.82 ms)  double=16 (123.65 ms)  cfloat=32 (81.54 ms)  cdouble=32 (1061.24 ms)
+    cost of the shipped width vs best: float=1.24x  double=1.41x  cfloat=1.39x  cdouble=1.26x

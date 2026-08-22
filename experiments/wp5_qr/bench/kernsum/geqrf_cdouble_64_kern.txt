@@ -1,0 +1,11 @@
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/geqrf_cdouble_64.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |   Med (ns)   |  Min (ns)  |  Max (ns)  | StdDev (ns) |                                               Name                                                |
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+|    100.0 |     244,730,385 |         4 | 61,182,596.3 | 60,983,394.0 | 58,843,928 | 63,919,669 | 2,708,940.2 | Typeinfo name for batchlas::sycl_geqrf::<unnamed>::GeqrfPanelResidentKernel<std::complex<double>> |
++----------+-----------------+-----------+--------------+--------------+------------+------------+-------------+---------------------------------------------------------------------------------------------------+
+

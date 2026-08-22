@@ -29,6 +29,59 @@ namespace batchlas::dispatch {
 template <Op O, typename T>
 struct RouteTable;
 
+// ---------------------------------------------------------------------------
+// THE NATIVE-VS-NATIVE TIE-BREAK, AND WHY IT IS A THIRD PREDICATE RATHER THAN A
+// REUSE OF EITHER OF THE OTHER TWO.
+//
+// An op with more than one native route -- geqrf and potrf both have {CTA,
+// Blocked} -- has a question the existing pair cannot express:
+//
+//   * supports() cannot answer it. It is CORRECTNESS ONLY. Putting "n is past
+//     the CTA crossover so CTA should be false" there is the exact defect
+//     route_potrf.hh:284-296 and route_geqrf.hh:300-310 both warn against: a
+//     forced route bypasses preferred() but NEVER supports() (:101 here), so a
+//     speed threshold in supports() makes a pinned route fall through to
+//     automatic() and the test that pinned it measures something else entirely.
+//
+//   * preferred() cannot answer it EITHER, and this is the part that is easy to
+//     get wrong. preferred() is consulted by the loop above the vendor-free
+//     walk, which runs REGARDLESS of vendor_available. So a window written to
+//     fix the vendor-free tier choice necessarily also moves vendor-PRESENT
+//     traffic onto that tier -- including at shapes where the vendor beats both
+//     natives. The two questions genuinely differ:
+//
+//         preferred(r, s)            -> "r is the best route available, vendor
+//                                        included". Flipping it moves the
+//                                        default in EVERY build.
+//         native_tier_preferred(r,s) -> "among the NATIVE routes that can serve
+//                                        s, r is the better one". Consulted
+//                                        only where there is no vendor left, so
+//                                        flipping it moves nothing in a
+//                                        vendor-present build.
+//
+// WITHOUT this, the vendor-free choice is decided entirely by the ORDER array,
+// which is static and therefore cannot follow a crossover. Measured cost of
+// that for geqrf (experiments/wp5_qr/bench/tier_summary.txt): the order lists
+// CTA first, and CTA is 1.37x SLOWER than the blocked driver in the same build
+// at double n=96, 1.43x at float n=128 -- a pure loss, in the one build this
+// work package exists for, with the better route already linked in.
+//
+// NEUTRAL BY CONSTRUCTION FOR EVERY OTHER TABLE. The hook is OPTIONAL: a
+// RouteTable that does not declare it gets `true`, which makes the first pass
+// below identical to the second and therefore identical to the single walk this
+// replaced. That is why this is not a flag day for gemm, trsm, potrf and gesvd.
+// It is also why the default is `true` and not `false`: a table that has not
+// thought about the question must keep its old answer.
+// ---------------------------------------------------------------------------
+template <typename Table, typename Shape>
+inline bool native_tier_preferred_or_default(Route r, const Shape& s) {
+    if constexpr (requires { Table::native_tier_preferred(r, s); }) {
+        return Table::native_tier_preferred(r, s);
+    } else {
+        return true;
+    }
+}
+
 // `Shape` is deduced. Most ops pass OpShape; an op whose routing reads
 // something OpShape has no field for -- gesvd needs jobu/jobvh and the
 // Hermitian flag -- passes a struct deriving from it, rather than growing
@@ -58,6 +111,17 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
             if (Table::supports(*r, s) && Table::preferred(*r, s)) return *r;
         }
         if (!vendor_available) {
+            // TWO PASSES, not one. The first honours the optional native-vs-native
+            // tie-break described above; the second is the original walk and is
+            // what a table without the hook -- or a shape outside every tier
+            // window it declares -- falls back to. A table with no hook makes the
+            // two passes identical, so this is a no-op for every op but geqrf.
+            for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+                if (is_native(*r) && Table::supports(*r, s) &&
+                    native_tier_preferred_or_default<Table>(*r, s)) {
+                    return *r;
+                }
+            }
             for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
                 if (is_native(*r) && Table::supports(*r, s)) return *r;
             }

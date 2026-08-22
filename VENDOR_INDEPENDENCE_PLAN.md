@@ -357,6 +357,211 @@ Two process points this pass established, both of which cost real time before th
    data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
    defect is real, but nobody knew that until it was checked.
 
+### WP5 has landed: native `geqrf` (two tiers) and native `orgqr`
+
+`src/extensions/geqrf_cta_device.hh` holds **all** of geqrf's device code — a
+LAPACK-faithful `larfg` and ONE `geqr2_panel_device` body written against a
+`Tile` abstraction. It is instantiated twice, against a `local_accessor` (the
+CTA tier: the whole m x n matrix resident, factorised in place, stored once) and
+against a raw global pointer (the blocked tier's panel leaf, for panels too tall
+to hold resident). One algorithm, two residencies, chosen per panel by the SAME
+`geqrf_cta_fits` predicate the route table's capacity uses. `orgqr` is `ormqr`
+applied to an identity, through an injected routed apply, exactly as the WP5
+baseline measured.
+
+Both ops ship **route-neutral**: `preferred()` is false, so a vendor-present
+build takes cuSOLVER for every shape and only a vendor-free build (or an explicit
+`BATCHLAS_GEQRF_ROUTE` / a direct entry point) reaches the kernels.
+
+**Three results worth carrying forward.**
+
+1. **The native factor is elementwise the vendor's factor, tau included, for all
+   four scalar types** (max relative difference 3.2e-06 float / 8.2e-15 double
+   over 10 shapes), because the native `larfg` deliberately follows LAPACK's
+   REAL-beta convention rather than `internal::larfg`'s phase-preserving one.
+   That divergence is a real fork in this tree and it is written up at the top of
+   `geqrf_cta_device.hh`. `geqrf` is a contract, not a private helper.
+
+2. **A residual test cannot guard a convention.** Kernel break K3 switched the
+   complex beta to the phase-preserving form: every residual column — ‖QRx−Ax‖,
+   ‖Q^HQx−x‖, both tiers, all four types — stayed GREEN, while the elementwise
+   comparison against the vendor and the "R's diagonal is real" check went red.
+   Any future test for this family that checks only residuals is blind to the one
+   property that makes the kernel a drop-in.
+
+3. **The short-final-panel error class is structurally ABSENT from this driver,
+   and the obvious test for it is worse than vacuous.** `supports()` requires
+   m >= n, so k = min(m,n) = n and the LAST panel's trailing block is EMPTY —
+   there is no trailing update after a short panel to derive from `nb` instead of
+   `ib`. What a short panel still exercises is the leaf at `ib < nb` columns.
+   Confirmed on this implementation: deleting the last reflector on a SQUARE REAL
+   matrix leaves the residual bit-identical (tau = 0 for a 1x1 real reflector) and
+   turns complex red; at m > n it turns EVERY type red. Test with m > n.
+
+**The burn-down moved by 16 test rows and by ZERO suites**, which is the honest
+number. In `build-novendor/`: `orgqr_tests` 16 -> 8 failures and `ormqr_tests`
+24 -> 16, both losing exactly their CUDA rows; `ormqr_cta_tests` (2) and
+`ormqr_blocked_tests` (30) are unchanged, because their references are netlib
+`geqrf`/`ormqr` on a host queue and `ormqr_vendor_or_throw` respectively. No
+suite closed, because every one of the four still has `Backend::NETLIB` rows that
+need WP9. The WP5 brief's "worth up to FOUR suites" claim does not survive
+contact with the test code.
+
+Full write-up, the harness, and both break sweeps (5 reference breaks, 7 kernel
+breaks, two of which turned nothing red and are reported as such) are in
+`experiments/wp5_qr/kernels/README.md`.
+
+#### The suite, and the defect it found: WP5 was in WP4's 48 KB launch hole
+
+`tests/geqrf_tests.cc` (new, in the `blas` label) and an extension to
+`tests/orgqr_tests.cc` hold WP5 to a HOST reference — `Q` formed on the host from
+the packed reflectors, `‖QR − A‖_F/‖A‖_F` and `‖Qᴴ Q − I‖_F/√k` in double for
+every scalar type — through the DIRECT entry points, plus the three oracles a
+residual cannot supply (the real-`R`-diagonal convention, elementwise agreement
+with the vendor, and feeding the factor across the ormqr/orgqr boundary in both
+directions). Nine deliberate breaks were applied to the source, rebuilt and run;
+the table is at the bottom of `tests/geqrf_tests.cc`, including the two that
+turned nothing red.
+
+**It found a shipped, reachable defect on its first vendor-free run.** A
+resident-leaf launch asking for *exactly* 49,152 B of local memory is refused by
+the CUDA backend — `CUDA_ERROR_INVALID_VALUE` at `enqueueKernelLaunch`. This is
+WP4's own "48 KB launch hole" (`potrf_cta.cc:258-296`), and WP4 wrote down the
+condition that reopens it: *"one group algorithm added anywhere in the body — a
+`reduce_over_group`, which is exactly what the probe kernel used — reintroduces
+the hole"*. `geqr2_panel_device` runs two `reduce_over_group` calls per
+reflector, so WP5's leaf sits in the hole and shipped without WP4's pad.
+
+Measured cold, one process per point, through the public facade:
+
+| bytes | float | double | cfloat | cdouble |
+|---|---|---|---|---|
+| 48,896 | pass | pass | pass | pass |
+| **49,152** | **fail** | **fail** | **fail** | **fail** |
+| 49,664 | pass | pass | pass | pass |
+
+— a byte threshold, not a shape or a type (reached at 384×32, 384×16, 192×32 and
+192×16 / 96×32 respectively).
+
+**Why it shipped: the attribute the UR CUDA adapter sets is sticky per
+`CUfunction`, so any earlier launch of a larger panel raises the cap for the rest
+of the process.** `geqrf_tests`' own blocked ladder reaches 100×32 (51,200 B)
+before 96×32 (49,152 B) and is green either way; it took `orgqr_tests` asking for
+cdouble 96×96 as the *first* blocked shape in its process to expose it. The whole
+class was invisible **by execution order**, not by construction — a new entry in
+this repository's blind-guard catalogue, and one no amount of shape coverage
+inside a single process would have closed.
+
+Fixed by adopting potrf's band and pad verbatim in `geqrf_cta.cc`
+(`geqrf_hole_padded`), applied in three places so the table and the launcher
+cannot disagree: the resident `local_accessor` allocation, `geqrf_cta_fits`, and
+`geqrf_cta_max_elems_for_slm` (through `geqrf_hole_safe_budget`, inert at this
+box's 97,280 B budget, so no pinned capacity number moves). Guarded by
+`GeqrfTest.ResidentLeafLaunchHoleAt48KiB`, which is declared **first** in the file
+because it is only discriminating while it is the first resident launch of its
+type in the process.
+
+#### The WP5 repair pass, and the dispatch gap it exposed
+
+Four fixes on top of the above. Full record, with every number, in
+`experiments/wp5_qr/README.md`.
+
+**1. The vendor-free build was taking the SLOWER of its own two native tiers,
+and `preferred()` could not fix it.** `kGeqrfOrder` lists CTA first, and with
+`preferred()` all-false the vendor-free walk returns the first *supported*
+native route — CTA anywhere the tile fits SLM, i.e. square n ≤ 155 float and
+n ≤ 110 double on this box. WP5's own tier sweep had already measured the blocked
+driver **ahead** of CTA from n ≈ 104 (float) and n ≈ 48 (double). Reaching for
+`preferred()` to express that window does not work: `preferred()` is consulted by
+the loop *above* the vendor-free walk, which runs regardless of
+`vendor_available`, so it would also move vendor-**present** traffic — including
+at shapes where cuSOLVER beats both natives.
+
+That is a genuine gap in the dispatch vocabulary, not a WP5 bug, and **potrf has
+it too** (same two native tiers, same all-false `preferred()`). It is now closed
+by a third, OPTIONAL predicate in `route_resolve.hh`:
+
+| predicate | question | consulted |
+|---|---|---|
+| `supports` | would this be a wrong answer? | always |
+| `preferred` | is `r` the best route available, **vendor included**? | always |
+| `native_tier_preferred` | among the **native** routes that can serve `s`, is `r` the better one? | **vendor-free walk only** |
+
+The vendor-free walk is now two passes; the hook is detected with a `requires`
+expression and **defaults to `true`**, which makes the first pass identical to the
+second for every table that does not declare it. gemm, trsm, potrf and gesvd are
+untouched by construction, and the route diff confirms it: **one substitution and
+one addition, both inside the new test, zero vendor-present decisions moved.**
+
+Measured same-session, interleaved, forced arm's route verified to read
+`native:cta`, vendor-free: **float n=112/128/155 gain 1.31x / 1.54x / 1.39x;
+double n=64/80/96/110 gain 1.08x / 1.30x / 1.37x / 1.39x.** Below the crossover
+CTA still wins (float n=64 2.95 vs 5.70 ms; cdouble n=64 59.2 vs 113.8 ms). Two
+cells — double n=48 and cfloat n=96 — are ties inside the harness's resolution and
+go to CTA deliberately, because CTA's workspace is **zero**.
+
+**2. Three uncoalesced memory movers.** `OrgqrIdentityKernel`,
+`OrgqrCopyBackKernel` and `pack_v_panel_batched` all launched
+`range<3>(batch, rows, cols)` and read `idx[2]` as the **column** — but `id<3>`
+makes dim 2 fastest-varying and every operand is column-major, so a warp touched
+32 sectors instead of 4. The tree's own fast kernels already use the opposite
+convention (`src/matrix.cc:400`, `register_128x128.hh:127`). Separately the
+blocked driver handed `V` to both trailing GEMMs at the **parent** `ld = m`
+although `V` is scratch the driver owns outright — a short operand with a long
+stride, the recorded "native GEMM collapses on strided ld" shape, for no reason.
+Clean same-session A/B (fixes reverted, rebuilt, measured, restored): **orgqr
+float n=512 1.196x, n=1024 1.118x**, 16/16 cells improved or neutral, nothing
+regressed. Small everywhere the cell is GEMM-bound, which is most of FP64.
+
+**3. 32 device entry functions that could never launch.**
+`larft_forward_columnwise_batched` took `use_device` as a runtime bool, so both
+implementations were instantiated for every `(Tag, T, WG)`; geqrf passes a literal
+`false`. `UseDevice` is now a template parameter (the runtime wrapper is retained
+for ormqr, whose choice really is a getenv). **880 → 848 entry functions, device
+link 125.45 s → 116.63 s** on the slowest-linking library in the tree.
+
+**4. `orgqr_buffer_size` gated on `native_need == 0`** — the exact latent defect
+the same change had deliberately removed from `geqrf_buffer_size` 170 lines
+above. Now uses `native_fired`.
+
+##### The break that matters: a residual test cannot guard a convention, and the vendor-free build had nothing else
+
+Before this pass the **only** test that could see geqrf's tau/beta convention was
+`NativeFactorMatchesTheVendorElementwise`, which opens with `GTEST_SKIP` in a
+vendor-free build. So in the build this work package exists for, the real-scalar
+half of geqrf's drop-in contract — the property `ormqr`, `orgqr`, `ormbr`,
+`sy2sb` and `band_reduction` consume — **had no guard at all**.
+`ConventionMatchesReferenceLapackWithoutAVendor` closes it against an independent
+host `xGEQR2`. Re-running break K3 (drop LAPACK's beta sign choice) with it in
+place: **RED for all four types in `build-novendor`**, where before it shipped
+green.
+
+Two things fell out of writing that reference:
+
+* K3 turned a *few* residual tests red this time (blocked float/double) because
+  dropping the sign choice causes cancellation in `alpha - beta` on some data —
+  but the CTA tier stayed green and **both complex types stayed green**. A
+  residual test catches this break *sometimes*. Do not rely on it.
+* **`zgeqr2` applies `conj(tau)`, not `tau`**, because reducing from the left
+  applies `H^H`. The first reference used `tau` and disagreed with the kernel by
+  1–4% for cfloat/cdouble while being *exact* for float/double — the same
+  signature as kernel break KE. For a real `T` the conjugate is the identity, so
+  this whole defect class is invisible to half the type list by construction.
+
+A second new test, `SubnormalScaleColumnsTakeTheDivisionPath`, covers the
+reciprocal guard in `geqrf_larfg_scalars`, whose division arm had **never
+executed** in any test, harness or benchmark in this tree. Deleting that arm is
+RED for all four types and nothing else. Reaching it at all requires subnormal
+input — `|alpha - beta| >= s`, so the reciprocal misbehaves only below the
+smallest normal — which is itself worth knowing, because it means no tight
+residual is possible there.
+
+**The burn-down did not move and was not expected to: 25 failed of 55 in
+`build-novendor`, identical count and identical failing set.** Ten open questions
+WP5 did not settle — including that the vendor-present default is still cuSOLVER
+everywhere, so the measured 3.24x/7.85x geomeans are **unrealised** — are listed
+in `experiments/wp5_qr/README.md` §5.
+
 ### WP4 Phase 2: the blocked driver, and the wrong answer it uncovered in WP3
 
 The blocked driver (`src/extensions/potrf_blocked.cc`) factorises above the CTA

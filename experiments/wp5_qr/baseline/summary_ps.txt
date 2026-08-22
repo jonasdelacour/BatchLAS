@@ -1,0 +1,18 @@
+BLAS-3 LOWER BOUND for a blocked geqrf, N=1024 nb=56 batch=128
+(sum of the two trailing GEMMs over all 18 panels; excludes panel factorisation)
+
+    type       build     G1_ms     G3_ms    sum_ms  eff_GF/s  cuSOLVER_geqrf_ms  headroom_x
+   float      vendor      5.21      7.91     13.12   13928.0             2109.8       160.8
+   float  vendorfree     25.05      8.35     33.40    5470.5             2109.8        63.2
+  double      vendor     75.90     70.33    146.23    1249.5             4274.3        29.2
+  double  vendorfree     75.90     70.33    146.23    1249.5             4274.3        29.2
+  cfloat      vendor     10.66     15.89     26.55   27527.0             3428.6       129.1
+  cfloat  vendorfree     53.19     16.16     69.35   10538.2             3428.6        49.4
+ cdouble      vendor    339.29    356.27    695.56    1050.7             5993.8         8.6
+ cdouble  vendorfree   1059.92    339.58   1399.50     522.2             5993.8         4.3
+
+free/vendor ratio of the BLAS-3 core:
+     float  2.55x   (G1 4.81x, G3 1.06x)
+    double  1.00x   (G1 1.00x, G3 1.00x)
+    cfloat  2.61x   (G1 4.99x, G3 1.02x)
+   cdouble  2.01x   (G1 3.12x, G3 0.95x)

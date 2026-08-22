@@ -12,6 +12,19 @@ set(EXTENSIONS_CTA_SOURCES
     # would be dead weight.
     potrf_cta.cc
     potrf_blocked.cc
+    # WP5 scaffolding, and THIS list for the same W12 reason as potrf's pair: the
+    # blocked geqrf driver's panel leaf will BE the CTA device function, shared
+    # through a geqrf_cta_device.hh, so the two sources must sit in ONE
+    # device-code cluster (":53-57 below: a source must sit with the sources
+    # whose device symbols it calls"). Neither file contains device code YET --
+    # both currently hold only the capability answers, which report the kernels
+    # absent -- but the grouping is decided here so landing a kernel is not also
+    # a CMake decision. NOTE the counter-example NOT to copy: ormqr_cta.cc is in
+    # this list while ormqr_blocked.cc is in EXTENSIONS_FACTORIZATION_SOURCES,
+    # which works only because those two share no device symbol. orgqr_blocked.cc
+    # follows ormqr_blocked.cc for exactly that reason.
+    geqrf_cta.cc
+    geqrf_blocked.cc
     steqr_cta.cc
     stedc_merge_cta.cc
     sytrd_cta.cc
@@ -46,6 +59,11 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     gesvd_blocked.cc
     inv.cc
     ormqr_blocked.cc
+    # WP5 scaffolding. HERE and not in EXTENSIONS_CTA_SOURCES: orgqr ships as
+    # ormqr applied to an identity, so it is built on ormqr_blocked.cc directly
+    # above and shares device symbols with neither geqrf TU. The grouping rule is
+    # the cluster, not the topic (see :53-57 below).
+    orgqr_blocked.cc
     lascl.cc
 )
 

@@ -1,0 +1,144 @@
+=== KERNEL BREAK K1 ===
+apply K1 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.722e-07,orth=1.201e-06,qrQ=5.185e-07,dF=1.213e-06,dtau=1.431e-06,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.488e-15,orth=1.702e-15,qrQ=1.091e-15,dF=1.533e-15,dtau=3.776e-15,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.500e-01,orth=1.358e-06,qrQ=4.486e-01,dF=1.622e+00,dtau=9.981e-01,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.046e-01,orth=1.070e-06,qrQ=2.801e-01,dF=1.622e+00,dtau=9.981e-01,dimag=0.000e+00
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.500e-01,orth=1.734e-15,qrQ=4.486e-01,dF=1.622e+00,dtau=9.981e-01,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.046e-01,orth=1.859e-15,qrQ=2.801e-01,dF=1.622e+00,dtau=9.981e-01,dimag=0.000e+00
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.425e-07,orth=8.227e-07,qrQ=9.466e-07,dF=2.980e-07,dtau=1.868e-07,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=3.335e-15,orth=2.125e-15,qrQ=1.834e-15,dF=5.337e-16,dtau=5.220e-16,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.031e-02,orth=9.011e-07,qrQ=8.908e-02,dF=1.749e+00,dtau=2.962e-01,dimag=0.000e+00
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=6.031e-02,orth=2.264e-15,qrQ=8.908e-02,dF=1.749e+00,dtau=2.962e-01,dimag=0.000e+00
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=5.634e-07,orth=1.219e-06,qrQ=5.107e-07,dF=3.737e-06,dtau=1.627e-05,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=2.388e-15,orth=1.888e-15,qrQ=1.252e-15,dF=9.470e-15,dtau=1.599e-14,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.522e-01,orth=1.067e-06,qrQ=1.721e-01,dF=1.847e+00,dtau=9.455e-01,dimag=0.000e+00
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.522e-01,orth=2.133e-15,qrQ=1.721e-01,dF=1.847e+00,dtau=9.455e-01,dimag=0.000e+00
+revert K1 ok
+=== KERNEL BREAK K2 ===
+apply K2 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.080e+00,orth=9.364e-07,qrQ=1.189e+00,dF=1.386e+00,dtau=4.474e-01,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.097e+00,orth=1.815e-15,qrQ=1.069e+00,dF=1.591e+00,dtau=4.330e-01,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.973e-07,orth=1.019e-06,qrQ=4.811e-07,dF=6.689e-07,dtau=6.467e-06,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.214e+00,orth=1.136e-06,qrQ=1.280e+00,dF=1.543e+00,dtau=7.778e-01,dimag=0.000e+00
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.022e-15,orth=1.499e-15,qrQ=1.111e-15,dF=9.190e-16,dtau=1.303e-14,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.214e+00,orth=1.748e-15,qrQ=1.280e+00,dF=1.543e+00,dtau=7.778e-01,dimag=0.000e+00
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.778e-01,orth=9.569e-07,qrQ=6.900e-01,dF=1.862e+00,dtau=1.403e-01,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=4.882e-01,orth=2.554e-15,qrQ=6.363e-01,dF=1.918e+00,dtau=1.505e-01,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=7.962e-01,orth=9.989e-07,qrQ=9.089e-01,dF=1.845e+00,dtau=3.685e-01,dimag=0.000e+00
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=7.962e-01,orth=1.809e-15,qrQ=9.089e-01,dF=1.845e+00,dtau=3.685e-01,dimag=0.000e+00
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.291e+00,orth=1.200e-06,qrQ=1.277e+00,dF=1.709e+00,dtau=4.989e-01,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=1.146e+00,orth=2.666e-15,qrQ=1.063e+00,dF=1.818e+00,dtau=4.882e-01,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.196e+00,orth=1.508e-06,qrQ=9.516e-01,dF=1.685e+00,dtau=9.921e-01,dimag=0.000e+00
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.196e+00,orth=2.296e-15,qrQ=9.516e-01,dF=1.685e+00,dtau=9.921e-01,dimag=0.000e+00
+revert K2 ok
+=== KERNEL BREAK K3 ===
+apply K3 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.722e-07,orth=1.201e-06,qrQ=5.185e-07,dF=1.213e-06,dtau=1.431e-06,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.488e-15,orth=1.702e-15,qrQ=1.091e-15,dF=1.533e-15,dtau=3.776e-15,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.862e-07,orth=1.166e-06,qrQ=4.992e-07,dF=1.604e+00,dtau=7.000e-01,dimag=9.392e-01
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=5.538e-07,orth=9.692e-07,qrQ=6.835e-07,dF=1.604e+00,dtau=7.000e-01,dimag=9.392e-01
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.196e-15,orth=1.982e-15,qrQ=1.368e-15,dF=1.604e+00,dtau=7.000e-01,dimag=9.392e-01
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.668e-15,orth=2.103e-15,qrQ=1.344e-15,dF=1.604e+00,dtau=7.000e-01,dimag=9.392e-01
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.425e-07,orth=8.227e-07,qrQ=9.466e-07,dF=2.980e-07,dtau=1.868e-07,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=3.335e-15,orth=2.125e-15,qrQ=1.834e-15,dF=5.337e-16,dtau=5.220e-16,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=9.759e-07,orth=1.147e-06,qrQ=1.050e-06,dF=1.821e+00,dtau=1.917e-01,dimag=9.656e-01
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=3.930e-15,orth=2.337e-15,qrQ=2.221e-15,dF=1.821e+00,dtau=1.917e-01,dimag=9.656e-01
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=5.634e-07,orth=1.219e-06,qrQ=5.107e-07,dF=3.737e-06,dtau=1.627e-05,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=2.388e-15,orth=1.888e-15,qrQ=1.252e-15,dF=9.470e-15,dtau=1.599e-14,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=6.624e-07,orth=1.202e-06,qrQ=9.720e-07,dF=1.825e+00,dtau=7.063e-01,dimag=9.610e-01
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.787e-15,orth=2.533e-15,qrQ=1.783e-15,dF=1.825e+00,dtau=7.063e-01,dimag=9.610e-01
+revert K3 ok
+=== KERNEL BREAK K4 ===
+apply K4 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.722e-07,orth=1.201e-06,qrQ=5.185e-07,dF=1.213e-06,dtau=1.431e-06,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.488e-15,orth=1.702e-15,qrQ=1.091e-15,dF=1.533e-15,dtau=3.776e-15,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.973e-07,orth=1.019e-06,qrQ=4.811e-07,dF=6.689e-07,dtau=6.467e-06,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=5.180e-07,orth=9.830e-07,qrQ=5.474e-07,dF=6.657e-07,dtau=1.144e-05,dimag=0.000e+00
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.022e-15,orth=1.499e-15,qrQ=1.111e-15,dF=9.190e-16,dtau=1.303e-14,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.379e-15,orth=1.819e-15,qrQ=1.090e-15,dF=1.619e-15,dtau=9.494e-15,dimag=0.000e+00
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.425e-07,orth=8.227e-07,qrQ=9.466e-07,dF=2.980e-07,dtau=1.868e-07,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=3.335e-15,orth=2.125e-15,qrQ=1.834e-15,dF=5.337e-16,dtau=5.220e-16,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=9.461e-07,orth=9.355e-07,qrQ=9.848e-07,dF=3.105e-07,dtau=2.986e-07,dimag=0.000e+00
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=2.866e-15,orth=2.156e-15,qrQ=2.624e-15,dF=6.121e-16,dtau=5.880e-16,dimag=0.000e+00
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=5.634e-07,orth=1.219e-06,qrQ=5.107e-07,dF=3.737e-06,dtau=1.627e-05,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=2.388e-15,orth=1.888e-15,qrQ=1.252e-15,dF=9.470e-15,dtau=1.599e-14,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=7.272e-07,orth=1.037e-06,qrQ=8.787e-07,dF=1.448e-06,dtau=9.013e-06,dimag=0.000e+00
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.868e-15,orth=2.847e-15,qrQ=1.663e-15,dF=3.381e-15,dtau=1.843e-14,dimag=0.000e+00
+revert K4 ok
+=== KERNEL BREAK K5 ===
+apply K5 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=6.175e+03,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=nan,orth=inf,qrQ=nan,dF=5.307e+211,dtau=6.175e+03,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.973e-07,orth=1.019e-06,qrQ=4.811e-07,dF=6.689e-07,dtau=6.467e-06,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=8.762e+03,dimag=nan
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.022e-15,orth=1.499e-15,qrQ=1.111e-15,dF=9.190e-16,dtau=1.303e-14,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=-nan,orth=-nan,qrQ=-nan,dF=2.620e+225,dtau=8.762e+03,dimag=0.000e+00
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=9.675e+03,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=9.675e+03,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=1.452e+04,dimag=nan
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=-nan,orth=-nan,qrQ=-nan,dF=-nan,dtau=1.452e+04,dimag=nan
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=6.174e+03,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=6.174e+03,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=nan,orth=nan,qrQ=nan,dF=nan,dtau=8.730e+03,dimag=nan
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=-nan,orth=-nan,qrQ=-nan,dF=-nan,dtau=8.730e+03,dimag=nan
+revert K5 ok
+=== KERNEL BREAK K6 ===
+apply K6 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=4.722e-07,orth=1.201e-06,qrQ=5.185e-07,dF=1.213e-06,dtau=1.431e-06,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.488e-15,orth=1.702e-15,qrQ=1.091e-15,dF=1.533e-15,dtau=3.776e-15,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.973e-07,orth=1.019e-06,qrQ=4.811e-07,dF=6.689e-07,dtau=6.467e-06,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=5.180e-07,orth=9.830e-07,qrQ=5.474e-07,dF=6.657e-07,dtau=1.144e-05,dimag=0.000e+00
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.022e-15,orth=1.499e-15,qrQ=1.111e-15,dF=9.190e-16,dtau=1.303e-14,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.379e-15,orth=1.819e-15,qrQ=1.090e-15,dF=1.619e-15,dtau=9.494e-15,dimag=0.000e+00
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.425e-07,orth=8.227e-07,qrQ=9.466e-07,dF=2.980e-07,dtau=1.868e-07,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=3.335e-15,orth=2.125e-15,qrQ=1.834e-15,dF=5.337e-16,dtau=5.220e-16,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=9.461e-07,orth=9.355e-07,qrQ=9.848e-07,dF=3.105e-07,dtau=2.986e-07,dimag=0.000e+00
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=2.866e-15,orth=2.156e-15,qrQ=2.624e-15,dF=6.121e-16,dtau=5.880e-16,dimag=0.000e+00
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=5.634e-07,orth=1.219e-06,qrQ=5.107e-07,dF=3.737e-06,dtau=1.627e-05,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=2.388e-15,orth=1.888e-15,qrQ=1.252e-15,dF=9.470e-15,dtau=1.599e-14,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=7.272e-07,orth=1.037e-06,qrQ=8.787e-07,dF=1.448e-06,dtau=9.013e-06,dimag=0.000e+00
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.868e-15,orth=2.847e-15,qrQ=1.663e-15,dF=3.381e-15,dtau=1.843e-14,dimag=0.000e+00
+revert K6 ok
+=== restoring the unbroken build ===
+restored
+L BREAK K7 ===
+apply K7 ok
+cta,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.695e-07,orth=9.168e-07,qrQ=4.983e-07,dF=7.037e-07,dtau=1.312e-06,dimag=0.000e+00
+blocked,float,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=2.721e+10,orth=1.161e+22,qrQ=4.623e+09,dF=1.465e+00,dtau=3.563e-01,dimag=0.000e+00
+cta,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=1.389e-15,orth=2.143e-15,qrQ=1.085e-15,dF=1.357e-15,dtau=1.888e-15,dimag=0.000e+00
+blocked,double,66,66,8,route=vendor:auto,leaf=1,nb=16,qr=2.033e+10,orth=8.937e+22,qrQ=9.166e+10,dF=1.631e+00,dtau=4.259e-01,dimag=0.000e+00
+cta,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=3.973e-07,orth=1.019e-06,qrQ=4.811e-07,dF=6.689e-07,dtau=6.467e-06,dimag=0.000e+00
+blocked,cfloat,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=6.836e+19,orth=5.017e+40,qrQ=9.451e+19,dF=1.455e+00,dtau=9.506e-01,dimag=2.213e-01
+cta,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=1.022e-15,orth=1.499e-15,qrQ=1.111e-15,dF=9.190e-16,dtau=1.303e-14,dimag=0.000e+00
+blocked,cdouble,66,66,8,route=vendor:auto,leaf=1,nb=32,qr=6.835e+19,orth=5.017e+40,qrQ=9.451e+19,dF=1.455e+00,dtau=9.506e-01,dimag=2.213e-01
+blocked,float,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=6.071e+45,orth=4.054e+38,qrQ=4.144e+18,dF=1.768e+00,dtau=2.498e-01,dimag=0.000e+00
+blocked,double,300,200,4,route=vendor:auto,leaf=1,nb=16,qr=3.729e+49,orth=8.720e+100,qrQ=3.034e+49,dF=1.768e+00,dtau=1.992e-01,dimag=0.000e+00
+blocked,cfloat,300,200,4,route=vendor:auto,leaf=1,nb=32,qr=1.948e+91,orth=1.366e+63,qrQ=8.350e+30,dF=1.738e+00,dtau=2.582e-01,dimag=1.084e-01
+blocked,cdouble,300,200,4,route=vendor:auto,leaf=2,nb=32,qr=1.948e+91,orth=1.229e+184,qrQ=3.065e+91,dF=1.738e+00,dtau=2.582e-01,dimag=1.084e-01
+cta,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=4.189e-07,orth=1.246e-06,qrQ=4.758e-07,dF=3.601e-06,dtau=1.568e-05,dimag=0.000e+00
+blocked,float,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=1.328e+25,orth=9.503e+51,qrQ=1.638e+25,dF=1.700e+00,dtau=4.916e-01,dimag=0.000e+00
+blocked,double,128,128,64,route=vendor:auto,leaf=1,nb=16,qr=5.489e+25,orth=3.471e+52,qrQ=4.624e+25,dF=1.836e+00,dtau=4.570e-01,dimag=0.000e+00
+blocked,cfloat,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=8.085e+43,orth=9.018e-07,qrQ=1.535e+00,dF=1.685e+00,dtau=9.838e-01,dimag=1.752e-01
+blocked,cdouble,128,128,64,route=vendor:auto,leaf=1,nb=32,qr=8.085e+43,orth=9.591e+88,qrQ=7.368e+43,dF=1.685e+00,dtau=9.838e-01,dimag=1.752e-01
+revert K7 ok
+=== restoring the unbroken build ===
+restored

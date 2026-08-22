@@ -1,0 +1,18 @@
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024_synth.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024_synth.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp5_qr/bench/nsys/orgqr_cdouble_1024_synth.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances |   Avg (ns)   |   Med (ns)   | Min (ns)  |  Max (ns)  | StdDev (ns)  |                                                 Name                                                 |
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+|     69.2 |   4,274,003,653 |        96 | 44,520,871.4 | 44,500,198.5 | 2,844,000 | 86,355,287 | 24,915,343.2 | Typeinfo name for batchlas::sycl_gemm::GemmTiledGeneralKernel<std::complex<double>, (int)16, (batch… |
+|     13.4 |     827,579,697 |       144 |  5,747,081.2 |  1,602,930.0 | 1,600,978 | 26,512,206 |  7,344,751.2 | Typeinfo name for batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0> |
+|     11.1 |     687,562,562 |        48 | 14,324,220.0 | 14,339,603.0 | 1,717,299 | 27,046,484 |  7,810,307.4 | Typeinfo name for batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)1> |
+|      3.5 |     215,647,943 |        72 |  2,995,110.3 |  3,013,170.0 | 2,411,388 |  3,487,176 |    325,308.4 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, std::complex<double>, (int)25… |
+|      1.4 |      88,628,865 |         3 | 29,542,955.0 |  6,854,318.0 | 6,854,125 | 74,920,422 | 39,298,039.2 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrIdentityKernel<std::complex<double>>         |
+|      0.6 |      40,090,149 |        24 |  1,670,422.9 |  1,702,259.0 | 1,481,649 |  1,925,718 |    154,659.5 | Typeinfo name for batchlas::wy::LarftKernelName<batchlas::OrmqrWyTag, std::complex<double>, (int)12… |
+|      0.5 |      28,308,608 |         3 |  9,436,202.7 |  9,432,234.0 | 9,425,675 |  9,450,699 |     12,975.5 | Typeinfo name for batchlas::sycl_orgqr::<unnamed>::OrgqrCopyBackKernel<std::complex<double>>         |
+|      0.2 |      13,642,295 |        96 |    142,107.2 |    129,521.5 |     9,152 |  1,807,124 |    183,219.1 | Typeinfo name for batchlas::wy::PackVKernelName<batchlas::OrmqrWyTag, std::complex<double>>          |
++----------+-----------------+-----------+--------------+--------------+-----------+------------+--------------+------------------------------------------------------------------------------------------------------+
+

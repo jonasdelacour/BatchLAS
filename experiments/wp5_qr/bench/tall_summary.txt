@@ -1,0 +1,51 @@
+# discarded / failed cells
+
+op,type,m,n,batch,vendor_ms,native_ms,ratio,v_relsd,n_relsd,v_route,n_route,v_res,n_res,v_ws_MB,n_ws_MB
+geqrf,cdouble,128,32,4096,9.8488,13.9154,0.708,0.0048,0.0004,vendor:auto,native:cta,2.36e-15,1.85e-15,0.0,335.5
+geqrf,cdouble,512,32,2048,21.3907,16.4335,1.302,0.0094,0.0017,vendor:auto,native:blocked,6.39e-15,6.27e-15,0.0,570.4
+geqrf,cdouble,1024,32,1024,20.5972,24.1086,0.854,0.0030,0.0021,vendor:auto,native:blocked,1.00e-14,1.00e-14,0.0,553.6
+geqrf,cdouble,2048,32,512,22.4660,30.8585,0.728,0.0041,0.0010,vendor:auto,native:blocked,2.77e-14,2.78e-14,0.0,545.3
+geqrf,cdouble,512,64,1024,37.5515,51.2325,0.733,0.0015,0.0005,vendor:auto,native:blocked,4.49e-15,4.32e-15,0.0,318.8
+geqrf,cdouble,1024,64,512,43.9975,53.5515,0.822,0.0012,0.0007,vendor:auto,native:blocked,1.09e-14,1.05e-14,0.0,293.6
+geqrf,cdouble,2048,64,256,65.2882,51.2257,1.275,0.0011,0.0009,vendor:auto,native:blocked,1.95e-14,1.70e-14,0.0,281.0
+geqrf,cdouble,1024,128,256,136.2648,81.5593,1.671,0.0006,0.0004,vendor:auto,native:blocked,8.03e-15,8.12e-15,0.0,163.6
+geqrf,cfloat,128,32,4096,3.9830,1.2037,3.309,0.0059,0.0013,vendor:auto,native:cta,3.14e-07,2.97e-07,0.0,167.8
+geqrf,cfloat,512,32,2048,10.2782,4.5307,2.269,0.0017,0.0038,vendor:auto,native:blocked,3.18e-07,3.36e-07,0.0,285.2
+geqrf,cfloat,1024,32,1024,10.5268,8.4540,1.245,0.0023,0.0025,vendor:auto,native:blocked,3.92e-07,4.11e-07,0.0,276.8
+geqrf,cfloat,2048,32,512,13.4766,12.8148,1.052,0.0060,0.0094,vendor:auto,native:blocked,5.07e-07,4.09e-07,0.0,272.6
+geqrf,cfloat,512,64,1024,20.8361,8.4931,2.453,0.0024,0.0076,vendor:auto,native:blocked,3.60e-07,6.21e-07,0.0,159.4
+geqrf,cfloat,1024,64,512,26.6001,12.0593,2.206,0.0014,0.0017,vendor:auto,native:blocked,3.81e-07,6.32e-07,0.0,146.8
+geqrf,cfloat,2048,64,256,41.3417,12.6045,3.280,0.0013,0.0016,vendor:auto,native:blocked,4.24e-07,7.37e-07,0.0,140.5
+geqrf,cfloat,1024,128,256,81.5400,11.2227,7.266,0.0007,0.0014,vendor:auto,native:blocked,4.43e-07,1.04e-06,0.0,81.8
+geqrf,double,128,32,4096,4.3729,7.0574,0.620,0.0025,0.0001,vendor:auto,native:cta,1.90e-15,2.26e-15,0.0,92.3
+geqrf,double,512,32,2048,10.1209,8.7260,1.160,0.0019,0.0002,vendor:auto,native:blocked,5.24e-15,5.50e-15,0.0,146.8
+geqrf,double,1024,32,1024,11.4908,6.6492,1.728,0.0020,0.0035,vendor:auto,native:blocked,8.05e-15,9.65e-15,0.0,140.5
+geqrf,double,2048,32,512,15.0755,7.4741,2.017,0.0014,0.0023,vendor:auto,native:blocked,1.92e-14,2.09e-14,0.0,137.4
+geqrf,double,512,64,1024,23.8825,11.4533,2.085,0.0014,0.0002,vendor:auto,native:blocked,3.26e-15,4.22e-15,0.0,81.8
+geqrf,double,1024,64,512,31.4575,8.5432,3.682,0.0012,0.0020,vendor:auto,native:blocked,7.35e-15,8.23e-15,0.0,74.4
+geqrf,double,2048,64,256,51.1567,8.0886,6.325,0.0007,0.0019,vendor:auto,native:blocked,1.31e-14,1.32e-14,0.0,70.8
+geqrf,double,1024,128,256,102.0222,12.2943,8.298,0.0004,0.0013,vendor:auto,native:blocked,7.94e-15,8.36e-15,0.0,41.4
+geqrf,float,128,32,4096,1.1253,0.7150,1.574,0.0067,0.0010,vendor:auto,native:cta,2.34e-07,2.67e-07,0.0,83.9
+geqrf,float,512,32,2048,4.3758,2.0725,2.111,0.0019,0.0002,vendor:auto,native:cta,3.02e-07,2.13e-07,0.0,142.6
+geqrf,float,1024,32,1024,5.5538,2.4574,2.260,0.0015,0.0047,vendor:auto,native:blocked,2.75e-07,3.08e-07,0.0,138.4
+geqrf,float,2048,32,512,9.5780,4.8107,1.991,0.0004,0.0040,vendor:auto,native:blocked,3.55e-07,3.33e-07,0.0,136.3
+geqrf,float,512,64,1024,10.8134,3.8658,2.797,0.0010,0.0005,vendor:auto,native:blocked,3.28e-07,4.60e-07,0.0,79.7
+geqrf,float,1024,64,512,16.7515,3.7061,4.520,0.0018,0.0025,vendor:auto,native:blocked,2.92e-07,7.10e-07,0.0,73.4
+geqrf,float,2048,64,256,34.7548,4.5829,7.584,0.0004,0.0022,vendor:auto,native:blocked,3.45e-07,8.99e-07,0.0,70.3
+geqrf,float,1024,128,256,56.4673,5.2037,10.851,0.0008,0.0011,vendor:auto,native:blocked,2.90e-07,8.97e-07,0.0,40.9
+
+# geomean of vendor_ms/native_ms  (>1 = native ahead)
+  geqrf  cdouble  n=  8  geomean=  0.962  wins=3/8  min=0.708  max=1.671
+  geqrf  cfloat   n=  8  geomean=  2.443  wins=8/8  min=1.052  max=7.266
+  geqrf  double   n=  8  geomean=  2.374  wins=7/8  min=0.620  max=8.298
+  geqrf  float    n=  8  geomean=  3.342  wins=8/8  min=1.574  max=10.851
+  geqrf  ALL      n= 32  geomean=  2.078  wins=26/32
+  OVERALL          n= 32  geomean=  2.078  wins=26/32
+
+# crossovers in ORDER (batch held fixed)
+
+# crossovers in BATCH (order held fixed)
+  geqrf cdouble n=32: crosses between batch=1024 (0.85x) and batch=2048 (1.30x)
+  geqrf cdouble n=32: crosses between batch=2048 (1.30x) and batch=4096 (0.71x)
+  geqrf cdouble n=64: crosses between batch=256 (1.27x) and batch=512 (0.82x)
+  geqrf double n=32: crosses between batch=2048 (1.16x) and batch=4096 (0.62x)
