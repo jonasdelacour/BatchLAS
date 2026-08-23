@@ -1,0 +1,233 @@
+=== BREAK: info_block_local ===
+  file: src/extensions/getrf_cta_device.hh
+  from: info_local = static_cast<int32_t>(piv_base + k + 1);
+  to  : info_local = static_cast<int32_t>(k + 1);   // BREAK B3: block-local
+=== build ===
+[ 98%] Built target syev_jacobi_cta_tests
+[100%] Built target syev_two_stage_tests
+[100%] Built target syev_blocked_tests
+[100%] Built target device_blas_tests
+=== run type 4 ===
+Note: Google Test filter = LuTest/4.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/4, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[ RUN      ] LuTest/4.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/4.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/4.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/4.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/4.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/4.BlockedFactorisesAndPivotsExactly (76 ms)
+[ RUN      ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed (4 ms)
+[ RUN      ] LuTest/4.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/4.BothPanelLeavesFactoriseCorrectly (1 ms)
+[ RUN      ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1076: Failure
+Expected equality of these values:
+  p.info[b]
+    Which is: 4
+  c1 + 1
+    Which is: 36
+info must be the GLOBAL 1-based column of the FIRST zero pivot (planted at global columns 35 and 69, nb=32)
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/4.NearlySingularIsNotFlagged
+[       OK ] LuTest/4.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/4.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/4.GetrsSolvesAllThreeTransposeModes (8 ms)
+[ RUN      ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched (2 ms)
+[ RUN      ] LuTest/4.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/4.NativeFactorFeedsTheVendorSolvers (3 ms)
+[ RUN      ] LuTest/4.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/4.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/4.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/4.RouteTableAndTheVendorFreeFallback (3 ms)
+[ RUN      ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly (3 ms)
+[ RUN      ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences (1 ms)
+[----------] 16 tests from LuTest/4 (119 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (119 ms total)
+[  PASSED  ] 14 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+
+ 1 FAILED TEST
+--- exit 1 ---
+=== run type 5 ===
+Note: Google Test filter = LuTest/5.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/5, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[ RUN      ] LuTest/5.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/5.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/5.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/5.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/5.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/5.BlockedFactorisesAndPivotsExactly (55 ms)
+[ RUN      ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed (6 ms)
+[ RUN      ] LuTest/5.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/5.BothPanelLeavesFactoriseCorrectly (1 ms)
+[ RUN      ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1076: Failure
+Expected equality of these values:
+  p.info[b]
+    Which is: 4
+  c1 + 1
+    Which is: 36
+info must be the GLOBAL 1-based column of the FIRST zero pivot (planted at global columns 35 and 69, nb=32)
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/5.NearlySingularIsNotFlagged
+[       OK ] LuTest/5.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/5.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/5.GetrsSolvesAllThreeTransposeModes (7 ms)
+[ RUN      ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched (2 ms)
+[ RUN      ] LuTest/5.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/5.NativeFactorFeedsTheVendorSolvers (3 ms)
+[ RUN      ] LuTest/5.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/5.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/5.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/5.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly (4 ms)
+[ RUN      ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences (1 ms)
+[----------] 16 tests from LuTest/5 (102 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (102 ms total)
+[  PASSED  ] 14 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+
+ 1 FAILED TEST
+--- exit 1 ---
+=== run type 6 ===
+Note: Google Test filter = LuTest/6.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/6, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[ RUN      ] LuTest/6.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/6.ResidentLeafLaunchHoleAt48KiB (7 ms)
+[ RUN      ] LuTest/6.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/6.CtaFactorisesAndPivotsExactly (5 ms)
+[ RUN      ] LuTest/6.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/6.BlockedFactorisesAndPivotsExactly (67 ms)
+[ RUN      ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed (11 ms)
+[ RUN      ] LuTest/6.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/6.BothPanelLeavesFactoriseCorrectly (3 ms)
+[ RUN      ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1076: Failure
+Expected equality of these values:
+  p.info[b]
+    Which is: 4
+  c1 + 1
+    Which is: 36
+info must be the GLOBAL 1-based column of the FIRST zero pivot (planted at global columns 35 and 69, nb=32)
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/6.NearlySingularIsNotFlagged
+[       OK ] LuTest/6.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/6.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/6.GetrsSolvesAllThreeTransposeModes (17 ms)
+[ RUN      ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched (5 ms)
+[ RUN      ] LuTest/6.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/6.NativeFactorFeedsTheVendorSolvers (15 ms)
+[ RUN      ] LuTest/6.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/6.VendorFactorFeedsTheNativeSolvers (6 ms)
+[ RUN      ] LuTest/6.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/6.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly (7 ms)
+[ RUN      ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences (2 ms)
+[----------] 16 tests from LuTest/6 (161 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (161 ms total)
+[  PASSED  ] 15 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+
+ 1 FAILED TEST
+--- exit 1 ---
+=== run type 7 ===
+Note: Google Test filter = LuTest/7.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/7, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[ RUN      ] LuTest/7.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/7.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/7.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/7.CtaFactorisesAndPivotsExactly (6 ms)
+[ RUN      ] LuTest/7.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/7.BlockedFactorisesAndPivotsExactly (99 ms)
+[ RUN      ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed (15 ms)
+[ RUN      ] LuTest/7.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/7.BothPanelLeavesFactoriseCorrectly (2 ms)
+[ RUN      ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1076: Failure
+Expected equality of these values:
+  p.info[b]
+    Which is: 4
+  c1 + 1
+    Which is: 36
+info must be the GLOBAL 1-based column of the FIRST zero pivot (planted at global columns 35 and 69, nb=32)
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (5 ms)
+[ RUN      ] LuTest/7.NearlySingularIsNotFlagged
+[       OK ] LuTest/7.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/7.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/7.GetrsSolvesAllThreeTransposeModes (29 ms)
+[ RUN      ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched (7 ms)
+[ RUN      ] LuTest/7.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/7.NativeFactorFeedsTheVendorSolvers (16 ms)
+[ RUN      ] LuTest/7.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/7.VendorFactorFeedsTheNativeSolvers (8 ms)
+[ RUN      ] LuTest/7.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/7.RouteTableAndTheVendorFreeFallback (7 ms)
+[ RUN      ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly (15 ms)
+[ RUN      ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences (3 ms)
+[----------] 16 tests from LuTest/7 (225 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (225 ms total)
+[  PASSED  ] 15 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+
+ 1 FAILED TEST
+--- exit 1 ---

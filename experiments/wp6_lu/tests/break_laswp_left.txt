@@ -1,0 +1,575 @@
+=== BREAK: laswp_left ===
+  file: src/extensions/getrf_blocked.cc
+  from: if (j0 > 0) {
+            (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+  to  : if (false) {   // BREAK B9: the left LASWP dropped
+            (void)lu_native::lu_laswp_launch<GetrfBlockedLa
+=== build ===
+[ 96%] Built target syev_cta_tests
+[ 98%] Built target syev_two_stage_tests
+[100%] Built target minibench_cli_tests
+[100%] Built target device_blas_tests
+=== run type 4 ===
+Note: Google Test filter = LuTest/4.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/4, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[ RUN      ] LuTest/4.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/4.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/4.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/4.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/4.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.22494 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.2041 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.58489 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0131645 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0125228 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0126962 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/4.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (63 ms)
+[ RUN      ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0110474 vs 0.00305176
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=0 (n=128)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0109139 vs 0.00305176
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=1 (n=128)
+[  FAILED  ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/4.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/4.BothPanelLeavesFactoriseCorrectly (2 ms)
+[ RUN      ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0118366 vs 0.00245571
+healthy item 0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0120373 vs 0.00245571
+healthy item 1
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0120258 vs 0.00245571
+healthy item 3
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/4.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0138427 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0135414 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=1 (n=48)
+[  FAILED  ] LuTest/4.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/4.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0119581 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0118221 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0118735 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=96)
+[  FAILED  ] LuTest/4.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0127084 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.013021 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0129484 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=80)
+[  FAILED  ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0132108 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0127511 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0136359 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=72)
+[  FAILED  ] LuTest/4.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/4.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/4.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/4.RouteTableAndTheVendorFreeFallback (3 ms)
+[ RUN      ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0125475 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.012331 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0130799 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0124711 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0130222 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0122814 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[----------] 16 tests from LuTest/4 (94 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (94 ms total)
+[  PASSED  ] 6 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/4.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 5 ===
+Note: Google Test filter = LuTest/5.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/5, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[ RUN      ] LuTest/5.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/5.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/5.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/5.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/5.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.22494 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.2041 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.58489 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0131645 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0125228 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0126962 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/5.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (39 ms)
+[ RUN      ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0110474 vs 5.68434e-12
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=0 (n=128)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0109139 vs 5.68434e-12
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=1 (n=128)
+[  FAILED  ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/5.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/5.BothPanelLeavesFactoriseCorrectly (1 ms)
+[ RUN      ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0118366 vs 4.57412e-12
+healthy item 0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0120373 vs 4.57412e-12
+healthy item 1
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0120258 vs 4.57412e-12
+healthy item 3
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/5.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0138427 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0135414 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=1 (n=48)
+[  FAILED  ] LuTest/5.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/5.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0119581 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0118221 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0118735 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=96)
+[  FAILED  ] LuTest/5.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0127084 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.013021 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0129484 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=80)
+[  FAILED  ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0132108 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0127511 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0136359 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=72)
+[  FAILED  ] LuTest/5.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/5.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/5.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/5.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0125475 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.012331 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0130799 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0124711 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0130222 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0122814 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[----------] 16 tests from LuTest/5 (73 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (73 ms total)
+[  PASSED  ] 6 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/5.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 6 ===
+Note: Google Test filter = LuTest/6.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/6, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[ RUN      ] LuTest/6.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/6.ResidentLeafLaunchHoleAt48KiB (7 ms)
+[ RUN      ] LuTest/6.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/6.CtaFactorisesAndPivotsExactly (6 ms)
+[ RUN      ] LuTest/6.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.24066 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.02343 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.10359 vs 0.00152588
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181137 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.01757 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0179432 vs 0.00152588
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (42 ms)
+[ RUN      ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0157148 vs 0.00305176
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=0 (n=128)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0154556 vs 0.00305176
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=1 (n=128)
+[  FAILED  ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/6.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/6.BothPanelLeavesFactoriseCorrectly (3 ms)
+[ RUN      ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.016845 vs 0.00245571
+healthy item 0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0170232 vs 0.00245571
+healthy item 1
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.017217 vs 0.00245571
+healthy item 3
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/6.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.019502 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0190111 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=1 (n=48)
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/6.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0170847 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0168295 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0169855 vs 0.00228882
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=96)
+[  FAILED  ] LuTest/6.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.017955 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181982 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0182223 vs 0.00190735
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=80)
+[  FAILED  ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/6.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0185476 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181699 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0188083 vs 0.00171661
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=72)
+[  FAILED  ] LuTest/6.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/6.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/6.VendorFactorFeedsTheNativeSolvers (9 ms)
+[ RUN      ] LuTest/6.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/6.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0176606 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0177617 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0184119 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0178968 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0182528 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0178306 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (3 ms)
+[----------] 16 tests from LuTest/6 (97 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (97 ms total)
+[  PASSED  ] 7 tests.
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 7 ===
+Note: Google Test filter = LuTest/7.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/7, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[ RUN      ] LuTest/7.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/7.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/7.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/7.CtaFactorisesAndPivotsExactly (6 ms)
+[ RUN      ] LuTest/7.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.24066 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.02343 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.10359 vs 2.84217e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181137 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.01757 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0179432 vs 2.84217e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (74 ms)
+[ RUN      ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0157148 vs 5.68434e-12
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=0 (n=128)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0154556 vs 5.68434e-12
+blocked/straddle: ||PA - LU||_F / ||A||_F too large at b=1 (n=128)
+[  FAILED  ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (6 ms)
+[ RUN      ] LuTest/7.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/7.BothPanelLeavesFactoriseCorrectly (3 ms)
+[ RUN      ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.016845 vs 4.57412e-12
+healthy item 0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.0170232 vs 4.57412e-12
+healthy item 1
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1093: Failure
+Expected: (pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)) <= (lu_tol<T>(n)), actual: 0.017217 vs 4.57412e-12
+healthy item 3
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (5 ms)
+[ RUN      ] LuTest/7.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.019502 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0190111 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=1 (n=48)
+[  FAILED  ] LuTest/7.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/7.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0170847 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0168295 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0169855 vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=96)
+[  FAILED  ] LuTest/7.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.017955 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181982 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0182223 vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=80)
+[  FAILED  ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/7.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0185476 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0181699 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=1 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0188083 vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=2 (n=72)
+[  FAILED  ] LuTest/7.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/7.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/7.VendorFactorFeedsTheNativeSolvers (13 ms)
+[ RUN      ] LuTest/7.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/7.RouteTableAndTheVendorFreeFallback (12 ms)
+[ RUN      ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0176606 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0177617 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0184119 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (6 ms)
+[ RUN      ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0178968 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0182528 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=1 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 0.0178306 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=2 (n=64)
+[  FAILED  ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (4 ms)
+[----------] 16 tests from LuTest/7 (149 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (149 ms total)
+[  PASSED  ] 7 tests.
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---

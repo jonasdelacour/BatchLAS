@@ -43,6 +43,20 @@
 #include "../../extensions/geqrf_native.hh"
 #include "../../extensions/orgqr_native.hh"
 
+// WP6: the same pair for the LU family. All three adapters are src/ headers of
+// public includes only (plus one private kernel header each), so the facade can
+// include them in a vendor-free build -- the gemm_variant.hh:1-9 rule.
+//
+// getrf's trailing update and panel solve, and getrs's / getri's triangular
+// solves, all reuse the gemm.hh / trsm.hh includes already present above for
+// potrf's seams. Nothing new is needed for them.
+#include "../../backends/getrf_route.hh"
+#include "../../backends/getrs_route.hh"
+#include "../../backends/getri_route.hh"
+#include "../../extensions/getrf_native.hh"
+#include "../../extensions/getrs_native.hh"
+#include "../../extensions/getri_native.hh"
+
 // orgqr's native arm is ormqr applied to an identity, and the apply must go
 // through the ROUTER. Only this layer can name the routed entry point: the driver
 // is instantiated per scalar type with no Backend parameter, and ormqr<B,T> needs
@@ -461,12 +475,167 @@ size_t orgqr_buffer_size(Queue& ctx,
     }
 }
 
+// ---------------------------------------------------------------------------
+// WP6 -- the LU family. All three are hooked exactly as geqrf/orgqr are above,
+// and the three "native route with no kernel" diagnostics are written the same
+// way.
+//
+// THEY USE factorization_vendor_available<B>, NOT solver_vendor_available<B>.
+// getrf/getrs/getri all come from cuBLAS on NVIDIA (cublas.cc:1493, :1453, :1521),
+// like geqrf/orgqr and unlike potrf. See the note at :69-87 for the LATENT GATE
+// DEFECT underneath that predicate -- vendor_available.hh:11-13 asserts a
+// file-level mapping that is false of the SYMBOLS. The extra place it used to
+// bite the LU family is GONE: cublas.cc's getrs had TWO arms and the batch <= 1
+// one called cusolverDnXgetrs -- a different library and the 64-bit non-batched
+// API -- from inside a TU gated on BATCHLAS_HAS_CUBLAS, so a cuBLAS-present /
+// cuSOLVER-absent configure claimed a vendor it could not link. That arm was
+// deleted in WP6's repair pass, because it was ALSO a crash: it read the packed
+// int32 pivots every getrf in this tree writes as genuine int64 and indexed out
+// of bounds (see the note at cublas.cc:1465). The LATENT GATE DEFECT itself
+// remains for geqrf and is still a change of its own.
+//
+// STATUS: ALL THREE OPS HAVE A LIVE NATIVE ARM, for all four scalar types.
+// getrf has two tiers -- getrf_cta_max_n_for_slm<T>() measures 155/109/109/77 for
+// float/double/cfloat/cdouble on an RTX 4090, and getrf_blocked_available<T>() is
+// true for every type -- and getrs_blocked_available<T>() / getri_blocked_
+// available<T>() are true as well. A VENDOR-FREE BUILD TAKES THE NATIVE ARM FOR
+// EVERY SQUARE SHAPE; the six bodies below are reached, not scaffolding.
+//
+// The vendor-PRESENT build is unchanged, and that is a routing fact rather than a
+// missing kernel: preferred() is still false everywhere in all three tables, so
+// Origin::Auto keeps returning {Vendor, Auto} wherever a vendor exists
+// (route_resolve.hh:110-112, :129). Measured at 96 of 96 route cells. The
+// benchmark that would replace those all-false windows with a measured one is
+// experiments/wp6_lu/bench/; read its README before writing one, because the
+// crossover moves with BATCH and not only with order.
+// ---------------------------------------------------------------------------
+
+// The diagnostics for a native route the build cannot service. One function per
+// op so the call and the buffer-size query cannot drift into two different
+// messages.
+//
+// THEY ARE THROWS RATHER THAN FALL-THROUGHS TO THE VENDOR, and that is the whole
+// point of writing them before any kernel exists. Omitting the native branch would
+// silently take the vendor at the exact moment a capability first comes off zero
+// -- a kernel LINKED but never REACHED, and a test suite passing green over it.
+// route_compiled.hh:1-24 names that defect class, and WP5's break B9 measured it:
+// deleting geqrf's native arm turned NOTHING red anywhere, in either build.
+template <typename T>
+[[noreturn]] inline void getrf_throw_native_unimplemented(dispatch::Route route,
+                                                          const char* who) {
+    throw std::logic_error(
+        std::string(who) + ": resolved to a native route (" +
+        std::string(dispatch::to_string(route.origin)) + ":" +
+        std::string(dispatch::to_string(route.algo)) +
+        ") but no native getrf kernel is linked into this build. "
+        "sycl_getrf::getrf_cta_max_n_for_slm / getrf_blocked_available reported a "
+        "capability the facade cannot service.");
+}
+
+template <typename T>
+[[noreturn]] inline void getrs_throw_native_unimplemented(dispatch::Route route,
+                                                          const char* who) {
+    throw std::logic_error(
+        std::string(who) + ": resolved to a native route (" +
+        std::string(dispatch::to_string(route.origin)) + ":" +
+        std::string(dispatch::to_string(route.algo)) +
+        ") but no native getrs driver is linked into this build. "
+        "sycl_getrs::getrs_blocked_available reported a capability the facade "
+        "cannot service.");
+}
+
+template <typename T>
+[[noreturn]] inline void getri_throw_native_unimplemented(dispatch::Route route,
+                                                          const char* who) {
+    throw std::logic_error(
+        std::string(who) + ": resolved to a native route (" +
+        std::string(dispatch::to_string(route.origin)) + ":" +
+        std::string(dispatch::to_string(route.algo)) +
+        ") but no native getri driver is linked into this build. "
+        "sycl_getri::getri_blocked_available reported a capability the facade "
+        "cannot service.");
+}
+
 template <Backend B, typename T>
 Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             Span<int64_t> pivots,
             Span<std::byte> work_space,
             Span<int32_t> info) {
+    // VALIDATION FIRST, hoisted here on purpose -- the trsm precedent at
+    // level3.cc:167-174 and potrf's at :203-206 -- because it must precede the
+    // shape builder, which reads A.rows()/A.cols(). It is deliberately one
+    // negative-extent test: see getrf.hh's note on why squareness and the pivot
+    // span's length are NOT checked here.
+    getrf_validate_params<T>(A);
+
+    // THE ROUTE IS RESOLVED BEFORE THE VENDOR-AVAILABLE TEST. Everything below the
+    // `if constexpr` at the bottom of this body is UNREACHABLE in the vendor-free
+    // build, which is the build this campaign exists for.
+    const dispatch::Route route = backend::getrf_route<B, T>(
+        ctx, A,
+        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
+
+    // BOTH NATIVE ARMS ARE LIVE, and this block serves EVERY getrf in the
+    // vendor-free build (verified reached, not merely linked: the coverage capture
+    // shows getrf resolving native for all four types and both tiers, and nsys
+    // shows GetrfPanelResidentKernel / GetrfPanelGlobalKernel executing). In the
+    // vendor-present build it is unreachable only because preferred() is all-false,
+    // which is a MEASURED WINDOW that has not been written yet -- not a missing
+    // kernel. The throw at the end is still what makes a THIRD tier impossible to
+    // ship silently.
+    if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::CTA) {
+            return sycl_getrf::getrf_cta_dispatch<T>(ctx, A, pivots, work_space, info);
+        }
+        if (route.algo == dispatch::Algorithm::Blocked) {
+            // THE TRAILING UPDATE AND THE PANEL SOLVE GO THROUGH THE ROUTER, not
+            // straight to a native kernel. Calling sycl_gemm::gemm_custom from the
+            // driver is a RECORDED DEFECT (WP3 step 16, trsm_native.hh:82-104,
+            // fix at level3.cc:186-231): it bypasses RouteTable<Op::gemm>
+            // entirely, so the driver would get the native kernel even on the
+            // shapes WP2 measured it losing.
+            //
+            // Injection is also the ONLY way to reach gemm/trsm from that TU at
+            // all: the driver is instantiated per scalar type with no Backend
+            // parameter, and gemm<B,T> / trsm<B,T> need one. Only this layer can
+            // name a routed entry point.
+            //
+            // Both signatures are the routed entry points' verbatim -- note that
+            // trsm's alpha comes THIRD (functions/trsm.hh:100-108); the old
+            // spelling is a deleted overload at :121-138 so a stale call cannot
+            // silently compile.
+            //
+            // MEASURED STAKE FOR WHOEVER WRITES THE DRIVER, and it INVERTS the
+            // prediction WP6 inherited: at the real batch and stride, the LU
+            // trailing update (NN, k = nb) reaches Tiled128x128RegisterK8 for
+            // float and Tiled64x64RegisterK16Wide for BOTH complex types, while
+            // DOUBLE lands on Tiled16 at all 13 shapes. That is structural -- the
+            // wide-scalar CTA-count relaxation is complex-only and the other
+            // wide-scalar door needs min_dim >= 256, which k = nb can never
+            // satisfy -- and it belongs to GEMM, not to WP6.
+            return sycl_getrf::getrf_blocked_dispatch<T>(
+                ctx, A, pivots, work_space, info,
+                [](Queue& c,
+                   const MatrixView<T, MatrixFormat::Dense>& ga,
+                   const MatrixView<T, MatrixFormat::Dense>& gb,
+                   const MatrixView<T, MatrixFormat::Dense>& gc,
+                   T galpha, T gbeta, Transpose gta, Transpose gtb,
+                   ComputePrecision gp) {
+                    return gemm<B, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+                },
+                [](Queue& c,
+                   const MatrixView<T, MatrixFormat::Dense>& ta,
+                   const MatrixView<T, MatrixFormat::Dense>& tb,
+                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
+                    return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
+                });
+        }
+        // Kept as the trailing default: Algorithm::Auto, and any future native
+        // tier, must not fall through to the vendor.
+        getrf_throw_native_unimplemented<T>(route, "getrf");
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<B>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
@@ -478,11 +647,95 @@ Event getrf(Queue& ctx,
 template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A) {
+    // THE QUERY MOVES WITH THE CALL: same validator, same builder, same *_route
+    // function, SAME ARGUMENTS, therefore the same GetrfShape and the same Route
+    // BY CONSTRUCTION rather than by a comment asking for it. The note at the top
+    // of this file records why -- "Splitting them would let the two resolve
+    // differently, which is the defect class S4d found in ormqr (buffer size 2560
+    // bytes, call demanded 276480)".
+    //
+    // The double resolution is real for getrf and there are TWO instances of it:
+    // options.hh:619 calls ctx.workspace(getrf_buffer_size<B,T>(...)) and :620
+    // calls getrf<B,T>(...), and src/extensions/inv.cc:36 sizes while :48 calls --
+    // each pair being two separate getenv reads inside one API call.
+    getrf_validate_params<T>(A);
+
+    const dispatch::Route route = backend::getrf_route<B, T>(
+        ctx, A,
+        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
+
+    // max(native, vendor), NOT "whatever the chosen route needs", and with two
+    // native tiers it is max OVER EVERY SUPPORTED ONE rather than over the one
+    // THIS resolution chose. Both halves of the argument are potrf's and geqrf's
+    // and transfer verbatim: a chosen-only size turns a query/call disagreement
+    // into an UNDER-allocation, which is the ormqr failure mode, while max() turns
+    // it into a harmless over-allocation. It is safe ONLY because every term is an
+    // alignment multiple -- the native queries must replay their layouts through
+    // BumpAllocator::measuring() (mempool.hh:186-190) rather than hand-summing,
+    // and every vendor query sums allocation_size terms (cublas.cc:1518, :1490;
+    // netlib_lapack.cc:1331-1336).
+    //
+    // NO MONOTONICITY REQUIREMENT HERE, unlike geqrf. That hazard exists because
+    // band_reduction.cc sizes at (m_max x nb_max) and calls at a smaller sub-view;
+    // nothing in the LU consumers does that. inv_layout sizes against the CALLER's
+    // A (inv.cc:34-36) and calls against the shape-identical Acopy (:17-23). Do
+    // not import a constraint with no caller behind it.
+    //
+    // WHAT IS LEFT OPEN, deliberately, exactly as for potrf and geqrf: the native
+    // terms are computed only inside `if (is_native(route))`, so the VENDOR ->
+    // NATIVE direction (the environment changing between options.hh:619 and :620)
+    // still ends in a BumpAllocator::allocate throw. Closing it means computing the
+    // blocked layout unconditionally on every vendor-present getrf that will never
+    // touch it, to defend against a getenv that changes inside one API call; a
+    // throw is also the benign end of this defect class.
+    //
+    // `native_fired` IS NOT `native_need != 0`, and the difference is expected to
+    // be real for getrf as it is for geqrf: the CTA tier's workspace is plausibly
+    // ZERO -- its tile is local memory and the pivots are the caller's span -- so a
+    // size of 0 is a valid answer, not evidence that no tier fired. Reading the
+    // internal-consistency check off the size would make a CTA-only build (blocked
+    // absent, capacity positive) throw on every call the route table had just
+    // promised. orgqr_buffer_size shipped with precisely that latent defect and it
+    // was fixed in the WP5 repair pass.
+    std::size_t native_need = 0;
+    bool native_fired = false;
+    if (dispatch::is_native(route)) {
+        const auto shape = backend::getrf_op_shape<B, T>(ctx, A);
+        using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
+        if (shape) {
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
+                native_need = std::max(native_need,
+                                       sycl_getrf::getrf_cta_buffer_size<T>(ctx, A));
+                native_fired = true;
+            }
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
+                              *shape)) {
+                native_need = std::max(native_need,
+                                       sycl_getrf::getrf_blocked_buffer_size<T>(ctx, A));
+                native_fired = true;
+            }
+        }
+        if (!native_fired) {
+            // is_native(route) says supports() accepted SOMETHING; if neither
+            // query above fired, the two disagree and that is a bug in this file
+            // rather than a shape the caller can fix.
+            getrf_throw_native_unimplemented<T>(route, "getrf_buffer_size");
+        }
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
+        // A vendor-free build with no native route left is the NoRouteError this
+        // work package exists to remove; with one, the native term is the whole
+        // answer. GATED ON native_fired, not on native_need != 0, for the reason
+        // above.
+        if (!native_fired) {
+            dispatch::throw_no_vendor_route<T>(
+                dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
+        }
+        return native_need;
     } else {
-        return backend::getrf_vendor_buffer_size<B, T>(ctx, A);
+        return std::max(native_need,
+                        backend::getrf_vendor_buffer_size<B, T>(ctx, A));
     }
 }
 
@@ -493,6 +746,53 @@ Event getrs(Queue& ctx,
             Transpose transA,
             Span<int64_t> pivots,
             Span<std::byte> work_space) {
+    // VALIDATION FIRST -- it must precede the shape builder, which reads
+    // A.rows()/B.cols(). Deliberately one negative-extent test; see getrs.hh on
+    // why squareness, A/B agreement and the pivot span's length are NOT checked
+    // here.
+    getrs_validate_params<T>(A, B);
+
+    const dispatch::Route route = backend::getrs_route<Back, T>(
+        ctx, A, B, transA,
+        /*vendor_available=*/dispatch::factorization_vendor_available<Back>);
+
+    // LIVE. getrs_blocked_available is true for every scalar type, and this arm
+    // serves every getrs in the vendor-free build; in the vendor-present build it
+    // is unreached only because preferred() is all-false. See the block comment
+    // above getrf. NOTE (measured, and it matters if a window is ever written
+    // here): the native getrs is a CROSSOVER ON nrhs, not a loss -- geomean
+    // 0.32x at nrhs=1 rising monotonically to 1.36x at nrhs=128
+    // (experiments/wp6_lu/bench/README.md).
+    if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::Blocked) {
+            // BOTH TRIANGULAR SOLVES GO THROUGH THE ROUTER. Calling a native trsm
+            // entry point from the driver TU is the recorded WP3-step-16 defect
+            // (trsm_native.hh:82-104, fix at level3.cc:186-231), and injection is
+            // in any case the only way to reach trsm<Back,T> from a TU
+            // instantiated per scalar type with no Backend parameter.
+            //
+            // Signature is the routed batchlas::trsm's positional form verbatim --
+            // alpha THIRD (functions/trsm.hh:100-108); the old spelling is a
+            // deleted overload at :121-138 so a stale call cannot silently compile.
+            //
+            // NO BUFFER-SIZE TWIN is injected alongside it, unlike orgqr's
+            // OrgqrApplyQ/OrgqrApplyQBufferSize pair (:349-363 and :431-440). That
+            // pair exists because the routed ormqr HAS a workspace whose size must
+            // come from the same resolution as the call; the public trsm takes no
+            // workspace at all, so there is nothing here for a query and a call to
+            // disagree about.
+            return sycl_getrs::getrs_blocked_dispatch<T>(
+                ctx, A, B, transA, pivots, work_space,
+                [](Queue& c,
+                   const MatrixView<T, MatrixFormat::Dense>& ta,
+                   const MatrixView<T, MatrixFormat::Dense>& tb,
+                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
+                    return trsm<Back, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
+                });
+        }
+        getrs_throw_native_unimplemented<T>(route, "getrs");
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::getrs, Back, dispatch::kFactorizationLibrary<Back>);
@@ -506,11 +806,54 @@ size_t getrs_buffer_size(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          const MatrixView<T,MatrixFormat::Dense>& B,
                          Transpose transA) {
+    // THE QUERY MOVES WITH THE CALL: same validator, same builder, same *_route
+    // function, SAME ARGUMENTS -- including transA, which is a live routing input
+    // for this op and would silently split the two resolutions if the query
+    // dropped it. The double resolution is real: options.hh:651 sizes and :652
+    // calls, two getenv reads inside one API call.
+    getrs_validate_params<T>(A, B);
+
+    const dispatch::Route route = backend::getrs_route<Back, T>(
+        ctx, A, B, transA,
+        /*vendor_available=*/dispatch::factorization_vendor_available<Back>);
+
+    // max(native, vendor) -- with ONE native tier this is max over that tier and
+    // the vendor. It is still not "whatever the chosen route needs": the two
+    // resolutions can differ (see above), and max() turns a disagreement into a
+    // harmless over-allocation where a chosen-only size turns it into the ormqr
+    // UNDER-allocation. Safe only because both terms are alignment multiples.
+    //
+    // `native_fired` rather than `native_need != 0`, for the same reason as getrf:
+    // an in-place interchange walk legitimately needs ZERO workspace, and only the
+    // collapsed-gather strategy needs a buffer.
+    std::size_t native_need = 0;
+    bool native_fired = false;
+    if (dispatch::is_native(route)) {
+        const auto shape = backend::getrs_op_shape<Back, T>(ctx, A, B, transA);
+        using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
+        if (shape) {
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
+                              *shape)) {
+                native_need = std::max(
+                    native_need,
+                    sycl_getrs::getrs_blocked_buffer_size<T>(ctx, A, B, transA));
+                native_fired = true;
+            }
+        }
+        if (!native_fired) {
+            getrs_throw_native_unimplemented<T>(route, "getrs_buffer_size");
+        }
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::getrs, Back, dispatch::kFactorizationLibrary<Back>);
+        if (!native_fired) {
+            dispatch::throw_no_vendor_route<T>(
+                dispatch::Op::getrs, Back, dispatch::kFactorizationLibrary<Back>);
+        }
+        return native_need;
     } else {
-        return backend::getrs_vendor_buffer_size<Back, T>(ctx, A, B, transA);
+        return std::max(native_need,
+                        backend::getrs_vendor_buffer_size<Back, T>(ctx, A, B, transA));
     }
 }
 
@@ -521,6 +864,45 @@ Event getri(Queue& ctx,
             Span<int64_t> pivots,
             Span<std::byte> work_space,
             Span<int32_t> info) {
+    // VALIDATION FIRST -- it must precede the shape builder, which reads
+    // A.rows()/A.cols(). The two-argument arity is used here and the one-argument
+    // arity in the query, because getri_buffer_size has no C; see getri.hh on why
+    // that split is forced, and src/backends/getri_route.hh on why the ROUTE is a
+    // function of A alone.
+    getri_validate_params<T>(A, C);
+
+    const dispatch::Route route = backend::getri_route<B, T>(
+        ctx, A,
+        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
+
+    // LIVE. getri_blocked_available is true for every scalar type, and this arm
+    // serves every getri in the vendor-free build -- it is what closed
+    // inverse_tests. Unreached in the vendor-present build only because
+    // preferred() is all-false; see the block comment above getrf.
+    if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::Blocked) {
+            // BOTH TRIANGULAR SOLVES GO THROUGH THE ROUTER -- the WP3-step-16
+            // rule, and the only way to reach trsm<B,T> from a TU instantiated per
+            // scalar type with no Backend parameter. Signature is the routed
+            // batchlas::trsm's positional form verbatim, alpha THIRD.
+            //
+            // NOTE WHAT IS *NOT* INJECTED: the row permutation. getri's measured
+            // design writes P straight into C rather than writing an identity and
+            // permuting it -- same store count, one kernel, ZERO workspace -- so
+            // there is no second routed op here, and no buffer-size twin either
+            // (the routed trsm takes no workspace).
+            return sycl_getri::getri_blocked_dispatch<T>(
+                ctx, A, C, pivots, work_space, info,
+                [](Queue& c,
+                   const MatrixView<T, MatrixFormat::Dense>& ta,
+                   const MatrixView<T, MatrixFormat::Dense>& tb,
+                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
+                    return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
+                });
+        }
+        getri_throw_native_unimplemented<T>(route, "getri");
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<B>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
@@ -532,11 +914,58 @@ Event getri(Queue& ctx,
 template <Backend B, typename T>
 size_t getri_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A) {
+    // THE QUERY MOVES WITH THE CALL: same builder, same *_route function, SAME
+    // ARGUMENTS -- which for getri means A alone, in both places, because
+    // getri_buffer_size's signature has no C. That is exactly why
+    // backend::getri_op_shape takes A alone: a builder that read C could be called
+    // from only one of the two sites, which is the split factorization.cc:8-10
+    // forbids.
+    //
+    // TWO double-resolution sites exist for this op: options.hh:695 sizes and :696
+    // calls, and src/extensions/inv.cc:35 sizes and :49 calls.
+    //
+    // THIS QUERY RUNS UNDER BumpAllocator::measuring(). inv_buffer_size
+    // (inv.cc:54-57) replays inv_layout, which calls this at :35, so per
+    // mempool.hh:180-186 everything reachable from here must be PURE WITH RESPECT
+    // TO THE WORKSPACE -- no workspace read or write, no kernel launch -- and must
+    // not dereference A.data_ptr().
+    getri_validate_params<T>(A);
+
+    const dispatch::Route route = backend::getri_route<B, T>(
+        ctx, A,
+        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
+
+    // max(native, vendor); `native_fired` rather than `native_need != 0`, because
+    // the native arm's workspace is EXPECTED to be zero (P is written straight into
+    // C and the routed trsm allocates nothing) and reading the consistency check
+    // off the size would throw on every call the table had just promised.
+    std::size_t native_need = 0;
+    bool native_fired = false;
+    if (dispatch::is_native(route)) {
+        const auto shape = backend::getri_op_shape<B, T>(ctx, A);
+        using Tbl = dispatch::RouteTable<dispatch::Op::getri, T>;
+        if (shape) {
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
+                              *shape)) {
+                native_need = std::max(native_need,
+                                       sycl_getri::getri_blocked_buffer_size<T>(ctx, A));
+                native_fired = true;
+            }
+        }
+        if (!native_fired) {
+            getri_throw_native_unimplemented<T>(route, "getri_buffer_size");
+        }
+    }
+
     if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+        if (!native_fired) {
+            dispatch::throw_no_vendor_route<T>(
+                dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+        }
+        return native_need;
     } else {
-        return backend::getri_vendor_buffer_size<B, T>(ctx, A);
+        return std::max(native_need,
+                        backend::getri_vendor_buffer_size<B, T>(ctx, A));
     }
 }
 

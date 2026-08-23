@@ -1,0 +1,6 @@
+luverify_v
+luverify_nv
+break_build.log
+*.nsys-rep
+*.sqlite
+*.qdrep

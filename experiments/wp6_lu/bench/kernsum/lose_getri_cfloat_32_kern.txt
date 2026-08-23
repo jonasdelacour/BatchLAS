@@ -1,0 +1,14 @@
+Generating SQLite file /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp6_lu/bench/nsys/lose_getri_cfloat_32.sqlite from /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp6_lu/bench/nsys/lose_getri_cfloat_32.nsys-rep
+Processing [/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp6_lu/bench/nsys/lose_getri_cfloat_32.sqlite] with [/opt/nvidia/nsight-systems/2025.6.3/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+-----------+-----------+----------+------------+-------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances | Avg (ns)  | Med (ns)  | Min (ns) |  Max (ns)  | StdDev (ns) |                                                 Name                                                 |
++----------+-----------------+-----------+-----------+-----------+----------+------------+-------------+------------------------------------------------------------------------------------------------------+
+|     86.2 |     169,569,726 |       200 | 847,848.6 | 853,370.0 |  786,217 |    907,627 |    40,882.4 | Typeinfo name for batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<std::complex<float>, (int)32, (batc… |
+|      8.4 |      16,584,544 |       100 | 165,845.4 |  62,545.0 |   61,056 | 10,392,855 | 1,033,031.5 | Typeinfo name for batchlas::sycl_getri::<unnamed>::GetriPermKernel<std::complex<float>>              |
+|      5.0 |       9,766,451 |       100 |  97,664.5 |  49,793.0 |   48,896 |  4,836,056 |   478,625.5 | Typeinfo name for batchlas::sycl_getri::<unnamed>::GetriZeroKernel<std::complex<float>>              |
+|      0.4 |         874,250 |         1 | 874,250.0 | 874,250.0 |  874,250 |    874,250 |         0.0 | Typeinfo name for batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<std::complex<float>>     |
++----------+-----------------+-----------+-----------+-----------+----------+------------+-------------+------------------------------------------------------------------------------------------------------+
+

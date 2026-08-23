@@ -1462,23 +1462,36 @@ namespace batchlas {
             auto nrhs = B.cols();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
-            if (batch_size <= 1) {
-                auto info = pool.allocate<int>(ctx, 1);
-                cusolverDnParams_t params;
-                cusolverDnCreateParams(&params);
-                cusolverDnXgetrs(handle, params, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
-                    pivots.data(),
-                    BackendScalar<T,BackendLibrary::CUBLAS>::type, B.data_ptr(), B.ld(),
-                    info.data());
-            } else {
-                int info;
-                auto reinterpreted_pivots = pivots .as_span<int>();
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
-                    handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
-                    B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
-            }
+            // ONE ARM FOR EVERY BATCH SIZE, and the deleted `batch_size <= 1`
+            // special case was a CRASH, not an optimisation.
+            //
+            // It called cusolverDnXgetrs, whose ipiv is GENUINE int64, and handed
+            // it `pivots.data()` raw. Every getrf in this tree writes PACKED
+            // 1-based int32 into that same span -- getrf_vendor below at :1508
+            // does `pivots.as_span<int>()`, and so do rocsolver.cc:227 and both
+            // native tiers -- so at batch 1 the solve read two packed pivots per
+            // int64 slot as one row index and indexed out of bounds.
+            // `getrf<CUDA,float>` then `getrs<CUDA,float>` at n=40, nrhs=3,
+            // batch=1 -- the exact sequence linalg::solve issues
+            // (linalg-ops.hh:343-344) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
+            // (exit 134). cublas?getrsBatched reads the packed int32 the getrf
+            // actually wrote and is correct at batchCount = 1, so the two-arm
+            // split bought nothing and cost the only pivot format the family
+            // agrees on. Found by WP6's pivot-contract survey; PRE-EXISTING, and
+            // no batched test could reach it because they all use batch >= 2.
+            //
+            // `info` here is a HOST int (cublas?getrsBatched's info is an argument
+            // validity code, not a per-item device array), which is why nothing is
+            // drawn from the pool; getrs_vendor_buffer_size still reports the old
+            // one-int figure, deliberately, because shrinking a workspace query is
+            // the change this family has been bitten by before.
+            static_cast<void>(pool);
+            int info;
+            auto reinterpreted_pivots = pivots.as_span<int>();
+            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
+                handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
+                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
+                B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
             return ctx.create_event_after_external_work();
         }
     

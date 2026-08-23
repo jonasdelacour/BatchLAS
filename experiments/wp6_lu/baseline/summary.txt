@@ -1,0 +1,316 @@
+== discarded, relative sd > 10% ==
+   (none)
+== flagged BAD/THREW ==
+   (none)
+
+== 1. cuBLAS getrf: ms and GFLOP/s at saturating batch (2n^3/3 per item) ==
+type          n   batch       med_ms      GFLOP/s      resid
+float        32    8192       0.1585      1129.18  3.275e-07
+float        64    8192       2.6286       544.66  1.905e-07
+float       128    4096       5.7701       992.47  3.291e-07
+float       256    2048      31.6364       724.05  3.395e-07
+float       512     512      49.7259       921.31  4.133e-07
+float      1024     128      94.5251       969.33  7.493e-07
+float      2048      32     519.1781       352.97  1.087e-06
+double       32    8192       0.5611       318.91  9.197e-16
+double       64    8192       3.2836       436.00  9.885e-16
+double      128    4096       8.8025       650.57  1.304e-15
+double      256    2048      46.2140       495.66  3.680e-15
+double      512     512      59.5264       769.62  3.342e-15
+double     1024     128     111.7691       819.78  4.408e-15
+double     2048      32     587.9311       311.69  1.123e-14
+cfloat       32    8192       0.2445       731.99  4.048e-07
+cfloat       64    8192       2.7871       513.67  3.209e-07
+cfloat      128    4096       6.9875       819.56  3.720e-07
+cfloat      256    2048      39.5983       578.47  3.350e-07
+cfloat      512     512      76.8228       596.35  5.946e-07
+cfloat     1024     128     122.7172       746.64  6.164e-07
+cfloat     2048      32     564.0225       324.90  1.060e-06
+cdouble      32    8192       1.4884       120.23  1.422e-15
+cdouble      64    8192       9.4175       152.02  1.362e-15
+cdouble     128    4096      24.6621       232.20  1.485e-15
+cdouble     256    2048      84.5121       271.04  1.615e-15
+cdouble     512     512     163.0038       281.05  3.401e-15
+cdouble    1024     128     351.4950       260.68  4.409e-15
+cdouble    2048      32    2594.1159        70.64  5.733e-15
+
+== getri: cuBLAS vs routed-trsm composition (laswp=list, nrhs=1) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       0.3550       1.0487     0.34x  native:cta|native:cta
+float        64    8192       1.7188       3.9285     0.44x  native:blocked|native:blocked
+float       128    4096       5.4482       9.3971     0.58x  native:blocked|native:blocked
+float       256    2048      41.7249      37.2631     1.12x  native:blocked|native:blocked
+float       512     512      69.4390      45.0449     1.54x  native:blocked|native:blocked
+float      1024     128     217.5582      48.7364     4.46x  native:blocked|native:blocked
+float      2048      32    1476.6700      53.8750    27.41x  native:blocked|native:blocked
+double       32    8192       0.8918       4.2971     0.21x  native:cta|native:cta
+double       64    8192       5.1924      12.5982     0.41x  native:blocked|native:blocked
+double      128    4096      17.2144      33.2019     0.52x  native:blocked|native:blocked
+double      256    2048      66.5861      94.7500     0.70x  native:blocked|native:blocked
+double      512     512     140.3877     152.4354     0.92x  native:blocked|native:blocked
+double     1024     128     242.6864     251.1835     0.97x  native:blocked|native:blocked
+double     2048      32    1757.1072     487.4852     3.60x  native:blocked|native:blocked
+cfloat       32    8192       0.3867       2.5275     0.15x  native:cta|native:cta
+cfloat       64    8192       1.9720       9.3598     0.21x  native:blocked|native:blocked
+cfloat      128    4096      13.6142      27.1932     0.50x  native:blocked|native:blocked
+cfloat      256    2048      60.4914      66.8409     0.91x  native:blocked|native:blocked
+cfloat      512     512     106.7774      79.4856     1.34x  native:blocked|native:blocked
+cfloat     1024     128     277.8567      86.5249     3.21x  native:blocked|native:blocked
+cfloat     2048      32    1741.0505     111.2511    15.65x  native:blocked|native:blocked
+cdouble      32    8192       3.3527      15.5605     0.22x  native:cta|native:cta
+cdouble      64    8192      20.1384      45.9038     0.44x  native:blocked|native:blocked
+cdouble     128    4096      67.6146      97.5069     0.69x  native:blocked|native:blocked
+cdouble     256    2048     245.0407     290.1904     0.84x  native:blocked|native:blocked
+cdouble     512     512     468.1691     516.2949     0.91x  native:blocked|native:blocked
+cdouble    1024     128    1003.3462     952.8387     1.05x  native:blocked|native:blocked
+cdouble    2048      32    7671.2274    1831.0562     4.19x  native:blocked|native:blocked
+
+== getri: cuBLAS vs routed-trsm composition (laswp=gather, nrhs=1) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       0.3550       0.6558     0.54x  native:cta|native:cta
+float        64    8192       1.7188       2.0717     0.83x  native:blocked|native:blocked
+float       128    4096       5.4482       4.1405     1.32x  native:blocked|native:blocked
+float       256    2048      41.7249      10.7127     3.89x  native:blocked|native:blocked
+float       512     512      69.4390      12.0851     5.75x  native:blocked|native:blocked
+float      1024     128     217.5582      13.8940    15.66x  native:blocked|native:blocked
+float      2048      32    1476.6700      19.7220    74.87x  native:blocked|native:blocked
+double       32    8192       0.8918       3.8827     0.23x  native:cta|native:cta
+double       64    8192       5.1924       9.8209     0.53x  native:blocked|native:blocked
+double      128    4096      17.2144      19.1354     0.90x  native:blocked|native:blocked
+double      256    2048      66.5861      57.5391     1.16x  native:blocked|native:blocked
+double      512     512     140.3877     109.3324     1.28x  native:blocked|native:blocked
+double     1024     128     242.6864     209.9439     1.16x  native:blocked|native:blocked
+double     2048      32    1757.1072     447.1116     3.93x  native:blocked|native:blocked
+cfloat       32    8192       0.3867       1.7170     0.23x  native:cta|native:cta
+cfloat       64    8192       1.9720       5.6329     0.35x  native:blocked|native:blocked
+cfloat      128    4096      13.6142      12.8641     1.06x  native:blocked|native:blocked
+cfloat      256    2048      60.4914      29.5644     2.05x  native:blocked|native:blocked
+cfloat      512     512     106.7774      35.4449     3.01x  native:blocked|native:blocked
+cfloat     1024     128     277.8567      45.9117     6.05x  native:blocked|native:blocked
+cfloat     2048      32    1741.0505      67.2611    25.88x  native:blocked|native:blocked
+cdouble      32    8192       3.3527      14.3991     0.23x  native:cta|native:cta
+cdouble      64    8192      20.1384      37.3384     0.54x  native:blocked|native:blocked
+cdouble     128    4096      67.6146      75.6740     0.89x  native:blocked|native:blocked
+cdouble     256    2048     245.0407     236.0562     1.04x  native:blocked|native:blocked
+cdouble     512     512     468.1691     459.6424     1.02x  native:blocked|native:blocked
+cdouble    1024     128    1003.3462     902.6336     1.11x  native:blocked|native:blocked
+cdouble    2048      32    7671.2274    1782.2974     4.30x  native:blocked|native:blocked
+
+== getrs: cuBLAS vs routed-trsm composition (laswp=list, nrhs=1) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       0.1231       0.6133     0.20x  native:cta|native:cta
+float        64    8192       0.3047       1.3110     0.23x  native:blocked|native:blocked
+float       128    4096       0.6586       1.5604     0.42x  native:blocked|native:blocked
+float       256    2048       1.3472       2.1087     0.64x  native:blocked|native:blocked
+float       512     512       1.4636       2.0287     0.72x  native:blocked|native:blocked
+float      1024     128       1.8920       2.1295     0.89x  native:blocked|native:blocked
+float      2048      32       2.9403       3.0757     0.96x  native:blocked|native:blocked
+double       32    8192       0.7165       3.7524     0.19x  native:cta|native:cta
+double       64    8192       1.6468       7.9737     0.21x  native:blocked|native:blocked
+double      128    4096       2.1036       8.9550     0.23x  native:blocked|native:blocked
+double      256    2048       2.7696      10.8173     0.26x  native:blocked|native:blocked
+double      512     512       2.5187       7.8080     0.32x  native:blocked|native:blocked
+double     1024     128       3.7561       5.5351     0.68x  native:blocked|native:blocked
+double     2048      32       6.2035       5.3813     1.15x  native:blocked|native:blocked
+cfloat       32    8192       0.1185       1.2188     0.10x  native:cta|native:cta
+cfloat       64    8192       0.4375       2.6550     0.16x  native:blocked|native:blocked
+cfloat      128    4096       1.0575       3.1598     0.33x  native:blocked|native:blocked
+cfloat      256    2048       1.7341       4.0993     0.42x  native:blocked|native:blocked
+cfloat      512     512       1.9456       3.5920     0.54x  native:blocked|native:blocked
+cfloat     1024     128       2.4816       2.9963     0.83x  native:blocked|native:blocked
+cfloat     2048      32       3.5326       4.1553     0.85x  native:blocked|native:blocked
+cdouble      32    8192       1.2969      14.0001     0.09x  native:cta|native:cta
+cdouble      64    8192       3.4398      28.3646     0.12x  native:blocked|native:blocked
+cdouble     128    4096       4.1054      29.0903     0.14x  native:blocked|native:blocked
+cdouble     256    2048       5.4480      30.6821     0.18x  native:blocked|native:blocked
+cdouble     512     512       4.5244      17.6222     0.26x  native:blocked|native:blocked
+cdouble    1024     128       6.7209       6.0288     1.11x  native:blocked|native:blocked
+cdouble    2048      32      11.1185      10.5177     1.06x  native:blocked|native:blocked
+
+== getrs: cuBLAS vs routed-trsm composition (laswp=gather, nrhs=1) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       0.1231       0.6267     0.20x  native:cta|native:cta
+float        64    8192       0.3047       1.3381     0.23x  native:blocked|native:blocked
+float       128    4096       0.6586       1.6168     0.41x  native:blocked|native:blocked
+float       256    2048       1.3472       2.2096     0.61x  native:blocked|native:blocked
+float       512     512       1.4636       2.2177     0.66x  native:blocked|native:blocked
+float      1024     128       1.8920       2.2275     0.85x  native:blocked|native:blocked
+float      2048      32       2.9403       3.1334     0.94x  native:blocked|native:blocked
+double       32    8192       0.7165       3.7654     0.19x  native:cta|native:cta
+double       64    8192       1.6468       7.9999     0.21x  native:blocked|native:blocked
+double      128    4096       2.1036       9.0012     0.23x  native:blocked|native:blocked
+double      256    2048       2.7696      10.9043     0.25x  native:blocked|native:blocked
+double      512     512       2.5187       7.9832     0.32x  native:blocked|native:blocked
+double     1024     128       3.7561       5.6207     0.67x  native:blocked|native:blocked
+double     2048      32       6.2035       5.4217     1.14x  native:blocked|native:blocked
+cfloat       32    8192       0.1185       1.2043     0.10x  native:cta|native:cta
+cfloat       64    8192       0.4375       2.6293     0.17x  native:blocked|native:blocked
+cfloat      128    4096       1.0575       3.0951     0.34x  native:blocked|native:blocked
+cfloat      256    2048       1.7341       3.9611     0.44x  native:blocked|native:blocked
+cfloat      512     512       1.9456       3.3006     0.59x  native:blocked|native:blocked
+cfloat     1024     128       2.4816       2.8836     0.86x  native:blocked|native:blocked
+cfloat     2048      32       3.5326       4.0782     0.87x  native:blocked|native:blocked
+cdouble      32    8192       1.2969      13.9825     0.09x  native:cta|native:cta
+cdouble      64    8192       3.4398      28.3268     0.12x  native:blocked|native:blocked
+cdouble     128    4096       4.1054      29.0086     0.14x  native:blocked|native:blocked
+cdouble     256    2048       5.4480      30.4948     0.18x  native:blocked|native:blocked
+cdouble     512     512       4.5244      17.2225     0.26x  native:blocked|native:blocked
+cdouble    1024     128       6.7209       5.8584     1.15x  native:blocked|native:blocked
+cdouble    2048      32      11.1185      10.3587     1.07x  native:blocked|native:blocked
+
+== getrs: cuBLAS vs routed-trsm composition (laswp=list, nrhs=64) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       2.0515       1.5054     1.36x  native:cta|native:cta
+float        64    8192       8.3635       3.7655     2.22x  native:blocked|native:blocked
+float       128    4096       8.7145       5.6003     1.56x  native:blocked|native:blocked
+float       256    2048       8.8956       8.2929     1.07x  native:blocked|native:blocked
+float       512     512       4.8226       3.5316     1.37x  native:blocked|native:blocked
+float      1024     128       6.5375       3.6665     1.78x  native:blocked|native:blocked
+float      2048      32      12.1735       7.9825     1.53x  native:blocked|native:blocked
+double       32    8192       6.0904       4.8743     1.25x  native:cta|native:cta
+double       64    8192      16.7830      12.4732     1.35x  native:blocked|native:blocked
+double      128    4096      23.8649      19.9011     1.20x  native:blocked|native:blocked
+double      256    2048      26.7932      26.9439     0.99x  native:blocked|native:blocked
+double      512     512      19.7914      18.8346     1.05x  native:blocked|native:blocked
+double     1024     128      20.2379      16.1843     1.25x  native:blocked|native:blocked
+double     2048      32      26.1352      20.7420     1.26x  native:blocked|native:blocked
+cfloat       32    8192       3.9526       3.8171     1.04x  native:cta|native:cta
+cfloat       64    8192      11.2719       9.0719     1.24x  native:blocked|native:blocked
+cfloat      128    4096      16.3295      13.9903     1.17x  native:blocked|native:blocked
+cfloat      256    2048      14.0666      15.0306     0.94x  native:blocked|native:blocked
+cfloat      512     512       7.0865       7.8044     0.91x  native:blocked|native:blocked
+cfloat     1024     128       7.5954       6.3922     1.19x  native:blocked|native:blocked
+cfloat     2048      32      13.1872      10.4372     1.26x  native:blocked|native:blocked
+cdouble      32    8192      14.4914      16.7359     0.87x  native:cta|native:cta
+cdouble      64    8192      43.1840      45.6334     0.95x  native:blocked|native:blocked
+cdouble     128    4096      56.5898      61.7921     0.92x  native:blocked|native:blocked
+cdouble     256    2048      80.8683      89.8626     0.90x  native:blocked|native:blocked
+cdouble     512     512      67.8588      72.4543     0.94x  native:blocked|native:blocked
+cdouble    1024     128      64.4179      60.2917     1.07x  native:blocked|native:blocked
+cdouble    2048      32      71.3627      65.2357     1.09x  native:blocked|native:blocked
+
+== getrs: cuBLAS vs routed-trsm composition (laswp=gather, nrhs=64) ==
+type          n   batch    vendor_ms      comp_ms  speedup  trsm route
+float        32    8192       2.0515       0.8111     2.53x  native:cta|native:cta
+float        64    8192       8.3635       2.2358     3.74x  native:blocked|native:blocked
+float       128    4096       8.7145       3.0542     2.85x  native:blocked|native:blocked
+float       256    2048       8.8956       4.1686     2.13x  native:blocked|native:blocked
+float       512     512       4.8226       3.3054     1.46x  native:blocked|native:blocked
+float      1024     128       6.5375       3.0448     2.15x  native:blocked|native:blocked
+float      2048      32      12.1735       6.3026     1.93x  native:blocked|native:blocked
+double       32    8192       6.0904       4.2008     1.45x  native:cta|native:cta
+double       64    8192      16.7830      10.1151     1.66x  native:blocked|native:blocked
+double      128    4096      23.8649      13.6699     1.75x  native:blocked|native:blocked
+double      256    2048      26.7932      20.5141     1.31x  native:blocked|native:blocked
+double      512     512      19.7914      17.5319     1.13x  native:blocked|native:blocked
+double     1024     128      20.2379      15.5739     1.30x  native:blocked|native:blocked
+double     2048      32      26.1352      19.0379     1.37x  native:blocked|native:blocked
+cfloat       32    8192       3.9526       2.4148     1.64x  native:cta|native:cta
+cfloat       64    8192      11.2719       5.9378     1.90x  native:blocked|native:blocked
+cfloat      128    4096      16.3295       7.4830     2.18x  native:blocked|native:blocked
+cfloat      256    2048      14.0666       9.1699     1.53x  native:blocked|native:blocked
+cfloat      512     512       7.0865       6.1674     1.15x  native:blocked|native:blocked
+cfloat     1024     128       7.5954       4.8454     1.57x  native:blocked|native:blocked
+cfloat     2048      32      13.1872       6.6495     1.98x  native:blocked|native:blocked
+cdouble      32    8192      14.4914      15.2244     0.95x  native:cta|native:cta
+cdouble      64    8192      43.1840      37.9602     1.14x  native:blocked|native:blocked
+cdouble     128    4096      56.5898      52.4492     1.08x  native:blocked|native:blocked
+cdouble     256    2048      80.8683      81.1037     1.00x  native:blocked|native:blocked
+cdouble     512     512      67.8588      69.4741     0.98x  native:blocked|native:blocked
+cdouble    1024     128      64.4179      58.5970     1.10x  native:blocked|native:blocked
+cdouble    2048      32      71.3627      61.3404     1.16x  native:blocked|native:blocked
+
+== workspace, bytes ==
+type          n   batch  nrhs         vendor     comp(list)   comp(gather)
+float        32    8192     1          32768              0        1048576
+float        64    8192     1          32768              0        2097152
+float       128    4096     1          16384              0        2097152
+float       256    2048     1           8192              0        2097152
+float       512     512     1           2048              0        1048576
+float      1024     128     1            512              0         524288
+float      2048      32     1            512              0         262144
+double       32    8192     1          32768              0        1048576
+double       64    8192     1          32768              0        2097152
+double      128    4096     1          16384              0        2097152
+double      256    2048     1           8192              0        2097152
+double      512     512     1           2048              0        1048576
+double     1024     128     1            512              0         524288
+double     2048      32     1            512              0         262144
+cfloat       32    8192     1          32768              0        1048576
+cfloat       64    8192     1          32768              0        2097152
+cfloat      128    4096     1          16384              0        2097152
+cfloat      256    2048     1           8192              0        2097152
+cfloat      512     512     1           2048              0        1048576
+cfloat     1024     128     1            512              0         524288
+cfloat     2048      32     1            512              0         262144
+cdouble      32    8192     1          32768              0        1048576
+cdouble      64    8192     1          32768              0        2097152
+cdouble     128    4096     1          16384              0        2097152
+cdouble     256    2048     1           8192              0        2097152
+cdouble     512     512     1           2048              0        1048576
+cdouble    1024     128     1            512              0         524288
+cdouble    2048      32     1            512              0         262144
+float        32    8192     1              0              0        2097152
+float        64    8192     1              0              0        4194304
+float       128    4096     1              0              0        4194304
+float       256    2048     1              0              0        4194304
+float       512     512     1              0              0        2097152
+float      1024     128     1              0              0        1048576
+float      2048      32     1              0              0         524288
+double       32    8192     1              0              0        3145728
+double       64    8192     1              0              0        6291456
+double      128    4096     1              0              0        6291456
+double      256    2048     1              0              0        6291456
+double      512     512     1              0              0        3145728
+double     1024     128     1              0              0        1572864
+double     2048      32     1              0              0         786432
+cfloat       32    8192     1              0              0        3145728
+cfloat       64    8192     1              0              0        6291456
+cfloat      128    4096     1              0              0        6291456
+cfloat      256    2048     1              0              0        6291456
+cfloat      512     512     1              0              0        3145728
+cfloat     1024     128     1              0              0        1572864
+cfloat     2048      32     1              0              0         786432
+cdouble      32    8192     1              0              0        5242880
+cdouble      64    8192     1              0              0       10485760
+cdouble     128    4096     1              0              0       10485760
+cdouble     256    2048     1              0              0       10485760
+cdouble     512     512     1              0              0        5242880
+cdouble    1024     128     1              0              0        2621440
+cdouble    2048      32     1              0              0        1310720
+float        32    8192    64              0              0       68157440
+float        64    8192    64              0              0      136314880
+float       128    4096    64              0              0      136314880
+float       256    2048    64              0              0      136314880
+float       512     512    64              0              0       68157440
+float      1024     128    64              0              0       34078720
+float      2048      32    64              0              0       17039360
+double       32    8192    64              0              0      135266304
+double       64    8192    64              0              0      270532608
+double      128    4096    64              0              0      270532608
+double      256    2048    64              0              0      270532608
+double      512     512    64              0              0      135266304
+double     1024     128    64              0              0       67633152
+double     2048      32    64              0              0       33816576
+cfloat       32    8192    64              0              0      135266304
+cfloat       64    8192    64              0              0      270532608
+cfloat      128    4096    64              0              0      270532608
+cfloat      256    2048    64              0              0      270532608
+cfloat      512     512    64              0              0      135266304
+cfloat     1024     128    64              0              0       67633152
+cfloat     2048      32    64              0              0       33816576
+cdouble      32    8192    64              0              0      269484032
+cdouble      64    8192    64              0              0      538968064
+cdouble     128    4096    64              0              0      538968064
+cdouble     256    2048    64              0              0      538968064
+cdouble     512     512    64              0              0      269484032
+cdouble    1024     128    64              0              0      134742016
+cdouble    2048      32    64              0              0       67371008
+
+== geomean speedups (composition over cuBLAS), and win counts ==
+  getri        laswp=list    nrhs=1    cells=28  geomean 0.97x  wins 10  worst 0.15x  best 27.41x
+  getri        laswp=gather  nrhs=1    cells=28  geomean 1.60x  wins 18  worst 0.23x  best 74.87x
+  getrs        laswp=list    nrhs=1    cells=28  geomean 0.36x  wins 3  worst 0.09x  best 1.15x
+  getrs        laswp=gather  nrhs=1    cells=28  geomean 0.36x  wins 3  worst 0.09x  best 1.15x
+  getrs        laswp=list    nrhs=64   cells=28  geomean 1.17x  wins 20  worst 0.87x  best 2.22x
+  getrs        laswp=gather  nrhs=64   cells=28  geomean 1.55x  wins 25  worst 0.95x  best 3.74x

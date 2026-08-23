@@ -1,0 +1,11 @@
+# Compiled harnesses. Same rule as experiments/wp4_potrf/slm/ and
+# experiments/wp5_qr/bench/: READMEs and small CSVs are committed, binaries and
+# blobs are not. Never commit *.nsys-rep, *.sqlite or BATCHLAS_KERNEL_TRACE JSON.
+lubench_v
+lubench_nv
+pivotcost
+routeq_lu_v
+routeq_lu_nv
+*.nsys-rep
+*.sqlite
+*.qdrep

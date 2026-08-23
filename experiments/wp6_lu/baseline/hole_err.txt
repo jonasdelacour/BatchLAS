@@ -1,0 +1,8 @@
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           1
+	Name:            CUDA_ERROR_INVALID_VALUE
+	Description:     invalid argument
+	Function:        enqueueKernelLaunch
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/enqueue.cpp:439
+

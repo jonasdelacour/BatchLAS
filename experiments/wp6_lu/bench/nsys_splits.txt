@@ -1,0 +1,89 @@
+##### win_getrf_float_2048
+       44.2 %     378 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+       29.0 %     135 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>
+       14.7 %     123 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelGlobalKernel<float>
+        8.1 %      45 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>
+        2.1 %      69 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<float>
+        1.8 %     189 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<float, (int)32, (batchlas::Side)0>
+
+##### win_getri_float_2048
+       39.8 %     135 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>
+       28.9 %       4 launches  batchlas::sycl_getri::<unnamed>::GetriPermKernel<float>
+        8.3 %     126 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        7.5 %       4 launches  batchlas::sycl_getri::<unnamed>::GetriZeroKernel<float>
+        5.5 %      45 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>
+        4.1 %     386 launches  batchlas::sycl_gemm::GemmRegisterTiledKernel<float, (int)32, (int)32, (int)8, (in…
+        2.9 %     575 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<float, (int)32, (batchlas::Side)0>
+        2.8 %      41 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelGlobalKernel<float>
+        0.4 %      23 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<float>
+
+##### cx_getrf_float_1024
+       63.2 %     248 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+       21.8 %      84 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>
+        5.6 %      28 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>
+        4.1 %      36 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelGlobalKernel<float>
+        3.5 %      92 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<float>
+        1.7 %     124 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<float, (int)32, (batchlas::Side)0>
+        0.1 %       8 launches  batchlas::sycl_gemm::GemmRegisterTiledKernel<float, (int)32, (int)32, (int)8, (in…
+
+##### lose_getrf_double_128
+       48.5 %      16 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<double>
+       33.6 %      24 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        9.2 %      12 launches  batchlas::sycl_gemm::GemmTiledGeneralKernel<double, (int)16, (batchlas::Transpose…
+        8.8 %      12 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<double, (int)32, (batchlas::Side)0>
+
+##### vend_getrf_double_128
+       99.9 %      12 launches  void getrf_panel<double, double, (int)4, (int)4, (int)3, (int)3, (int)4, (bool)1>(int, T1 *const *,�
+        0.1 %      12 launches  batchlas::MatrixView<double, (batchlas::MatrixFormat)0>::init_data_ptr_array(Queu…
+
+##### lose_getrf_cdouble_128
+       36.7 %      12 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<std::complex<double>>
+       22.2 %       6 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0>
+       21.8 %      18 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+       14.7 %       9 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<std::complex<double>, (int)32, (bat…
+        4.6 %       3 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)1>
+
+##### cx_getrf_cdouble_1024
+       42.3 %      48 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0>
+       35.9 %      45 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)1>
+       12.8 %     186 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        5.9 %      81 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelGlobalKernel<std::complex<double>>
+        2.8 %      93 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<std::complex<double>, (int)32, (bat…
+        0.3 %      15 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<std::complex<double>>
+
+##### lose_getrs_float_512
+       34.1 %   1,694 launches  batchlas::sycl_gemm::GemmTiledGeneralKernel<float, (int)16, (batchlas::Transpose)…
+       24.8 %   2,479 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<float, (int)32, (batchlas::Side)0>
+       21.5 %      77 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrs::<unnamed>::GetrsLaswpTag…
+       12.6 %      30 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        2.8 %     617 launches  batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<float>
+        2.2 %       9 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>
+        1.5 %      16 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<float>
+        0.5 %       3 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>
+
+##### win_getrs_float_512
+       35.6 %      58 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrs::<unnamed>::GetrsLaswpTag…
+       22.0 %     351 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)1>
+       17.5 %   1,394 launches  batchlas::sycl_gemm::GemmRegisterTiledKernel<float, (int)32, (int)32, (int)8, (in…
+       17.3 %   1,871 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<float, (int)32, (batchlas::Side)0>
+        5.3 %      30 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        1.3 %       9 launches  batchlas::sycl_gemm::GemmRegister128x128Kernel<float, (bool)0>
+        0.9 %      16 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<float>
+
+##### lose_getrs_cdouble_512
+       39.2 %      84 launches  batchlas::sycl_gemm::GemmTiledGeneralKernel<std::complex<double>, (int)16, (batch…
+       17.4 %     207 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<std::complex<double>, (int)32, (bat…
+       15.0 %       8 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)0>
+       10.6 %       7 launches  batchlas::sycl_gemm::GemmRegister64x64K16WideKernel<std::complex<double>, (bool)1>
+        9.0 %      30 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrf::<unnamed>::GetrfBlockedL…
+        4.1 %      11 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelGlobalKernel<std::complex<double>>
+        2.6 %      96 launches  batchlas::sycl_gemm::<unnamed>::GemmDirectKernel<std::complex<double>>
+        1.3 %       6 launches  batchlas::lu_native::LuLaswpKernel<batchlas::sycl_getrs::<unnamed>::GetrsLaswpTag…
+        0.9 %       5 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<std::complex<double>>
+
+##### lose_getri_cfloat_32
+       86.2 %     200 launches  batchlas::sycl_trsm::<unnamed>::TrsmCtaKernel<std::complex<float>, (int)32, (batc…
+        8.4 %     100 launches  batchlas::sycl_getri::<unnamed>::GetriPermKernel<std::complex<float>>
+        5.0 %     100 launches  batchlas::sycl_getri::<unnamed>::GetriZeroKernel<std::complex<float>>
+        0.4 %       1 launches  batchlas::sycl_getrf::<unnamed>::GetrfPanelResidentKernel<std::complex<float>>
+

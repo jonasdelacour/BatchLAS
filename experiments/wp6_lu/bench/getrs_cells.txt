@@ -1,0 +1,80 @@
+# getrs, the op the baseline predicted would lose. Two axes, each with the other
+# held fixed, because getrs has THREE (n, nrhs, batch) and a table that moves two
+# at once cannot say which one a crossover belongs to.
+#
+# (a) ORDER axis at nrhs = 1 and at nrhs = 64, batch on the saturating schedule.
+getrs:float:64:1:8192
+getrs:double:64:1:8192
+getrs:cfloat:64:1:8192
+getrs:cdouble:64:1:8192
+getrs:float:256:1:2048
+getrs:double:256:1:2048
+getrs:cfloat:256:1:2048
+getrs:cdouble:256:1:2048
+getrs:float:512:1:512
+getrs:double:512:1:512
+getrs:cfloat:512:1:512
+getrs:cdouble:512:1:512
+getrs:float:1024:1:128
+getrs:double:1024:1:128
+getrs:cfloat:1024:1:128
+getrs:cdouble:1024:1:128
+getrs:float:2048:1:32
+getrs:double:2048:1:32
+getrs:cfloat:2048:1:32
+getrs:cdouble:2048:1:32
+getrs:float:64:64:8192
+getrs:double:64:64:8192
+getrs:cfloat:64:64:8192
+getrs:cdouble:64:64:8192
+getrs:float:256:64:2048
+getrs:double:256:64:2048
+getrs:cfloat:256:64:2048
+getrs:cdouble:256:64:2048
+getrs:float:512:64:512
+getrs:double:512:64:512
+getrs:cfloat:512:64:512
+getrs:cdouble:512:64:512
+getrs:float:1024:64:128
+getrs:double:1024:64:128
+getrs:cfloat:1024:64:128
+getrs:cdouble:1024:64:128
+getrs:float:2048:64:32
+getrs:double:2048:64:32
+getrs:cfloat:2048:64:32
+getrs:cdouble:2048:64:32
+# (b) NRHS axis, order and batch FIXED at n = 512, batch = 256.
+getrs:float:512:2:256
+getrs:float:512:8:256
+getrs:float:512:32:256
+getrs:float:512:128:256
+getrs:float:512:512:256
+getrs:double:512:2:256
+getrs:double:512:8:256
+getrs:double:512:32:256
+getrs:double:512:128:256
+getrs:double:512:512:256
+getrs:cfloat:512:2:256
+getrs:cfloat:512:8:256
+getrs:cfloat:512:32:256
+getrs:cfloat:512:128:256
+getrs:cfloat:512:512:256
+getrs:cdouble:512:2:256
+getrs:cdouble:512:8:256
+getrs:cdouble:512:32:256
+getrs:cdouble:512:128:256
+getrs:cdouble:512:512:256
+# and the same nrhs axis at n = 512, batch = 256 for nrhs = 1, to close the ladder
+getrs:float:512:1:256
+getrs:double:512:1:256
+getrs:cfloat:512:1:256
+getrs:cdouble:512:1:256
+# (c) BATCH axis, order and nrhs FIXED at n = 512, nrhs = 8.
+getrs:float:512:8:64
+getrs:float:512:8:128
+getrs:float:512:8:512
+getrs:float:512:8:1024
+getrs:cdouble:512:8:64
+getrs:cdouble:512:8:128
+getrs:cdouble:512:8:512
+getrs:cdouble:512:8:1024

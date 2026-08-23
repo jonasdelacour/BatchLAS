@@ -1,0 +1,286 @@
+=== BREAK: pivot_metric ===
+  file: src/extensions/getrf_cta_device.hh
+  from: return sycl::fabs(a.re) + sycl::fabs(a.im);
+  to  : return sycl::sqrt(a.re * a.re + a.im * a.im);   // BREAK B8: modulus, not cabs1
+=== build ===
+[ 98%] Built target syev_jacobi_cta_tests
+[ 98%] Built target syev_cta_tests
+[100%] Built target syev_two_stage_tests
+[100%] Built target device_blas_tests
+=== run type 4 ===
+Note: Google Test filter = LuTest/4.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/4, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[ RUN      ] LuTest/4.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/4.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/4.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/4.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/4.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/4.BlockedFactorisesAndPivotsExactly (76 ms)
+[ RUN      ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed (5 ms)
+[ RUN      ] LuTest/4.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/4.BothPanelLeavesFactoriseCorrectly (2 ms)
+[ RUN      ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+[       OK ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins (1 ms)
+[ RUN      ] LuTest/4.NearlySingularIsNotFlagged
+[       OK ] LuTest/4.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/4.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/4.GetrsSolvesAllThreeTransposeModes (8 ms)
+[ RUN      ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched (2 ms)
+[ RUN      ] LuTest/4.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/4.NativeFactorFeedsTheVendorSolvers (3 ms)
+[ RUN      ] LuTest/4.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/4.VendorFactorFeedsTheNativeSolvers (2 ms)
+[ RUN      ] LuTest/4.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/4.RouteTableAndTheVendorFreeFallback (3 ms)
+[ RUN      ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly (3 ms)
+[ RUN      ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences (1 ms)
+[----------] 16 tests from LuTest/4 (120 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (120 ms total)
+[  PASSED  ] 15 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+--- exit 0 ---
+=== run type 5 ===
+Note: Google Test filter = LuTest/5.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/5, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[ RUN      ] LuTest/5.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/5.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/5.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/5.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/5.BlockedFactorisesAndPivotsExactly
+[       OK ] LuTest/5.BlockedFactorisesAndPivotsExactly (57 ms)
+[ RUN      ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed (6 ms)
+[ RUN      ] LuTest/5.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/5.BothPanelLeavesFactoriseCorrectly (1 ms)
+[ RUN      ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+[       OK ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins (2 ms)
+[ RUN      ] LuTest/5.NearlySingularIsNotFlagged
+[       OK ] LuTest/5.NearlySingularIsNotFlagged (0 ms)
+[ RUN      ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/5.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/5.GetrsSolvesAllThreeTransposeModes (8 ms)
+[ RUN      ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched (2 ms)
+[ RUN      ] LuTest/5.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/5.NativeFactorFeedsTheVendorSolvers (3 ms)
+[ RUN      ] LuTest/5.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/5.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/5.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/5.RouteTableAndTheVendorFreeFallback (5 ms)
+[ RUN      ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly (5 ms)
+[ RUN      ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences (1 ms)
+[----------] 16 tests from LuTest/5 (107 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (107 ms total)
+[  PASSED  ] 15 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+--- exit 0 ---
+=== run type 6 ===
+Note: Google Test filter = LuTest/6.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/6, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[ RUN      ] LuTest/6.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/6.ResidentLeafLaunchHoleAt48KiB (7 ms)
+[ RUN      ] LuTest/6.CtaFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.08053 vs 1
+cta/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.080528154711669 > 1 at b=2 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/6.CtaFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.22359 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2235891516009478 > 1 at b=0 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.25067 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2506744654914588 > 1 at b=1 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.25521 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2552126990620007 > 1 at b=2 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed (47 ms)
+[ RUN      ] LuTest/6.BothPanelLeavesFactoriseCorrectly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1028: Failure
+Expected: (worst_pivot_ratio<T>(buf.data() + size_t(b) * stride, m, n, ld)) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.22652 vs 1
+resident leaf, b=0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1028: Failure
+Expected: (worst_pivot_ratio<T>(buf.data() + size_t(b) * stride, m, n, ld)) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.19924 vs 1
+resident leaf, b=1
+[  FAILED  ] LuTest/6.BothPanelLeavesFactoriseCorrectly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+[       OK ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins (3 ms)
+[ RUN      ] LuTest/6.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 133.065 vs 1
+blocked/near-singular: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 133.06460361612443 > 1 at b=0 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 20
+  p.expect_piv[k]
+    Which is: 21
+blocked/near-singular: ipiv[19] = 20, expected 21 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1209: Failure
+Expected equality of these values:
+  piv_item(p, b)[0]
+    Which is: 1
+  2
+cta: ipiv[0] = 1 at b=0. 2 is cabs1's answer (LAPACK's, netlib's); 1 is the MODULUS's answer, which is cuBLAS's and is not this library's contract
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1209: Failure
+Expected equality of these values:
+  piv_item(p, b)[0]
+    Which is: 1
+  2
+cta: ipiv[0] = 1 at b=1. 2 is cabs1's answer (LAPACK's, netlib's); 1 is the MODULUS's answer, which is cuBLAS's and is not this library's contract
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.33333 vs 1
+cta/pivot-metric: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.3333333730697632 > 1 at b=0 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.33333 vs 1
+cta/pivot-metric: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.3333333730697632 > 1 at b=1 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/6.GetrsSolvesAllThreeTransposeModes (18 ms)
+[ RUN      ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched (5 ms)
+[ RUN      ] LuTest/6.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/6.NativeFactorFeedsTheVendorSolvers (15 ms)
+[ RUN      ] LuTest/6.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/6.VendorFactorFeedsTheNativeSolvers (6 ms)
+[ RUN      ] LuTest/6.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/6.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly (7 ms)
+[ RUN      ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences (2 ms)
+[----------] 16 tests from LuTest/6 (123 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (123 ms total)
+[  PASSED  ] 11 tests.
+[  FAILED  ] 5 tests, listed below:
+[  FAILED  ] LuTest/6.CtaFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BothPanelLeavesFactoriseCorrectly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+
+ 5 FAILED TESTS
+--- exit 1 ---
+=== run type 7 ===
+Note: Google Test filter = LuTest/7.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/7, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[ RUN      ] LuTest/7.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/7.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/7.CtaFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.08053 vs 1
+cta/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.0805281731284906 > 1 at b=2 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/7.CtaFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/7.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.22359 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2235893432617995 > 1 at b=0 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.25067 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2506743841855539 > 1 at b=1 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.25521 vs 1
+blocked/random: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.2552127092419356 > 1 at b=2 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed
+[       OK ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed (82 ms)
+[ RUN      ] LuTest/7.BothPanelLeavesFactoriseCorrectly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1028: Failure
+Expected: (worst_pivot_ratio<T>(buf.data() + size_t(b) * stride, m, n, ld)) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.22652 vs 1
+resident leaf, b=0
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1028: Failure
+Expected: (worst_pivot_ratio<T>(buf.data() + size_t(b) * stride, m, n, ld)) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.19924 vs 1
+resident leaf, b=1
+[  FAILED  ] LuTest/7.BothPanelLeavesFactoriseCorrectly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+[       OK ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins (5 ms)
+[ RUN      ] LuTest/7.NearlySingularIsNotFlagged
+[       OK ] LuTest/7.NearlySingularIsNotFlagged (1 ms)
+[ RUN      ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1209: Failure
+Expected equality of these values:
+  piv_item(p, b)[0]
+    Which is: 1
+  2
+cta: ipiv[0] = 1 at b=0. 2 is cabs1's answer (LAPACK's, netlib's); 1 is the MODULUS's answer, which is cuBLAS's and is not this library's contract
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1209: Failure
+Expected equality of these values:
+  piv_item(p, b)[0]
+    Which is: 1
+  2
+cta: ipiv[0] = 1 at b=1. 2 is cabs1's answer (LAPACK's, netlib's); 1 is the MODULUS's answer, which is cuBLAS's and is not this library's contract
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.33333 vs 1
+cta/pivot-metric: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.3333333333333333 > 1 at b=0 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:634: Failure
+Expected: (ratio) <= (1.0 + 32.0 * eps_of<T>()), actual: 1.33333 vs 1
+cta/pivot-metric: cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached 1.3333333333333333 > 1 at b=1 -- a row with a LARGER cabs1 than the chosen pivot was left below it, so this is not a cabs1 PARTIAL-pivoting factorization
+[  FAILED  ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/7.GetrsSolvesAllThreeTransposeModes
+[       OK ] LuTest/7.GetrsSolvesAllThreeTransposeModes (31 ms)
+[ RUN      ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched
+[       OK ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched (8 ms)
+[ RUN      ] LuTest/7.NativeFactorFeedsTheVendorSolvers
+[       OK ] LuTest/7.NativeFactorFeedsTheVendorSolvers (18 ms)
+[ RUN      ] LuTest/7.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/7.VendorFactorFeedsTheNativeSolvers (8 ms)
+[ RUN      ] LuTest/7.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/7.RouteTableAndTheVendorFreeFallback (9 ms)
+[ RUN      ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly
+[       OK ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly (15 ms)
+[ RUN      ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences
+[       OK ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences (3 ms)
+[----------] 16 tests from LuTest/7 (197 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (197 ms total)
+[  PASSED  ] 12 tests.
+[  FAILED  ] 4 tests, listed below:
+[  FAILED  ] LuTest/7.CtaFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BothPanelLeavesFactoriseCorrectly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+
+ 4 FAILED TESTS
+--- exit 1 ---

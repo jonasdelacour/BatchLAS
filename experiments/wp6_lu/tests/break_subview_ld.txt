@@ -1,0 +1,554 @@
+=== BREAK: subview_ld ===
+  file: src/extensions/getrf_blocked.cc
+  from: nr, nc, ld, stride, batch, ptrs.data());
+  to  : nr, nc, nr, stride, batch, ptrs.data());   // BREAK B5: rows, not parent ld
+=== build ===
+[ 98%] Built target sytrd_sy2sb_tests
+[100%] Built target syev_two_stage_tests
+[100%] Built target syev_blocked_tests
+[100%] Built target device_blas_tests
+=== run type 4 ===
+Note: Google Test filter = LuTest/4.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/4, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[ RUN      ] LuTest/4.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/4.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/4.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/4.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/4.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.45143e+30 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 6.68935e+31 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.09049e+31 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 4.55225e+28 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.70884e+28 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.59679e+29 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+[  FAILED  ] LuTest/4.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (57 ms)
+[ RUN      ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+blocked/straddle: F(37,64) is not finite at b=0
+[  FAILED  ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/4.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/4.BothPanelLeavesFactoriseCorrectly (2 ms)
+[ RUN      ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1085: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+item 0 left F(42,64) non-finite; a failed item must stay finite, as LAPACK's and cuBLAS's do
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/4.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.41704e+22 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 41
+  p.expect_piv[k]
+    Which is: 34
+blocked/near-singular: ipiv[32] = 41, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/4.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/4.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+getrs/factor: F(35,64) is not finite at b=0
+[  FAILED  ] LuTest/4.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+getri/factor: F(40,64) is not finite at b=0
+[  FAILED  ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+dropin/native-factor: F(39,64) is not finite at b=0
+[  FAILED  ] LuTest/4.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/4.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/4.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/4.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/4.RouteTableAndTheVendorFreeFallback (2 ms)
+[ RUN      ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.92325e+28 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 39
+  p.expect_piv[k]
+    Which is: 34
+facade/getrf: ipiv[32] = 39, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/4.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.25911e+29 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 35
+  p.expect_piv[k]
+    Which is: 34
+buffer-size/getrf: ipiv[32] = 35, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (1 ms)
+[----------] 16 tests from LuTest/4 (88 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (88 ms total)
+[  PASSED  ] 6 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/4.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/4.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[  FAILED  ] LuTest/4.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 5 ===
+Note: Google Test filter = LuTest/5.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/5, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[ RUN      ] LuTest/5.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/5.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/5.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/5.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/5.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.45143e+30 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 6.68935e+31 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.09049e+31 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 4.55225e+28 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.70884e+28 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.59679e+29 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+[  FAILED  ] LuTest/5.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (37 ms)
+[ RUN      ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+blocked/straddle: F(68,96) is not finite at b=0
+[  FAILED  ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/5.BothPanelLeavesFactoriseCorrectly (1 ms)
+[ RUN      ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1085: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+item 0 left F(68,96) non-finite; a failed item must stay finite, as LAPACK's and cuBLAS's do
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/5.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.41704e+22 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 41
+  p.expect_piv[k]
+    Which is: 34
+blocked/near-singular: ipiv[32] = 41, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1170: Skipped
+cabs1 and the modulus coincide for a real scalar type
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/5.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: inf vs 4.26326e-12
+getrs/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=96)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 33
+  p.expect_piv[k]
+    Which is: 34
+getrs/factor: ipiv[32] = 33, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: inf vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 33
+  p.expect_piv[k]
+    Which is: 34
+getri/factor: ipiv[32] = 33, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/5.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: inf vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 68
+  p.expect_piv[k]
+    Which is: 34
+dropin/native-factor: ipiv[32] = 68, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/5.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/5.VendorFactorFeedsTheNativeSolvers (3 ms)
+[ RUN      ] LuTest/5.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/5.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.92325e+28 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 39
+  p.expect_piv[k]
+    Which is: 34
+facade/getrf: ipiv[32] = 39, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/5.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.25911e+29 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 35
+  p.expect_piv[k]
+    Which is: 34
+buffer-size/getrf: ipiv[32] = 35, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1> (1 ms)
+[----------] 16 tests from LuTest/5 (69 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (69 ms total)
+[  PASSED  ] 6 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] LuTest/5.PivotSelectionUsesCabs1AndNotTheModulus
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/5.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[  FAILED  ] LuTest/5.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 6 ===
+Note: Google Test filter = LuTest/6.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/6, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[ RUN      ] LuTest/6.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/6.ResidentLeafLaunchHoleAt48KiB (7 ms)
+[ RUN      ] LuTest/6.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/6.CtaFactorisesAndPivotsExactly (5 ms)
+[ RUN      ] LuTest/6.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.96374e+32 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.68881e+31 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.26663e+31 vs 0.000786781
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.87105e+29 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 7.48541e+29 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.0315e+30 vs 0.000786781
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (35 ms)
+[ RUN      ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+blocked/straddle: F(37,64) is not finite at b=0
+[  FAILED  ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (5 ms)
+[ RUN      ] LuTest/6.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/6.BothPanelLeavesFactoriseCorrectly (3 ms)
+[ RUN      ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1085: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+item 0 left F(40,64) non-finite; a failed item must stay finite, as LAPACK's and cuBLAS's do
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/6.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.65924e+23 vs 0.00114441
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 45
+  p.expect_piv[k]
+    Which is: 34
+blocked/near-singular: ipiv[32] = 45, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/6.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/6.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+getrs/factor: F(35,64) is not finite at b=0
+[  FAILED  ] LuTest/6.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+getri/factor: F(40,64) is not finite at b=0
+[  FAILED  ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+dropin/native-factor: F(39,64) is not finite at b=0
+[  FAILED  ] LuTest/6.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/6.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/6.VendorFactorFeedsTheNativeSolvers (9 ms)
+[ RUN      ] LuTest/6.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/6.RouteTableAndTheVendorFreeFallback (4 ms)
+[ RUN      ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 6.63823e+29 vs 0.00152588
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 42
+  p.expect_piv[k]
+    Which is: 34
+facade/getrf: ipiv[32] = 42, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/6.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 5.88144e+29 vs 0.00152588
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 37
+  p.expect_piv[k]
+    Which is: 34
+buffer-size/getrf: ipiv[32] = 37, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1> (2 ms)
+[----------] 16 tests from LuTest/6 (82 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (82 ms total)
+[  PASSED  ] 7 tests.
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/6.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/6.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---
+=== run type 7 ===
+Note: Google Test filter = LuTest/7.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/7, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[ RUN      ] LuTest/7.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/7.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/7.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/7.CtaFactorisesAndPivotsExactly (7 ms)
+[ RUN      ] LuTest/7.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.96374e+32 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.68881e+31 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 3.26663e+31 vs 1.46549e-12
+blocked/random: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.87105e+29 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=0 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 7.4854e+29 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=1 (n=33)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 2.0315e+30 vs 1.46549e-12
+blocked/dominant-permuted: ||PA - LU||_F / ||A||_F too large at b=2 (n=33)
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (65 ms)
+[ RUN      ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+blocked/straddle: F(68,96) is not finite at b=0
+[  FAILED  ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (3 ms)
+[ RUN      ] LuTest/7.BothPanelLeavesFactoriseCorrectly
+[       OK ] LuTest/7.BothPanelLeavesFactoriseCorrectly (2 ms)
+[ RUN      ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:1085: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+item 0 left F(68,96) non-finite; a failed item must stay finite, as LAPACK's and cuBLAS's do
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (2 ms)
+[ RUN      ] LuTest/7.NearlySingularIsNotFlagged
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 1.65924e+23 vs 2.13163e-12
+blocked/near-singular: ||PA - LU||_F / ||A||_F too large at b=0 (n=48)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 45
+  p.expect_piv[k]
+    Which is: 34
+blocked/near-singular: ipiv[32] = 45, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/7.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (0 ms)
+[ RUN      ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus
+[       OK ] LuTest/7.PivotSelectionUsesCabs1AndNotTheModulus (0 ms)
+[ RUN      ] LuTest/7.GetrsSolvesAllThreeTransposeModes
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:622: Failure
+Value of: hfinite(up(F[size_t(j) * p.ld + i]))
+  Actual: false
+Expected: true
+getrs/factor: F(80,65) is not finite at b=0
+[  FAILED  ] LuTest/7.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: inf vs 3.55271e-12
+getri/factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=80)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 33
+  p.expect_piv[k]
+    Which is: 34
+getri/factor: ipiv[32] = 33, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.NativeFactorFeedsTheVendorSolvers
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: inf vs 3.19744e-12
+dropin/native-factor: ||PA - LU||_F / ||A||_F too large at b=0 (n=72)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 68
+  p.expect_piv[k]
+    Which is: 34
+dropin/native-factor: ipiv[32] = 68, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/7.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (1 ms)
+[ RUN      ] LuTest/7.VendorFactorFeedsTheNativeSolvers
+[       OK ] LuTest/7.VendorFactorFeedsTheNativeSolvers (11 ms)
+[ RUN      ] LuTest/7.RouteTableAndTheVendorFreeFallback
+[       OK ] LuTest/7.RouteTableAndTheVendorFreeFallback (7 ms)
+[ RUN      ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 6.63823e+29 vs 2.84217e-12
+facade/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 42
+  p.expect_piv[k]
+    Which is: 34
+facade/getrf: ipiv[32] = 42, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (4 ms)
+[ RUN      ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses
+[       OK ] LuTest/7.DirectEntryPointsRefuseWhatSupportsRefuses (0 ms)
+[ RUN      ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:629: Failure
+Expected: (res) <= (lu_tol<T>(p.n)), actual: 5.88144e+29 vs 2.84217e-12
+buffer-size/getrf: ||PA - LU||_F / ||A||_F too large at b=0 (n=64)
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:643: Failure
+Expected equality of these values:
+  ip[k]
+    Which is: 37
+  p.expect_piv[k]
+    Which is: 34
+buffer-size/getrf: ipiv[32] = 37, expected 34 at b=0 -- the pivot base, direction or metric disagrees with LAPACK
+[  FAILED  ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1> (3 ms)
+[----------] 16 tests from LuTest/7 (120 ms total)
+
+[----------] Global test environment tear-down
+[==========] 16 tests from 1 test suite ran. (120 ms total)
+[  PASSED  ] 7 tests.
+[  FAILED  ] 9 tests, listed below:
+[  FAILED  ] LuTest/7.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BlockWidthStraddleIsQueriedNotAssumed, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.SingularColumnGivesGlobalOneBasedInfoFirstFailureWins, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.NearlySingularIsNotFlagged, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.GetrsSolvesAllThreeTransposeModes, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.GetriInvertsAndLeavesTheFactorUntouched, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.NativeFactorFeedsTheVendorSolvers, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.FacadeReachesTheNativeKernelsBitExactly, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[  FAILED  ] LuTest/7.BufferSizeCoversEveryRouteAndNeverDereferences, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+
+ 9 FAILED TESTS
+--- exit 1 ---

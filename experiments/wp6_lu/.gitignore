@@ -1,0 +1,14 @@
+# BELT AND BRACES. Every subdirectory here carries its own .gitignore naming its
+# own harness binaries; this one repeats the CLASSES that must never enter the
+# diff regardless of what a future subdirectory is called. This branch has been
+# caught twice -- once with 13 BATCHLAS_KERNEL_TRACE JSON dumps that were 83% of
+# the PR diff.
+*.nsys-rep
+*.sqlite
+*.qdstrm
+*.qdrep
+nsys/
+__pycache__/
+*.pyc
+*.o
+*.so

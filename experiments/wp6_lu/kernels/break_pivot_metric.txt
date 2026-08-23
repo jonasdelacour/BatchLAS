@@ -1,0 +1,18 @@
+# bin=luverify_v getrf=native:cta getrs/getri=native:blocked
+getrf,float,64,1,4,0.0819,0.0819,0.0009,8.54,4.415e-07,2560,native:cta,0,58,0,0,ok
+getri,float,64,1,4,0.0657,0.0658,0.0081,21.29,6.906e-07,512,native:cta|native:blocked,4.415e-07,58,0.0e+00,ok
+getrs,float,64,5,4,0.0760,0.0760,0.0022,2.16,1.906e+00,0,native:cta|native:blocked,4.415e-07,58,BAD
+singular,float,6,-,3,-,-,-,-,-,2560,native:cta,dev_info=[0 6 0],host_info=[0 6 0],min_absUii_item1=0.000e+00,host_mismatch=0,nonfinite=0,ok
+getrf,double,64,1,4,0.2157,0.2156,0.0008,3.24,1.647e-15,2560,native:cta,0,58,0,0,ok
+getri,double,64,1,4,0.1240,0.1250,0.0300,11.27,1.790e-15,512,native:cta|native:blocked,1.647e-15,58,0.0e+00,ok
+getrs,double,64,5,4,0.1457,0.1457,0.0008,1.12,1.906e+00,0,native:cta|native:blocked,1.647e-15,58,BAD
+singular,double,6,-,3,-,-,-,-,-,2560,native:cta,dev_info=[0 6 0],host_info=[0 6 0],min_absUii_item1=0.000e+00,host_mismatch=0,nonfinite=0,ok
+getrf,cfloat,64,1,4,0.0986,0.0986,0.0004,7.09,3.549e-07,2560,native:cta,0,58,0,0,ok
+getri,cfloat,64,1,4,0.9969,0.9970,0.0003,1.40,6.215e-07,512,native:cta|native:blocked,3.549e-07,58,0.0e+00,ok
+getrs,cfloat,64,5,4,0.4733,0.4733,0.0002,0.35,1.873e+00,0,native:cta|native:blocked,3.549e-07,58,BAD
+singular,cfloat,6,-,3,-,-,-,-,-,2560,native:cta,dev_info=[0 6 0],host_info=[0 0 0],min_absUii_item1=0.000e+00,host_mismatch=1,nonfinite=0,ok
+getrf,cdouble,64,1,4,0.3870,0.3870,0.0003,1.81,9.344e-16,2560,native:cta,0,58,0,0,ok
+getri,cdouble,64,1,4,3.3863,3.3864,0.0002,0.41,8.753e-16,512,native:cta|native:blocked,9.344e-16,58,0.0e+00,ok
+getrs,cdouble,64,5,4,1.1729,1.1729,0.0001,0.14,1.873e+00,0,native:cta|native:blocked,9.344e-16,58,BAD
+singular,cdouble,6,-,3,-,-,-,-,-,2560,native:cta,dev_info=[0 6 0],host_info=[0 6 0],min_absUii_item1=0.000e+00,host_mismatch=0,nonfinite=0,ok
+FAILS=4

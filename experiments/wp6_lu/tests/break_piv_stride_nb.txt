@@ -1,0 +1,190 @@
+=== BREAK: piv_stride_nb ===
+  file: src/extensions/getrf_blocked.cc
+  from: ld, stride, mp, ib, batch,
+                                       piv_ptr, n, j0, info.data(), nullptr);
+  to  : ld, stride, mp, ib, batch,
+                                       piv_ptr, ib, j0, info.data(), nullptr);   //
+=== build ===
+[ 98%] Built target sytrd_cta_tests
+[ 98%] Built target syev_cta_tests
+[100%] Built target syev_two_stage_tests
+[100%] Built target device_blas_tests
+=== run type 4 ===
+Note: Google Test filter = LuTest/4.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/4, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1>
+[ RUN      ] LuTest/4.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/4.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/4.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/4.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/4.BlockedFactorisesAndPivotsExactly
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:616: Failure
+Value of: ip[k] >= k + 1 && ip[k] <= p.n
+  Actual: false
+Expected: true
+blocked/random: ipiv[31] = 9 is outside [k+1, n] at b=1 -- not a 1-based interchange list
+/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/tests/getrf_tests.cc:616: Failure
+Value of: ip[k] >= k + 1 && ip[k] <= p.n
+  Actual: false
+Expected: true
+blocked/dominant-permuted: ipiv[31] = 2 is outside [k+1, n] at b=1 -- not a 1-based interchange list
+[  FAILED  ] LuTest/4.BlockedFactorisesAndPivotsExactly, where TypeParam = (anonymous namespace)::LuConfig<float, (batchlas::Backend)1> (62 ms)
+[ RUN      ] LuTest/4.BlockWidthStraddleIsQueriedNotAssumed
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        wait
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/event.cpp:116
+
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+unknown file: Failure
+C++ exception with description "cuda backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)" thrown in the test body.
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        operator()
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/queue.cpp:154
+
+unknown file: Failure
+C++ exception with description "cuda backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)" thrown in TearDown().
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        release
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/event.cpp:65
+
+exception in ~event_impl cuda backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+getrf_tests: /home/jonaslacour/sycl_workspace/llvm/sycl/source/detail/event_impl.cpp:48: sycl::_V1::detail::event_impl::~event_impl(): Assertion `false' failed.
+experiments/wp6_lu/tests/run_break.sh: line 37: 3531911 Aborted                 (core dumped) CUDA_VISIBLE_DEVICES=1 ./build/tests/getrf_tests --gtest_filter="LuTest/$t.*" 2>&1
+--- exit 134 ---
+=== run type 5 ===
+Note: Google Test filter = LuTest/5.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/5, where TypeParam = (anonymous namespace)::LuConfig<double, (batchlas::Backend)1>
+[ RUN      ] LuTest/5.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/5.ResidentLeafLaunchHoleAt48KiB (4 ms)
+[ RUN      ] LuTest/5.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/5.CtaFactorisesAndPivotsExactly (3 ms)
+[ RUN      ] LuTest/5.BlockedFactorisesAndPivotsExactly
+CUBLAS initialization failed with status: 1
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+unknown file: Failure
+C++ exception with description "CUBLAS initialization failed" thrown in the test body.
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        operator()
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/queue.cpp:154
+
+unknown file: Failure
+C++ exception with description "cuda backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)" thrown in TearDown().
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        release
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/event.cpp:65
+
+exception in ~event_impl cuda backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+getrf_tests: /home/jonaslacour/sycl_workspace/llvm/sycl/source/detail/event_impl.cpp:48: sycl::_V1::detail::event_impl::~event_impl(): Assertion `false' failed.
+experiments/wp6_lu/tests/run_break.sh: line 37: 3531957 Aborted                 (core dumped) CUDA_VISIBLE_DEVICES=1 ./build/tests/getrf_tests --gtest_filter="LuTest/$t.*" 2>&1
+--- exit 134 ---
+=== run type 6 ===
+Note: Google Test filter = LuTest/6.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/6, where TypeParam = (anonymous namespace)::LuConfig<std::complex<float>, (batchlas::Backend)1>
+[ RUN      ] LuTest/6.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/6.ResidentLeafLaunchHoleAt48KiB (7 ms)
+[ RUN      ] LuTest/6.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/6.CtaFactorisesAndPivotsExactly (5 ms)
+[ RUN      ] LuTest/6.BlockedFactorisesAndPivotsExactly
+CUBLAS initialization failed with status: 1
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+unknown file: Failure
+C++ exception with description "CUBLAS initialization failed" thrown in the test body.
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        operator()
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/queue.cpp:154
+
+unknown file: Failure
+C++ exception with description "cuda backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)" thrown in TearDown().
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        release
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/event.cpp:65
+
+exception in ~event_impl cuda backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+getrf_tests: /home/jonaslacour/sycl_workspace/llvm/sycl/source/detail/event_impl.cpp:48: sycl::_V1::detail::event_impl::~event_impl(): Assertion `false' failed.
+experiments/wp6_lu/tests/run_break.sh: line 37: 3532002 Aborted                 (core dumped) CUDA_VISIBLE_DEVICES=1 ./build/tests/getrf_tests --gtest_filter="LuTest/$t.*" 2>&1
+--- exit 134 ---
+=== run type 7 ===
+Note: Google Test filter = LuTest/7.*
+[==========] Running 16 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 16 tests from LuTest/7, where TypeParam = (anonymous namespace)::LuConfig<std::complex<double>, (batchlas::Backend)1>
+[ RUN      ] LuTest/7.ResidentLeafLaunchHoleAt48KiB
+[       OK ] LuTest/7.ResidentLeafLaunchHoleAt48KiB (5 ms)
+[ RUN      ] LuTest/7.CtaFactorisesAndPivotsExactly
+[       OK ] LuTest/7.CtaFactorisesAndPivotsExactly (6 ms)
+[ RUN      ] LuTest/7.BlockedFactorisesAndPivotsExactly
+CUBLAS initialization failed with status: 1
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+<CUDA>[ERROR]: UMF failed with: CUDA_ERROR_ILLEGAL_ADDRESS - an illegal memory access was encountered
+unknown file: Failure
+C++ exception with description "CUBLAS initialization failed" thrown in the test body.
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        operator()
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/queue.cpp:154
+
+unknown file: Failure
+C++ exception with description "cuda backend failed with error: 2147483646 (UR_RESULT_ERROR_UNKNOWN)" thrown in TearDown().
+<CUDA>[ERROR]: 
+UR CUDA ERROR:
+	Value:           700
+	Name:            CUDA_ERROR_ILLEGAL_ADDRESS
+	Description:     an illegal memory access was encountered
+	Function:        release
+	Source Location: /home/jonaslacour/sycl_workspace/llvm/unified-runtime/source/adapters/cuda/event.cpp:65
+
+exception in ~event_impl cuda backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+getrf_tests: /home/jonaslacour/sycl_workspace/llvm/sycl/source/detail/event_impl.cpp:48: sycl::_V1::detail::event_impl::~event_impl(): Assertion `false' failed.
+experiments/wp6_lu/tests/run_break.sh: line 37: 3532047 Aborted                 (core dumped) CUDA_VISIBLE_DEVICES=1 ./build/tests/getrf_tests --gtest_filter="LuTest/$t.*" 2>&1
+--- exit 134 ---

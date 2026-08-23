@@ -1,0 +1,12 @@
+op,type,n,nrhs,batch,med_ms,mean_ms,relsd,GFLOPs,resid,ws,route,extra,ntpiv,extra2,flag
+getrf,float,1024,1,512,240.4531,240.4482,0.0002,1524.22,6.903e-07,18432,native:blocked,0,1015,0,0,ok
+getrf,float,1024,1,1024,492.6095,492.5851,0.0002,1488.01,6.903e-07,36864,native:blocked,0,1014,0,0,ok
+getrf,float,2048,1,128,301.0895,301.1120,0.0001,2434.52,6.437e-07,4608,native:blocked,0,2045,0,0,ok
+getrf,float,2048,1,256,630.6872,630.7425,0.0001,2324.47,6.262e-07,9216,native:blocked,0,2042,0,0,ok
+getri,float,1024,1,512,120.2205,120.2233,0.0002,6097.20,6.203e-07,0,native:blocked|native:blocked,6.903e-07,1015,0.0e+00,ok
+getri,float,1024,1,1024,244.6542,244.7037,0.0005,5992.19,6.592e-07,0,native:blocked|native:blocked,6.903e-07,1014,0.0e+00,ok
+getri,float,2048,1,128,184.6349,184.6395,0.0001,7940.08,7.286e-07,0,native:blocked|native:blocked,6.437e-07,2045,0.0e+00,ok
+getri,float,2048,1,256,391.9966,391.9946,0.0000,7479.74,8.789e-07,0,native:blocked|native:blocked,6.262e-07,2042,0.0e+00,ok
+getrf,cdouble,1024,1,384,1140.0220,1139.9427,0.0001,241.12,3.704e-15,13824,native:blocked,0,1014,0,0,ok
+getrf,cdouble,2048,1,128,2660.1915,2660.1891,0.0000,275.55,4.878e-15,4608,native:blocked,0,2045,0,0,ok
+getri,cdouble,1024,1,384,2642.1042,2642.1114,0.0000,208.07,3.628e-15,0,native:blocked|native:blocked,3.704e-15,1014,0.0e+00,ok
