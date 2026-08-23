@@ -11,11 +11,11 @@ quietly edited.
 
 ## Status
 
-**WP0–WP5 are complete. WP6–WP9 are not started.**
+**WP0–WP6 are complete. WP7–WP9 are not started.**
 
 | | state |
 |---|---|
-| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **30/55** |
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **33/56** |
 | Vendor-present build | **52/53**, the one failure pre-existing and unrelated |
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
@@ -356,6 +356,76 @@ Two process points this pass established, both of which cost real time before th
    *uninitialized* while the unpadded ones used `::Random`, so every cross-`ld` ratio compared
    data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
    defect is real, but nobody knew that until it was checked.
+
+### WP6 has landed: native LU — and the first work package that does not win
+
+`getrf` gets a CTA-resident tier and a blocked driver with a routed trailing
+update. `getrs` and `getri` are built on WP3's routed `trsm`, following WP5's
+orgqr-on-identity precedent. All three had no route resolution at all before.
+
+**The burn-down moves 30/55 → 33/56**: `inverse_tests` and `linalg_layer_tests`
+leave the failing set, none join, and the new `getrf_tests` passes in both
+builds. `cond_tests` and `iluk_tests` remain — `cond_tests` needs `gemv` (WP7)
+and `syev` as well as `getri`.
+
+**It does not win overall, and that is the result.** Unlike WP5's `orgqr` — a
+per-batch-item vendor loop — `cublasGetrfBatched` and `cublasGetriBatched` are
+genuinely batched. Measured at each arm's own best batch: `getrf` geomean
+**0.805×**, `getri` **1.284×**, `getrs` **0.32×** at `nrhs=1` rising to 1.36× at
+128. cuBLAS runs at **90–91% of FP64 peak** for `cdouble`; there is nothing to
+win there. `preferred()` stays all-false, so nothing routes here by default and
+the vendor-present build is unchanged.
+
+The `getrs` result is the sharpest: two routed triangular solves lose 3–11× to
+`cublasGetrsBatched` at one right-hand side, because `trsm`'s blocked driver
+amortises a panel over many columns and one column gives it nothing to amortise.
+`nrhs=1` is the only width `linalg::solve` issues. A native `getrs` needs a
+separate narrow-RHS path before it can be preferred.
+
+**Saturation was established before any comparison existed**, rather than
+caveated afterwards — the WP5 lesson applied one package later. `getrf` float
+`n=1024` gives 256× the work for 3.5× the time between batch 1 and 256, and
+`cdouble n=2048` gives 64× the work for 1.03× the time. Every ratio at `n ≥ 1024`
+flatters us, and the tables say so beside each one.
+
+#### What pivoting costs, and the permutation lever
+
+The plan asked for the unpivoted lower bound. It is **1.25–2.65×**, almost
+entirely the *search* rather than the swap, and it gets cheaper as `n` grows.
+
+The bigger lever is the permutation. A LAPACK-faithful `laswp` — one work-item
+per column walking the interchange list — is **49–51%** of a composed
+`getrs`/`getri` at `n=128`, because column-major puts consecutive work-items `ld`
+apart, so every warp access is 32 transactions, and the list is sequential in `k`
+so it cannot be parallelised. Collapsing it to a gather (apply the interchanges
+to an identity index array once, then gather contiguously) is what moves
+`getri`'s geomean from 0.97× to 1.60×, and `getri` gets it **free** by writing
+`P` straight into `C` instead of writing `I` and permuting it.
+
+#### A pre-existing crash in the vendor path
+
+`cublas.cc`'s `getrs` had a `batch_size <= 1` arm calling `cusolverDnXgetrs`,
+whose `ipiv` is genuine `int64`, handed `pivots.data()` raw — while **every**
+`getrf` in this tree writes *packed 1-based int32* into that same span
+(`cublas.cc:1521`, `:1550`, `rocsolver.cc:227`, and both native tiers). At batch 1
+it read two packed pivots per `int64` slot as one row index and indexed out of
+bounds: `CUDA_ERROR_ILLEGAL_ADDRESS`, on exactly the sequence `linalg::solve`
+issues. No batched test could reach it because they all use `batch >= 2`. Found
+by the pivot-contract survey, not by a test.
+
+#### Four performance ideas, three reverted
+
+A division-free power-of-two split (0.936×), a work-group cap raised to 1024
+(0.974×), a `range<3>` zero-fill (1.000×) and a derived permutation width
+(0.9999×, kept with a comment saying it is *not* a performance claim). Each was
+built and measured rather than argued about. The correctness fixes cost nothing:
+a post-repair A/B over 156 saturation cells is geomean 1.0005.
+
+Also recorded: the first version of the new out-of-order race test stayed
+**green with both guards deleted**, because a 300 MB host copy serialised the
+queue and closed the window it was testing. Caught by running the break — the
+seventh blind guard in this repository, and the second written in the same change
+as the fix it guards.
 
 ### WP5 has landed: native `geqrf` (two tiers) and native `orgqr`
 
