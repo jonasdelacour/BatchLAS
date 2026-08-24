@@ -1,0 +1,3 @@
+op,type,n,nrhs,batch,med_ms,mean_ms,relsd,GFLOPs,resid,ws,route,extra,ntpiv,extra2,flag
+getrs,float,64,1,8192,0.1765,0.1768,0.0036,380.18,4.701e-07,0,native:cta|native:cta,4.097e-07,58,ok
+getrs,float,512,1,64,0.2545,0.2544,0.0016,131.84,6.068e-07,0,native:blocked|native:cta,4.196e-07,508,ok

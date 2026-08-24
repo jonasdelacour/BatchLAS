@@ -1,0 +1,123 @@
+== pooled: distinct (type, n, nrhs, batch) cells where BOTH arms are ok,
+   relsd <= 10 pct, and BOTH routes verified from the printed route column
+   (354 cells)
+   68 cells measured by more than one sweep; cross-pass spread max/min:
+      float    n=64    nrhs=2    b=8192    1.611 1.653 1.635   spread 1.026
+      float    n=64    nrhs=4    b=8192    1.371 1.376 1.351 1.388   spread 1.027
+      float    n=512   nrhs=8    b=512     1.550 1.549 1.594   spread 1.029
+      float    n=512   nrhs=1    b=512     2.220 2.263 2.302   spread 1.037
+      float    n=64    nrhs=8    b=8192    1.250 1.209 1.205   spread 1.037
+      float    n=512   nrhs=2    b=512     2.180 2.175 2.276   spread 1.047
+
+C1  nrhs <= 1, every type, every order
+   INSIDE : 111 cells, geomean  2.256, min  1.242, 0 LOSSES
+   OUTSIDE: 243 cells, 188 of them are WINS handed to the vendor, best 4.919
+        left  cdouble  n=512   nrhs=2    b=512     4.919
+        left  double   n=2048  nrhs=2    b=64      4.769
+        left  cdouble  n=512   nrhs=2    b=1024    4.765
+        left  double   n=1024  nrhs=2    b=128     4.560
+        left  cdouble  n=512   nrhs=2    b=256     4.542
+
+C2  nrhs <= 2, every type, every order
+   INSIDE : 187 cells, geomean  2.238, min  1.123, 0 LOSSES
+   OUTSIDE: 167 cells, 112 of them are WINS handed to the vendor, best 3.944
+        left  double   n=1024  nrhs=4    b=256     3.944
+        left  double   n=1024  nrhs=4    b=128     3.144
+        left  double   n=512   nrhs=4    b=512     3.097
+        left  double   n=2048  nrhs=4    b=64      2.880
+        left  double   n=512   nrhs=4    b=1024    2.745
+
+C3  C2 + (float and nrhs <= 4)
+   INSIDE : 215 cells, geomean  2.142, min  1.123, 0 LOSSES
+   OUTSIDE: 139 cells, 84 of them are WINS handed to the vendor, best 3.944
+        left  double   n=1024  nrhs=4    b=256     3.944
+        left  double   n=1024  nrhs=4    b=128     3.144
+        left  double   n=512   nrhs=4    b=512     3.097
+        left  double   n=2048  nrhs=4    b=64      2.880
+        left  double   n=512   nrhs=4    b=1024    2.745
+
+C4  C3 + (float and nrhs <= 8)
+   INSIDE : 234 cells, geomean  2.039, min  0.686, 3 LOSSES
+        loss float    n=2048  nrhs=8    b=4       0.686
+        loss float    n=2048  nrhs=8    b=8       0.778
+        loss float    n=2048  nrhs=8    b=16      0.877
+   OUTSIDE: 120 cells, 68 of them are WINS handed to the vendor, best 3.944
+        left  double   n=1024  nrhs=4    b=256     3.944
+        left  double   n=1024  nrhs=4    b=128     3.144
+        left  double   n=512   nrhs=4    b=512     3.097
+        left  double   n=2048  nrhs=4    b=64      2.880
+        left  double   n=512   nrhs=4    b=1024    2.745
+
+C5  C3 + (nrhs <= 4 and n >= 128)
+   INSIDE : 276 cells, geomean  1.976, min  0.886, 7 LOSSES
+        loss cfloat   n=2048  nrhs=4    b=4       0.886
+        loss double   n=128   nrhs=4    b=2048    0.940
+        loss cfloat   n=2048  nrhs=4    b=8       0.947
+        loss double   n=2048  nrhs=4    b=4       0.953
+        loss cfloat   n=1024  nrhs=4    b=16      0.976
+        loss cdouble  n=128   nrhs=4    b=1024    0.980
+        loss cdouble  n=1024  nrhs=4    b=16      0.987
+   OUTSIDE:  78 cells, 30 of them are WINS handed to the vendor, best 1.801
+        left  double   n=1024  nrhs=8    b=128     1.801
+        left  float    n=256   nrhs=8    b=2048    1.609
+        left  float    n=512   nrhs=8    b=512     1.564
+        left  float    n=128   nrhs=8    b=4096    1.522
+        left  double   n=512   nrhs=8    b=256     1.488
+
+C6  nrhs <= 4, every type, every order
+   INSIDE : 294 cells, geomean  1.881, min  0.577, 20 LOSSES
+        loss cdouble  n=32    nrhs=4    b=8192    0.577
+        loss cdouble  n=64    nrhs=4    b=4096    0.695
+        loss cdouble  n=64    nrhs=4    b=8192    0.704
+        loss cdouble  n=64    nrhs=4    b=16384   0.718
+        loss cdouble  n=64    nrhs=4    b=2048    0.728
+        loss cdouble  n=64    nrhs=4    b=1024    0.759
+        loss cfloat   n=32    nrhs=4    b=8192    0.798
+        loss double   n=32    nrhs=4    b=8192    0.844
+        ... and 12 more
+   OUTSIDE:  60 cells, 25 of them are WINS handed to the vendor, best 1.801
+        left  double   n=1024  nrhs=8    b=128     1.801
+        left  float    n=256   nrhs=8    b=2048    1.609
+        left  float    n=512   nrhs=8    b=512     1.564
+        left  float    n=128   nrhs=8    b=4096    1.522
+        left  double   n=512   nrhs=8    b=256     1.488
+
+C7  nrhs <= 8, every type, every order (i.e. the whole capability)
+   INSIDE : 354 cells, geomean  1.625, min  0.294, 55 LOSSES
+        loss cdouble  n=64    nrhs=8    b=1024    0.294
+        loss cdouble  n=32    nrhs=8    b=8192    0.303
+        loss cdouble  n=64    nrhs=8    b=2048    0.346
+        loss double   n=32    nrhs=8    b=8192    0.354
+        loss cdouble  n=64    nrhs=8    b=4096    0.366
+        loss cdouble  n=64    nrhs=8    b=8192    0.369
+        loss double   n=64    nrhs=8    b=2048    0.377
+        loss double   n=64    nrhs=8    b=4096    0.413
+        ... and 47 more
+   OUTSIDE:   0 cells, 0 of them are WINS handed to the vendor, best -
+
+C8  C5 but the nrhs 3..4 clause also requires batch >= 16 (CTA count)
+   INSIDE : 272 cells, geomean  1.997, min  0.940, 4 LOSSES
+        loss double   n=128   nrhs=4    b=2048    0.940
+        loss cfloat   n=1024  nrhs=4    b=16      0.976
+        loss cdouble  n=128   nrhs=4    b=1024    0.980
+        loss cdouble  n=1024  nrhs=4    b=16      0.987
+   OUTSIDE:  82 cells, 31 of them are WINS handed to the vendor, best 1.801
+        left  double   n=1024  nrhs=8    b=128     1.801
+        left  float    n=256   nrhs=8    b=2048    1.609
+        left  float    n=512   nrhs=8    b=512     1.564
+        left  float    n=128   nrhs=8    b=4096    1.522
+        left  double   n=512   nrhs=8    b=256     1.488
+
+C9  C5 but the nrhs 3..4 clause is bounded above at n <= 1024
+   INSIDE : 266 cells, geomean  2.010, min  0.940, 4 LOSSES
+        loss double   n=128   nrhs=4    b=2048    0.940
+        loss cfloat   n=1024  nrhs=4    b=16      0.976
+        loss cdouble  n=128   nrhs=4    b=1024    0.980
+        loss cdouble  n=1024  nrhs=4    b=16      0.987
+   OUTSIDE:  88 cells, 37 of them are WINS handed to the vendor, best 2.880
+        left  double   n=2048  nrhs=4    b=64      2.880
+        left  double   n=2048  nrhs=4    b=32      1.813
+        left  double   n=1024  nrhs=8    b=128     1.801
+        left  float    n=256   nrhs=8    b=2048    1.609
+        left  float    n=512   nrhs=8    b=512     1.564
+

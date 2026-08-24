@@ -1562,9 +1562,32 @@ GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n) {
     return s;
 }
 
+// THE FUSED TIER'S TWO CAPACITIES, AND THEY DEFAULT TO PRESENT.
+//
+// This is a REPAIR, and the defect it repairs is the exact shape this file exists
+// to catch. The helper below used to set neither field, so both defaulted to 0,
+// so RouteTable<getrs>::supports({Native, CTA}, s) returned false on EVERY shape
+// in this file -- which meant every `is_vendor(resolve(...))` assertion about
+// getrs held no matter what preferred() said, and the whole fused tier plus its
+// measured nrhs window could land, or be inverted, with this suite reporting
+// 78/78 either way. A helper that quietly describes a device on which the tier
+// under test cannot run is a BLIND GUARD, and the campaign has now recorded eight.
+//
+// The values are what this box actually reports for a 4-byte scalar: local memory
+// 101,376 B, less the 4 KB the launcher holds back, less the largest diagonal
+// block the tier ever charges (32 x 33 floats = 4,224 B), over sizeof(float) --
+// 23,264 elements -- and kGetrsFusedMaxRhs = 8. They are CONSTANTS here rather
+// than a device query because this file is the PURE layer: getrf_tests.cc's
+// RouteTableAndTheVendorFreeFallback is what asks the real builder on the real
+// device whether it agrees. Two files, two halves of the same claim.
+constexpr int64_t kFusedMaxElemsF32 = 23264;
+constexpr int64_t kFusedMaxNrhs     = 8;
+
 GetrsShape getrs_shape(int64_t order, int64_t nrhs, int64_t batch,
                        bool blocked_available = true,
-                       Transpose transA = Transpose::NoTrans) {
+                       Transpose transA = Transpose::NoTrans,
+                       int64_t fused_max_elems = kFusedMaxElemsF32,
+                       int64_t fused_max_nrhs = kFusedMaxNrhs) {
     GetrsShape s;
     s.op = Op::getrs;
     s.scalar = ScalarKind::F32;
@@ -1577,6 +1600,8 @@ GetrsShape getrs_shape(int64_t order, int64_t nrhs, int64_t batch,
     s.is_gpu = true;
     s.has_sg32 = true;
     s.blocked_available = blocked_available;
+    s.fused_max_elems = fused_max_elems;
+    s.fused_max_nrhs = fused_max_nrhs;
     return s;
 }
 
@@ -1615,6 +1640,7 @@ constexpr Route kGetrfNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kGetrfAuto{Origin::Auto, Algorithm::Auto};
 
 using GetrsTable = RouteTable<Op::getrs, float>;
+constexpr Route kGetrsCta{Origin::Native, Algorithm::CTA};
 constexpr Route kGetrsBlocked{Origin::Native, Algorithm::Blocked};
 constexpr Route kGetrsNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kGetrsAuto{Origin::Auto, Algorithm::Auto};
@@ -2034,10 +2060,21 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
     EXPECT_TRUE((declares_native_tier_preferred<RouteTable<Op::geqrf, float>, GeqrfShape>))
         << "geqrf's measured tier window must not be deleted by a WP6 copy-paste";
 
-    // The single-arm LU tables must NOT declare it: with one native route there is
-    // no native-vs-native question, and route_orgqr.hh sets the precedent of
-    // simply not having the member.
-    EXPECT_FALSE((declares_native_tier_preferred<GetrsTable, GetrsShape>));
+    // getrs DECLARES IT NOW, and that assertion flipped when the op gained a
+    // second native arm. It used to read EXPECT_FALSE on the ground that "with one
+    // native route there is no native-vs-native question" -- true while
+    // kGetrsOrder held a single {Native, Blocked}. It now holds {Native, CTA}
+    // (the FUSED narrow-RHS kernel, src/extensions/getrs_fused.cc) ahead of it,
+    // and the two are 7.9x apart at nrhs = 1, so the hook is the ONLY instrument
+    // that can carry that window without also dragging vendor-present traffic
+    // (route_resolve.hh:40-70).
+    EXPECT_TRUE((declares_native_tier_preferred<GetrsTable, GetrsShape>))
+        << "getrs has two native tiers; the order array alone cannot follow a "
+           "crossover between them";
+
+    // getri is still single-arm and must NOT declare it: with one native route
+    // there is no native-vs-native question, and route_orgqr.hh sets the precedent
+    // of simply not having the member.
     EXPECT_FALSE((declares_native_tier_preferred<GetriTable, GetriShape>));
 }
 
@@ -2111,10 +2148,29 @@ TEST(RouteGetrs, VendorFreeFallbackHandsOverTheNativeRoute) {
     EXPECT_TRUE(GetrsTable::supports(kGetrsBlocked, s))
         << "nrhs and batch are speed questions; neither may gate CORRECTNESS, even "
            "though nrhs=1 is measured 0.36x geomean";
-    EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s));
+    EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s))
+        << "the COMPOSITION is never preferred at any width the fused tier serves; "
+           "it is 0.36x geomean here and the window belongs to CTA alone";
 
     EXPECT_TRUE(is_native(resolve_getrs_route<float>(kGetrsAuto, s, false)));
-    EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)));
+
+    // AND WITH A VENDOR PRESENT IT IS NOW NATIVE TOO, at this shape, because
+    // nrhs = 1 is inside the measured window (2.26x geomean over 111 cells, min
+    // 1.24x, flat across every batch ladder at five orders). This assertion used
+    // to read is_vendor and it was RIGHT to, at the time: preferred() was all
+    // false. It is written the other way round now, and the pairing is the point
+    // -- supports() is unchanged by the window, so the vendor-free line above
+    // still passes for its own reason.
+    const Route with_vendor = resolve_getrs_route<float>(kGetrsAuto, s, true);
+    EXPECT_TRUE(is_native(with_vendor));
+    EXPECT_EQ(with_vendor.algo, Algorithm::CTA);
+
+    // The width just outside clause A for a NON-float type is the other half of
+    // the window and must still take the vendor.
+    const auto wide = getrs_shape(/*order=*/32, /*nrhs=*/4, /*batch=*/1);
+    EXPECT_TRUE(is_vendor((resolve_route<Op::getrs, double>(kGetrsAuto, wide, true))))
+        << "double at nrhs = 4 is OUTSIDE the measured window (its n=128 ladder dips "
+           "to 0.940x mid-ladder); routing it native would ship a measured loss";
 }
 
 TEST(RouteGetrs, AllThreeTransposeModesAreSupportedAndTransAReachesTheShape) {
@@ -2181,44 +2237,172 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
            "read as live";
 }
 
-TEST(RouteGetrs, PreferredIsFalseEverywhereAndAbsentDriverIsUnsupported) {
+// THE MEASURED nrhs WINDOW, both sides of it, and the ABSENT DRIVER.
+//
+// REPLACES PreferredIsFalseEverywhereAndAbsentDriverIsUnsupported, which asserted
+// that preferred() is false for every route at every shape. That was true when it
+// was written and is now the OPPOSITE of the shipped table, so it is rewritten
+// rather than deleted: the property it guarded -- "a preferred() window may not
+// appear without the grid that justifies it" -- still needs a guard, and the way
+// to guard a window is to pin BOTH of its sides.
+//
+// THE WINDOW (experiments/wp6_perf/bench/README.md, 354 + 134 measured cells):
+//     nrhs <= 2  for every type and order   -- clause A
+//   + nrhs <= 4  for float only             -- clause B
+// and NOTHING else. Everything wider is a measured loss somewhere on its batch
+// ladder, and the composition is never preferred at any width at all.
+TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
+    // ---- clause A: every type, every order, nrhs <= 2 ----------------------
     for (int64_t order : {1, 32, 128, 2048}) {
-        for (int64_t nrhs : {1, 8, 64}) {
+        for (int64_t nrhs : {int64_t(1), int64_t(2)}) {
             for (int64_t batch : {1, 128, 8192}) {
                 const auto s = getrs_shape(order, nrhs, batch);
-                EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s));
-                EXPECT_FALSE(GetrsTable::preferred(kVendorAuto, s));
-                EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)))
+                EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
+                    << "clause A: order " << order << " nrhs " << nrhs;
+                EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s))
+                    << "the COMPOSITION must never be preferred: it is the arm the "
+                       "fused tier replaces and it loses to the vendor at every width "
+                       "the fused tier serves";
+                EXPECT_FALSE(GetrsTable::preferred(kVendorAuto, s))
+                    << "preferred() is asked only of NATIVE routes; a true here would "
+                       "make the vendor win the first walk for the wrong reason";
+                const Route r = resolve_getrs_route<float>(kGetrsAuto, s, true);
+                EXPECT_TRUE(is_native(r) && r.algo == Algorithm::CTA)
                     << "order " << order << " nrhs " << nrhs << " batch " << batch;
+                // ... and every type, not just float.
+                EXPECT_TRUE((RouteTable<Op::getrs, double>::preferred(kGetrsCta, s)));
+                EXPECT_TRUE((RouteTable<Op::getrs, std::complex<float>>::preferred(kGetrsCta, s)));
+                EXPECT_TRUE((RouteTable<Op::getrs, std::complex<double>>::preferred(kGetrsCta, s)));
             }
         }
     }
-    const auto s = getrs_shape(256, 16, 512);
-    EXPECT_FALSE((RouteTable<Op::getrs, double>::preferred(kGetrsBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getrs, std::complex<float>>::preferred(kGetrsBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getrs, std::complex<double>>::preferred(kGetrsBlocked, s)));
 
-    // ABSENT DRIVER -- what this build reports today (getrs_native.cc returns false
-    // for every type). The arm must be UNSUPPORTED, not selectable-but-unimplemented,
-    // and forcing must not escape it (route_resolve.hh:165 -> :175).
-    const auto absent = getrs_shape(64, 8, 256, /*blocked_available=*/false);
-    EXPECT_FALSE(GetrsTable::supports(kGetrsBlocked, absent));
-    EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, absent, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, absent, false)));
-    EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsBlocked, absent, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsNativeBare, absent, true)));
+    // ---- clause B is FLOAT ONLY, and that is the half most likely to be
+    // widened by someone who reads "nrhs <= 4" and drops the type test ------
+    for (int64_t order : {32, 128, 1024, 2048}) {
+        const auto s = getrs_shape(order, /*nrhs=*/4, /*batch=*/256);
+        EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
+            << "clause B: float nrhs=4 at order " << order;
+        EXPECT_FALSE((RouteTable<Op::getrs, double>::preferred(kGetrsCta, s)))
+            << "double nrhs=4 is OUTSIDE the window: its n=128 ladder dips to 0.940x "
+               "at batch 2048, MID-LADDER, where no boundary in n or batch reaches it";
+        EXPECT_FALSE((RouteTable<Op::getrs, std::complex<float>>::preferred(kGetrsCta, s)))
+            << "cfloat nrhs=4 dips to 0.976x at n=1024 batch 16";
+        EXPECT_FALSE((RouteTable<Op::getrs, std::complex<double>>::preferred(kGetrsCta, s)))
+            << "cdouble nrhs=4 is 0.577x at n=32 and dips mid-ladder at n=128 and 1024";
+    }
+
+    // ---- outside the window, EVERY type takes the vendor -------------------
+    for (int64_t nrhs : {5, 8, 16, 64}) {
+        const auto s = getrs_shape(/*order=*/256, nrhs, /*batch=*/512);
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, s)) << "float nrhs " << nrhs;
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)))
+            << "nrhs " << nrhs << " is outside the window and must take the vendor";
+        EXPECT_FALSE((RouteTable<Op::getrs, double>::preferred(kGetrsCta, s)));
+        EXPECT_FALSE((RouteTable<Op::getrs, std::complex<double>>::preferred(kGetrsCta, s)));
+    }
+
+    // THE WINDOW IS NOT A CORRECTNESS GATE, and this is the pairing that keeps a
+    // pinned route honest: at nrhs = 8 the fused tier is NOT preferred but IS
+    // supported, so `BATCHLAS_GETRS_ROUTE=native:cta` still runs the fused kernel
+    // there rather than falling through automatic() to cuBLAS and measuring the
+    // route it was pinned away from (route_resolve.hh:165 -> :175).
+    {
+        const auto s = getrs_shape(/*order=*/256, /*nrhs=*/8, /*batch=*/512);
+        EXPECT_TRUE(GetrsTable::supports(kGetrsCta, s));
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, s));
+        const Route pinned = resolve_getrs_route<float>(kGetrsCta, s, true);
+        EXPECT_TRUE(is_native(pinned) && pinned.algo == Algorithm::CTA);
+    }
+
+    // ---- and the window may not outrun the CAPACITY -----------------------
+    // Inside the window by nrhs, outside it by elements: supports() refuses, so
+    // preferred() never gets to select an unlaunchable route.
+    {
+        auto s = getrs_shape(/*order=*/kFusedMaxElemsF32 + 1, /*nrhs=*/1, /*batch=*/8);
+        EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
+            << "guard: preferred() must NOT repeat the capacity test, or a pinned "
+               "native:cta above the ceiling would silently resolve elsewhere";
+        EXPECT_FALSE(GetrsTable::supports(kGetrsCta, s));
+        const Route r = resolve_getrs_route<float>(kGetrsAuto, s, true);
+        EXPECT_TRUE(is_vendor(r)) << "above the resident-RHS ceiling the vendor takes it";
+        const Route rf = resolve_getrs_route<float>(kGetrsAuto, s, false);
+        EXPECT_TRUE(is_native(rf) && rf.algo == Algorithm::Blocked)
+            << "a vendor-free build above the ceiling must fall to the COMPOSITION";
+    }
+
+    // ---- ABSENT TIERS. Each capability is independent -----------------------
+    // (a) the fused tier absent, the composition present.
+    {
+        const auto s = getrs_shape(64, 1, 256, /*blocked_available=*/true,
+                                   Transpose::NoTrans, /*fused_max_elems=*/0,
+                                   /*fused_max_nrhs=*/0);
+        EXPECT_FALSE(GetrsTable::supports(kGetrsCta, s));
+        EXPECT_TRUE(GetrsTable::supports(kGetrsBlocked, s));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)))
+            << "with the fused tier absent, preferred() selects nothing and the "
+               "vendor takes it -- the pre-WP6-PERF behaviour, exactly";
+        const Route rf = resolve_getrs_route<float>(kGetrsAuto, s, false);
+        EXPECT_TRUE(is_native(rf) && rf.algo == Algorithm::Blocked);
+        EXPECT_TRUE(is_native(resolve_getrs_route<float>(kGetrsCta, s, false)))
+            << "a forced native:cta the build cannot serve falls to automatic(), "
+               "which in a vendor-free build is the composition";
+    }
+    // (b) the composition absent, the fused tier present.
+    {
+        const auto s = getrs_shape(64, 1, 256, /*blocked_available=*/false);
+        EXPECT_FALSE(GetrsTable::supports(kGetrsBlocked, s));
+        EXPECT_TRUE(GetrsTable::supports(kGetrsCta, s));
+        const Route r = resolve_getrs_route<float>(kGetrsAuto, s, false);
+        EXPECT_TRUE(is_native(r) && r.algo == Algorithm::CTA);
+    }
+    // (c) BOTH absent -- the original assertion, unchanged in meaning.
+    {
+        const auto absent = getrs_shape(64, 8, 256, /*blocked_available=*/false,
+                                        Transpose::NoTrans, 0, 0);
+        EXPECT_FALSE(GetrsTable::supports(kGetrsBlocked, absent));
+        EXPECT_FALSE(GetrsTable::supports(kGetrsCta, absent));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, absent, true)));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, absent, false)));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsBlocked, absent, true)));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsNativeBare, absent, true)));
+    }
 }
 
 TEST(RouteGetrs, BareOriginResolvesToASpecificAlgorithm) {
-    // Even with ONE native arm, {Native, Auto} must not come back verbatim: no
-    // dispatch tail can map it to a driver (route_resolve.hh:146-163).
+    // {Native, Auto} must not come back verbatim: no dispatch tail can map it to a
+    // driver (route_resolve.hh:146-163).
+    //
+    // AND THE ANSWER CHANGED WHEN THE FUSED TIER LANDED, which is a fact about the
+    // ENV VARIABLE and not only about this function: `BATCHLAS_GETRS_ROUTE=native`
+    // used to mean the composition, because it was the only native route in
+    // kGetrsOrder; CTA is now listed first, so the bare origin means the FUSED
+    // KERNEL wherever the right-hand side is resident. Any baseline recorded with
+    // a bare `native` pin -- experiments/wp6_lu/bench/run_cells.sh:37 and
+    // kernels/run_grid.sh:39 export it into all three LU variables at once -- is
+    // measuring a different getrs today than when it was recorded. That is a
+    // measurement-comparability trap, not a correctness one, and this test is
+    // where it is written down.
     const auto s = getrs_shape(64, 8, 256);
+    ASSERT_TRUE(GetrsTable::supports(kGetrsCta, s))
+        << "guard: 64 x 8 = 512 elements is well inside the capacity, so the "
+           "assertion below must be about the ORDER and not about a refusal";
     const Route r = resolve_getrs_route<float>(kGetrsNativeBare, s,
                                                /*vendor_available=*/true);
     EXPECT_EQ(r.origin, Origin::Native);
-    EXPECT_EQ(r.algo, Algorithm::Blocked);
+    EXPECT_EQ(r.algo, Algorithm::CTA)
+        << "a bare `native` origin must resolve to the FIRST supported route in "
+           "kGetrsOrder, which is now the fused tier";
     EXPECT_FALSE(GetrsTable::supports(kGetrsNativeBare, s))
         << "{Native, Auto} itself must never be reported supported";
+
+    // Above the fused tier's width it still resolves, to the composition.
+    const auto wide = getrs_shape(64, 64, 256);
+    EXPECT_FALSE(GetrsTable::supports(kGetrsCta, wide));
+    const Route rw = resolve_getrs_route<float>(kGetrsNativeBare, wide, true);
+    EXPECT_EQ(rw.origin, Origin::Native);
+    EXPECT_EQ(rw.algo, Algorithm::Blocked);
 }
 
 TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {

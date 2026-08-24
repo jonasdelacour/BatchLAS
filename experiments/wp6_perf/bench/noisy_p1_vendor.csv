@@ -1,0 +1,3 @@
+op,type,n,nrhs,batch,med_ms,mean_ms,relsd,GFLOPs,resid,ws,route,extra,ntpiv,extra2,flag
+getrs,float,64,1,8192,0.3084,0.3085,0.0031,217.62,2.655e-07,0,vendor:auto|vendor:auto,1.905e-07,58,ok
+getrs,float,512,1,64,0.5333,0.5335,0.0026,62.92,5.001e-07,0,vendor:auto|vendor:auto,4.049e-07,508,ok

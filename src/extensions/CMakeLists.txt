@@ -86,6 +86,12 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # and this is the same reason orgqr_blocked.cc sits here rather than beside
     # geqrf_cta.cc. If either ever calls the getrf CTA device body it MOVES.
     getrs_native.cc
+    # The FUSED narrow-RHS getrs tier. HERE for the same reason getrs_native.cc is:
+    # it calls no getrf CTA device function, so it shares no device symbol with
+    # that cluster. Its kernel is entirely its own -- one work-group per matrix,
+    # the interchange walk and both substitutions in one launch, no GEMM and no
+    # laswp -- so it shares no device symbol with getrs_native.cc either.
+    getrs_fused.cc
     getri_blocked.cc
     lascl.cc
 )

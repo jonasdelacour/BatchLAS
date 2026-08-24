@@ -2,6 +2,15 @@
 
 // Native batched GETRS -- declarations.
 //
+// TWO NATIVE TIERS ARE DECLARED IN THIS FILE. Everything down to the
+// PIVOT-FORMAT note is the COMPOSED tier (row permutation + two ROUTED trsm,
+// src/extensions/getrs_native.cc); the FUSED NARROW-RHS tier
+// (src/extensions/getrs_fused.cc) is at the BOTTOM, after that note, and is the
+// one a vendor-free build now takes wherever its right-hand side is resident.
+// The measured gap between them at nrhs = 1 -- the only width the library issues
+// -- is 7.9x, so read the bottom section before assuming the numbers below govern
+// what actually runs.
+//
 // STATUS: LIVE. getrs_blocked_available<T>() is true for every scalar type and
 // getrs_blocked_dispatch is the driver in src/extensions/getrs_native.cc, so
 // RouteTable<Op::getrs,T>::supports() admits the native arm for every square GPU
@@ -231,5 +240,105 @@ Event getrs_blocked_dispatch(Queue& ctx,
 // :177-249), including a pivot floor built from ||T||_inf. Read it before inventing
 // a policy.
 // ---------------------------------------------------------------------------
+
+
+// ===========================================================================
+// THE FUSED NARROW-RHS TIER  (src/extensions/getrs_fused.cc)
+//
+// ONE KERNEL PER MATRIX: the row permutation, the forward substitution and the
+// back substitution, with no GEMM launch and no separate laswp launch. It exists
+// because the composed tier above is 0.32x of cublas?getrsBatched at nrhs = 1 and
+// the loss is STRUCTURAL -- trsm's blocked driver amortises a panel over many
+// columns and one column gives it nothing to amortise, so nrhs = 1 was being
+// served by ~26,000 TILE-16 GEMM launches of shape n x 1 x k.
+//
+// NOT ONLY nrhs = 1. linalg::solve (linalg-ops.hh:336-344) and the Python binding
+// (ops_factorization.cc:91) are the only callers of getrs in the tree, and BOTH
+// pass the caller's own B.cols() -- they do not narrow it to one column. That is
+// why this tier is instantiated over a WINDOW up to kGetrsFusedMaxRhs rather than
+// for a single column.
+//
+// MEASURED, prototype, vendor-free build, saturating batch, interleaved in one
+// process against BOTH the composed tier and cublas?getrsBatched
+// (experiments/wp6_getrs/proto/grid_nv.csv, grid_big.csv):
+//
+//   nrhs = 1 : GEOMEAN 2.10x over cuBLAS across 15 cells (4 types x n in
+//              {64,128,512,2048}), NO LOSSES, worst 1.24x, best 3.62x; and
+//              7.86x over the composed tier. float n=512 batch=512 runs at
+//              825 GB/s, i.e. 82% of this device's 1008 GB/s DRAM peak -- the op
+//              is O(n^2) reads for O(n^2) work, so that IS the ceiling.
+//   nrhs<= 8 : still ahead of the COMPOSED tier at every measured cell
+//              (worst 1.11x); the vendor comparison crosses over per type and n.
+//
+// THE CEILING IS THE RESIDENT RHS. n * nrhs * sizeof(T) plus one nb x nb diagonal
+// block must fit local memory, which makes the capacity a supports() question and
+// not a preferred() one: above it the kernel does not launch.
+// ===========================================================================
+
+// The widest right-hand-side count this tier is INSTANTIATED for. It is a
+// CAPABILITY, not a speed window: the trailing update carries a compile-time
+// accumulator array so the A element it reads is reused across the right-hand
+// sides from a register, and above this the kernel simply does not exist.
+//
+// 8 rather than 16 or 64 because the measured window stops well below it -- at
+// nrhs = 16 the fused tier is 0.55-0.60x of the COMPOSED tier at n = 512 for
+// double and cfloat, because the resident RHS has grown large enough to halve the
+// resident-blocks-per-SM count. Instantiating past the window is device code
+// nothing selects, and this library's build time is dominated by the device link.
+inline constexpr int64_t kGetrsFusedMaxRhs = 8;
+
+// Whether the fused kernel is in this build. TRUE for all four types; defined in
+// src/extensions/getrs_fused.cc beside the kernel, for potrf_native.hh:81-92's
+// reason. 0/false is the agreed spelling of "this arm is not in this build".
+template <typename T>
+bool getrs_fused_available();
+
+// The capacity, in RHS ELEMENTS (n * nrhs), for a given per-work-group
+// local-memory budget.
+//
+// ASKED OF THE DEVICE, never of a constant, for route_potrf.hh:114-127's reason:
+// the ceiling is a pure function of the local-memory budget, so a build-time
+// number makes supports() claim an unlaunchable route on a device with less of
+// it. It must NOT come from build/include/batchlas/device_limits.hh, whose 49152
+// is hardcoded by cmake/BatchLASDetectSYCL.cmake:44-45 for any nvidia_gpu_sm_*
+// pattern and is 2.06x wrong on this box (local_mem_size is 101,376 B here).
+//
+// It charges the LARGEST nb the tier ever uses rather than the nb this call would
+// pick, so the number is a single conservative ceiling a caller can compare
+// against without re-deriving the kernel's block choice. ZERO means the kernel is
+// absent or the budget cannot hold even an empty RHS.
+template <typename T>
+std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes);
+
+// Workspace for the fused tier. ZERO in every mode -- the RHS is permuted and
+// solved in LOCAL memory and written back in place, so there is no out-of-place
+// buffer and no scratch at all. Dereferences nothing.
+template <typename T>
+std::size_t getrs_fused_buffer_size(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& B,
+                                    Transpose transA);
+
+// DIRECT-CALL ENTRY POINT, exposed for the same correctness reason the composed
+// tier's is (potrf_native.hh:126-141): route_resolve.hh:165 gates a forced route
+// on supports() and falls through to automatic() at :175, so a test that sets
+// BATCHLAS_GETRS_ROUTE and gets one gate wrong runs cuBLAS and passes GREEN over
+// a kernel nothing executed.
+//
+// It takes NO injected trsm: this tier calls no other BLAS operation, which is
+// the whole point of it.
+//
+// It re-checks every RouteTable<Op::getrs,T>::supports() gate INCLUDING the
+// capacity, and throws rather than launching something that cannot run.
+//
+// ALL THREE transA MODES. Trans/ConjTrans swap the two solves AND move the
+// permutation to the output, in REVERSE; the derivation is in getrs_fused.cc.
+template <typename T>
+Event getrs_fused_dispatch(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           Transpose transA,
+                           Span<int64_t> pivots,
+                           Span<std::byte> workspace);
 
 }  // namespace batchlas::sycl_getrs

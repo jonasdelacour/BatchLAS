@@ -1,0 +1,173 @@
+cells: 168 ; vendor-vs-blocked kept 168 ; vendor-vs-cta kept 83
+
+DROPPED, vendor-vs-cta (the cta arm's own capacity ceiling shows up here):
+   float    n=32    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=32    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=32    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=64    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=64    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=64    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=128   nrhs=16   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=128   nrhs=64   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=128   nrhs=128  b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=256   nrhs=16   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=256   nrhs=64   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=256   nrhs=128  b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   float    n=512   nrhs=16   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=512   nrhs=64   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=512   nrhs=128  b=512    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=1024  nrhs=16   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=1024  nrhs=64   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=1024  nrhs=128  b=128    : cta PIN-FELL-THROUGH to native:blocked
+   float    n=2048  nrhs=16   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   float    n=2048  nrhs=64   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   float    n=2048  nrhs=128  b=32     : cta PIN-FELL-THROUGH to native:blocked
+   double   n=32    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=32    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=32    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=64    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=64    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=64    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=128   nrhs=16   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=128   nrhs=64   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=128   nrhs=128  b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=256   nrhs=16   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=256   nrhs=64   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=256   nrhs=128  b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   double   n=512   nrhs=16   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=512   nrhs=64   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=512   nrhs=128  b=512    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=1024  nrhs=16   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=1024  nrhs=64   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=1024  nrhs=128  b=128    : cta PIN-FELL-THROUGH to native:blocked
+   double   n=2048  nrhs=16   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   double   n=2048  nrhs=64   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   double   n=2048  nrhs=128  b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=32    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=32    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=32    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=64    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=64    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=64    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=128   nrhs=16   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=128   nrhs=64   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=128   nrhs=128  b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=256   nrhs=16   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=256   nrhs=64   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=256   nrhs=128  b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=512   nrhs=16   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=512   nrhs=64   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=512   nrhs=128  b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=1024  nrhs=16   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=1024  nrhs=64   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=1024  nrhs=128  b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=2048  nrhs=16   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=2048  nrhs=64   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cfloat   n=2048  nrhs=128  b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=32    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=32    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=32    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=64    nrhs=16   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=64    nrhs=64   b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=64    nrhs=128  b=8192   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=128   nrhs=16   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=128   nrhs=64   b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=128   nrhs=128  b=4096   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=256   nrhs=16   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=256   nrhs=64   b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=256   nrhs=128  b=2048   : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=512   nrhs=16   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=512   nrhs=64   b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=512   nrhs=128  b=512    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=1024  nrhs=16   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=1024  nrhs=64   b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=1024  nrhs=128  b=128    : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=2048  nrhs=4    b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=2048  nrhs=16   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=2048  nrhs=64   b=32     : cta PIN-FELL-THROUGH to native:blocked
+   cdouble  n=2048  nrhs=128  b=32     : cta PIN-FELL-THROUGH to native:blocked
+
+DROPPED, vendor-vs-blocked:
+
+== GEOMEAN of cuBLAS_ms / native_ms, by nrhs, over every (type, n) cell
+   above 1.0 means NATIVE is faster.  WP6's published BEFORE row is
+   nrhs 1 -> 0.323, 2 -> 0.586, 8 -> 0.484, 32 -> 0.848, 64 -> 1.088, 128 -> 1.362
+
+nrhs              1        2        4       16       64      128
+BEFORE        0.256    0.331    0.326    0.457    1.094    1.478
+  cells          28       28       28       28       28       28
+  wins         0/28     2/28     2/28     3/28    19/28    24/28
+AFTER         2.117    2.173    1.421        -        -        -
+  cells          28       28       27        0        0        0
+  wins        28/28    28/28    22/27      0/0      0/0      0/0
+
+== nrhs = 1 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           0.201         0.213         0.354         0.508         0.566         0.648         0.604
+float a           2.453         1.720         1.830         1.905         2.220         2.466         2.275
+double b          0.190         0.206         0.233         0.256         0.321         0.675         0.733
+double a          3.839         3.647         2.801         2.036         2.025         2.592         2.912
+cfloat b          0.099         0.158         0.300         0.357         0.423         0.550         0.484
+cfloat a          1.602         1.277         1.588         1.394         1.611         1.866         1.991
+cdouble b         0.092         0.110         0.099         0.086         0.083         0.150         0.219
+cdouble a         2.144         2.632         2.397         1.897         1.765         2.215         2.160
+
+== nrhs = 2 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           0.215         0.227         0.358         0.514         0.569         0.665         0.609
+float a           1.880         1.611         1.805         1.966         2.180         2.593         2.435
+double b          0.193         0.208         0.240         0.262         0.696         1.428         1.333
+double a          2.050         2.171         2.198         1.845         3.923         4.560         3.542
+cfloat b          0.106         0.171         0.316         0.376         0.445         0.552         0.522
+cfloat a          1.211         1.322         1.648         1.437         1.663         1.941         1.972
+cdouble b         0.093         0.111         0.173         0.226         0.271         0.394         0.443
+cdouble a         1.123         1.378         2.361         3.546         4.930         4.530         2.311
+
+== nrhs = 4 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           0.240         0.258         0.396         0.521         0.567         0.556         0.611
+float a           1.348         1.371         1.700         1.739         1.893         1.869         1.526
+double b          0.156         0.175         0.217         0.242         0.685         1.261         1.276
+double a          0.846         0.923         1.089         1.185         3.089         3.142         1.812
+cfloat b          0.122         0.191         0.342         0.388         0.449         0.452         0.519
+cfloat a          0.790         1.150         1.404         1.370         1.475         1.477         1.204
+cdouble b         0.095         0.112         0.175         0.226         0.271         0.384         0.442
+cdouble a         0.576         0.703         1.226         1.873         2.187         2.684             -
+
+== nrhs = 16 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           0.500         0.463         0.564         0.650         0.658         0.662         0.650
+float a               -             -             -             -             -             -             -
+double b          0.243         0.295         0.469         0.714         1.018         1.336         1.129
+double a              -             -             -             -             -             -             -
+cfloat b          0.263         0.315         0.437         0.470         0.487         0.529         0.498
+cfloat a              -             -             -             -             -             -             -
+cdouble b         0.197         0.229         0.252         0.275         0.295         0.386         0.442
+cdouble a             -             -             -             -             -             -             -
+
+== nrhs = 64 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           1.350         2.228         1.607         1.094         1.380         1.606         1.402
+float a               -             -             -             -             -             -             -
+double b          1.244         1.352         1.202         0.997         1.052         1.250         1.235
+double a              -             -             -             -             -             -             -
+cfloat b          1.040         1.251         1.168         0.932         0.878         1.113         1.077
+cfloat a              -             -             -             -             -             -             -
+cdouble b         0.857         0.846         0.721         0.781         0.889         1.088         0.393
+cdouble a             -             -             -             -             -             -             -
+
+== nrhs = 128 : cuBLAS_ms / native_ms per (type, n).  b = BEFORE (composition), a = AFTER (fused)
+type                 32            64           128           256           512          1024          2048
+float b           2.099         3.136         2.338         1.609         1.269         2.214         2.325
+float a               -             -             -             -             -             -             -
+double b          2.302         2.046         1.662         1.332         1.145         1.334         1.514
+double a              -             -             -             -             -             -             -
+cfloat b          1.290         1.377         1.451         1.187         0.959         1.384         1.948
+cfloat a              -             -             -             -             -             -             -
+cdouble b         1.500         1.178         0.914         0.933         0.976         1.104         1.120
+cdouble a             -             -             -             -             -             -             -
+
+== AFTER / BEFORE, i.e. blocked_ms / cta_ms : how much the fused tier bought over the composition
+   nrhs 1    geomean   8.255 over 28 cells, min 3.391, max 24.093
+   nrhs 2    geomean   6.560 over 28 cells, min 2.657, max 18.192
+   nrhs 4    geomean   4.403 over 27 cells, min 1.420, max 8.268

@@ -756,14 +756,26 @@ Event getrs(Queue& ctx,
         ctx, A, B, transA,
         /*vendor_available=*/dispatch::factorization_vendor_available<Back>);
 
-    // LIVE. getrs_blocked_available is true for every scalar type, and this arm
-    // serves every getrs in the vendor-free build; in the vendor-present build it
-    // is unreached only because preferred() is all-false. See the block comment
-    // above getrf. NOTE (measured, and it matters if a window is ever written
-    // here): the native getrs is a CROSSOVER ON nrhs, not a loss -- geomean
-    // 0.32x at nrhs=1 rising monotonically to 1.36x at nrhs=128
-    // (experiments/wp6_lu/bench/README.md).
+    // LIVE, AND TWO-TIERED. Both native arms exist for every scalar type. In the
+    // vendor-free build native_tier_preferred sends every shape the FUSED tier can
+    // hold to Algorithm::CTA and the rest to Algorithm::Blocked; in the
+    // vendor-present build neither is reached, because preferred() is all-false.
+    // See the block comment above getrf.
+    //
+    // MEASURED, and it matters if a preferred() window is ever written here: the
+    // COMPOSITION is a crossover on nrhs (geomean 0.32x of cuBLAS at nrhs=1 rising
+    // to 1.36x at nrhs=128, experiments/wp6_lu/bench/README.md), while the FUSED
+    // tier is 2.10x of cuBLAS at nrhs=1 with no losses over 15 cells and crosses
+    // the other way as nrhs grows (experiments/wp6_getrs/proto/).
     if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::CTA) {
+            // THE FUSED NARROW-RHS TIER. It injects NOTHING -- no trsm, no gemm,
+            // no laswp -- because it calls no other BLAS operation at all: the
+            // permutation and both substitutions are one kernel. That is why this
+            // arm has no seam where the Blocked one below has one.
+            return sycl_getrs::getrs_fused_dispatch<T>(
+                ctx, A, B, transA, pivots, work_space);
+        }
         if (route.algo == dispatch::Algorithm::Blocked) {
             // BOTH TRIANGULAR SOLVES GO THROUGH THE ROUTER. Calling a native trsm
             // entry point from the driver TU is the recorded WP3-step-16 defect
@@ -832,6 +844,21 @@ size_t getrs_buffer_size(Queue& ctx,
         const auto shape = backend::getrs_op_shape<Back, T>(ctx, A, B, transA);
         using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
         if (shape) {
+            // max OVER EVERY NATIVE TIER THAT COULD SERVE THIS SHAPE, not over the
+            // one the route named. The query and the call resolve independently
+            // (options.hh:651 sizes and :652 calls, two getenv reads inside one
+            // API call), so a lease sized for only one tier is a lease the other
+            // tier can overrun. Both are 0 today -- the fused tier is entirely
+            // local-memory resident and the composition is in-place -- and that is
+            // exactly why the max must be written now rather than when one of them
+            // grows a workspace.
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA},
+                              *shape)) {
+                native_need = std::max(
+                    native_need,
+                    sycl_getrs::getrs_fused_buffer_size<T>(ctx, A, B, transA));
+                native_fired = true;
+            }
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
                               *shape)) {
                 native_need = std::max(

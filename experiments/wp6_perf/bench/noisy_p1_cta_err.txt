@@ -1,0 +1,2 @@
+    getrs float N n=64 nrhs=1 batch=8192 : resid 4.701e-07
+    getrs float N n=512 nrhs=1 batch=64 : resid 6.068e-07

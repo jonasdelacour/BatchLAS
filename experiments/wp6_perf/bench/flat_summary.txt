@@ -1,0 +1,104 @@
+== flat : 180 cells, 159 kept, 21 dropped
+   DROP float    n=512   nrhs=1    b=64     : vendor relsd=0.120
+   DROP double   n=2048  nrhs=8    b=4      : cta PIN-FELL-THROUGH to native:blocked
+   DROP double   n=2048  nrhs=8    b=8      : cta PIN-FELL-THROUGH to native:blocked
+   DROP double   n=2048  nrhs=8    b=16     : cta PIN-FELL-THROUGH to native:blocked
+   DROP double   n=2048  nrhs=8    b=32     : cta PIN-FELL-THROUGH to native:blocked
+   DROP double   n=2048  nrhs=8    b=64     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cfloat   n=2048  nrhs=8    b=4      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cfloat   n=2048  nrhs=8    b=8      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cfloat   n=2048  nrhs=8    b=16     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cfloat   n=2048  nrhs=8    b=32     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cfloat   n=2048  nrhs=8    b=64     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=4    b=4      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=4    b=8      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=4    b=16     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=4    b=32     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=4    b=64     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=8    b=4      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=8    b=8      : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=8    b=16     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=8    b=32     : cta PIN-FELL-THROUGH to native:blocked
+   DROP cdouble  n=2048  nrhs=8    b=64     : cta PIN-FELL-THROUGH to native:blocked
+
+-- float n=64 : cuBLAS_ms / cta_ms across batch
+nrhs          1024      2048      4096      8192     16384    spread   verdict
+1            3.447     3.406     2.707     1.723     1.648      2.09  FLAT-WIN
+4            1.760     1.642     1.506     1.388     1.510      1.27  FLAT-WIN
+8            1.003     1.099     1.171     1.205     1.407      1.40  FLAT-WIN
+
+-- float n=512 : cuBLAS_ms / cta_ms across batch
+nrhs            64       128       256       512      1024    spread   verdict
+1                -     2.364     2.760     2.302     1.723      1.60  FLAT-WIN
+4            1.674     1.768     1.906     1.880     1.525      1.25  FLAT-WIN
+8            1.109     1.235     1.382     1.594     1.284      1.44  FLAT-WIN
+
+-- float n=2048 : cuBLAS_ms / cta_ms across batch
+nrhs             4         8        16        32        64    spread   verdict
+1            1.896     1.536     1.982     2.279     2.310      1.50  FLAT-WIN
+4            1.133     1.221     1.323     1.522     1.803      1.59  FLAT-WIN
+8            0.686     0.778     0.877     1.096     1.230      1.79   CROSSES
+
+-- double n=64 : cuBLAS_ms / cta_ms across batch
+nrhs          1024      2048      4096      8192     16384    spread   verdict
+1            4.240     4.114     3.418     3.662     3.963      1.24  FLAT-WIN
+4            1.121     0.949     0.911     0.927     0.940      1.23   CROSSES
+8            0.472     0.377     0.413     0.414     0.429      1.25 FLAT-LOSS
+
+-- double n=512 : cuBLAS_ms / cta_ms across batch
+nrhs            64       128       256       512      1024    spread   verdict
+1            3.033     3.170     2.741     2.021     1.722      1.84  FLAT-WIN
+4            1.708     2.128     2.679     3.102     2.745      1.82  FLAT-WIN
+8            0.888     1.174     1.488     1.235     1.156      1.68   CROSSES
+
+-- double n=2048 : cuBLAS_ms / cta_ms across batch
+nrhs             4         8        16        32        64    spread   verdict
+1            2.405     2.702     2.870     2.913     2.481      1.21  FLAT-WIN
+4            0.953     1.054     1.285     1.813     2.880      3.02   CROSSES
+8                -         -         -         -         -         -  no-cells
+
+-- cfloat n=64 : cuBLAS_ms / cta_ms across batch
+nrhs          1024      2048      4096      8192     16384    spread   verdict
+1            2.810     2.359     1.437     1.280     1.242      2.26  FLAT-WIN
+4            1.150     0.952     1.088     1.156     1.268      1.33   CROSSES
+8            0.657     0.469     0.724     0.856     0.968      2.06 FLAT-LOSS
+
+-- cfloat n=512 : cuBLAS_ms / cta_ms across batch
+nrhs            64       128       256       512      1024    spread   verdict
+1            1.841     2.230     2.065     1.603     1.346      1.66  FLAT-WIN
+4            1.166     1.308     1.480     1.465     1.270      1.27  FLAT-WIN
+8            0.767     0.870     1.038     0.801     0.705      1.47   CROSSES
+
+-- cfloat n=2048 : cuBLAS_ms / cta_ms across batch
+nrhs             4         8        16        32        64    spread   verdict
+1            1.402     1.522     1.731     2.002     1.762      1.43  FLAT-WIN
+4            0.886     0.947     1.028     1.206     1.451      1.64   CROSSES
+8                -         -         -         -         -         -  no-cells
+
+-- cdouble n=64 : cuBLAS_ms / cta_ms across batch
+nrhs          1024      2048      4096      8192     16384    spread   verdict
+1            2.873     2.581     2.592     2.632     2.661      1.11  FLAT-WIN
+4            0.759     0.728     0.695     0.706     0.718      1.09 FLAT-LOSS
+8            0.294     0.346     0.366     0.369     0.414      1.41 FLAT-LOSS
+
+-- cdouble n=512 : cuBLAS_ms / cta_ms across batch
+nrhs            64       128       256       512      1024    spread   verdict
+1            2.854     2.750     2.353     1.771     1.602      1.78  FLAT-WIN
+4            1.459     2.033     2.546     2.202     2.146      1.74  FLAT-WIN
+8            0.750     1.052     0.830     0.716     0.703      1.50   CROSSES
+
+-- cdouble n=2048 : cuBLAS_ms / cta_ms across batch
+nrhs             4         8        16        32        64    spread   verdict
+1            1.680     1.750     1.869     2.160     2.130      1.29  FLAT-WIN
+4                -         -         -         -         -         -  no-cells
+8                -         -         -         -         -         -  no-cells
+
+== every row that CROSSES 1.0 on its ladder (these cannot go in the window unguarded)
+   float    n=2048  nrhs=8    min 0.686  max 1.230
+   double   n=64    nrhs=4    min 0.911  max 1.121
+   double   n=512   nrhs=8    min 0.888  max 1.488
+   double   n=2048  nrhs=4    min 0.953  max 2.880
+   cfloat   n=64    nrhs=4    min 0.952  max 1.268
+   cfloat   n=512   nrhs=8    min 0.705  max 1.038
+   cfloat   n=2048  nrhs=4    min 0.886  max 1.451
+   cdouble  n=512   nrhs=8    min 0.703  max 1.052

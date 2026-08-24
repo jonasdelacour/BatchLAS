@@ -1,0 +1,39 @@
+== flat3 : 33 cells, 33 kept, 0 dropped
+
+-- float n=128 : cuBLAS_ms / cta_ms across batch
+nrhs        spread   verdict
+4                -  no-cells
+
+-- float n=1024 : cuBLAS_ms / cta_ms across batch
+nrhs        spread   verdict
+4                -  no-cells
+
+-- double n=128 : cuBLAS_ms / cta_ms across batch
+nrhs           256       512      1024      2048      4096      8192    spread   verdict
+4            1.363     1.220     1.254     0.940     1.098     1.111      1.45   CROSSES
+
+-- double n=1024 : cuBLAS_ms / cta_ms across batch
+nrhs            16        32        64       128       256    spread   verdict
+4            1.323     1.653     2.318     3.149     3.944      2.98  FLAT-WIN
+
+-- cfloat n=128 : cuBLAS_ms / cta_ms across batch
+nrhs           256       512      1024      2048      4096      8192    spread   verdict
+4            1.197     1.108     1.410     1.141     1.415     1.606      1.45  FLAT-WIN
+
+-- cfloat n=1024 : cuBLAS_ms / cta_ms across batch
+nrhs            16        32        64       128       256    spread   verdict
+4            0.976     1.091     1.352     1.471     1.452      1.51   CROSSES
+
+-- cdouble n=128 : cuBLAS_ms / cta_ms across batch
+nrhs           256       512      1024      2048      4096      8192    spread   verdict
+4            1.303     1.321     0.980     1.147     1.231     1.228      1.35   CROSSES
+
+-- cdouble n=1024 : cuBLAS_ms / cta_ms across batch
+nrhs            16        32        64       128       256    spread   verdict
+4            0.987     1.198     1.697     2.685     2.339      2.72   CROSSES
+
+== every row that CROSSES 1.0 on its ladder (these cannot go in the window unguarded)
+   double   n=128   nrhs=4    min 0.940  max 1.363
+   cfloat   n=1024  nrhs=4    min 0.976  max 1.471
+   cdouble  n=128   nrhs=4    min 0.980  max 1.321
+   cdouble  n=1024  nrhs=4    min 0.987  max 2.685
