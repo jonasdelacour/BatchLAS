@@ -1,0 +1,406 @@
+route-column audit: 512 rows, 0 disagree with the pin
+correctness audit : 0 rows with relerr != 0
+
+type     transA    out    red  batch       MB vendor GB/s native GB/s route           ratio p1  ratio p2
+cdouble  C       1     64    512      0.5       115.2       161.5 native:cta          1.40      1.59
+cdouble  C       1    512    512      4.0       528.3       958.8 native:cta          1.81      1.78
+cdouble  C       1   2048    512     16.0       852.6      2151.0 native:cta          2.52      2.50
+cdouble  C       4   1024    512     32.0      1738.3      1723.6 native:cta          0.99      0.93
+cdouble  C      16    512    512     64.0      2040.8      1533.7 native:cta          0.75      0.75
+cdouble  C      16   2048    512    256.0       917.9       858.3 native:cta          0.94      0.92
+cdouble  C      64     64    512     32.0      1411.0       639.8 native:cta          0.45      0.46
+cdouble  C      64    512    512    256.0       844.1       902.2 native:cta          1.07      1.07
+cdouble  C      64   2048    512   1024.0       822.8       932.7 native:cta          1.13      1.13
+cdouble  C     128    128    512    128.0       854.9       866.9 native:cta          1.01      1.01
+cdouble  C     256    256    512    512.0       325.2       921.1 native:cta          2.83      2.82
+cdouble  C     256   1024    512   2048.0       902.8       944.4 native:cta          1.05      1.05
+cdouble  C     512    512    256   1024.0       862.1       936.1 native:cta          1.09      1.09
+cdouble  C    1024    128    512   1024.0       328.3       927.7 native:cta          2.83      2.83
+cdouble  C    1024   1024    128   2048.0       864.2       943.8 native:cta          1.09      1.09
+cdouble  C    2048     64    512   1024.0       354.3       705.1 native:cta          1.99      1.99
+cdouble  N       1     64    512      0.5       115.4        80.3 native:direct       0.70      0.71
+cdouble  N       1    512    512      4.0       392.1       127.4 native:direct       0.32      0.33
+cdouble  N       1   2048    512     16.0       563.8       135.8 native:direct       0.24      0.24
+cdouble  N       4   1024    512     32.0      1216.1       347.8 native:direct       0.29      0.29
+cdouble  N      16    512    512     64.0      1975.1      1150.6 native:direct       0.58      0.55
+cdouble  N      16   2048    512    256.0       899.8       545.1 native:direct       0.61      0.61
+cdouble  N      64     64    512     32.0      1412.9      1884.0 native:direct       1.33      1.33
+cdouble  N      64    512    512    256.0       888.9       924.1 native:direct       1.04      1.03
+cdouble  N      64   2048    512   1024.0       871.3       941.2 native:direct       1.08      1.08
+cdouble  N     128    128    512    128.0       789.3       901.3 native:direct       1.14      1.15
+cdouble  N     256    256    512    512.0       927.1       937.1 native:direct       1.01      1.01
+cdouble  N     256   1024    512   2048.0       941.8       950.8 native:direct       1.01      1.01
+cdouble  N     512    512    256   1024.0       938.5       944.1 native:direct       1.01      1.00
+cdouble  N    1024    128    512   1024.0       932.9       925.4 native:direct       0.99      0.99
+cdouble  N    1024   1024    128   2048.0       945.7       945.6 native:direct       1.00      1.00
+cdouble  N    2048     64    512   1024.0       926.1       928.2 native:direct       1.00      1.00
+cdouble  T       1     64    512      0.5       113.2       158.1 native:cta          1.40      1.38
+cdouble  T       1    512    512      4.0       395.1       989.8 native:cta          2.51      2.46
+cdouble  T       1   2048    512     16.0       565.9      2151.5 native:cta          3.80      3.79
+cdouble  T       4   1024    512     32.0      1861.9      1728.1 native:cta          0.93      0.93
+cdouble  T      16    512    512     64.0      2066.1      1533.6 native:cta          0.74      0.75
+cdouble  T      16   2048    512    256.0       917.6       857.9 native:cta          0.93      0.93
+cdouble  T      64     64    512     32.0      1419.7       639.1 native:cta          0.45      0.45
+cdouble  T      64    512    512    256.0       882.5       904.3 native:cta          1.02      1.04
+cdouble  T      64   2048    512   1024.0       884.4       932.0 native:cta          1.05      1.06
+cdouble  T     128    128    512    128.0       871.3       864.0 native:cta          0.99      0.99
+cdouble  T     256    256    512    512.0       339.7       922.4 native:cta          2.71      2.70
+cdouble  T     256   1024    512   2048.0       903.1       944.6 native:cta          1.05      1.05
+cdouble  T     512    512    256   1024.0       923.0       936.3 native:cta          1.01      1.01
+cdouble  T    1024    128    512   1024.0       352.7       928.1 native:cta          2.63      2.62
+cdouble  T    1024   1024    128   2048.0       928.2       944.1 native:cta          1.02      1.02
+cdouble  T    2048     64    512   1024.0       377.9       704.6 native:cta          1.86      1.87
+cfloat   C       1     64    512      0.2        54.9        70.6 native:cta          1.29      1.31
+cfloat   C       1    512    512      2.0       472.9       611.0 native:cta          1.29      1.29
+cfloat   C       1   2048    512      8.0      1258.0      1765.7 native:cta          1.40      1.36
+cfloat   C       4   1024    512     16.0      1791.7      2057.8 native:cta          1.15      1.20
+cfloat   C      16    512    512     32.0      2427.6      2668.6 native:cta          1.10      1.08
+cfloat   C      16   2048    512    128.0       908.3       908.9 native:cta          1.00      1.00
+cfloat   C      64     64    512     16.0      1475.1      1541.1 native:cta          1.04      1.06
+cfloat   C      64    512    512    128.0       900.0       905.2 native:cta          1.01      1.01
+cfloat   C      64   2048    512    512.0       940.4       943.4 native:cta          1.00      1.00
+cfloat   C     128    128    512     64.0      3098.3      3283.1 native:cta          1.06      1.05
+cfloat   C     256    256    512    256.0       920.8       922.1 native:cta          1.00      1.00
+cfloat   C     256   1024    512   1024.0       951.5       946.7 native:cta          0.99      1.00
+cfloat   C     512    512    256    512.0       935.5       937.5 native:cta          1.00      1.00
+cfloat   C    1024    128    512    512.0       927.1       927.6 native:cta          1.00      1.00
+cfloat   C    1024   1024    128   1024.0       946.1       946.9 native:cta          1.00      1.00
+cfloat   C    2048     64    512    512.0       920.9       926.1 native:cta          1.01      0.99
+cfloat   N       1     64    512      0.2        68.4        49.8 native:direct       0.73      0.81
+cfloat   N       1    512    512      2.0       466.2        90.5 native:direct       0.19      0.19
+cfloat   N       1   2048    512      8.0      1206.9        99.2 native:direct       0.08      0.08
+cfloat   N       4   1024    512     16.0      1700.8       422.6 native:direct       0.25      0.21
+cfloat   N      16    512    512     32.0      2397.9      1459.4 native:direct       0.61      0.60
+cfloat   N      16   2048    512    128.0       961.4       693.3 native:direct       0.72      0.72
+cfloat   N      64     64    512     16.0      1607.8      1813.4 native:direct       1.13      1.14
+cfloat   N      64    512    512    128.0       915.2       905.3 native:direct       0.99      0.99
+cfloat   N      64   2048    512    512.0       954.3       941.2 native:direct       0.99      0.98
+cfloat   N     128    128    512     64.0      3168.5      3545.3 native:direct       1.12      1.10
+cfloat   N     256    256    512    256.0       921.7       928.5 native:direct       1.01      1.01
+cfloat   N     256   1024    512   1024.0       949.0       949.2 native:direct       1.00      1.00
+cfloat   N     512    512    256    512.0       941.1       942.1 native:direct       1.00      1.00
+cfloat   N    1024    128    512    512.0       930.3       930.5 native:direct       1.00      1.00
+cfloat   N    1024   1024    128   1024.0       949.0       949.0 native:direct       1.00      1.00
+cfloat   N    2048     64    512    512.0       922.6       923.5 native:direct       1.00      1.00
+cfloat   T       1     64    512      0.2        68.4        86.9 native:cta          1.27      1.30
+cfloat   T       1    512    512      2.0       466.0       618.4 native:cta          1.33      1.36
+cfloat   T       1   2048    512      8.0      1210.4      1724.5 native:cta          1.42      1.45
+cfloat   T       4   1024    512     16.0      1769.3      2094.2 native:cta          1.18      1.17
+cfloat   T      16    512    512     32.0      2449.9      2613.8 native:cta          1.07      1.09
+cfloat   T      16   2048    512    128.0       907.8       910.0 native:cta          1.00      1.00
+cfloat   T      64     64    512     16.0      1445.6      1531.1 native:cta          1.06      1.06
+cfloat   T      64    512    512    128.0       902.0       905.8 native:cta          1.00      1.02
+cfloat   T      64   2048    512    512.0       942.0       942.8 native:cta          1.00      1.00
+cfloat   T     128    128    512     64.0      3063.0      3254.7 native:cta          1.06      1.09
+cfloat   T     256    256    512    256.0       920.8       922.1 native:cta          1.00      1.00
+cfloat   T     256   1024    512   1024.0       951.7       946.9 native:cta          0.99      1.00
+cfloat   T     512    512    256    512.0       935.9       937.5 native:cta          1.00      1.00
+cfloat   T    1024    128    512    512.0       927.4       927.7 native:cta          1.00      1.00
+cfloat   T    1024   1024    128   1024.0       946.1       947.1 native:cta          1.00      1.00
+cfloat   T    2048     64    512    512.0       935.5       924.7 native:cta          0.99      1.00
+double   C       1     64    512      0.2        64.1        86.8 native:cta          1.35      1.16
+double   C       1    512    512      2.0       370.8       588.0 native:cta          1.59      1.65
+double   C       1   2048    512      8.0       781.2      1660.7 native:cta          2.13      2.13
+double   C       4   1024    512     16.0      1678.8      1864.1 native:cta          1.11      1.16
+double   C      16    512    512     32.0      2089.0      1964.7 native:cta          0.94      0.94
+double   C      16   2048    512    128.0       949.7       891.8 native:cta          0.94      0.94
+double   C      64     64    512     16.0      1286.5       802.3 native:cta          0.62      0.62
+double   C      64    512    512    128.0       907.6       898.4 native:cta          0.99      0.99
+double   C      64   2048    512    512.0       956.8       942.4 native:cta          0.98      0.98
+double   C     128    128    512     64.0      2288.1      1337.0 native:cta          0.58      0.59
+double   C     256    256    512    256.0       917.6       919.3 native:cta          1.00      1.00
+double   C     256   1024    512   1024.0       950.6       947.1 native:cta          1.00      1.00
+double   C     512    512    256    512.0       935.6       936.8 native:cta          1.00      1.00
+double   C    1024    128    512    512.0       926.9       926.5 native:cta          1.00      1.00
+double   C    1024   1024    128   1024.0       945.0       946.7 native:cta          1.00      1.00
+double   C    2048     64    512    512.0       921.1       930.0 native:cta          1.01      1.01
+double   N       1     64    512      0.2        54.5        57.9 native:direct       1.06      0.91
+double   N       1    512    512      2.0       375.2       122.8 native:direct       0.33      0.33
+double   N       1   2048    512      8.0       776.3       139.0 native:direct       0.18      0.18
+double   N       4   1024    512     16.0      1372.7       385.0 native:direct       0.28      0.28
+double   N      16    512    512     32.0      2115.3      1237.0 native:direct       0.59      0.59
+double   N      16   2048    512    128.0       902.3       665.3 native:direct       0.74      0.71
+double   N      64     64    512     16.0      1358.9      1778.5 native:direct       1.31      1.26
+double   N      64    512    512    128.0       897.2       906.3 native:direct       1.01      1.01
+double   N      64   2048    512    512.0       940.4       941.1 native:direct       1.00      1.00
+double   N     128    128    512     64.0      2763.8      3465.4 native:direct       1.25      1.25
+double   N     256    256    512    256.0       913.5       927.5 native:direct       1.02      1.01
+double   N     256   1024    512   1024.0       947.6       949.3 native:direct       1.00      1.00
+double   N     512    512    256    512.0       937.2       941.7 native:direct       1.00      1.01
+double   N    1024    128    512    512.0       927.1       930.1 native:direct       1.00      1.00
+double   N    1024   1024    128   1024.0       946.9       947.6 native:direct       1.00      1.00
+double   N    2048     64    512    512.0       921.2       924.3 native:direct       1.00      1.00
+double   T       1     64    512      0.2        53.0        85.6 native:cta          1.62      1.32
+double   T       1    512    512      2.0       375.3       596.1 native:cta          1.59      1.61
+double   T       1   2048    512      8.0       777.8      1664.6 native:cta          2.14      2.16
+double   T       4   1024    512     16.0      1628.1      1897.1 native:cta          1.17      1.18
+double   T      16    512    512     32.0      2070.2      1961.9 native:cta          0.95      0.94
+double   T      16   2048    512    128.0       942.1       894.4 native:cta          0.95      0.94
+double   T      64     64    512     16.0      1297.5       799.6 native:cta          0.62      0.61
+double   T      64    512    512    128.0       908.4       899.3 native:cta          0.99      0.94
+double   T      64   2048    512    512.0       969.6       942.0 native:cta          0.97      0.98
+double   T     128    128    512     64.0      2281.9      1334.0 native:cta          0.58      0.57
+double   T     256    256    512    256.0       918.4       919.5 native:cta          1.00      1.00
+double   T     256   1024    512   1024.0       950.5       947.0 native:cta          1.00      1.00
+double   T     512    512    256    512.0       935.1       937.3 native:cta          1.00      1.00
+double   T    1024    128    512    512.0       926.1       926.6 native:cta          1.00      1.00
+double   T    1024   1024    128   1024.0       945.8       946.6 native:cta          1.00      1.00
+double   T    2048     64    512    512.0       888.7       930.1 native:cta          1.05      1.01
+float    C       1     64    512      0.1        33.6        44.1 native:cta          1.32      1.29
+float    C       1    512    512      1.0       249.4       324.9 native:cta          1.30      1.32
+float    C       1   2048    512      4.0       681.5      1020.0 native:cta          1.50      1.46
+float    C       4   1024    512      8.0      1107.4      1299.2 native:cta          1.17      1.18
+float    C      16    512    512     16.0      1624.1      1816.7 native:cta          1.12      1.10
+float    C      16   2048    512     64.0      3275.7      2880.0 native:cta          0.88      0.88
+float    C      64     64    512      8.0       825.5       858.6 native:cta          1.04      1.05
+float    C      64    512    512     64.0      3145.8      3328.9 native:cta          1.06      1.05
+float    C      64   2048    512    256.0       929.6       933.5 native:cta          1.00      1.00
+float    C     128    128    512     32.0      2266.6      2114.6 native:cta          0.93      1.02
+float    C     256    256    512    128.0       895.6       903.7 native:cta          1.01      1.01
+float    C     256   1024    512    512.0       938.6       941.0 native:cta          1.00      1.00
+float    C     512    512    256    256.0       921.2       926.9 native:cta          1.01      1.00
+float    C    1024    128    512    256.0       919.4       922.7 native:cta          1.00      1.01
+float    C    1024   1024    128    512.0       936.3       940.5 native:cta          1.00      1.01
+float    C    2048     64    512    256.0       913.0       927.3 native:cta          1.02      1.02
+float    N       1     64    512      0.1        33.7        33.8 native:direct       1.00      0.84
+float    N       1    512    512      1.0       240.5        81.8 native:direct       0.34      0.34
+float    N       1   2048    512      4.0       691.6        96.8 native:direct       0.14      0.14
+float    N       4   1024    512      8.0      1012.9       380.0 native:direct       0.38      0.38
+float    N      16    512    512     16.0      1561.9      1218.5 native:direct       0.78      0.78
+float    N      16   2048    512     64.0      2869.3       925.5 native:direct       0.32      0.57
+float    N      64     64    512      8.0       942.3      1136.9 native:direct       1.21      1.20
+float    N      64    512    512     64.0      3204.2      3427.1 native:direct       1.07      1.05
+float    N      64   2048    512    256.0       930.5       931.8 native:direct       1.00      1.01
+float    N     128    128    512     32.0      2339.0      2713.5 native:direct       1.16      1.17
+float    N     256    256    512    128.0       890.9       906.9 native:direct       1.02      1.02
+float    N     256   1024    512    512.0       938.4       944.9 native:direct       1.01      1.00
+float    N     512    512    256    256.0       920.7       929.2 native:direct       1.01      1.00
+float    N    1024    128    512    256.0       925.5       918.6 native:direct       0.99      1.00
+float    N    1024   1024    128    512.0       937.9       943.9 native:direct       1.01      1.00
+float    N    2048     64    512    256.0       905.0       906.4 native:direct       1.00      1.01
+float    T       1     64    512      0.1        35.0        43.5 native:cta          1.24      1.04
+float    T       1    512    512      1.0       249.3       325.6 native:cta          1.31      1.33
+float    T       1   2048    512      4.0       692.7      1018.9 native:cta          1.47      1.51
+float    T       4   1024    512      8.0      1091.1      1295.1 native:cta          1.19      1.16
+float    T      16    512    512     16.0      1622.9      1791.6 native:cta          1.10      1.13
+float    T      16   2048    512     64.0      3274.7      3022.2 native:cta          0.92      0.91
+float    T      64     64    512      8.0       826.7       882.6 native:cta          1.07      1.08
+float    T      64    512    512     64.0      3104.6      3367.6 native:cta          1.08      1.06
+float    T      64   2048    512    256.0       929.4       933.4 native:cta          1.00      1.00
+float    T     128    128    512     32.0      2232.6      2110.1 native:cta          0.94      0.94
+float    T     256    256    512    128.0       892.9       902.6 native:cta          1.01      1.02
+float    T     256   1024    512    512.0       938.2       940.6 native:cta          1.00      1.00
+float    T     512    512    256    256.0       920.9       926.6 native:cta          1.01      1.01
+float    T    1024    128    512    256.0       914.7       921.8 native:cta          1.01      1.01
+float    T    1024   1024    128    512.0       936.8       940.9 native:cta          1.00      1.01
+float    T    2048     64    512    256.0       913.6       927.2 native:cta          1.01      1.02
+
+==============================================================================
+ACCEPTANCE GATE (B6), applied to the DEFAULT native route
+==============================================================================
+cells: 192   >=0.85x: 161   in [0.50,0.85): 16   BELOW 0.50x: 15
+
+--- BLOCKERS: every cell below 0.50x on its worst pass ---
+  cfloat   N  out=1     red=2048  batch=512        8.0 MB  vendor   1206.9  native     99.2  ratio 0.08 / 0.08
+  float    N  out=1     red=2048  batch=512        4.0 MB  vendor    691.6  native     96.8  ratio 0.14 / 0.14
+  double   N  out=1     red=2048  batch=512        8.0 MB  vendor    776.3  native    139.0  ratio 0.18 / 0.18
+  cfloat   N  out=1     red=512   batch=512        2.0 MB  vendor    466.2  native     90.5  ratio 0.19 / 0.19
+  cfloat   N  out=4     red=1024  batch=512       16.0 MB  vendor   1700.8  native    422.6  ratio 0.25 / 0.21
+  cdouble  N  out=1     red=2048  batch=512       16.0 MB  vendor    563.8  native    135.8  ratio 0.24 / 0.24
+  double   N  out=4     red=1024  batch=512       16.0 MB  vendor   1372.7  native    385.0  ratio 0.28 / 0.28
+  cdouble  N  out=4     red=1024  batch=512       32.0 MB  vendor   1216.1  native    347.8  ratio 0.29 / 0.29
+  float    N  out=16    red=2048  batch=512       64.0 MB  vendor   2869.3  native    925.5  ratio 0.32 / 0.57
+  cdouble  N  out=1     red=512   batch=512        4.0 MB  vendor    392.1  native    127.4  ratio 0.32 / 0.33
+  double   N  out=1     red=512   batch=512        2.0 MB  vendor    375.2  native    122.8  ratio 0.33 / 0.33
+  float    N  out=1     red=512   batch=512        1.0 MB  vendor    240.5  native     81.8  ratio 0.34 / 0.34
+  float    N  out=4     red=1024  batch=512        8.0 MB  vendor   1012.9  native    380.0  ratio 0.38 / 0.38
+  cdouble  T  out=64    red=64    batch=512       32.0 MB  vendor   1419.7  native    639.1  ratio 0.45 / 0.45
+  cdouble  C  out=64    red=64    batch=512       32.0 MB  vendor   1411.0  native    639.8  ratio 0.45 / 0.46
+
+--- SUB-0.85x (target misses that are not blockers) ---
+  cdouble  N  out=16    red=512   batch=512       64.0 MB  vendor   1975.1  native   1150.6  ratio 0.58 / 0.55
+  double   T  out=128   red=128   batch=512       64.0 MB  vendor   2281.9  native   1334.0  ratio 0.58 / 0.57
+  double   C  out=128   red=128   batch=512       64.0 MB  vendor   2288.1  native   1337.0  ratio 0.58 / 0.59
+  double   N  out=16    red=512   batch=512       32.0 MB  vendor   2115.3  native   1237.0  ratio 0.59 / 0.59
+  cfloat   N  out=16    red=512   batch=512       32.0 MB  vendor   2397.9  native   1459.4  ratio 0.61 / 0.60
+  cdouble  N  out=16    red=2048  batch=512      256.0 MB  vendor    899.8  native    545.1  ratio 0.61 / 0.61
+  double   T  out=64    red=64    batch=512       16.0 MB  vendor   1297.5  native    799.6  ratio 0.62 / 0.61
+  double   C  out=64    red=64    batch=512       16.0 MB  vendor   1286.5  native    802.3  ratio 0.62 / 0.62
+  cdouble  N  out=1     red=64    batch=512        0.5 MB  vendor    115.4  native     80.3  ratio 0.70 / 0.71
+  double   N  out=16    red=2048  batch=512      128.0 MB  vendor    902.3  native    665.3  ratio 0.74 / 0.71
+  cfloat   N  out=16    red=2048  batch=512      128.0 MB  vendor    961.4  native    693.3  ratio 0.72 / 0.72
+  cfloat   N  out=1     red=64    batch=512        0.2 MB  vendor     68.4  native     49.8  ratio 0.73 / 0.81
+  cdouble  T  out=16    red=512   batch=512       64.0 MB  vendor   2066.1  native   1533.6  ratio 0.74 / 0.75
+  cdouble  C  out=16    red=512   batch=512       64.0 MB  vendor   2040.8  native   1533.7  ratio 0.75 / 0.75
+  float    N  out=16    red=512   batch=512       16.0 MB  vendor   1561.9  native   1218.5  ratio 0.78 / 0.78
+  float    N  out=1     red=64    batch=512        0.1 MB  vendor     33.7  native     33.8  ratio 1.00 / 0.84
+
+--- NATIVE WINS >= 1.15x on the worst pass ---
+  cdouble  T  out=1     red=2048  batch=512       16.0 MB  vendor    565.9  native   2151.5  ratio 3.80 / 3.79
+  cdouble  C  out=1024  red=128   batch=512     1024.0 MB  vendor    328.3  native    927.7  ratio 2.83 / 2.83
+  cdouble  C  out=256   red=256   batch=512      512.0 MB  vendor    325.2  native    921.1  ratio 2.83 / 2.82
+  cdouble  T  out=256   red=256   batch=512      512.0 MB  vendor    339.7  native    922.4  ratio 2.71 / 2.70
+  cdouble  T  out=1024  red=128   batch=512     1024.0 MB  vendor    352.7  native    928.1  ratio 2.63 / 2.62
+  cdouble  C  out=1     red=2048  batch=512       16.0 MB  vendor    852.6  native   2151.0  ratio 2.52 / 2.50
+  cdouble  T  out=1     red=512   batch=512        4.0 MB  vendor    395.1  native    989.8  ratio 2.51 / 2.46
+  double   T  out=1     red=2048  batch=512        8.0 MB  vendor    777.8  native   1664.6  ratio 2.14 / 2.16
+  double   C  out=1     red=2048  batch=512        8.0 MB  vendor    781.2  native   1660.7  ratio 2.13 / 2.13
+  cdouble  C  out=2048  red=64    batch=512     1024.0 MB  vendor    354.3  native    705.1  ratio 1.99 / 1.99
+  cdouble  T  out=2048  red=64    batch=512     1024.0 MB  vendor    377.9  native    704.6  ratio 1.86 / 1.87
+  cdouble  C  out=1     red=512   batch=512        4.0 MB  vendor    528.3  native    958.8  ratio 1.81 / 1.78
+  double   T  out=1     red=512   batch=512        2.0 MB  vendor    375.3  native    596.1  ratio 1.59 / 1.61
+  double   C  out=1     red=512   batch=512        2.0 MB  vendor    370.8  native    588.0  ratio 1.59 / 1.65
+  float    T  out=1     red=2048  batch=512        4.0 MB  vendor    692.7  native   1018.9  ratio 1.47 / 1.51
+  float    C  out=1     red=2048  batch=512        4.0 MB  vendor    681.5  native   1020.0  ratio 1.50 / 1.46
+  cfloat   T  out=1     red=2048  batch=512        8.0 MB  vendor   1210.4  native   1724.5  ratio 1.42 / 1.45
+  cdouble  C  out=1     red=64    batch=512        0.5 MB  vendor    115.2  native    161.5  ratio 1.40 / 1.59
+  cdouble  T  out=1     red=64    batch=512        0.5 MB  vendor    113.2  native    158.1  ratio 1.40 / 1.38
+  cfloat   C  out=1     red=2048  batch=512        8.0 MB  vendor   1258.0  native   1765.7  ratio 1.40 / 1.36
+  cdouble  N  out=64    red=64    batch=512       32.0 MB  vendor   1412.9  native   1884.0  ratio 1.33 / 1.33
+  cfloat   T  out=1     red=512   batch=512        2.0 MB  vendor    466.0  native    618.4  ratio 1.33 / 1.36
+  double   T  out=1     red=64    batch=512        0.2 MB  vendor     53.0  native     85.6  ratio 1.62 / 1.32
+  float    T  out=1     red=512   batch=512        1.0 MB  vendor    249.3  native    325.6  ratio 1.31 / 1.33
+  float    C  out=1     red=512   batch=512        1.0 MB  vendor    249.4  native    324.9  ratio 1.30 / 1.32
+  float    C  out=1     red=64    batch=512        0.1 MB  vendor     33.6  native     44.1  ratio 1.32 / 1.29
+  cfloat   C  out=1     red=512   batch=512        2.0 MB  vendor    472.9  native    611.0  ratio 1.29 / 1.29
+  cfloat   C  out=1     red=64    batch=512        0.2 MB  vendor     54.9  native     70.6  ratio 1.29 / 1.31
+  cfloat   T  out=1     red=64    batch=512        0.2 MB  vendor     68.4  native     86.9  ratio 1.27 / 1.30
+  double   N  out=64    red=64    batch=512       16.0 MB  vendor   1358.9  native   1778.5  ratio 1.31 / 1.26
+  double   N  out=128   red=128   batch=512       64.0 MB  vendor   2763.8  native   3465.4  ratio 1.25 / 1.25
+  float    N  out=64    red=64    batch=512        8.0 MB  vendor    942.3  native   1136.9  ratio 1.21 / 1.20
+  float    C  out=4     red=1024  batch=512        8.0 MB  vendor   1107.4  native   1299.2  ratio 1.17 / 1.18
+  cfloat   T  out=4     red=1024  batch=512       16.0 MB  vendor   1769.3  native   2094.2  ratio 1.18 / 1.17
+  double   T  out=4     red=1024  batch=512       16.0 MB  vendor   1628.1  native   1897.1  ratio 1.17 / 1.18
+  float    N  out=128   red=128   batch=512       32.0 MB  vendor   2339.0  native   2713.5  ratio 1.16 / 1.17
+  float    T  out=4     red=1024  batch=512        8.0 MB  vendor   1091.1  native   1295.1  ratio 1.19 / 1.16
+  double   C  out=1     red=64    batch=512        0.2 MB  vendor     64.1  native     86.8  ratio 1.35 / 1.16
+
+--- PORTABLE ARM: native:direct on transposed shapes (vs vendor, p1) ---
+  cdouble  C  out=1     red=64    batch=512    vendor    115.2  direct     76.1  ratio 0.66
+  cdouble  C  out=1     red=512   batch=512    vendor    528.3  direct    121.6  ratio 0.23
+  cdouble  C  out=1     red=2048  batch=512    vendor    852.6  direct    129.1  ratio 0.15
+  cdouble  C  out=4     red=1024  batch=512    vendor   1738.3  direct    345.7  ratio 0.20
+  cdouble  C  out=16    red=512   batch=512    vendor   2040.8  direct    680.3  ratio 0.33
+  cdouble  C  out=16    red=2048  batch=512    vendor    917.9  direct    205.7  ratio 0.22
+  cdouble  C  out=64    red=64    batch=512    vendor   1411.0  direct   1517.3  ratio 1.07
+  cdouble  C  out=64    red=512   batch=512    vendor    844.1  direct    232.5  ratio 0.28
+  cdouble  C  out=64    red=2048  batch=512    vendor    822.8  direct    237.8  ratio 0.29
+  cdouble  C  out=128   red=128   batch=512    vendor    854.9  direct    255.2  ratio 0.30
+  cdouble  C  out=256   red=256   batch=512    vendor    325.2  direct    252.6  ratio 0.78
+  cdouble  C  out=256   red=1024  batch=512    vendor    902.8  direct    246.7  ratio 0.27
+  cdouble  C  out=512   red=512   batch=256    vendor    862.1  direct    248.1  ratio 0.29
+  cdouble  C  out=1024  red=128   batch=512    vendor    328.3  direct    264.8  ratio 0.81
+  cdouble  C  out=1024  red=1024  batch=128    vendor    864.2  direct    246.6  ratio 0.29
+  cdouble  C  out=2048  red=64    batch=512    vendor    354.3  direct    262.9  ratio 0.74
+  cdouble  T  out=1     red=64    batch=512    vendor    113.2  direct     70.4  ratio 0.62
+  cdouble  T  out=1     red=512   batch=512    vendor    395.1  direct    121.4  ratio 0.31
+  cdouble  T  out=1     red=2048  batch=512    vendor    565.9  direct    127.7  ratio 0.23
+  cdouble  T  out=4     red=1024  batch=512    vendor   1861.9  direct    346.1  ratio 0.19
+  cdouble  T  out=16    red=512   batch=512    vendor   2066.1  direct   1094.3  ratio 0.53
+  cdouble  T  out=16    red=2048  batch=512    vendor    917.6  direct    211.1  ratio 0.23
+  cdouble  T  out=64    red=64    batch=512    vendor   1419.7  direct   1511.8  ratio 1.06
+  cdouble  T  out=64    red=512   batch=512    vendor    882.5  direct    233.9  ratio 0.27
+  cdouble  T  out=64    red=2048  batch=512    vendor    884.4  direct    236.0  ratio 0.27
+  cdouble  T  out=128   red=128   batch=512    vendor    871.3  direct    253.8  ratio 0.29
+  cdouble  T  out=256   red=256   batch=512    vendor    339.7  direct    252.2  ratio 0.74
+  cdouble  T  out=256   red=1024  batch=512    vendor    903.1  direct    246.3  ratio 0.27
+  cdouble  T  out=512   red=512   batch=256    vendor    923.0  direct    247.7  ratio 0.27
+  cdouble  T  out=1024  red=128   batch=512    vendor    352.7  direct    264.8  ratio 0.75
+  cdouble  T  out=1024  red=1024  batch=128    vendor    928.2  direct    247.1  ratio 0.27
+  cdouble  T  out=2048  red=64    batch=512    vendor    377.9  direct    263.1  ratio 0.70
+  cfloat   C  out=1     red=64    batch=512    vendor     54.9  direct     49.1  ratio 0.89
+  cfloat   C  out=1     red=512   batch=512    vendor    472.9  direct     90.1  ratio 0.19
+  cfloat   C  out=1     red=2048  batch=512    vendor   1258.0  direct     98.5  ratio 0.08
+  cfloat   C  out=4     red=1024  batch=512    vendor   1791.7  direct    299.1  ratio 0.17
+  cfloat   C  out=16    red=512   batch=512    vendor   2427.6  direct    815.6  ratio 0.34
+  cfloat   C  out=16    red=2048  batch=512    vendor    908.3  direct    200.4  ratio 0.22
+  cfloat   C  out=64    red=64    batch=512    vendor   1475.1  direct    956.8  ratio 0.65
+  cfloat   C  out=64    red=512   batch=512    vendor    900.0  direct    239.8  ratio 0.27
+  cfloat   C  out=64    red=2048  batch=512    vendor    940.4  direct    239.9  ratio 0.26
+  cfloat   C  out=128   red=128   batch=512    vendor   3098.3  direct   1233.2  ratio 0.40
+  cfloat   C  out=256   red=256   batch=512    vendor    920.8  direct    264.9  ratio 0.29
+  cfloat   C  out=256   red=1024  batch=512    vendor    951.5  direct    247.7  ratio 0.26
+  cfloat   C  out=512   red=512   batch=256    vendor    935.5  direct    251.2  ratio 0.27
+  cfloat   C  out=1024  red=128   batch=512    vendor    927.1  direct    264.4  ratio 0.29
+  cfloat   C  out=1024  red=1024  batch=128    vendor    946.1  direct    247.5  ratio 0.26
+  cfloat   C  out=2048  red=64    batch=512    vendor    920.9  direct    523.0  ratio 0.57
+  cfloat   T  out=1     red=64    batch=512    vendor     68.4  direct     49.4  ratio 0.72
+  cfloat   T  out=1     red=512   batch=512    vendor    466.0  direct     90.2  ratio 0.19
+  cfloat   T  out=1     red=2048  batch=512    vendor   1210.4  direct     98.4  ratio 0.08
+  cfloat   T  out=4     red=1024  batch=512    vendor   1769.3  direct    298.6  ratio 0.17
+  cfloat   T  out=16    red=512   batch=512    vendor   2449.9  direct    756.0  ratio 0.31
+  cfloat   T  out=16    red=2048  batch=512    vendor    907.8  direct    193.2  ratio 0.21
+  cfloat   T  out=64    red=64    batch=512    vendor   1445.6  direct    955.8  ratio 0.66
+  cfloat   T  out=64    red=512   batch=512    vendor    902.0  direct    240.2  ratio 0.27
+  cfloat   T  out=64    red=2048  batch=512    vendor    942.0  direct    237.0  ratio 0.25
+  cfloat   T  out=128   red=128   batch=512    vendor   3063.0  direct   1224.2  ratio 0.40
+  cfloat   T  out=256   red=256   batch=512    vendor    920.8  direct    262.0  ratio 0.28
+  cfloat   T  out=256   red=1024  batch=512    vendor    951.7  direct    247.0  ratio 0.26
+  cfloat   T  out=512   red=512   batch=256    vendor    935.9  direct    250.4  ratio 0.27
+  cfloat   T  out=1024  red=128   batch=512    vendor    927.4  direct    263.2  ratio 0.28
+  cfloat   T  out=1024  red=1024  batch=128    vendor    946.1  direct    245.6  ratio 0.26
+  cfloat   T  out=2048  red=64    batch=512    vendor    935.5  direct    522.6  ratio 0.56
+  double   C  out=1     red=64    batch=512    vendor     64.1  direct     56.4  ratio 0.88
+  double   C  out=1     red=512   batch=512    vendor    370.8  direct    118.5  ratio 0.32
+  double   C  out=1     red=2048  batch=512    vendor    781.2  direct    133.5  ratio 0.17
+  double   C  out=4     red=1024  batch=512    vendor   1678.8  direct    370.6  ratio 0.22
+  double   C  out=16    red=512   batch=512    vendor   2089.0  direct   1154.2  ratio 0.55
+  double   C  out=16    red=2048  batch=512    vendor    949.7  direct    197.1  ratio 0.21
+  double   C  out=64    red=64    batch=512    vendor   1286.5  direct   1387.2  ratio 1.08
+  double   C  out=64    red=512   batch=512    vendor    907.6  direct    240.5  ratio 0.27
+  double   C  out=64    red=2048  batch=512    vendor    956.8  direct    231.3  ratio 0.24
+  double   C  out=128   red=128   batch=512    vendor   2288.1  direct   1957.8  ratio 0.86
+  double   C  out=256   red=256   batch=512    vendor    917.6  direct    258.9  ratio 0.28
+  double   C  out=256   red=1024  batch=512    vendor    950.6  direct    248.9  ratio 0.26
+  double   C  out=512   red=512   batch=256    vendor    935.6  direct    250.6  ratio 0.27
+  double   C  out=1024  red=128   batch=512    vendor    926.9  direct    262.7  ratio 0.28
+  double   C  out=1024  red=1024  batch=128    vendor    945.0  direct    249.2  ratio 0.26
+  double   C  out=2048  red=64    batch=512    vendor    921.1  direct    513.8  ratio 0.56
+  double   T  out=1     red=64    batch=512    vendor     53.0  direct     55.9  ratio 1.06
+  double   T  out=1     red=512   batch=512    vendor    375.3  direct    118.2  ratio 0.32
+  double   T  out=1     red=2048  batch=512    vendor    777.8  direct    133.5  ratio 0.17
+  double   T  out=4     red=1024  batch=512    vendor   1628.1  direct    371.2  ratio 0.23
+  double   T  out=16    red=512   batch=512    vendor   2070.2  direct   1150.2  ratio 0.56
+  double   T  out=16    red=2048  batch=512    vendor    942.1  direct    194.4  ratio 0.21
+  double   T  out=64    red=64    batch=512    vendor   1297.5  direct   1387.0  ratio 1.07
+  double   T  out=64    red=512   batch=512    vendor    908.4  direct    241.0  ratio 0.27
+  double   T  out=64    red=2048  batch=512    vendor    969.6  direct    230.8  ratio 0.24
+  double   T  out=128   red=128   batch=512    vendor   2281.9  direct   1935.2  ratio 0.85
+  double   T  out=256   red=256   batch=512    vendor    918.4  direct    262.4  ratio 0.29
+  double   T  out=256   red=1024  batch=512    vendor    950.5  direct    249.3  ratio 0.26
+  double   T  out=512   red=512   batch=256    vendor    935.1  direct    252.8  ratio 0.27
+  double   T  out=1024  red=128   batch=512    vendor    926.1  direct    262.5  ratio 0.28
+  double   T  out=1024  red=1024  batch=128    vendor    945.8  direct    248.2  ratio 0.26
+  double   T  out=2048  red=64    batch=512    vendor    888.7  direct    508.6  ratio 0.57
+  float    C  out=1     red=64    batch=512    vendor     33.6  direct     27.8  ratio 0.83
+  float    C  out=1     red=512   batch=512    vendor    249.4  direct     81.6  ratio 0.33
+  float    C  out=1     red=2048  batch=512    vendor    681.5  direct     96.7  ratio 0.14
+  float    C  out=4     red=1024  batch=512    vendor   1107.4  direct    282.9  ratio 0.26
+  float    C  out=16    red=512   batch=512    vendor   1624.1  direct    845.3  ratio 0.52
+  float    C  out=16    red=2048  batch=512    vendor   3275.7  direct   1026.2  ratio 0.31
+  float    C  out=64    red=64    batch=512    vendor    825.5  direct    720.5  ratio 0.87
+  float    C  out=64    red=512   batch=512    vendor   3145.8  direct   1247.5  ratio 0.40
+  float    C  out=64    red=2048  batch=512    vendor    929.6  direct    238.5  ratio 0.26
+  float    C  out=128   red=128   batch=512    vendor   2266.6  direct   1122.7  ratio 0.50
+  float    C  out=256   red=256   batch=512    vendor    895.6  direct    273.2  ratio 0.31
+  float    C  out=256   red=1024  batch=512    vendor    938.6  direct    250.6  ratio 0.27
+  float    C  out=512   red=512   batch=256    vendor    921.2  direct    261.8  ratio 0.28
+  float    C  out=1024  red=128   batch=512    vendor    919.4  direct    524.8  ratio 0.57
+  float    C  out=1024  red=1024  batch=128    vendor    936.3  direct    250.8  ratio 0.27
+  float    C  out=2048  red=64    batch=512    vendor    913.0  direct    563.0  ratio 0.62
+  float    T  out=1     red=64    batch=512    vendor     35.0  direct     32.6  ratio 0.93
+  float    T  out=1     red=512   batch=512    vendor    249.3  direct     81.2  ratio 0.33
+  float    T  out=1     red=2048  batch=512    vendor    692.7  direct     96.8  ratio 0.14
+  float    T  out=4     red=1024  batch=512    vendor   1091.1  direct    283.1  ratio 0.26
+  float    T  out=16    red=512   batch=512    vendor   1622.9  direct    845.1  ratio 0.52
+  float    T  out=16    red=2048  batch=512    vendor   3274.7  direct   1041.2  ratio 0.32
+  float    T  out=64    red=64    batch=512    vendor    826.7  direct    722.6  ratio 0.87
+  float    T  out=64    red=512   batch=512    vendor   3104.6  direct   1243.9  ratio 0.40
+  float    T  out=64    red=2048  batch=512    vendor    929.4  direct    234.1  ratio 0.25
+  float    T  out=128   red=128   batch=512    vendor   2232.6  direct   1121.8  ratio 0.50
+  float    T  out=256   red=256   batch=512    vendor    892.9  direct    272.6  ratio 0.31
+  float    T  out=256   red=1024  batch=512    vendor    938.2  direct    249.8  ratio 0.27
+  float    T  out=512   red=512   batch=256    vendor    920.9  direct    263.9  ratio 0.29
+  float    T  out=1024  red=128   batch=512    vendor    914.7  direct    524.0  ratio 0.57
+  float    T  out=1024  red=1024  batch=128    vendor    936.8  direct    250.9  ratio 0.27
+  float    T  out=2048  red=64    batch=512    vendor    913.6  direct    564.2  ratio 0.62

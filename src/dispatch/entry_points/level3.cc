@@ -32,6 +32,11 @@
 #include <batchlas/blas/functions/trsm.hh>
 
 #include "../../backends/trsm_route.hh"
+// WP7: the native GEMV arm. Same shape as the trsm include above -- the
+// adapter reaches only public headers plus src/sycl/gemv_native.hh, so the
+// vendor-free facade can include it.
+#include "../../backends/gemv_route.hh"
+#include "../../sycl/gemv_native.hh"
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
@@ -139,7 +144,7 @@ Event gemm(Queue& ctx,
     }
 }
 
-template <Backend B, typename T>
+template <Backend Back, typename T>
 Event gemv(Queue& ctx,
            const MatrixView<T,MatrixFormat::Dense>& A,
            const VectorView<T>& X,
@@ -147,11 +152,44 @@ Event gemv(Queue& ctx,
            T alpha,
            T beta,
            Transpose transA) {
-    if constexpr (!dispatch::level3_vendor_available<B>) {
+    // THE GATE RUNS BEFORE THE VENDOR-AVAILABLE TEST, for the reason recorded
+    // at the top of this file and restated for trsm: anything below that test
+    // is unreachable in the vendor-free build, which is the build WP7 exists
+    // for. Putting the route resolution in the `else` branch would leave all
+    // 40 vendor-free gemv_tests failures exactly where they are.
+    //
+    // NO VALIDATION CALL IS HOISTED HERE, unlike trsm. gemv has never had a
+    // gemv_validate_params and WP7 deliberately does not add one: the native
+    // kernel must accept exactly what the vendor accepts, and a new throw would
+    // turn today's silent bugs into crashes in live paths -- ortho.cc:217-224's
+    // transA=Trans branch builds A_i as (i x m) and passes a column of length
+    // A.rows() as x, which is structurally wrong TODAY under the vendor. The
+    // shape builder returns nullopt for it, so it keeps going to the vendor and
+    // WP7 changes nothing about it. It is filed, not fixed.
+    const dispatch::Route route = backend::gemv_route<Back, T>(
+        ctx, A, X, Y, transA,
+        /*vendor_available=*/dispatch::level3_vendor_available<Back>);
+
+    if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::CTA) {
+            return sycl_gemv::gemv_native_cta<T>(ctx, A, X, Y, alpha, beta, transA);
+        }
+        if (route.algo == dispatch::Algorithm::Direct) {
+            return sycl_gemv::gemv_native_direct<T>(ctx, A, X, Y, alpha, beta, transA);
+        }
+    }
+
+    if constexpr (!dispatch::level3_vendor_available<Back>) {
+        // Still honest about the gap. What reaches here in a vendor-free build
+        // is exactly what supports() refuses: a heterogeneous A, a negative
+        // extent, an empty batch, or a set of views whose lengths do not
+        // describe one gemv (the shape builder's nullopt, which resolves to
+        // {Vendor, Auto}). Those have no route at all without a vendor, and
+        // they say so by name rather than dying downstream.
         dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::gemv, B, dispatch::kLevel3Library<B>);
+            dispatch::Op::gemv, Back, dispatch::kLevel3Library<Back>);
     } else {
-        return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
+        return backend::gemv_vendor<Back, T>(ctx, A, X, Y, alpha, beta, transA);
     }
 }
 

@@ -1,0 +1,15 @@
+# Campaign trap 7: this campaign has TWICE shipped a bloated PR diff from
+# tracked build artefacts. Nothing this directory produces that is a binary, a
+# profiler report or a stderr spool may become tracked.
+#
+# The audit builds no binary of its own -- it reuses ../ab/gemvab_v, which
+# ../ab/.gitignore already covers -- so what is listed here is what ncu and the
+# sweeps drop beside the CSVs.
+*.ncu-rep
+*.nsys-rep
+*.sqlite
+*.qdrep
+parity_err.txt
+prize_err.txt
+mechanism_err.txt
+gemvab_*

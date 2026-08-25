@@ -229,7 +229,26 @@ void append_static_rows(std::ostringstream& out) {
         // the facade a native arm. Before that this row said `true` while every
         // vendor-free gemm call threw.
         {"gemm",  level3_vendor_available<B>,        true},
-        {"gemv",  level3_vendor_available<B>,        false},
+        // WP7 landed src/sycl/gemv_native.cc: bodies 1 and 2 behind
+        // {Native, Direct} and body 3 behind {Native, CTA}, all four scalar
+        // types. FLIPPED IN THE SAME STEP AS THE ENTRY-POINT WIRING
+        // (entry_points/level3.cc's gemv), never before it -- flipping it while
+        // the kernel was merely linked would restate the overclaim this whole
+        // note exists to prevent.
+        //
+        // Same reading rule as the rows below: this column answers "is the
+        // kernel IN THE BUILD", not "does traffic reach it". preferred() is
+        // all-false for gemv and that is a MEASURED result, not a placeholder
+        // -- cuBLAS gemvStridedBatched runs at 94-105% of the achievable DRAM
+        // roof on 90 of 92 reproducing cells, so a vendor-present build sends
+        // gemv nothing. A vendor-free build now reaches the kernels through
+        // route_resolve.hh:60-63 instead of throwing.
+        //
+        // AND UNLIKE EVERY OTHER NATIVE TIER IN THIS CAMPAIGN, gemv's Direct
+        // route has NO GPU GATE, so this `true` covers the native_cpu queue as
+        // well: half of tests/gemv_tests.cc runs on Backend::NETLIB over
+        // Device("cpu"), and that half is the reason the row moved.
+        {"gemv",  level3_vendor_available<B>,        true},
         {"trsm",  level3_vendor_available<B>,        false},
         {"trmm",  level3_vendor_available<B>,        tiles_f32},
         // symm has NO tile kernel. Its only portable kernel is the mirrored

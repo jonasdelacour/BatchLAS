@@ -1,0 +1,14 @@
+arm,type,m,n,batch,transA,kernel,grid,block,smem_static,smem_dynamic
+native:direct,cdouble,64,128,128,N,GemvDirectNKernel,256.00,32.00,0.00,0.00
+native:direct,float,64,128,128,N,GemvDirectNKernel,256.00,32.00,0.00,0.00
+native:direct,cdouble,64,128,32,N,GemvDirectNKernel,64.00,32.00,0.00,0.00
+native:direct,cdouble,64,128,16,N,GemvDirectNKernel,32.00,32.00,0.00,0.00
+native:direct,cdouble,16,512,128,N,GemvDirectNKernel,64.00,32.00,0.00,0.00
+native:direct,cdouble,1,512,128,N,GemvDirectNKernel,4.00,32.00,0.00,0.00
+native:direct,cdouble,4096,128,128,N,GemvDirectNKernel,2,048.00,256.00,0.00,0.00
+native:direct,cdouble,128,64,128,T,GemvDirectTKernel,256.00,32.00,0.00,0.00
+native:direct,cdouble,128,64,32,T,GemvDirectTKernel,64.00,32.00,0.00,0.00
+native:cta,cdouble,128,64,128,T,GemvCtaTKernel,1,024.00,256.00,0.00,0.00
+native:cta,cdouble,128,64,32,T,GemvCtaTKernel,512.00,128.00,0.00,0.00
+native:cta,cdouble,256,256,1024,T,GemvCtaTKernel,32,768.00,256.00,0.00,0.00
+native:cta,cdouble,256,4096,128,C,GemvCtaTKernel,65,536.00,256.00,0.00,0.00

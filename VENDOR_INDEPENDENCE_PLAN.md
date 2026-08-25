@@ -11,16 +11,17 @@ quietly edited.
 
 ## Status
 
-**WP0–WP6 are complete. WP7–WP9 are not started.**
+**WP0–WP7 are complete. WP8–WP9 are not started.**
 
 | | state |
 |---|---|
-| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **33/56** |
-| Vendor-present build | **52/53**, the one failure pre-existing and unrelated |
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **34/56** |
+| Vendor-present build | **55/56**, the one failure (`lanczos_tests`) pre-existing and unrelated |
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
 | level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
 | `potrf` | native CTA kernel **and** a blocked driver above its ceiling, all four types, both triangles; **vendor-free potrf works at every order** and, for `float`, is **1.13–1.40× FASTER than cuSOLVER** at n≥1024. Still route-neutral: `preferred()` false everywhere, because complex is 0.31–0.51× and small `n` loses |
+| `gemv` | native, **all four scalar types, all three `transA`, and — uniquely in this campaign — NOT GPU-gated**: the `Direct` route runs on the `native_cpu` queue too, which is what closes all 40 vendor-free `gemv_tests`. Parity at the DRAM roof: on the final post-repair grid of **192 cells, median 1.007×, 181 at or above 0.85×, worst 0.444×**, the two sub-0.50× cells being the stated `complex<double>` short-reduction weakness; **1.88–3.07× over cuBLAS** for `complex<double>` transposed at large footprint. Route-neutral: `preferred()` false everywhere, because the win's boundary is not expressible over the fields the shape carries — the one candidate predicate was tested out-of-sample and **refuted** |
 | M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
 | M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
 
@@ -82,6 +83,11 @@ critique, and each superseding the sketch in §5 of this document):
 | WP3 S12 | the `Side::Left` SLM staging tile | float/Left window moves `order <= 16` → `order <= 128`; staging **gated to real types** after it cost complex a 464 B stack frame |
 | WP3 S13 | win at every order 8..512, both sides, float and `complex<float>` | 3 of 4 (type, side) combinations win at every order; `complex<float>`/Right at order 8–16 shown to be a roofline tie at 88.5–90.5% of DRAM peak |
 | WP3 S14 | the cooperative CTA solve (W work-items per solve) | **built, measured and rejected** — passes the register gate at N=128 in fewer registers than V1 needs at N=32, and still measures 0.39× at order 64, 0.80× at 128 |
+| WP7 S1–S6 | `RouteTable<Op::gemv, T>`, the three-body native GEMV translation unit, the shape builder, the facade arm and the coverage flip | vendor-free `gemv_tests` **40 FAILED → 0**, *including the 20 `Backend::NETLIB` rows on the `native_cpu` queue*; suite 33/56 → **34/56**; `ortho_tests` 16 FAILED → **8** (residue all NETLIB/geqrf); `cond_tests` 30 → 24 (residue is WP9). `preferred()` ships **all-false** and `route_diff` reports **0 moved decisions** in the vendor-present build |
+| WP7 S7 | the blind guard in `tests/gemv_tests.cc` is replaced | 24 new typed tests (**192 cases**, suite 40 → **232**) over `ConjTrans`, padded `ld`, `inc != 1`, non-square, genuinely complex data, both quick-return contracts and the four segment widths of body 4 — each with a **break actually applied, rebuilt, run and reverted**; 30 breaks in total, and **`cross`, `conj`, `ld`, `xinc`, `yinc`, `segld`, `segxinc`, `segyinc` each leave all 40 original tests entirely GREEN** |
+| WP7 S8 (lead) | the ninth blind guard, found by the final reviewer *after* S7 | every one of those 232 cases used the **natural batch stride**, so a kernel deriving `stride` as `ld*cols` (and `size*inc` for the vectors) passed the whole suite — while `ortho.cc:218-222` hands the native path `A.stride() == m*A.cols()` against a view whose `ld*cols` is `m*i`, on **every CGS iteration**. Four `stride_pad` cases, one per kernel body, suite **232 → 264**. Break `padstride` (all four bodies derive the stride): **exactly 32 FAILED, all four new cases across all 8 suites and nothing else** — armed, and the 232 proven blind |
+| WP7 R1 (repair) | the parity gate re-run on an (`out_len`, `red_len`) ladder that reaches `out_len = 1`, and the `NoTrans` short-output collapse fixed | the gate FAILED as first shipped — **15 of 192 cells below B6's 0.50× line, worst 0.08×**, 13 of them one family the original grid could not reach (its minimum `out_len` was 64). `src/sycl/gemv_native.cc` **body 4** (W lanes per output, `W` a **template parameter** — as a runtime value it was 2× slower and *regressed* `out_len >= 8`) takes that family from min 0.08/median 0.38 to **min 0.60/median 1.16/max 4.09**. Blockers **15 → 2**, both the stated `complex<double>` short-reduction weakness |
+| WP7 R2 (repair) | `gemv` gains a section in `tests/route_vocabulary_tests.cc`, which had **zero** `Op::gemv` assertions | 13 cases, suite 78 → **91**, covering all three CTA gates, the Direct arm's absent `is_gpu` clause (the WP7 deliverable, now an assertion), `preferred()` all-false over 540 shapes, `kGemvOrder`, the `out_len()`/`red_len()` swap and B2. **Arming proved by 7 breaks**, including the V1 trap itself |
 | WP3 S16 | the trailing-update GEMM goes through the **route table** instead of the native kernel unconditionally | **167 of 168 cells win**; the n=512 solve 18.8 ms → **11.19 ms** against a 14.28 ms vendor; `trsm_tests` 91/91, vendor-free failing set byte-identical |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
@@ -1303,7 +1309,211 @@ lower bound to know how much the pivoting is costing.
 
 **Effort:** medium. **Risk:** low-medium.
 
-### WP7 — `gemv` and the level-2 gap
+### WP7 — `gemv` and the level-2 gap  — **DONE**
+
+**Outcome: vendor-freedom at parity, plus one large measured exception.** The full write-up
+with every CSV is `experiments/wp7_gemv/ab/README.md`; the recon baseline that framed it is
+`experiments/wp7_gemv/baseline/README.md`.
+
+Three corrections to the sketch below, each of which changed the design:
+
+1. **The performance premise was wrong for `gemv` itself.** cuBLAS `gemvStridedBatched`
+   measures **94–105% of the ~950 GB/s achievable DRAM roof on 90 of 92 reproducing cells**.
+   A batched `gemv` reads A once and does two flops per element; there is nothing to win.
+   The `latrd` `symv` opportunity is real but is a *different kernel* and is not this work
+   package.
+2. **The `nd_range` warning was right, and the fix is a FLATTENING, not a tuning.** All three
+   bodies use a 1-D global range over `out_len * batch` with `b = gid / out_len`,
+   `i = gid % out_len`, so one work-group can span several batch items and the work-group
+   count never collapses to the batch. At `m = 64, batch = 128` the ladder ends at `wg = 32`
+   and the launch is **256 work-groups on a 128-SM device**, against the 128 groups of 64
+   threads the obvious `nd_range<2>` produces.
+3. **`gemv` must NOT be GPU-gated, and it is the only native tier here that is not.** Half of
+   `tests/gemv_tests.cc` is `Backend::NETLIB` on a `native_cpu` `Device("cpu")` queue. A
+   GPU-only native `gemv` closes 20 of the 40 vendor-free failures, leaves the suite red and
+   moves the burn-down by **zero**. The `Direct` route therefore carries no `is_gpu` clause
+   and `src/sycl/gemv_native.cc` is compiled for the `native_cpu` target.
+
+Also worth recording: the intuition about which `transA` is hard **inverts** when the
+decomposition is one work-item per output element. Column-major, at reduction step `j`,
+work-items `i` and `i+1` read `A[i + j*ld]` and `A[i+1 + j*ld]` — adjacent. So `NoTrans`
+needs no collective at all, and it is `Trans`/`ConjTrans` that wants the sub-group reduction.
+
+Device-link cost (D7): **+8.1 s vendor-present, +6.9 s vendor-free** on `libbatchlas_sycl.so`
+(49.5 s → 57.6 s / 49.9 s → 56.8 s), for **64** new entry functions, all at 28–40 registers
+with zero spill, zero stack frame and **zero barriers** — and no `smem` figure from `ptxas`
+on any of them, so the recorded 48 KB launch hole is structurally unreachable. Control: the
+same probe log reports `used 1 barriers` for `TrsmCtaKernel`, which does allocate SLM, so the
+zero-barrier reading discriminates rather than being an artefact of the instrument.
+
+> **The 64 entry functions are 40 more than the 24 first reported, and they cost nothing.**
+> Body 4 (below) is templated on its segment width `W ∈ {2,4,8,16,32}`, i.e. 5
+> instantiations × 4 scalar types × {plain, `_with_offset`} = 40 extra kernels. Measured
+> back-to-back on an idle box, same TU touched, same procedure: **58.03 s with body 4 absent,
+> 57.59 s with it present.** The device link here is not bound by the number of entry
+> functions in this TU.
+
+---
+
+## WP7 REPAIR PASS — what four audits found, and what changed
+
+Four auditors reviewed WP7 as first implemented. Their findings, triaged and re-verified
+before acting:
+
+**CONFIRMED and FIXED — the parity gate FAILED as first shipped.** B6 makes any cell below
+0.50× a blocker. The implementer's grid reported "ZERO cells below 0.50×" and was correct
+about its own 84 cells — but **its minimum `out_len` was 64**, and the failing family lives
+below the 32-lane warp width. On an (`out_len`, `red_len`) ladder reaching `out_len = 1`,
+**15 of 192 cells measured below 0.50×, worst 0.08×**, reproduced on three passes. Thirteen
+were one family: `Algorithm::Direct`, `transA = NoTrans`, `out_len < 32`.
+
+*The mechanism, from ncu, is two effects that both stop exactly at 32 lanes.* Sectors per
+global load is `32/out_len` below the warp width and floors at 8.5 above it (out_len 1, 2, 4,
+8, 16, 24, 31, 32, 48, 64 → 32.0, 16.0, 12.0, 10.0, 9.0, 9.0, 9.5, 8.5, 8.67, 8.5), because
+B5's flattening makes a warp straddle batch items whose rows are `stride_a` apart. And
+`out_len * batch` is the body's ONLY extent, so at `out_len = 1, batch = 512` the launch is
+16 work-groups on a 128-SM box — 2.08% occupancy, 7.03% of DRAM. The transition is in
+**lanes, not bytes** (float turns at the same `out_len = 32` despite a 4× narrower scalar) and
+padding `ld` moves nothing, so it is neither a sector-size nor an alignment artefact.
+
+*The fix is `src/sycl/gemv_native.cc` **body 4**, the segmented NoTrans body.* With
+`W = gemv_seg_width(out_len)` — the largest power of two with `W*out_len <= 32` — lane `l`
+of a sub-group takes `i = l % out_len`, `jsub = l / out_len` and walks
+`j = jsub, jsub+W, ...`, and lanes `l` and `l+out_len` are folded by a `log2(W)`-step shuffle
+at stride `out_len`. That restores 32 contiguous elements per warp when `ld == m`, and
+multiplies the extent by `32/out_len`. **It is not a new route**: `{Native, Direct}` on a
+NoTrans shape now names two kernels, chosen on `out_len` and on whether the device
+ENUMERATES a sub-group size of 32 — a decomposition, not an algorithm. Putting it in
+`supports()` would be a speed cutoff in the predicate documented to carry correctness only,
+and on the `native_cpu` queue the enumeration is false, so the 20 NETLIB rows keep body 1 and
+the no-GPU-gate deliverable is untouched.
+
+*Re-measured on the audit's own harness, two fresh passes, idle GPU, zero foreign processes:*
+
+| | before | after |
+|---|---|---|
+| cells below 0.50× (of 192) | **15** | **2** |
+| worst cell | **0.08×** | **0.44×** |
+| the `NoTrans`, `out_len < 32` family (24 cells) | min 0.08, median 0.38, **13 blockers** | min 0.60, median **1.16**, max 4.09, **0 blockers** |
+
+**AND THE RESULT WORTH CARRYING FORWARD: `W` HAD TO BE A TEMPLATE PARAMETER, AND THAT WAS
+WORTH 2×.** The first version of body 4 carried `W` as a runtime `const int`. It fixed
+`out_len <= 4` and **REGRESSED `out_len >= 8` below the body it replaced.** ncu says it was
+not the memory system: at `out_len = 16`, float, the runtime-`W` version already had
+sectors-per-load 2.50 (ideal) and 8.27% occupancy against body 1's 3.00 and 4.12%, and still
+ran at 26% of DRAM where body 1 reached 69%. Better coalescing and better occupancy, slower
+kernel — the loop, not the traffic. With `W` a compile-time constant the trip count and the
+address stride are both known, the loop unrolls, and the same shapes run at 90–98% of the
+vendor:
+
+| `out_len` (float, ~128 MB, NoTrans) | 1 | 2 | 4 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|
+| body 1 | 235.1 | 335.4 | 517.3 | 730.5 | 692.9 | 827.2 |
+| body 4, `W` runtime | 906.5 | 707.9 | 576.1 | 607.5 | **373.8** | **461.1** |
+| body 4, `W` `constexpr` | **934.9** | **921.4** | **913.2** | **903.0** | 624.7 | **861.1** |
+| cuBLAS | 901.3 | 1281.0 | 1112.4 | 1012.8 | 897.6 | 962.0 |
+
+(GB/s, `experiments/wp7_gemv/repair/outlen_body{1,4}.csv`. `out_len = 12` is the one place
+body 1 is still ahead of body 4 by more than noise: `W = 2` there leaves 8 of 32 lanes idle
+because 12 does not divide 32. It is 0.70× of cuBLAS against body 1's 0.77× — a documented
+residual, not a blocker.)
+
+**CONFIRMED and FIXED — `gemv` had ZERO assertions in `tests/route_vocabulary_tests.cc`.**
+Verified: `grep -o 'Op::[a-z]*'` listed fourteen ops and no `gemv`, and the file did not
+include `route_gemv.hh`. The resulting blind spot was proved from two directions before being
+closed: vendor-present, **all 114 `gemv` decisions in a full `ctest` capture resolve to
+`vendor:auto`**, so no vendor-present test can observe the table at all; vendor-free, pinning
+`native:direct` removes the CTA kernel from every decision and all `gemv_tests` still pass.
+Thirteen cases now cover `supports()` on all three CTA gates, the Direct arm's absent
+`is_gpu` clause, `preferred()` all-false over a 540-shape spread, `kGemvOrder`, the
+`out_len()`/`red_len()` swap, B2's non-shadowing, the zero-extent contract, and the silent
+pin fall-through. **Suite 78 → 91.** The V1 trap was avoided deliberately and then
+*measured*: seven breaks, each applied, rebuilt, run and reverted, each turning named cases
+red — including `unarmed`, which is the V1 trap itself and turns 7 cases red.
+
+**CONFIRMED and FIXED — two documentation claims in `route_gemv.hh` were false.** A bare
+`BATCHLAS_GEMV_ROUTE=native` does **not** resolve to CTA; it resolves to the first
+**supported** native route, which is Direct for `NoTrans`, for a CPU device and for a GPU
+without an enumerated 32 — 76 of 104 decisions. And pinning `native:cta` on a shape CTA
+cannot serve **falls through silently, to a build-dependent destination**: the vendor in a
+vendor-present build, `native:direct` in a vendor-free one, with no diagnostic either way. A
+misspelled value behaves identically because `ParsedRouteEnv::unparsed` is discarded (this is
+campaign-wide, not a `gemv` invention). Both are now documented and both are guarded by a
+test.
+
+**CONFIRMED and STATED, not fixed (B6 allows either).** `complex<double>` transposed with
+`red_len() <= 64` measures **0.43–0.46×** and is the only remaining blocker pair. The
+implementer's "`m` in {48, 64}" understated it: at batch 128 the whole `m <= 128` column
+loses, 0.27–0.60×. The mechanism is the fold ladder's fixed per-output cost, and it was
+checked rather than assumed — ncu holds occupancy at 82–95% and the grid constant while DRAM
+throughput climbs 38.5% (`red_len` 32) → 64.8% (64) → 93.4% (128) → 95.6% (512), fully
+amortised by `red_len = 128`. **The named fix is body 4's idea transposed** (W outputs per
+sub-group when `red_len` is small) and is a bounded follow-up; it was not landed in the repair
+pass because a fifth body on a different arm would have made body 4 unattributable — which is
+how the runtime-vs-`constexpr` result above was found at all.
+
+**REFUTED — the winning rectangle must not ship, and `preferred()` stays all-false.** The
+prize IS real: 68 of 241 `complex<double>` transposed cells win by ≥ 1.15×, the bulk at
+2.5–3.08×, cross-pass spread median 1.0054, and at matched bytes the native CTA body reads
+936–941 GB/s for **all four** scalar types while cuBLAS reads 323 for `complex<double>` and
+940–946 for the rest — the dip is cuBLAS's and is type-exclusive. But the rectangle
+"`64 <= m <= 320` and `n >= 256`" was fitted at a **fixed ~1 GB footprint**, where `batch`
+moves inversely with shape and the third axis is invisible. Resolved on an (m, n, batch) grid
+it **admits 17 cells below 1.00×, worst 0.36×**. Every clause that passes the ≥ 1.15× gate
+strictly sits on the edge of the sampled range and captures at most 22 of the 68 wins. So
+`preferred()` ships **ALL-FALSE**, and the 3× is one environment variable away.
+
+**REFUTED — the per-call route resolution is not a regression.** Measured at **0.164 µs**
+(0.077 µs for the `sub_group_sizes` query, 0.067 µs for `getenv` plus two `std::string`
+constructions), i.e. 2–3% of a minimal batched kernel launch, and identical in shape to what
+`getrf`/`getrs`/`potrf` already pay per call.
+
+**CONFIRMED, no code change — two instrument limits worth carrying forward.**
+(1) A `gemv` coverage row **cannot** confirm that a particular SHAPE ran: `coverage.cc` keys
+rows on a power-of-two `shape_class` and is first-writer-wins, so the m/n/batch columns can
+report a different call's shape. To prove a specific shape ran, use a break that is red only
+for that shape. (2) **Concurrent agents on a two-GPU box are now a routine hazard**: a
+contended row can have a LOW relative standard deviation, so the `rel_sd` guard does not catch
+it. Pin `CUDA_VISIBLE_DEVICES` to a device verified idle via
+`nvidia-smi --query-compute-apps`, and carry a per-row foreign-process count.
+
+The three defects found and deliberately **not** fixed (D4, D5, D6) are filed with file and
+line in **`WP7_FILED_DEFECTS.md`**.
+
+### The gates, re-run after the repair on an idle box
+
+| gate | vendor-present (`build`) | vendor-free (`build-novendor`) |
+|---|---|---|
+| compile + link | clean, 0 errors, 0 warnings | clean, 0 errors, 0 warnings |
+| `gemv_tests` | `264 tests from 16 test suites ran.` / `[  PASSED  ] 264 tests.` | `264 tests from 16 test suites ran.` / `[  PASSED  ] 264 tests.` — **0 FAILED**, 0 SKIPPED, including the 20 `Backend::NETLIB` rows of the pre-WP7 fixture (116 NETLIB rows in total once `GemvCoverageTest` is counted) |
+| `route_vocabulary_tests` | `91 tests from 11 test suites ran.` / `[  PASSED  ] 91 tests.` | `91 tests from 11 test suites ran.` / `[  PASSED  ] 91 tests.` |
+| `ctest -LE slow` | `98% tests passed, 1 tests failed out of 56` → **55/56**, only the pre-existing gemv-independent `lanczos_tests` | `61% tests passed, 22 tests failed out of 56` → **34/56** |
+| `ctest -L blas` | `100% tests passed, 0 tests failed out of 18` (18 selected) | — |
+| `ctest -L ortho` | `100% tests passed, 0 tests failed out of 5` (5 selected) | — |
+| `scripts/route_diff.sh` vs the audit capture | **0 removed decisions**, 60 added (57 `vendor:auto` from the new test shapes + 3 `Backend::AUTO` pure-layer rows) | **0 removed decisions**, 28 added (25 `native:direct`, 3 `Backend::AUTO`) |
+
+`lanczos_tests` was checked rather than assumed: it fails **identically in both builds**, and
+its coverage dump holds only `linked,gemv` rows and **zero `reached` rows** — it never calls
+`gemv`. And the 22 vendor-free failures were checked for joiners: `grep -ci gemv` over the
+3,957-line `--rerun-failed --output-on-failure` log returns **0**.
+
+The parity re-measurement ran on **device 1 verified idle**, with **zero foreign compute
+processes** on every row, `relerr` exactly 0 on all 1,152 timed rows, and the route column
+asserted against the pin on 384 of 384 compared cells.
+
+**Do not read that `relerr` as evidence of numerical quality.** `ab/gemvab.cpp` generates
+`h * 0.0625` for `h` in `[0,16]`, so every product is a multiple of 1/256 and every sum out to
+`red_len = 2048` stays under 2^24 — a float reduction in *any* order is bit-exact, and
+`relerr == 0` is guaranteed by the data rather than earned by the kernel. The harness cannot
+detect a precision regression; it is armed only against a *structural* error, and only partly
+(the imaginary part is 0.5x the real part, so a dropped cross-term does move it). This is the
+same blind-guard shape WP7's test work exists to close, one level up in the instrument. The
+correctness evidence is `gemv_tests` and its breaks, not this column.
+
+
+---
+
+*The original sketch, kept for the record:*
 
 `gemv` is vendor-only at host level, and this is simultaneously a self-sufficiency item and
 a known *performance opportunity*: the panel `symv` inside `latrd` is bound by 12–16× L1

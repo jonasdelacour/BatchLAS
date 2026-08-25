@@ -148,6 +148,112 @@ a suite that exercises two backends with different coverage cannot distinguish "
 kernel" from "we shipped nothing". This is the same lesson as `linked` vs `reachable` above,
 one level up.
 
+## After WP7 (and its repair pass) — 34 / 56, and the failing SET is the reviewable artefact
+
+    ctest --test-dir build-novendor -LE slow
+    61% tests passed, 22 tests failed out of 56          <- i.e. 34 PASSED
+
+**Read that line carefully.** `N tests failed out of M` is a FAILURE count. The pass count is
+`M - N`. This has been misread in this campaign before.
+
+`gemv_tests` is the suite that left the failing set, and **it is the only one**. Vendor-free it
+went **40 FAILED → 0 FAILED**, including the 20 `Backend::NETLIB` rows that run on a
+`native_cpu` `Device("cpu")` queue — which is the whole reason `RouteTable<Op::gemv>`'s
+`Direct` arm carries **no `is_gpu` clause**, the only native tier in this campaign that does
+not. Proved by RESOLVED ROUTE rather than by symbols (`BATCHLAS_COVERAGE_OUT`, 160 reached
+`gemv` rows, vendor-free):
+
+```
+     24 CUDA   native:cta     transA=1        40 NETLIB native:direct transA=0
+     16 CUDA   native:cta     transA=2        24 NETLIB native:direct transA=1
+     40 CUDA   native:direct  transA=0        16 NETLIB native:direct transA=2
+```
+
+The CPU half takes `native:direct` for **all three** `transA` values; the GPU half takes
+`native:cta` for the transposed ones. `transA` appears as its own column, so `GemvShape` is
+not shadowing `OpShape::transA` and gemv's two arms — which are different KERNELS, not
+different flags — did not collapse into one first-writer-wins row.
+
+### The ninth blind guard, found after the suite was already rewritten
+
+WP7 replaced `gemv_tests`' blind fixture with 192 new cases — and every one of them still used
+the **natural batch stride** (`a_stride == ld*n`, `x_stride == size*inc`, `y_stride == size*inc`).
+A kernel that *derived* each batch stride instead of reading it from the view therefore passed
+all 232 cases. That is a live property, not a hypothetical one: `src/extensions/ortho.cc:218-222`
+hands the native path `A.stride() == m*A.cols()` against a view whose `ld*cols` is `m*i`, on every
+CGS iteration — so until now the only thing guarding stride handling was `ortho_tests`, a
+different suite, by accident.
+
+Four `stride_pad` cases, one per kernel body, take the suite to **264**. Break `padstride` (all
+four bodies compute `stride_a = ld*cols` and `stride_x/y = size*inc`) turns **exactly 32 tests
+RED — the four new cases across all eight typed suites, and nothing else.** Both halves of that
+number matter: the new cases are armed, and the 232 that preceded them are proven blind.
+
+The lesson is the one the campaign keeps re-learning in a new costume: *a rewritten test suite is
+not automatically an armed one.* The rewrite was driven by a list of degrees of freedom, and
+batch stride was not on the list, so it inherited the original fixture's single blind spot
+unchanged through 192 new cases.
+
+The same run in the **vendor-present** build gives **160 reached rows, all `vendor:auto`**.
+`preferred()` ships all-false, so WP7 is route-neutral there, and `scripts/route_diff.sh`
+agrees: **0 removed decisions** in both builds.
+
+### The 22 failing suites, after WP7
+
+Recorded as a SET, because a suite leaving it means a native kernel now covers that op and a
+suite joining it is a regression. Reproduced identically on two full runs:
+
+```
+options_api_tests   syevx_tests         lanczos_tests       trsm_tests
+ortho_tests         cond_tests          ormqr_tests         ormqr_cta_tests
+ormqr_blocked_tests orgqr_tests         iluk_tests          symm_tests
+hemm_tests          herk_tests          her2k_tests         syrk_tests
+syr2k_tests         syev_tests          trmm_tests          sytrd_blocked_tests
+syev_cta_tests      syev_blocked_tests
+```
+
+**The pre-WP7 set is these 22 plus `gemv_tests` — 23 names.** It is written down here
+explicitly so the next work package's auditor can diff SETS rather than infer from failure
+text, which is what WP7's own auditor had to do.
+
+**NOTHING JOINED, and that is measured rather than inferred.**
+`ctest -LE slow --rerun-failed --output-on-failure` over all 22 suites produces 3,957 lines,
+and `grep -ci gemv` on it returns **0**. Every failure is a `NoRouteError`, and the ops they
+name are:
+
+| op | occurrences | op | occurrences |
+|---|---|---|---|
+| `syev` | 87 | `syrk` | 12 |
+| `geqrf` | 44 | `her2k` | 12 |
+| `trsm` | 32 | `hemm` | 12 |
+| `ormqr` | 24 | `syr2k` | 10 |
+| `trmm` | 16 | `symm` | 8 |
+| `herk` | 16 | `spmm` | 2 |
+| `getri` | 16 | | |
+
+No suite fails for a `gemv` reason, and `gemv` is the only op WP7 touched.
+
+### Two suites that improved without leaving the set, and one that is not WP7's
+
+* `ortho_tests`: **16 FAILED → 8**. All 8 remaining are `Backend` 6 = NETLIB, naming `geqrf` —
+  the host path, i.e. WP9, not a missing GPU kernel.
+* `cond_tests`: **30 → 24**. Does not close, exactly as forecast: the residue is
+  `NETLIB`/`getri` (WP9) plus `src/extra/cond.cc`'s `syev_vendor_or_throw` bypass, which is
+  filed in `WP7_FILED_DEFECTS.md`.
+* `lanczos_tests` fails in **both** builds and is **not WP7's**. Verified rather than assumed:
+  its coverage dump contains only `linked,gemv` rows and **zero `reached` rows** — it never
+  calls `gemv` at all — and it fails identically vendor-present (where the whole suite is
+  55/56) and vendor-free.
+
+### The instrument caveat this pass added
+
+**A `gemv` coverage row cannot confirm that a particular SHAPE ran.** `src/dispatch/coverage.cc`
+keys rows on a power-of-two `shape_class` and is first-writer-wins, so the m/n/batch columns
+can report a *different* call's shape. Two `gemv` coverage tests at m=41, n=76, batch=5
+produce no row of their own — they collapse into the m=70, n=48, batch=6 row. To prove a
+specific shape ran, use a break that is red only for that shape. The `linked` vs `reachable`
+lesson, one level further down.
+
 ## The same gap, per op
 
 `cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose
@@ -157,6 +263,20 @@ one level up.
 |---|---|
 | yes | `gemm`, `ormqr`, `syev`, `gesvd` |
 | **no** | `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `herk`, `her2k`, `geqrf`, `orgqr`, `getrf`, `getrs`, `getri`, `potrf`, `spmm` |
+
+> **This table is the WP0 reading and it is NOT maintained — do not use it as a status
+> board.** WP3–WP7 have since landed native `trsm`, `potrf`, `geqrf`/`orgqr`, `getrf`/`getrs`
+> and `gemv`, none of which is reflected above. It is left as recorded so the WP0 → today diff
+> stays legible.
+>
+> It is also **not trustworthy op by op**, which is worth knowing before anyone regenerates
+> it. In the post-WP7 vendor-free capture the `linked` rows report
+> `native_route_existed = 0` for `trsm` — after WP3 shipped a native `trsm` — and `= 1` for
+> `getri`, for which WP9 has not started. The `linked` half of the coverage instrument answers
+> "does this build have a native route registered for this (op, scalar, backend)", which is
+> not the same question as "is there a native kernel", and it is stale for both. **Read the
+> `reached` rows and the resolved route.** A kernel being linked is not evidence it runs; a
+> `linked` row saying 0 is not evidence it does not exist.
 
 `miss` rows add what a run actually reached, e.g.
 
