@@ -1,0 +1,15 @@
+# The cells where the shipped `auto` decision LOSES to body 3, plus their
+# neighbours. Run with WS="2 4 8" to ask whether a SMALLER W -- which launches
+# more sub-groups, since the launch is out_len*batch/W -- recovers them.
+1 32 128
+1 64 128
+1 32 512
+1 64 512
+2 32 512
+4 32 128
+4 64 128
+4 32 512
+4 64 512
+16 32 128
+8 32 512
+16 32 512

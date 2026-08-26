@@ -467,17 +467,239 @@ struct RouteTable<Op::getrs, T> {
     //
     // THE COMPOSITION IS NEVER PREFERRED, and that is measured too, not an
     // oversight: at every width the fused tier serves it is 2.7x-24.6x behind the
-    // fused tier and 0.26-0.46x of the vendor. It DOES beat the vendor at nrhs =
-    // 64 (geomean 1.09x) and nrhs = 128 (1.48x) -- but with 9 and 4 losses of 28
-    // respectively and NO batch ladder anywhere on that axis, so it is not a
-    // window yet. That is left open in experiments/wp6_perf/README.md rather than
-    // shipped.
+    // fused tier and 0.26-0.46x of the vendor.
+    //
+    // =====================================================================
+    // WP8-I2: THE WIDE-nrhs LADDER EXISTS NOW, AND IT SAYS TWO THINGS. THE
+    // CLAUSE IS *NOT* SHIPPED HERE -- this is the recommendation and its CSV.
+    //
+    // (1) THE RECORDED HEADLINE WAS AN ARTEFACT OF READING ONE BATCH PER ORDER.
+    //     "nrhs = 64 geomean 1.09x, nrhs = 128 geomean 1.48x, 9 and 4 losses of
+    //     28" came from grid_*.csv, which carries exactly one saturating batch
+    //     per order and NO ladder on the batch axis at any width >= 16. A full
+    //     ladder -- 4 types x 5 orders x 4 widths x 7 batches (32 .. 8192),
+    //     464 paired cells, experiments/wp8_getrs/lad_*.csv + hi_*.csv -- shows
+    //     the composition's advantage FALLING MONOTONICALLY WITH BATCH at every
+    //     type and every order, because below saturation neither arm is measuring
+    //     its own speed. At float n=128 nrhs=128 the composition costs
+    //     9.96 / 2.80 / 1.90 / 1.76 us per item at batch 32 / 128 / 256 / 512 and
+    //     cuBLAS 38.2 / 10.2 / 5.59 / 3.31: an 8x batch for a 1.06x time on one
+    //     arm and a 3.7x on the other. Read at saturation, the WALK's best
+    //     candidate (float nrhs >= 128, 11 cells, geomean 1.761, zero losses) has
+    //     MINIMUM 1.0436 and FAILS GATE-C. So on the arm that shipped in WP6
+    //     there is no window at any width, for any type.
+    //
+    // (2) THE GATHER CHANGES THE ANSWER. With the permutation collapsed
+    //     (src/extensions/getrs_native.cc, default at nrhs >= 16), re-measured on
+    //     the saturated rungs -- 5 orders x 3 batches per type, TWO native passes
+    //     and TWO vendor passes, medians of 11 reps, warm JIT,
+    //     CUDA_VISIBLE_DEVICES pinned, zero foreign compute processes on every
+    //     row, quoted at the WORSE pass, cross-pass median spread 1.0022 and
+    //     worst 1.1208 over 270 arm-medians (experiments/wp8_getrs/cl_*.csv +
+    //     gap_*.csv, scored by clause.py into clause_summary.txt):
+    //
+    //       CANDIDATE                       cells  geomean    min  loss  <1.15  GATE-C
+    //       float   nrhs >= 64                 30    2.837  1.765     0      0  PASS
+    //       float   nrhs >= 128                15    3.444  1.850     0      0  PASS
+    //       double  nrhs >= 128                15    1.865  1.279     0      0  PASS
+    //       float + double nrhs >= 128         30    2.535  1.279     0      0  PASS
+    //       RECOMMENDED (the union below)      45    2.467  1.279     0      0  PASS
+    //       ---- and every wider candidate FAILS, with its refuting cell ----
+    //       float   nrhs >= 32                 45    2.147  0.907     1      4  float   n=64  nrhs=32  b=4096
+    //       double  nrhs >= 64                 30    1.563  0.998     1      1  double  n=64  nrhs=64  b=2048
+    //       cfloat  nrhs >= 128                20    1.801  0.994     1      0  cfloat  n=64  nrhs=128 b=1024
+    //       cfloat  nrhs >= 64                 34    1.657  0.787     2      0  cfloat  n=64  nrhs=64  b=2048
+    //       cdouble nrhs >= 128                13    1.131  0.924     2      8  cdouble n=128 nrhs=128 b=1024
+    //       cdouble nrhs >= 64                 26    1.002  0.693    12     11  cdouble n=128 nrhs=64  b=1024
+    //       all types nrhs >= 128              63    1.925  0.924     3      8  cdouble n=128 nrhs=128 b=1024
+    //
+    //     THE RECOMMENDED CLAUSE, on GetrsShape::nrhs() -- B.cols(), NEVER
+    //     order(), because a predicate written on the wrong extent inverts the
+    //     window and that error was caught twice in WP7:
+    //
+    //       if (r.algo == Algorithm::Blocked) {
+    //           if constexpr (std::is_same_v<T, float>)  return s.nrhs() >= 64;
+    //           if constexpr (std::is_same_v<T, double>) return s.nrhs() >= 128;
+    //           return false;                  // cfloat and cdouble earn nothing
+    //       }
+    //
+    //     IT WOULD BE THE FIRST CLAUSE IN THIS TABLE NAMING Algorithm::Blocked,
+    //     so the `if (r.algo != Algorithm::CTA) return false` early return below
+    //     is load-bearing for clauses A and B and must be RELAXED rather than
+    //     deleted: CTA must stay unpreferred above nrhs = 4 and Blocked must stay
+    //     unpreferred below the per-type boundary, where it is 0.09-0.36x.
+    //     native_tier_preferred is untouched -- CTA cannot reach nrhs >= 64 at
+    //     all (kGetrsFusedMaxRhs = 8).
+    //
+    //     BATCH COVERAGE OF THE ADMITTED SET, stated exactly, because this is
+    //     where every previous getrs window died. 45 cells measured DIRECTLY on
+    //     three saturated rungs of each of five orders, two passes each side. A
+    //     further 58 admitted cells at the ladder's other rungs (batch 32..8192)
+    //     are covered by a BOUND rather than a measurement: the vendor arm did
+    //     not move in this pass, and the gather's own A/B measured MINIMUM 1.0004
+    //     with ZERO cells below 1.00 over 80 cells and two passes, so
+    //     post_ratio >= walk_ratio at every admitted cell -- and all 58 already
+    //     clear 1.15 on the WALK ladder (min 1.1933, geomean 2.1616). ZERO
+    //     admitted cells are left uncovered by measurement or bound.
+    //
+    // (2b) cfloat WAS IN THIS CLAUSE UNTIL THE BOUND'S OWN GAP WAS MEASURED, and
+    //     that is the methodological result of this pass. `cfloat nrhs >= 128`
+    //     scored 15 cells, geomean 1.974, MIN 1.482, zero losses -- a clean PASS
+    //     -- on the directly measured rungs. The coverage bound then named FIVE
+    //     admitted cfloat cells it could not cover, because the WALK ladder was
+    //     itself below 1.15 there. Measuring those five
+    //     (experiments/wp8_getrs/gap_*.csv) produced
+    //         cfloat n=64 nrhs=128 batch=1024 = 0.9944  (0.9969 / 0.9944, two passes)
+    //     with 1.2901 at batch 512 and 1.4824 at batch 2048 ON EITHER SIDE OF IT.
+    //     A dip in the MIDDLE of a ladder cannot be closed by any boundary in
+    //     batch, in order or in nrhs -- the C5/C8/C9 failure mode, found again.
+    //     It was invisible to every candidate scored before the gap sweep
+    //     existed, and it is the reason the clause is float+double and not
+    //     non-cdouble. Widening to include cfloat costs 20 cells of geomean 1.80
+    //     and buys one measured loss.
+    //
+    // (3) cdouble IS REFUTED AT EVERY WIDTH, and that is this pass's negative
+    //     result rather than a gap in it. At nrhs = 128 it is 13 cells, geomean
+    //     1.131, minimum 0.9238, with TWO outright losses and EIGHT more between
+    //     1.00 and 1.15; at nrhs = 64 it is 12 losses of 13. The losses are
+    //     CLUSTERED ON THE TYPE, not mid-ladder -- cdouble n=128 nrhs=64 loses at
+    //     batch 1024, 2048 AND 4096, i.e. the whole ladder -- so a (type, nrhs)
+    //     predicate CAN exclude them, which is why the recommendation is per-type
+    //     rather than a single scalar. That is the answer to the question this
+    //     pass was set: the recorded 9 and 4 losses are BOTH. On the type axis
+    //     they cluster (cdouble is a whole-type loss at every width, and its
+    //     n=128 nrhs=64 ladder loses at every rung); on the ORDER axis inside
+    //     the remaining types they are interior, which is why no boundary in n
+    //     appears anywhere in the recommendation. What is left losing for cdouble is the
+    //     trsm/GEMM arm and not the permutation: the gather is worth only
+    //     1.04-1.26x there against 1.12-2.79x for float, exactly as the
+    //     (32 + sizeof(T)) / sizeof(T) sector inflation predicts.
+    // =====================================================================
+    // =====================================================================
+    // WP8 ROUTING PASS: CLAUSE C LANDS. The recommendation above is applied
+    // VERBATIM and its CSV is experiments/wp8_getrs/clause_summary.txt, scored
+    // in this pass by experiments/wp8_getri/analyse.py's sibling reader.
+    //
+    // WHAT CHANGED HERE STRUCTURALLY. `if (r.algo != Algorithm::CTA) return
+    // false` was RELAXED, not deleted -- clauses A and B depend on it to keep
+    // the COMPOSITION unpreferred at the narrow widths, where it is 0.09-0.36x
+    // of the vendor. The composition is now preferred at exactly the widths
+    // where it was measured ahead, and nowhere else.
+    //
+    // THE AXIS IS GetrsShape::nrhs(), WHICH IS B.cols() AND NEVER order().
+    // Spelled on the wrong extent this clause inverts: it would admit every
+    // wide-order narrow-RHS call, which is the regime where the composition is
+    // 0.09x. That error was caught twice in WP7 and once here in review.
+    //
+    // THE 45 ADMITTED CELLS, TRANSCRIBED (ratio = vendor_med / native_med,
+    // QUOTED = the worse of two passes each side; zero losses, zero cells below
+    // 1.15, geomean 2.467, min 1.2791):
+    //
+    //   float nrhs=64   n=64  b2048 2.076  b4096 2.819  b8192 4.074
+    //                   n=128 b1024 1.871  b2048 1.775  b4096 3.167
+    //                   n=256 b1024 1.849  b2048 2.426  b4096 3.861
+    //                   n=512 b512  1.952  b1024 2.067  b2048 2.620
+    //                   n=1024 b128 2.175  b256  1.914  b512  1.765
+    //   float nrhs=128  n=64  b2048 3.683  b4096 5.074  b8192 6.335
+    //                   n=128 b1024 2.609  b2048 3.931  b4096 5.007
+    //                   n=256 b1024 3.121  b2048 4.463  b4096 4.888
+    //                   n=512 b512  2.501  b1024 2.839  b2048 3.689
+    //                   n=1024 b128 2.769  b256  2.049  b512  1.850
+    //   double nrhs=128 n=64  b2048 2.100  b4096 2.519  b8192 2.766
+    //                   n=128 b1024 1.803  b2048 2.422  b4096 2.809
+    //                   n=256 b1024 1.666  b2048 2.044  b4096 2.244
+    //                   n=512 b512  1.408  b1024 1.461  b2048 1.655
+    //                   n=1024 b128 1.438  b256  1.341  b512  1.279
+    //
+    // AND THE CELL THAT REFUSES EACH WIDER CLAUSE, so none is rediscovered:
+    //   float  nrhs >= 32   0.9069 at n=64  nrhs=32  b=4096
+    //   double nrhs >= 64   0.9984 at n=64  nrhs=64  b=2048
+    //   cfloat nrhs >= 128  0.9944 at n=64  nrhs=128 b=1024 -- and that cell is
+    //     a dip in the MIDDLE of its own ladder (1.2901 at b=512, 1.4824 at
+    //     b=2048 on either side of it), so no boundary in batch, order or nrhs
+    //     reaches it. cfloat scored 15 cells / geomean 1.974 / min 1.482 on the
+    //     directly measured rungs and was in this clause until the gap sweep
+    //     existed.
+    //   cdouble nrhs >= 128 0.9238 at n=128 nrhs=128 b=1024, with 2 losses and
+    //     8 more cells between 1.00 and 1.15. cdouble is refuted at every width.
+    //
+    // ---- WHAT THIS PASS ADDED: A CLEAN RE-MEASURE, THE BATCH AXIS, AND A
+    // ---- CORRECTION THAT NEARLY COST HALF THE CLAUSE
+    //
+    // THE RE-MEASURE FIRST. Everything above was re-run on device 1 with nothing
+    // else on the box (experiments/wp8_getri/lu_c{1,2}.csv, pair_cells.sh: the
+    // two arms are two BUILDS run back to back on each cell, 11 reps, median,
+    // host oracle per row, resolved route checked per arm, foreign count 0). It
+    // reproduces I2's figures cell for cell -- float n=512 nrhs=64 b=512 reads
+    // 1.9703 against 1.9517, n=512 nrhs=128 b=512 reads 2.5344 against 2.5011,
+    // cdouble n=128 nrhs=128 b=1024 reads 0.9196 against 0.9238 -- and scores:
+    //     float  nrhs >= 64,  batch >= 128   22 cells, geomean 3.138, MIN 1.7695
+    //     double nrhs >= 128, batch >= 128   15 cells, geomean 1.979, MIN 1.2858
+    //     union                              37 cells, MIN 1.2858, ZERO losses,
+    //                                        ZERO cells below 1.15
+    // I2's own named risk -- "double n=1024 nrhs=128 batch=512 at 1.2791 is the
+    // LAST rung measured at that order and the ladder is falling; it costs
+    // 8.6 GB to measure batch 1024 and it was not measured" -- is closed: that
+    // cell measures 1.3070 at batch 1024, i.e. the ladder turns back up.
+    //
+    // (a) THE CLAUSE GAINS A BATCH FLOOR THAT I2 DID NOT HAVE, AND IT IS A
+    //     CONSERVATIVE ONE. I2's own note recorded the gap: "the recommended
+    //     clause carries no batch floor -- so if it lands, it routes small-batch
+    //     wide-nrhs shapes on the strength of a bound rather than a
+    //     measurement". Every one of its 45 cells, and every one of the 37 this
+    //     pass re-measured, is at batch >= 128.
+    //
+    //     WHAT THE LOW END ACTUALLY DOES: at nrhs = 128 the composition still
+    //     WINS at batch 64 and 32 -- float 5.93 / 5.96 (n=64 / n=128), 5.60 at
+    //     n=256, 4.71 at n=512, 3.87 at n=1024; double 4.31 / 4.05 / 3.56 -- so
+    //     the floor at 128 GIVES UP measured wins rather than excluding measured
+    //     losses. It is set there anyway, for two reasons that are stated rather
+    //     than glossed: (i) below 32 the region is genuinely ragged, and the
+    //     only readings there come from a CONTAMINATED sweep (0.055x-0.33x at
+    //     batch 1-2), so the rung immediately under any lower floor is not
+    //     bracketed by a trustworthy non-winner; (ii) at nrhs = 64 -- the other
+    //     half of the clause -- the low end is not measured at all. A floor that
+    //     is only conservative cannot admit a loss, which is the property
+    //     GATE-C actually needs. Moving it down is one cheap sweep
+    //     (experiments/wp8_getri/gen_floor.py) and is named as open work.
+    //
+    // (b) A CORRECTION THAT NEARLY COST THE float nrhs >= 64 HALF OF THIS
+    //     CLAUSE, recorded because the same trap will be there for the next
+    //     pass. WP8's first sweep ran an LU harness on device 1 while a gemv
+    //     harness ran on device 0, on the reasoning that two cards are two
+    //     machines. They are not -- same NUMA node, same CPU affinity mask, one
+    //     UVM driver, and lubench6 runs on managed memory -- and the per-row
+    //     foreign() guard cannot see it, because --query-compute-apps is PER
+    //     DEVICE and neither process is on the other's card. rel_sd cannot see
+    //     it either: the contaminated rows read 0.012-0.017. Under that
+    //     contention getrs float n=1024 nrhs=64 batch=1024 measured 0.8859 --
+    //     an apparent outright LOSS inside the admitted set, exactly the
+    //     mid-ladder failure this clause family has died of twice before. Run
+    //     ALONE the same cell measures 1.9563. The narrowing it would have
+    //     forced (float nrhs >= 128, giving up 15 cells at 1.77x-4.07x) was
+    //     written and then reverted. SERIALISE THE BOX; a second card is not a
+    //     second machine.
+    // =====================================================================
     static bool preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return false;
 
-        // The composition is the arm the fused tier replaces. It is never the
-        // default anywhere; a vendor-free build reaches it through
-        // native_tier_preferred below, not through here.
+        // The COMPOSITION -- clause C. Preferred only at the widths where it was
+        // measured ahead of the vendor, per type. Everywhere else it stays the
+        // arm the fused tier replaces, reached in a vendor-free build through
+        // native_tier_preferred below and never through here.
+        if (r.algo == Algorithm::Blocked) {
+            // THE BATCH FLOOR IS CONSERVATIVE, AND KNOWN TO BE. See the WP8 note
+            // above: at nrhs = 128 the composition still wins at batch 32 and 64
+            // (3.56x-5.96x), so this line gives up measured wins. It is here
+            // because below 32 the region is ragged and the only readings are
+            // from a contaminated sweep, and because nrhs = 64 -- the other half
+            // of the clause -- has no low-batch ladder at all.
+            if (s.batch < 128) return false;
+            if constexpr (std::is_same_v<T, float>)  return s.nrhs() >= 64;
+            if constexpr (std::is_same_v<T, double>) return s.nrhs() >= 128;
+            return false;   // cfloat and cdouble earn nothing at any width
+        }
+
         if (r.algo != Algorithm::CTA) return false;
 
         if (s.nrhs() <= 2) return true;                  // clause A

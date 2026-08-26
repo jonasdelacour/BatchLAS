@@ -11,7 +11,8 @@ quietly edited.
 
 ## Status
 
-**WP0–WP7 are complete. WP8–WP9 are not started.**
+**WP0–WP7 are complete, and their remaining measured performance gaps have been closed
+(see "The WP6/WP7 performance-closure pass"). WP8–WP9 are not started.**
 
 | | state |
 |---|---|
@@ -21,7 +22,10 @@ quietly edited.
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
 | level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
 | `potrf` | native CTA kernel **and** a blocked driver above its ceiling, all four types, both triangles; **vendor-free potrf works at every order** and, for `float`, is **1.13–1.40× FASTER than cuSOLVER** at n≥1024. Still route-neutral: `preferred()` false everywhere, because complex is 0.31–0.51× and small `n` loses |
-| `gemv` | native, **all four scalar types, all three `transA`, and — uniquely in this campaign — NOT GPU-gated**: the `Direct` route runs on the `native_cpu` queue too, which is what closes all 40 vendor-free `gemv_tests`. Parity at the DRAM roof: on the final post-repair grid of **192 cells, median 1.007×, 181 at or above 0.85×, worst 0.444×**, the two sub-0.50× cells being the stated `complex<double>` short-reduction weakness; **1.88–3.07× over cuBLAS** for `complex<double>` transposed at large footprint. Route-neutral: `preferred()` false everywhere, because the win's boundary is not expressible over the fields the shape carries — the one candidate predicate was tested out-of-sample and **refuted** |
+| `gemv` | native, **all four scalar types, all three `transA`, and — uniquely in this campaign — NOT GPU-gated**: the `Direct` route runs on the `native_cpu` queue too, which is what closes all 40 vendor-free `gemv_tests`. Parity at the DRAM roof. The short-reduction family that was WP7's last sub-0.50× weakness is **FIXED** by body 5 (W outputs per sub-group), and `preferred()` now **ships a window**: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` — 63 cells, geomean 2.57×, every boundary bracketed by a measured non-winner |
+| `getrf` | native blocked arm, with the left-hand interchange **deferred out of the block loop and served by one SLM gather**. 1.207× over the arm it replaced; against cuBLAS **0.839× → 1.00–1.02×** overall, and 1.26–3.11× for `float`/`cfloat`, which is where `preferred()` now routes (`float` order ≥ 256, `cfloat` order ≥ 512). `double`/`cdouble` stay vendor-preferred and that is correct |
+| `getrs` | the composed driver's permutation has a second spelling — the interchange list collapsed to a **gather in local memory**, default at `nrhs >= 16`, **and it buys no workspace at all** (the budgeted out-of-place RHS was an artefact of the prototype). 1.319× over the walk across 80 cells, zero losses. `preferred()`: `float nrhs >= 64`, `double nrhs >= 128`, both at `batch >= 128` |
+| `getri` | unchanged kernel, but the measured win is now **routed**: `float` order ≥ 128, `cfloat` order ≥ 256 — 30 cells, geomean **4.18×**, min 1.20×. At `batch <= 32` the native driver beats cuBLAS by 1.7–28× for every type because the vendor's batched `getri` is a per-item loop there; that region is real, unrouted, and named as open work |
 | M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
 | M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
 
@@ -1528,6 +1532,114 @@ which makes any A/B there vacuous.
 
 **Effort:** medium. **Risk:** low, with a real chance of a performance *win*, not just
 parity.
+
+### The WP6/WP7 performance-closure pass — **DONE**
+
+> **Naming, so nobody is misled:** this pass's experiment directories are named
+> `experiments/wp8_*`. That is a collision with the WP8 below, which is **sparse `spmm`
+> and is still not started**. The directories are a closure pass over WP6 and WP7; the
+> `wp8_` prefix is a misnomer left in place rather than renamed across ~200 files.
+
+Six measured gaps were open after WP7. Four closed, one is now settled as *not a gap*,
+and one is deliberately left open with its arithmetic.
+
+**The two kernel wins share one mechanism, and it is the same one twice.** `getrf`'s
+row interchange and `getrs`'s permutation were both LAPACK-faithful walks — one work-item
+per column, walking the list — and column-major puts consecutive work-items `ld` apart, so
+every warp access is 32 transactions. Collapsing each to a **gather** (apply the
+interchanges to an identity index array once in local memory, then stream the data
+coalesced in / permuted out / coalesced back) is worth **1.207×** on `getrf` and **1.319×**
+on `getrs` over the arms they replace.
+
+`getrf`'s version needed one further idea. The gather amortises as `L/R` — L transpositions
+against R staged rows — so applied in place it only pays below a crossover. **Deferring the
+left-hand interchange out of the block loop** makes `L == R` exactly, because the deferred
+list runs to the end of the matrix, so the amortisation is 1:1 at every order and **no gate
+is needed at all** — and a lever with no gate cannot carry the leg-predicate defect that
+has bitten this campaign twice. The deferral rests on an identity worth stating: under
+LAPACK's schedule column block `r` receives the lists of panels `r+1..P-1` in order, which
+concatenated is exactly `[j0_{r+1}, n)` in increasing `k`, and no driver step reads a column
+below its own `j0` afterwards. So it is bit-for-bit the same composition, and the two
+spellings are asserted identical on every measured row.
+
+**Four `preferred()` windows now ship**, where WP6 had one and WP7 had none:
+
+| op | window | evidence |
+|---|---|---|
+| `getri` | `float` order ≥ 128, `cfloat` order ≥ 256 | 30 cells, geomean **4.18×**, min 1.20× |
+| `getrf` | `float` order ≥ 256, `cfloat` order ≥ 512 | 15 cells, geomean **2.00×**, min 1.26× |
+| `getrs` | `float nrhs ≥ 64`, `double nrhs ≥ 128`, both `batch ≥ 128` | 37 cells, geomean **2.60×**, min 1.29× |
+| `gemv` | `cdouble`, transposed, `64 ≤ red_len ≤ 352`, `out_len ≥ 256`, `batch ≥ 320` | 63 cells, geomean **2.57×** |
+
+Every boundary is bracketed by a measured non-winner, and every rejected wider candidate is
+recorded with the specific cell that refutes it.
+
+#### The four negative results, which cost as much to establish as the wins
+
+1. **The brief's own framing of the `getrf` gap was wrong.** "Four kernels per block step
+   versus cuBLAS's one fused kernel" implied launch overhead. The blocked arm launches
+   `5P-4` kernels — 16 at `n=128`, nsys-confirmed — which at 5 µs is 80 µs against a 67.1 ms
+   call: **0.12% of the time and 0.2% of the gap**, falling monotonically with batch. And
+   the fused arm *already exists and already loses*: `float n ≤ 155` resolves `native:cta`,
+   one kernel, no laswp, and it measures 0.77–1.00× of cuBLAS. The decomposition costs
+   **data movement, not launches**. No fused blocked LU was attempted, correctly.
+
+2. **`getrs`'s recorded wide-`nrhs` window does not exist.** "nrhs=64 geomean 1.094×,
+   nrhs=128 geomean 1.478×" came from a grid with **one batch per order and no ladder on
+   the batch axis at any width**. Built properly — 464 paired cells over 7 batches — the
+   composition's advantage **falls monotonically with batch**, because below saturation
+   neither arm is measuring its own speed. Read only where both arms saturate, the walk's
+   best candidate fails the gate on its minimum. The window that shipped is the *gather's*,
+   not the walk's.
+
+3. **The gather's budgeted cost does not exist either.** Both the plan and the source header
+   priced it at "an out-of-place RHS plus an `int32[n]` per item" — 134 MB at
+   `cdouble n=512, nrhs=128, batch=128` — and then reasoned at length about the facade
+   billing that to every `nrhs=1` call. That cost was an artefact of the *prototype*, which
+   gathered into a separate global buffer and never copied back. Permuting **in local
+   memory** removes both buffers and the copy-back: `getrs_blocked_buffer_size` still
+   returns 0 at every shape and every width, and a test asserts it.
+
+4. **A pure re-schedule refutes its own prediction.** Deferring the interchange while
+   *keeping* the per-column walk moves byte-for-byte identical traffic and was predicted to
+   be 1.00× "by construction". Measured: geomean 1.055× with **three of eleven cells
+   losing**, spread 0.707–1.315×. The mechanism is the **work-item count**, not the traffic:
+   the same product of work distributed as `batch*ib` items walking `n-j0` steps instead of
+   `batch*j0` items walking `ib` is 15× less parallelism at `n=512`. That is also why the
+   gather wins *more* than its 7.9× traffic saving alone predicts — it puts the parallelism
+   back as well.
+
+#### The measurement finding that nearly cost half the `getrs` clause
+
+**Two RTX 4090s in one chassis are not two independent machines, and neither `foreign()`
+nor `rel_sd` can see it.** A sweep on device 1 running alongside a sweep on device 0 read
+`getrf float n=256 batch=128` at 5.51 ms against 1.006 ms alone — and both cards correctly
+reported zero foreign processes, because `nvidia-smi --query-compute-apps` is *per device*,
+while `rel_sd` on the contaminated rows was 0.0004–0.017. Same NUMA node, same CPU affinity
+mask, one UVM driver, managed memory. It is cell-specific and intermittent: 4 of 7 paired
+cells agreed to 0.5% while 3 were 2.2–5.5× apart. `getri` and `gemv` were unaffected — long,
+device-resident timed regions — while `getrf` and `getrs` were wrong by up to 5×.
+
+One contaminated reading looked exactly like a **mid-ladder loss inside the admitted set**,
+the failure mode this clause family has died of twice. It caused the `float` boundary to be
+narrowed from `nrhs ≥ 64` to `≥ 128`, giving up 15 cells at 1.77–4.07×, before a re-measure
+on an idle box reverted the narrowing. **Run one harness on the box at a time**, and note
+that device 0 here drives the display.
+
+#### What is left open, with its number
+
+* **`getrs`'s gather is parallel over batch only** — `nd_range<1>(batch*wg, wg)`, one wave
+  at the clause's own floor of 128. It never loses (A/B min 1.0004 over 80 cells), so it is
+  an unclaimed lever rather than a defect, but it is this codebase's signature pattern
+  sitting in the arm this pass shipped. `getrf`'s gather does not have it.
+* **`getri` at `batch ≤ 32`** beats cuBLAS by 1.7–28× for *every* type, because the vendor's
+  batched `getri` is a per-item loop there. Unrouted: a batch clause needs bracketing at
+  every `(type, order)` it would admit, and low batch was measured only at orders 128 and 512.
+* **The conditional right-hand `getrf` gather**, declined with its arithmetic: a one-order
+  lever behind a per-block-step runtime gate, worth ~1.29× at `n=256`, ~1.07× at `n=512` and
+  ~1.00× at `n ≥ 1024`.
+* **`getrs double` is at 1.274× at `n=2048` and still declining with order.** `n=4096` is
+  unmeasured and is the one place a future order could fall under the bar.
 
 ### WP8 — sparse: `spmm`
 

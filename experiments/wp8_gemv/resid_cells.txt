@@ -1,0 +1,10 @@
+# The five cells still below 1.00 after gate 3, plus their nearest admitted
+# neighbours, for a third and fourth pass at higher rep count.
+16 32 128
+4 32 512
+2 32 512
+1 32 4096
+8 32 512
+32 32 512
+16 32 512
+64 32 128

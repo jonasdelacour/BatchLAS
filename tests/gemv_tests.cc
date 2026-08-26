@@ -9,6 +9,10 @@
 #include <limits>
 #include <algorithm>
 #include "test_utils.hh"
+#include "../src/sycl/gemv_native.hh"
+#include "../src/backends/gemv_route.hh"
+#include <utility>
+#include <cstdlib>
 
 using namespace batchlas;
 
@@ -390,7 +394,19 @@ protected:
 
         UnifiedVector<ScalarType> A(std::max(1, a_stride * c.batch));
         UnifiedVector<ScalarType> x(std::max(1, x_stride * c.batch));
-        UnifiedVector<ScalarType> y(std::max(1, y_stride * c.batch));
+        // A GUARD BAND PAST THE END OF y, AND IT EXISTS BECAUSE THE SUITE WAS
+        // BLIND WITHOUT IT. Body 5's tail sub-group covers W outputs and can run
+        // past the last one; its correctness rests on a mask and a clamp. THREE
+        // separate breaks against that pair -- `segTtail` (return instead of
+        // mask), `segTtailwrite` (mask dropped at the store) and `segTclampoff2`
+        // (mask AND clamp dropped together) -- ALL CAME BACK GREEN over 376
+        // cases, because a write past the last batch item lands past the end of
+        // this allocation, where nothing was looking. That is the twelfth
+        // recorded blind guard in this campaign and it is closed here: the band
+        // is poisoned before the call and asserted untouched after it, so an
+        // out-of-range y write has somewhere observable to land.
+        constexpr int kGuard = 64;
+        UnifiedVector<ScalarType> y(std::max(1, y_stride * c.batch) + kGuard);
 
         // A's PAD ELEMENTS (rows m..ld-1) are filled with a large poison value.
         // A kernel that walked a column by ld instead of by m -- or that mixed
@@ -435,6 +451,9 @@ protected:
                 y_initial[b * y_stride + t] = v;
             }
         }
+        // The guard band, poisoned with a value no correct kernel produces.
+        const ScalarType guard_v = static_cast<ScalarType>(RealType(-98765));
+        for (int t = 0; t < kGuard; ++t) y[y_stride * c.batch + t] = guard_v;
 
         MatrixView<ScalarType, MatrixFormat::Dense> A_view(
             A.data(), c.m, c.n, ld, a_stride, c.batch);
@@ -527,6 +546,15 @@ protected:
                     }
                 }
             }
+        }
+
+        // THE GUARD BAND. Nothing may write past the last batch item of y. See
+        // the note on its allocation: three separate breaks against body 5's
+        // tail masking were green over 376 cases until this existed.
+        for (int t = 0; t < kGuard; ++t) {
+            EXPECT_EQ(y[y_stride * c.batch + t], guard_v)
+                << "y guard band element " << t << " past the end of batch "
+                << c.batch << " was written";
         }
     }
 };
@@ -1124,6 +1152,439 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
     c.alpha = static_cast<S>(1.25); c.beta = static_cast<S>(-0.5);
     c.stride_pad = 19;
     this->run_case(c);
+}
+
+
+// ===========================================================================
+// BODY 5 -- THE SEGMENTED **TRANSPOSED** CTA KERNEL, GemvSegTKernel<T, W>.
+// (src/sycl/gemv_native.cc; W outputs per sub-group, L = 32/W lanes each.)
+//
+// WHY THE CASES BELOW LOOK NOTHING LIKE BODY 4's. Body 4's gate is on out_len
+// and body 5's is on **red_len**, which under Trans/ConjTrans is m -- so where
+// body 4 needed short OUTPUT vectors, body 5 needs short REDUCTIONS, i.e. small
+// m with n large. A case copied across from the body-4 section reaches body 3
+// and proves nothing. That axis confusion is the error route_gemv.hh:273-277
+// records being caught twice in WP7, and it is the single easiest way to make
+// this whole section vacuous.
+//
+// AND THE GATE IS PER SCALAR TYPE, which is new in this file. Body 5 runs at
+// red_len <= 32 for float, <= 16 for complex<float>, <= 48 for double and
+// <= 64 for complex<double>, because body 3 reaches the DRAM roof at a
+// different red_len for each (its own GB/s at out_len 2048, batch 512:
+// float 833 at red_len 32 but 913 at 48; cfloat 780 at 16 but 911 at 24;
+// double 548 at 32, 817 at 48, 929 at 64; cdouble 434 at 32, 456 at 48, 708 at
+// 64, 933 at 128). These are TYPED tests over all four scalars, so a single
+// case does NOT reach body 5 for all four types unless m <= 16. That is stated
+// per case below, and SegTransWidthDecisionSurface is what pins it down: it
+// asserts the resolved W through gemv_seg_trans_width_debug -- THE SAME gate
+// function the launcher calls -- at every boundary, on both sides, for all four
+// types.
+//
+// REACHABILITY, AND WHY IT NEEDED ITS OWN INSTRUMENT. {Native, CTA} now names
+// TWO kernels, so the resolved route column -- the campaign's usual answer to
+// "linked is not reachable" -- reads `native:cta` for both of them and cannot
+// distinguish a body-5 launch from a body-3 launch. With preferred() all-false
+// the CTA route is not taken at all in a vendor-present build, so every break
+// here must be run in build-novendor or under an explicit route pin. Both halves
+// are checked below rather than assumed.
+// ===========================================================================
+
+// MEASURED, EACH BREAK APPLIED TO src/sycl/gemv_native.cc, REBUILT IN
+// build-novendor, RUN, AND REVERTED (experiments/wp8_gemv/breaks_body5.py; 376
+// cases total; every red case is Backend 1 = CUDA, because the native_cpu queue
+// does not enumerate a sub-group size of 32 and therefore never reaches body 5 --
+// which is itself the proof that the sub-group gate works). NOT ONE break turned
+// a pre-WP7 GemvMatrixViewTest case red, so "the old cases stay green" is a
+// measurement about which kernel ran and not an accident of a shared path.
+//
+//   break           red   coverage tests turned red
+//   ------------------------------------------------------------------------
+//   segTmap          35   all ten computing seg-T cases (s and o swapped)
+//   segTfold         15   nine (complex fold at stride L instead of 1)
+//   segTfold2        16   nine (the real fold; separate code from the complex)
+//   segTld           31   nine  -- ld ignored
+//   segTxinc         27   eight -- xinc ignored
+//   segTyinc         35   ten   -- yinc ignored
+//   segTstridea       6   PaddedBatchStride + ...WideBand ALONE  <-- the batch
+//                         stride derived as ld*cols instead of read from the
+//                         view. TWO cases in the whole file see it.
+//   segTstridex      31   nine  -- x's per-item stride ignored
+//   segTstridey      35   ten   -- y's per-item stride ignored
+//   segTconj          6   the four ConjTrans seg-T cases ALONE
+//   segTwrite        35   ten (`s == 0` narrowed to `lane == 0`)
+//   segTalpha         4   SegTransAlphaZeroScalesY ALONE
+//   segTbeta          4   SegTransBetaZeroDoesNotReadY ALONE
+//   segTtailwrite    10   the THREE cases with a partial tail sub-group ALONE
+//   segTclampoff2    10   the same three (mask AND clamp dropped together)
+//   segTgateopen     12   the four decision tests (gate 1 opened to red_len 1e5)
+//   segTgateshut     16   the same four (gate 1 shut entirely)
+//   segTfloorgone     4   SegTransParallelismGate ALONE (gate 3 removed)
+//   segTfloorflat     2   SegTransParallelismGate ALONE (its two rows collapsed)
+//   segTw8off         3   SegTransWidthDecisionSurface ALONE (W band off by one)
+//   segTemitoff      16   the four decision tests (no type emits body 5)
+//
+// THREE BREAKS TURNED **NOTHING** RED, AND EACH ONE IS EXPLAINED RATHER THAN
+// CELEBRATED. Two of them were also the reason the y guard band above exists.
+//
+//   segTtail   -- `return` instead of the mask on the partial tail. Green, and
+//     it stays green even with the guard band. The reason is the fold's CLOSURE:
+//     lane group o reads only lanes o*L .. o*L+L-1, and the groups that would
+//     return are the HIGH ones, which no surviving group reads from. So the mask
+//     is a SPEC-CONFORMANCE requirement -- a shuffle reached by part of a
+//     sub-group is undefined behaviour -- and NOT an observable-value
+//     requirement on this hardware. Exactly body 4's `segactive` epitaph, from
+//     the other side. No test in any suite can be written to catch it.
+//
+//   segTclampoff -- the clamp removed, the mask kept. Green, correctly: the
+//     clamp only affects the ADDRESSES an out-of-range lane group forms, and
+//     `active` still stops it dereferencing them. It is defence in depth, and
+//     its partner segTclampoff2 (both removed) IS red, which is what shows the
+//     pair is load-bearing together.
+//
+//   segTlaunch -- the sub-group count handed to the work-group ladder left at
+//     out_len*batch instead of ceil(out_len*batch / W), so the launch is W times
+//     too big. Green, and correctly: the extra sub-groups all have
+//     base >= total and return. It is a PERFORMANCE defect (a W-fold
+//     over-launch), not a correctness one, and no value check can see it.
+//
+// AND THE ONE THAT CHANGED THE SUITE. segTtailwrite and segTclampoff2 were BOTH
+// GREEN over 376 cases before the y guard band existed, because an out-of-range
+// write lands past the end of y's allocation where nothing was looking. That is
+// the twelfth recorded blind guard in this campaign. With the band they turn
+// exactly the three partial-tail cases red -- out_len*batch mod W != 0 for
+// SegTransPartialLanesAndTail (2385 mod 8 = 1), SegTransOutputsStraddleBatchItems
+// (3065 mod 8 = 1) and SegTransPaddedBatchStrideWideBand (8295 mod 4 = 3) -- and
+// nothing else, which is the right answer.
+
+// THE DECISION SURFACE. Not a performance claim -- a claim about WHICH KERNEL
+// RUNS, asserted at every boundary of the two per-type tables and on both sides
+// of each, so that no break can move a boundary without moving this test.
+//
+// It also pins the two ways the launcher declines AFTER the gate has said yes:
+// a device that does not enumerate a sub-group size of 32 (the native_cpu
+// queue, where body 5 carries an unsatisfiable reqd_sub_group_size), and
+// red_len <= 0.
+TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
+    using S = typename TestFixture::ScalarType;
+    if (!this->ctx) return;
+    const bool sg32 = this->ctx->device().supports_sub_group_size(32);
+
+    // (red_len, expected W) transcribed from the two tables in
+    // src/sycl/gemv_native.cc, per type, INCLUDING the cell one past each edge.
+    // out_len*batch used for the gate-3 input. A million clears both rows of
+    // the parallelism floor (16*CU and 64*CU) on any device this suite runs on;
+    // the floor itself is asserted separately in SegTransParallelismGate. This
+    // test is about the two red_len tables and nothing else.
+    const int64_t kItems = 1 << 20;
+    std::vector<std::pair<int, int>> want;
+    if constexpr (std::is_same_v<S, float>) {
+        want = {{1,8},{16,8},{24,8},{25,4},{32,4},{33,1},{48,1},{64,1},{128,1}};
+    } else if constexpr (std::is_same_v<S, std::complex<float>>) {
+        want = {{1,8},{8,8},{16,8},{17,1},{24,1},{32,1},{48,1},{64,1},{128,1}};
+    } else if constexpr (std::is_same_v<S, double>) {
+        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{49,1},{64,1},{128,1}};
+    } else {
+        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{64,4},{65,1},{96,1},{128,1}};
+    }
+    for (const auto& [rl, w] : want) {
+        const int got = batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
+        // On a device with no enumerated sub-group 32 the launcher declines
+        // EVERYTHING, and that is the property that keeps the Direct route's
+        // no-GPU-gate promise intact -- body 5 must never be the reason a
+        // native_cpu queue fails to launch.
+        EXPECT_EQ(got, sg32 ? w : 1) << "red_len " << rl << " sg32 " << sg32;
+    }
+    // Degenerate reduction lengths take body 3, whose quick-return path this
+    // file already guards.
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 0, kItems), 1);
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, -1, kItems), 1);
+}
+
+// AND THE SHAPES BELOW REALLY DO REACH IT. Asserted rather than believed, for
+// the exact m values the cases use, so that a gate edit which silently sends
+// them all to body 3 turns THIS red instead of leaving the whole section green
+// and meaningless. The resolved ROUTE is printed alongside, because a break run
+// in a build where the CTA route is not taken is vacuous whatever the gate says.
+TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
+    using S = typename TestFixture::ScalarType;
+    if (!this->ctx) return;
+    if (!this->ctx->device().supports_sub_group_size(32)) return;
+
+    // THE ITEMS THE BODY-5 CASES BELOW ACTUALLY USE, per band, taken from the
+    // smallest case in each: 2385 for the W = 8 band (SegTransPartialLanesAndTail,
+    // n = 53, batch = 45) and 8288 for the W = 4 band (SegTransWideBandTranspose,
+    // n = 37, batch = 224). GATE 3's floor is 16*CU and 64*CU respectively --
+    // 2048 and 8192 on this 128-SM box -- so both clear it here.
+    //
+    // ON A BIGGER DEVICE THEY WOULD NOT, and then gate 3 declines and every
+    // body-5 case in this file silently becomes an ordinary body-3 case: the
+    // whole section stays green and proves nothing, which is the vacuous-break
+    // failure mode this campaign records as trap 4. So it REPORTS rather than
+    // passing quietly.
+    const int64_t kItems8 = 2385;
+    const int64_t kItems4 = 8288;
+    const int cu = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    if (static_cast<int64_t>(16) * cu > kItems8 || static_cast<int64_t>(64) * cu > kItems4) {
+        GTEST_SKIP() << "VACUOUS ON THIS DEVICE: MAX_COMPUTE_UNITS = " << cu
+                     << " puts gate 3's floors at " << (16 * cu) << " and " << (64 * cu)
+                     << ", above the smallest body-5 cases' out_len*batch of "
+                     << kItems8 << " and " << kItems4
+                     << ". Every body-5 case here would run body 3. Enlarge their "
+                        "batch before trusting any break result.";
+    }
+    const int64_t kItems = kItems8;
+    UnifiedVector<S> a(16 * 8), x(8), y(16);
+    UnifiedVector<S*> pa(1);
+    MatrixView<S, MatrixFormat::Dense> Av(a.data(), 8, 16, 8, 8 * 16, 1, pa.data());
+    VectorView<S> Xv(x.data(), 8, 1, Inc{1}, Stride{8});
+    VectorView<S> Yv(y.data(), 16, 1, Inc{1}, Stride{16});
+    const auto rt = backend::gemv_route<TestFixture::BackendType, S>(
+        *this->ctx, Av, Xv, Yv, Transpose::Trans, /*vendor_available=*/false);
+    std::cout << "[ROUTE] gemv Trans (vendor_available=false) resolves to "
+              << dispatch::to_string(rt.origin) << ":" << dispatch::to_string(rt.algo)
+              << std::endl;
+
+    // Every m used by a body-5 case below, with the W it must resolve to.
+    // m = 1, 3, 5 and 16 are inside EVERY type's gate; 40 and 48 are inside
+    // double's and complex<double>'s only, which is why they are checked with
+    // the type-conditional expectation rather than a bare > 1.
+    for (int m : {1, 3, 5, 16}) {
+        EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
+            << "body 5 must serve red_len " << m << " for every scalar type";
+    }
+    const bool wide = std::is_same_v<S, double> || std::is_same_v<S, std::complex<double>>;
+    for (int m : {40, 44}) {
+        EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4) > 1, wide)
+            << "red_len " << m << " is inside the double gates only";
+        if (wide) {
+            EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4), 4)
+                << "red_len " << m << " is in the W = 4 band";
+        }
+    }
+}
+
+// --- the cases -------------------------------------------------------------
+//
+// EVERY ONE OF THESE HAS ld > m, xinc > 1, yinc > 1 AND batch > 1, because the
+// body-4 break table recorded that the pre-WP7 cases were structurally BLIND to
+// ld (ld == rows everywhere), to xinc and to yinc (inc == 1 everywhere) -- three
+// breaks that turned zero pre-existing cases red. Body 5 reads all three and a
+// separate per-item stride; a case that leaves them at their natural values
+// cannot fail when they are ignored.
+//
+// n IS LARGE AND m IS SMALL ON ALL OF THEM. That is the body-5 shape.
+
+// L = 4 LANES AND ONLY ONE OF THEM HAS ANY WORK. red_len = 1 < L, so lanes
+// s = 1, 2, 3 of every group never enter the loop and carry a zero into the
+// fold; if the fold's stride or its participation were wrong, their zeros (or
+// their neighbour group's partials) would land in y.
+TYPED_TEST(GemvCoverageTest, SegTransMinimalReduction) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 1; c.n = 200; c.batch = 16; c.ld = 5; c.xinc = 2; c.yinc = 3;
+    c.transA = Transpose::Trans;
+    c.alpha = static_cast<S>(1.25); c.beta = static_cast<S>(-0.5);
+    this->run_case(c);
+}
+
+// PARTIAL LANES, AND A TAIL SUB-GROUP AT THE SAME TIME. red_len = 3 leaves one
+// of the four lanes idle, and out_len*batch = 53*11 = 583, which is 7 mod 8 --
+// so the LAST sub-group has one lane group in range and seven past the end.
+// That is body 5's early-exit trap: the exit is NOT sub-group uniform and must
+// be MASKED, never returned, or the fold is reached by part of a sub-group.
+TYPED_TEST(GemvCoverageTest, SegTransPartialLanesAndTail) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 3; c.n = 53; c.batch = 45; c.ld = 7; c.xinc = 2; c.yinc = 2;
+    c.transA = Transpose::ConjTrans;
+    c.alpha = static_cast<S>(0.75); c.beta = static_cast<S>(1.5);
+    this->run_case(c);
+}
+
+// THE W OUTPUTS OF ONE SUB-GROUP STRADDLE A BATCH BOUNDARY. out_len = 5 and
+// W = 8, so no sub-group's eight outputs ever lie inside one matrix: every one
+// of them spans two or three batch items, each with its own b, its own column
+// j, and its own x and y. A kernel that computed b once per sub-group instead
+// of once per lane group -- the obvious simplification -- is wrong here and
+// right everywhere else in this file.
+TYPED_TEST(GemvCoverageTest, SegTransOutputsStraddleBatchItems) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 5; c.n = 5; c.batch = 613; c.ld = 9; c.xinc = 3; c.yinc = 2;
+    c.transA = Transpose::Trans;
+    c.alpha = static_cast<S>(-1.75); c.beta = static_cast<S>(0.25);
+    this->run_case(c);
+}
+
+// THE W = 8 UPPER EDGE FOR EVERY TYPE. red_len = 16 is complex<float>'s whole
+// gate and is inside all three others, so this is the one case at the top of
+// the W = 8 band that all four instantiations reach. red_len = 16 is also
+// exactly 4*L, i.e. four full rounds with no partial one.
+TYPED_TEST(GemvCoverageTest, SegTransFullLanesConjTranspose) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 16; c.n = 45; c.batch = 64; c.ld = 19; c.xinc = 2; c.yinc = 3;
+    c.transA = Transpose::ConjTrans;
+    c.alpha = static_cast<S>(2.0); c.beta = static_cast<S>(-0.25);
+    this->run_case(c);
+}
+
+// THE W = 4 BAND -- A SEPARATE TEMPLATE INSTANTIATION, AND THEREFORE A SEPARATE
+// KERNEL. GemvSegTKernel<T,4> and GemvSegTKernel<T,8> share no code after the
+// compiler is done with them (that is the whole point of W being a template
+// parameter), so a defect in one is invisible to the other. red_len = 40 is
+// inside double's and complex<double>'s gates only; for float and
+// complex<float> this case runs on body 3 and is an ordinary Trans case.
+TYPED_TEST(GemvCoverageTest, SegTransWideBandTranspose) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 40; c.n = 37; c.batch = 224; c.ld = 47; c.xinc = 2; c.yinc = 2;
+    c.transA = Transpose::Trans;
+    c.alpha = static_cast<S>(1.5); c.beta = static_cast<S>(-0.75);
+    this->run_case(c);
+}
+
+// ONE ELEMENT ABOVE complex<float>'s GATE AND INSIDE THE OTHER THREE. m = 17
+// is the smallest red_len at which the four types do NOT agree, so a gate that
+// collapsed to a single constant -- in either direction -- changes what runs
+// here. Paired with SegTransFullLanesConjTranspose at m = 16, it brackets that
+// boundary from both sides with a computing case, not only with the decision
+// surface above.
+TYPED_TEST(GemvCoverageTest, SegTransGateBoundaryConjTranspose) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 17; c.n = 41; c.batch = 64; c.ld = 23; c.xinc = 3; c.yinc = 2;
+    c.transA = Transpose::ConjTrans;
+    c.alpha = static_cast<S>(1.5); c.beta = static_cast<S>(-0.75);
+    this->run_case(c);
+}
+
+// alpha == 0 AND beta == 0 ON BODY 5's OWN COPIES OF THE GUARDS. This file now
+// watches FIVE copies of `if (!alpha_zero)` and `if (!beta_zero)`, one per body,
+// and body 5's would otherwise be the unobserved one. NaN in the operand each
+// guard is supposed to leave unread is what makes the claim observable rather
+// than an arithmetic identity that no break can move.
+TYPED_TEST(GemvCoverageTest, SegTransBetaZeroDoesNotReadY) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 8; c.n = 40; c.batch = 64; c.ld = 11; c.xinc = 2; c.yinc = 3;
+    c.transA = Transpose::Trans;
+    c.alpha = static_cast<S>(1.0); c.beta = static_cast<S>(0.0);
+    c.y_starts_nan = true;
+    this->run_case(c);
+}
+
+TYPED_TEST(GemvCoverageTest, SegTransAlphaZeroScalesY) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 8; c.n = 40; c.batch = 64; c.ld = 11; c.xinc = 2; c.yinc = 3;
+    c.transA = Transpose::ConjTrans;
+    c.alpha = static_cast<S>(0.0); c.beta = static_cast<S>(-1.5);
+    c.a_starts_nan = true;
+    this->run_case(c);
+}
+
+// THE BATCH STRIDE, ON BODY 5. The stride_pad field exists because a previous
+// rewrite of this suite was blind to batch stride -- a kernel that DERIVED the
+// stride as ld*cols instead of reading A.stride() passed all 232 cases -- and
+// ortho.cc:218-222 is the live caller that hands a derived-stride-defeating
+// view on every CGS iteration. Body 5 reads A.stride(), X.stride() and
+// Y.stride() in its own code; none of the four existing PaddedBatchStride cases
+// reaches it, because their m values are 70, 70, 66 and 8-under-NoTrans.
+TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStride) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 13; c.n = 39; c.batch = 64; c.ld = 17; c.xinc = 2; c.yinc = 3;
+    c.transA = Transpose::Trans;
+    c.alpha = static_cast<S>(1.25); c.beta = static_cast<S>(-0.5);
+    c.stride_pad = 29;   // co-prime with ld, xinc and yinc
+    this->run_case(c);
+}
+
+TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStrideWideBand) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    c.m = 44; c.n = 35; c.batch = 237; c.ld = 51; c.xinc = 3; c.yinc = 2;
+    c.transA = Transpose::ConjTrans;
+    c.alpha = static_cast<S>(0.75); c.beta = static_cast<S>(1.25);
+    c.stride_pad = 23;
+    this->run_case(c);
+}
+
+
+// GATE 3, THE PARALLELISM CONDITION, ON BOTH SIDES. Body 5 launches
+// (out_len*batch)/W sub-groups against body 3's out_len*batch, so below
+// 8*MAX_COMPUTE_UNITS outputs it gives away parallelism the shape cannot spare.
+// Measured: at out_len*batch <= 512 body 5 is 0.891x-0.989x of body 3
+// (experiments/wp8_gemv/skinny_p{1,2}.csv, sixteen losing cells found only
+// because the WP7 parity grid reaches out_len = 1 and this pass's own
+// (out_len, red_len) plane started at 64).
+//
+// This asserts the boundary through the launcher's own gate function, at a
+// red_len every type admits, so it cannot pass by the gate being declined for
+// some other reason.
+TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
+    using S = typename TestFixture::ScalarType;
+    if (!this->ctx) return;
+    if (!this->ctx->device().supports_sub_group_size(32)) return;
+    const int cu = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    auto w = [&](int red_len, int64_t items) {
+        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+    };
+    // THE W = 8 ROW, floor 16*CU, probed at a red_len every type puts in that band.
+    const int64_t f8 = static_cast<int64_t>(16) * cu;
+    EXPECT_EQ(w(8, f8 - 1), 1) << "one output short of the W = 8 floor must take body 3";
+    EXPECT_EQ(w(8, f8), 8) << "exactly at the W = 8 floor body 5 must serve the call";
+    EXPECT_EQ(w(8, 0), 1);
+    EXPECT_EQ(w(8, 1), 1);
+
+    // THE W = 4 ROW, floor 64*CU -- FOUR TIMES HIGHER, which is the whole point
+    // of the floor being a table. Only double and complex<double> have a W = 4
+    // band at red_len 40 (float's ends at 32, complex<float>'s at 16), so the
+    // other two must decline at every items.
+    const int64_t f4 = static_cast<int64_t>(64) * cu;
+    if constexpr (std::is_same_v<S, double> || std::is_same_v<S, std::complex<double>>) {
+        EXPECT_EQ(w(40, f4 - 1), 1) << "one output short of the W = 4 floor must take body 3";
+        EXPECT_EQ(w(40, f4), 4) << "exactly at the W = 4 floor body 5 must serve the call";
+        // AND THE TWO ROWS ARE DIFFERENT. At f8 the W = 8 band is admitted and
+        // the W = 4 band is not; a single-number floor cannot produce this.
+        EXPECT_EQ(w(8, f8), 8);
+        EXPECT_EQ(w(40, f8), 1) << "the W = 4 band's floor is FOUR TIMES the W = 8 band's";
+    } else {
+        EXPECT_EQ(w(40, f4 * 16), 1) << "red_len 40 is above this type's gate";
+    }
+    EXPECT_GT(w(8, f8 * 64), 1);
+}
+
+// AND THE ENV KNOB BYPASSES ALL THREE GATES, which is what lets a measurement
+// ask what body 5 WOULD do above a gate and a test reach body 3 below one.
+// BATCHLAS_GEMV_SEGT is re-read per call and never latched, precisely so this
+// assertion is not defeated by an earlier gemv call in the same process --
+// the campaign's eleventh recorded blind guard.
+TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
+    using S = typename TestFixture::ScalarType;
+    if (!this->ctx) return;
+    if (!this->ctx->device().supports_sub_group_size(32)) return;
+    const int64_t kBig = 1 << 20;
+    const int kFar = 100000;     // far above every per-type red_len gate
+    // Default: gates apply.
+    ::unsetenv("BATCHLAS_GEMV_SEGT");
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, kBig), 1);
+    EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
+    // Forced: gates bypassed, in both directions, AFTER a default read.
+    ::setenv("BATCHLAS_GEMV_SEGT", "4", 1);
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 4);
+    ::setenv("BATCHLAS_GEMV_SEGT", "8", 1);
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 8);
+    ::setenv("BATCHLAS_GEMV_SEGT", "2", 1);
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 2);
+    ::setenv("BATCHLAS_GEMV_SEGT", "off", 1);
+    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
+    // And unsetting it restores the gates -- which a latched PRESENCE would not.
+    ::unsetenv("BATCHLAS_GEMV_SEGT");
+    EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
 }
 
 // ... (Keep main function) ...

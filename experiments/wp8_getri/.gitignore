@@ -1,0 +1,7 @@
+lubench6_v
+lubench6_nv
+*.nsys-rep
+*.sqlite
+*.json
+nsys/
+__pycache__/

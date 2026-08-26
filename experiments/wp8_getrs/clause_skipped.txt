@@ -1,0 +1,5 @@
+SKIP getrs:cdouble:512:64:2048  needs 18.00 GiB
+SKIP getrs:cdouble:512:128:2048  needs 20.00 GiB
+SKIP getrs:cdouble:1024:64:512  needs 17.00 GiB
+SKIP getrs:cdouble:1024:128:512  needs 18.00 GiB
+131 cells, 4 skipped

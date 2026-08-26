@@ -1,0 +1,182 @@
+# 127 cells paired across 1 pass(es), 1 refusals
+# REFUSED ('getri', 'float', 64, 1, 2048): v BAD-THROW
+
+=== getri ===
+  getri float order>=128                         n= 20 geo= 3.980 min=1.2135 loss= 0 sub1.15= 0  PASS
+  getri float order>=64                          n= 22 geo= 3.461 min=0.8530 loss= 2 sub1.15= 2  FAIL
+      REFUTED BY float n=64 nrhs=1 batch=16384  ratio 0.8530  (passes 0.8530)
+  getri float order>=256                         n= 13 geo= 6.268 min=2.6409 loss= 0 sub1.15= 0  PASS
+  getri cfloat order>=256                        n= 11 geo= 4.477 min=1.6815 loss= 0 sub1.15= 0  PASS
+  getri cfloat order>=128                        n= 13 geo= 3.453 min=0.7070 loss= 2 sub1.15= 2  FAIL
+      REFUTED BY cfloat n=128 nrhs=1 batch=512  ratio 0.7070  (passes 0.7070)
+  getri cfloat order>=512                        n=  7 geo= 7.159 min=3.8094 loss= 0 sub1.15= 0  PASS
+  getri double order>=512                        n=  5 geo= 1.199 min=1.0823 loss= 0 sub1.15= 1  FAIL
+      REFUTED BY double n=2048 nrhs=1 batch=128  ratio 1.0823  (passes 1.0823)
+  getri double order>=256                        n=  7 geo= 1.178 min=1.0823 loss= 0 sub1.15= 3  FAIL
+      REFUTED BY double n=2048 nrhs=1 batch=128  ratio 1.0823  (passes 1.0823)
+  getri double order>=1024                       n=  3 geo= 1.133 min=1.0823 loss= 0 sub1.15= 1  FAIL
+      REFUTED BY double n=2048 nrhs=1 batch=128  ratio 1.0823  (passes 1.0823)
+  getri cdouble order>=512                       n=  4 geo= 1.039 min=0.9525 loss= 1 sub1.15= 4  FAIL
+      REFUTED BY cdouble n=512 nrhs=1 batch=1024  ratio 0.9525  (passes 0.9525)
+  getri cdouble order>=1024                      n=  2 geo= 1.081 min=1.0301 loss= 0 sub1.15= 2  FAIL
+      REFUTED BY cdouble n=1024 nrhs=1 batch=256  ratio 1.0301  (passes 1.0301)
+  getri SHIPPED float>=128 | cfloat>=256         n= 31 geo= 4.150 min=1.2135 loss= 0 sub1.15= 0  PASS
+
+=== getrs (batch >= 128 unless stated) ===
+  getrs float nrhs>=128 batch>=128               n= 15 geo= 3.679 min=1.8484 loss= 0 sub1.15= 0  PASS
+  getrs float nrhs>=64 batch>=128                n= 22 geo= 3.138 min=1.7695 loss= 0 sub1.15= 0  PASS
+  getrs double nrhs>=128 batch>=128              n= 15 geo= 1.979 min=1.2858 loss= 0 sub1.15= 0  PASS
+  getrs double nrhs>=64 batch>=128               n= 15 geo= 1.979 min=1.2858 loss= 0 sub1.15= 0  PASS
+  getrs cfloat nrhs>=128 batch>=128              n=  2 geo= 1.588 min=1.5182 loss= 0 sub1.15= 0  PASS
+  getrs cdouble nrhs>=128 batch>=128             n=  2 geo= 0.980 min=0.9196 loss= 1 sub1.15= 2  FAIL
+      REFUTED BY cdouble n=128 nrhs=128 batch=1024  ratio 0.9196  (passes 0.9196)
+  getrs SHIPPED float|double nrhs>=128 batch>=128 n= 30 geo= 2.698 min=1.2858 loss= 0 sub1.15= 0  PASS
+  getrs SAME BUT NO BATCH FLOOR                  n= 44 geo= 3.074 min=1.2858 loss= 0 sub1.15= 0  PASS
+
+=== getrf ===
+  getrf float order>=256                         n=  9 geo= 2.009 min=1.2626 loss= 0 sub1.15= 0  PASS
+  getrf float order>=128                         n= 11 geo= 1.730 min=0.7757 loss= 1 sub1.15= 2  FAIL
+      REFUTED BY float n=128 nrhs=1 batch=512  ratio 0.7757  (passes 0.7757)
+  getrf float order>=512                         n=  6 geo= 2.357 min=1.7400 loss= 0 sub1.15= 0  PASS
+  getrf cfloat order>=512                        n=  6 geo= 1.978 min=1.6065 loss= 0 sub1.15= 0  PASS
+  getrf cfloat order>=256                        n=  9 geo= 1.649 min=0.8851 loss= 1 sub1.15= 1  FAIL
+      REFUTED BY cfloat n=256 nrhs=1 batch=128  ratio 0.8851  (passes 0.8851)
+  getrf cfloat order>=128                        n= 11 geo= 1.372 min=0.4920 loss= 3 sub1.15= 3  FAIL
+      REFUTED BY cfloat n=128 nrhs=1 batch=128  ratio 0.4920  (passes 0.4920)
+  getrf double order>=512                        n=  3 geo= 0.942 min=0.7486 loss= 1 sub1.15= 3  FAIL
+      REFUTED BY double n=512 nrhs=1 batch=1024  ratio 0.7486  (passes 0.7486)
+  getrf cdouble order>=1024                      n=  1 geo= 1.016 min=1.0165 loss= 0 sub1.15= 1  FAIL
+      REFUTED BY cdouble n=1024 nrhs=1 batch=128  ratio 1.0165  (passes 1.0165)
+  getrf SHIPPED float>=256 | cfloat>=512         n= 15 geo= 1.997 min=1.2626 loss= 0 sub1.15= 0  PASS
+  getrf WIDER   float>=256 | cfloat>=256         n= 18 geo= 1.820 min=0.8851 loss= 1 sub1.15= 1  FAIL
+      REFUTED BY cfloat n=256 nrhs=1 batch=128  ratio 0.8851  (passes 0.8851)
+
+=== FULL TABLE ===
+op,type,order,nrhs,batch,route,p1,QUOTED
+getrf,cdouble,1024,1,128,native:blocked,1.0165,1.0165
+getrf,cfloat,128,1,128,native:blocked,0.4920,0.4920
+getrf,cfloat,128,1,512,native:blocked,0.7269,0.7269
+getrf,cfloat,256,1,128,native:blocked,0.8851,0.8851
+getrf,cfloat,256,1,512,native:blocked,1.4326,1.4326
+getrf,cfloat,256,1,1024,native:blocked,1.1880,1.1880
+getrf,cfloat,512,1,128,native:blocked,1.7748,1.7748
+getrf,cfloat,512,1,512,native:blocked,1.6718,1.6718
+getrf,cfloat,512,1,1024,native:blocked,1.6065,1.6065
+getrf,cfloat,1024,1,128,native:blocked,2.1348,2.1348
+getrf,cfloat,1024,1,512,native:blocked,2.1035,2.1035
+getrf,cfloat,2048,1,128,native:blocked,2.8017,2.8017
+getrf,double,512,1,128,native:blocked,1.0333,1.0333
+getrf,double,512,1,1024,native:blocked,0.7486,0.7486
+getrf,double,1024,1,128,native:blocked,1.0816,1.0816
+getrf,float,128,1,128,native:cta,1.0037,1.0037
+getrf,float,128,1,512,native:cta,0.7757,0.7757
+getrf,float,256,1,128,native:blocked,1.2626,1.2626
+getrf,float,256,1,512,native:blocked,1.5658,1.5658
+getrf,float,256,1,1024,native:blocked,1.5750,1.5750
+getrf,float,512,1,128,native:blocked,2.3455,2.3455
+getrf,float,512,1,512,native:blocked,1.7400,1.7400
+getrf,float,512,1,1024,native:blocked,2.1783,2.1783
+getrf,float,1024,1,128,native:blocked,2.7782,2.7782
+getrf,float,1024,1,512,native:blocked,2.2309,2.2309
+getrf,float,2048,1,128,native:blocked,3.1115,3.1115
+getri,cdouble,512,1,128,native:blocked|native:blocked,1.0450,1.0450
+getri,cdouble,512,1,1024,native:blocked|native:blocked,0.9525,0.9525
+getri,cdouble,1024,1,128,native:blocked|native:blocked,1.1348,1.1348
+getri,cdouble,1024,1,256,native:blocked|native:blocked,1.0301,1.0301
+getri,cfloat,128,1,512,native:blocked|native:blocked,0.7070,0.7070
+getri,cfloat,128,1,2048,native:blocked|native:blocked,0.9681,0.9681
+getri,cfloat,256,1,128,native:blocked|native:blocked,1.9877,1.9877
+getri,cfloat,256,1,512,native:blocked|native:blocked,1.6815,1.6815
+getri,cfloat,256,1,2048,native:blocked|native:blocked,2.0498,2.0498
+getri,cfloat,256,1,4096,native:blocked|native:blocked,2.1948,2.1948
+getri,cfloat,512,1,1,native:blocked|native:blocked,24.3244,24.3244
+getri,cfloat,512,1,32,native:blocked|native:blocked,8.8996,8.8996
+getri,cfloat,512,1,128,native:blocked|native:blocked,4.1376,4.1376
+getri,cfloat,512,1,1024,native:blocked|native:blocked,3.8094,3.8094
+getri,cfloat,1024,1,128,native:blocked|native:blocked,5.9870,5.9870
+getri,cfloat,1024,1,512,native:blocked|native:blocked,5.4873,5.4873
+getri,cfloat,2048,1,128,native:blocked|native:blocked,8.5999,8.5999
+getri,double,256,1,512,native:blocked|native:blocked,1.1240,1.1240
+getri,double,256,1,4096,native:blocked|native:blocked,1.1293,1.1293
+getri,double,512,1,128,native:blocked|native:blocked,1.3123,1.3123
+getri,double,512,1,1024,native:blocked|native:blocked,1.2966,1.2966
+getri,double,1024,1,128,native:blocked|native:blocked,1.1602,1.1602
+getri,double,1024,1,512,native:blocked|native:blocked,1.1577,1.1577
+getri,double,2048,1,128,native:blocked|native:blocked,1.0823,1.0823
+getri,float,64,1,8192,native:cta|native:blocked,0.8561,0.8561
+getri,float,64,1,16384,native:cta|native:blocked,0.8530,0.8530
+getri,float,128,1,1,native:cta|native:blocked,2.1805,2.1805
+getri,float,128,1,2,native:cta|native:blocked,2.1766,2.1766
+getri,float,128,1,32,native:cta|native:blocked,2.0888,2.0888
+getri,float,128,1,256,native:cta|native:blocked,1.8239,1.8239
+getri,float,128,1,1024,native:cta|native:blocked,1.5557,1.5557
+getri,float,128,1,4096,native:cta|native:blocked,1.2652,1.2652
+getri,float,128,1,16384,native:cta|native:blocked,1.2135,1.2135
+getri,float,256,1,128,native:blocked|native:blocked,4.0912,4.0912
+getri,float,256,1,1024,native:blocked|native:blocked,3.0747,3.0747
+getri,float,256,1,4096,native:blocked|native:blocked,2.6409,2.6409
+getri,float,512,1,1,native:blocked|native:blocked,18.5688,18.5688
+getri,float,512,1,32,native:blocked|native:blocked,15.2720,15.2720
+getri,float,512,1,128,native:blocked|native:blocked,7.6002,7.6002
+getri,float,512,1,1024,native:blocked|native:blocked,3.9980,3.9980
+getri,float,512,1,2048,native:blocked|native:blocked,4.4663,4.4663
+getri,float,1024,1,128,native:blocked|native:blocked,9.0646,9.0646
+getri,float,1024,1,512,native:blocked|native:blocked,5.0680,5.0680
+getri,float,1024,1,1024,native:blocked|native:blocked,5.9153,5.9153
+getri,float,2048,1,128,native:blocked|native:blocked,9.3489,9.3489
+getri,float,2048,1,256,native:blocked|native:blocked,7.0945,7.0945
+getrs,cdouble,128,128,1024,native:blocked|native:blocked,0.9196,0.9196
+getrs,cdouble,512,128,512,native:blocked|native:blocked,1.0446,1.0446
+getrs,cfloat,128,128,1024,native:blocked|native:blocked,1.5182,1.5182
+getrs,cfloat,512,128,512,native:blocked|native:blocked,1.6614,1.6614
+getrs,double,64,128,32,native:blocked|native:blocked,4.4801,4.4801
+getrs,double,64,128,64,native:blocked|native:blocked,4.3059,4.3059
+getrs,double,64,128,128,native:blocked|native:blocked,4.1221,4.1221
+getrs,double,64,128,512,native:blocked|native:blocked,2.0118,2.0118
+getrs,double,64,128,4096,native:blocked|native:blocked,2.5182,2.5182
+getrs,double,128,128,32,native:blocked|native:blocked,4.0495,4.0495
+getrs,double,128,128,64,native:blocked|native:blocked,3.5631,3.5631
+getrs,double,128,128,128,native:blocked|native:blocked,3.1618,3.1618
+getrs,double,128,128,1024,native:blocked|native:blocked,1.7882,1.7882
+getrs,double,128,128,4096,native:blocked|native:blocked,2.8004,2.8004
+getrs,double,256,128,64,native:blocked|native:blocked,2.7593,2.7593
+getrs,double,256,128,128,native:blocked|native:blocked,2.2922,2.2922
+getrs,double,256,128,1024,native:blocked|native:blocked,1.6604,1.6604
+getrs,double,256,128,4096,native:blocked|native:blocked,2.2296,2.2296
+getrs,double,512,128,64,native:blocked|native:blocked,2.1089,2.1089
+getrs,double,512,128,128,native:blocked|native:blocked,1.7482,1.7482
+getrs,double,512,128,512,native:blocked|native:blocked,1.4122,1.4122
+getrs,double,512,128,2048,native:blocked|native:blocked,1.6605,1.6605
+getrs,double,1024,128,64,native:blocked|native:blocked,1.6518,1.6518
+getrs,double,1024,128,128,native:blocked|native:blocked,1.4453,1.4453
+getrs,double,1024,128,512,native:blocked|native:blocked,1.2858,1.2858
+getrs,double,1024,128,1024,native:blocked|native:blocked,1.3070,1.3070
+getrs,float,64,128,32,native:cta|native:blocked,6.0613,6.0613
+getrs,float,64,128,64,native:cta|native:blocked,5.9307,5.9307
+getrs,float,64,128,128,native:cta|native:blocked,5.8519,5.8519
+getrs,float,64,128,512,native:cta|native:blocked,4.5654,4.5654
+getrs,float,64,128,4096,native:cta|native:blocked,4.9739,4.9739
+getrs,float,128,128,32,native:cta|native:blocked,5.9603,5.9603
+getrs,float,128,128,64,native:cta|native:blocked,5.7243,5.7243
+getrs,float,128,128,128,native:cta|native:blocked,5.3399,5.3399
+getrs,float,128,128,1024,native:cta|native:blocked,2.5983,2.5983
+getrs,float,128,128,4096,native:cta|native:blocked,4.9637,4.9637
+getrs,float,256,64,1024,native:blocked|native:blocked,1.8530,1.8530
+getrs,float,256,64,4096,native:blocked|native:blocked,3.8390,3.8390
+getrs,float,256,128,64,native:blocked|native:blocked,5.5956,5.5956
+getrs,float,256,128,128,native:blocked|native:blocked,5.0909,5.0909
+getrs,float,256,128,1024,native:blocked|native:blocked,3.1265,3.1265
+getrs,float,256,128,4096,native:blocked|native:blocked,4.8555,4.8555
+getrs,float,512,64,512,native:blocked|native:blocked,1.9703,1.9703
+getrs,float,512,64,2048,native:blocked|native:blocked,2.6083,2.6083
+getrs,float,512,128,64,native:blocked|native:blocked,4.7128,4.7128
+getrs,float,512,128,128,native:blocked|native:blocked,4.3155,4.3155
+getrs,float,512,128,512,native:blocked|native:blocked,2.5344,2.5344
+getrs,float,512,128,2048,native:blocked|native:blocked,3.6508,3.6508
+getrs,float,1024,64,128,native:blocked|native:blocked,2.1744,2.1744
+getrs,float,1024,64,512,native:blocked|native:blocked,1.7695,1.7695
+getrs,float,1024,64,1024,native:blocked|native:blocked,1.9563,1.9563
+getrs,float,1024,128,64,native:blocked|native:blocked,3.8724,3.8724
+getrs,float,1024,128,128,native:blocked|native:blocked,2.8203,2.8203
+getrs,float,1024,128,512,native:blocked|native:blocked,1.8484,1.8484
+getrs,float,1024,128,1024,native:blocked|native:blocked,2.0769,2.0769

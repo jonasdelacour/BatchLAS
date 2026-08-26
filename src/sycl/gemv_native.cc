@@ -19,6 +19,8 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -133,6 +135,7 @@ template <typename T> class GemvDirectNKernel;
 template <typename T> class GemvDirectTKernel;
 template <typename T> class GemvCtaTKernel;
 template <typename T, int W> class GemvSegNKernel;
+template <typename T, int W> class GemvSegTKernel;
 
 // ---------------------------------------------------------------------------
 // THE SEGMENT WIDTH -- how many lanes body 4 puts on ONE output.
@@ -174,6 +177,297 @@ inline int gemv_seg_width(int out_len) {
     int w = 1;
     while (w * 2 * out_len <= 32) w *= 2;
     return w;
+}
+
+// ===========================================================================
+// BODY 5's SEGMENT WIDTH -- how many OUTPUTS one sub-group serves under Trans,
+// and the runtime gate that decides whether body 5 runs at all.
+//
+// ---- WHAT THE DEFECT ACTUALLY WAS ---------------------------------------
+// route_gemv.hh recorded body 3's short-reduction collapse as "the shuffle
+// ladder is a fixed cost per output (5 steps, doubled to 10 for a complex
+// scalar)". THAT READING IS REFUTED BY THE COUNTERS. If the cost were the
+// shuffle COUNT, `double` (5 shift_group_left on a 64-bit value = 10 hardware
+// shuffles) and `complex<float>` (10 shift_group_left on a 32-bit value = 10
+// hardware shuffles) would be hurt EQUALLY. Measured on body 3 at
+// out_len = 2048, batch = 512, transA = Trans, DRAM-resident, GB/s:
+//
+//     red_len        32      64     128    2048(roof)
+//     float       833.8   924.2   931.0    952.3
+//     double      547.5   928.6   932.2    953.8
+//     cfloat      921.2   925.4   932.7    954.0
+//     cdouble     434.5   708.5   932.5    952.2
+//
+// double and cfloat are 1.68x apart at red_len = 32 at IDENTICAL bytes,
+// IDENTICAL shape and IDENTICAL shuffle count. ncu on the same launches
+// (experiments/wp8_gemv/ncu_precheck.csv) names the discriminator:
+//
+//     sm__pipe_fp64_cycles_active, % of peak     dram__throughput, % of peak
+//     red_len      32      64     128              32      64     128
+//     cdouble   85.55   86.11   84.69           40.61   66.09   95.08
+//     double    85.01   82.74   58.33           50.61   95.78   95.39
+//     cfloat     0.00    0.00    0.00           95.30   95.15   95.27
+//     float      0.00    0.00    0.00           79.09   95.59   95.63
+//
+// THE FOLD IS FP64 WORK ON A 1/64-RATE GEFORCE PART. sg_sum runs log2(32) = 5
+// add steps on ALL 32 lanes of every sub-group, i.e. 160 double-adds per output
+// for `double` and 320 for `complex<double>` (the halves fold separately),
+// against only red_len useful FMAs. At red_len = 32 that is five folds' worth
+// of FP64 for one round of loads, and the FP64 pipe -- not DRAM, not occupancy
+// (79-93% throughout), not coalescing (sectors/load 16.00 for cdouble, the
+// ideal) -- is what runs out. The real types never touch that pipe at all.
+//
+// ---- THE FIX, AND WHY W IS A TEMPLATE PARAMETER --------------------------
+// Put L = 32/W lanes on each output and serve W outputs per sub-group. The fold
+// then costs L*log2(L) adds per output instead of 32*5: 160 -> 24 at L = 8,
+// 8 at L = 4, 2 at L = 2. The loop's red_len FMAs per output are unchanged.
+//
+// W IS A TEMPLATE PARAMETER FOR BODY 4's RECORDED REASON, not for style. With
+// W a runtime `const int` the NoTrans segmented body FIXED out_len <= 4 and
+// REGRESSED out_len >= 8 below the body it replaced -- at BETTER
+// sectors-per-load and BETTER occupancy -- because the trip count and the
+// address stride stopped being compile-time constants and the loop stopped
+// unrolling. See the table on gemv_seg_width above. Body 5 has the identical
+// exposure: its trip count is (red_len - s + L - 1)/L and its stride is L.
+//
+// ---- THE SECTOR FLOOR IS WHAT BOUNDS W ----------------------------------
+// Under Trans the sub-group reads W runs of L*sizeof(T) CONTIGUOUS bytes per
+// round. A 32-byte sector is fully used only when L*sizeof(T) >= 32:
+//
+//     cdouble (16 B)  L >= 2  ->  W <= 16
+//     double, cfloat  ( 8 B)  L >= 4  ->  W <=  8
+//     float    ( 4 B)  L >= 8  ->  W <=  4
+//
+// It is also an ALIGNMENT argument against the extreme. A run starts at element
+// (b*stride + j*ld + s0), so an ODD ld -- the suite uses ld = 79 -- misaligns
+// every other column. A misaligned 32-B run (L = 2) costs 2 sectors instead of
+// 1, +100%; a 64-B run (L = 4) costs 3 instead of 2, +50%; a 128-B run (L = 8)
+// costs 5 instead of 4, +25%; body 3's 512-B runs cost +6%.
+//
+// AND THE MEASUREMENT ONLY HALF AGREES WITH IT, WHICH IS WHY THE W TABLE BELOW
+// IS TRANSCRIBED AND NOT DERIVED. The floor predicts W <= 4 for float. Measured
+// at out_len = 2048, batch = 512, Trans, body 5 against body 3:
+//
+//     red_len          1      2      4      8     16     24     32
+//     float  W = 4  3.36x  3.34x  3.34x  3.40x  3.35x      -  1.069x
+//     float  W = 8  5.89x  5.88x  5.69x  5.91x  5.16x  1.35x  1.064x
+//
+// W = 8 is L = 4, i.e. SIXTEEN-byte runs -- half a sector -- and it is 1.7x
+// FASTER than the floor-respecting W = 4 across red_len <= 16. Below the warp
+// width this kernel is not sector-bound at all: body 3 is idling 32 - red_len of
+// its 32 lanes, and recovering them dominates a wasted half-sector. The floor
+// re-asserts itself at the long end of the band, where the loop is long enough
+// for traffic to matter again, and that is exactly where the W table turns to 4.
+//
+// The instantiated set is therefore W in {2, 4, 8}: 8 and 4 are what the table
+// selects, and 2 exists so BATCHLAS_GEMV_SEGT=2 keeps meaning W = 2 rather than
+// silently resolving to something else -- campaign trap 3, in miniature.
+// ===========================================================================
+inline constexpr int kGemvSegTransMaxW = 8;
+
+// ===========================================================================
+// THE TWO GATES, BOTH ON red_len() AND NEVER ON out_len(). Under Trans/ConjTrans
+// red_len() == m == A.rows() and out_len() == n == A.cols(). The band is on the
+// REDUCTION length: that is where body 3's per-output fixed cost stops being
+// amortised. A predicate written on the other extent inverts the window, and
+// route_gemv.hh:273-277 records that exact error being caught TWICE in WP7.
+//
+// BOTH TABLES ARE TRANSCRIBED FROM A CSV, CELL BY CELL, NOT INFERRED FROM AN
+// INEQUALITY: experiments/wp8_gemv/wfine_p{1,2}.csv, body 5 against body 3
+// interleaved rep by rep inside one process, 11 reps, median, two passes,
+// red_len walked down to 1 at out_len 256 and 2048. The full table is in
+// gemv_native.hh.
+//
+// ---- GATE 1: WHERE BODY 5 RUNS AT ALL -----------------------------------
+// Body 3 reaches the ~950 GB/s DRAM roof at a DIFFERENT red_len for each scalar
+// type, and above that point there is nothing to win and a whole unrolled loop
+// to lose -- which is exactly where body 4's recorded history says a segmented
+// body REGRESSES. Body 3's own GB/s at out_len = 2048, batch = 512, Trans:
+//
+//     red_len       1     8    16    24    32    48    64   128
+//     float      59.3 261.5 485.5 655.9 832.6 912.9 922.7 931.0
+//     cfloat    104.8 450.2 779.8 911.1 921.7 929.4 925.2 932.7
+//     double     33.3 149.8 281.9 415.9 548.1 817.0 928.7 932.2
+//     cdouble    26.6 118.8 224.2 329.2 434.3 456.2 707.9 932.5
+//
+// so the last red_len at which body 3 is still materially short of the roof is
+// 32 for float, 16 for cfloat, 48 for double and 64 for cdouble. Those four
+// numbers ARE the gate. Every cell admitted below is a measured win in both
+// passes; every cell just above is measured 0.98-1.00x, i.e. a REVERT under
+// GATE-B, and the gate is what keeps it on body 3.
+//
+// NOTE WHAT THE TWO COMPLEX TYPES DO NOT SHARE. cdouble's gate is 4x cfloat's,
+// because their shortfalls have different causes: cdouble's is FP64 work in the
+// fold (85% of the FP64 pipe at every red_len, see above) and cfloat's is
+// nothing but idle lanes below the warp width. Same body, same shuffle count,
+// different band -- which is why this is a per-type table and not one constant.
+// ===========================================================================
+template <typename T> inline constexpr int kGemvSegTransMaxRedLen = 0;
+template <> inline constexpr int kGemvSegTransMaxRedLen<float> = 32;
+template <> inline constexpr int kGemvSegTransMaxRedLen<std::complex<float>> = 16;
+template <> inline constexpr int kGemvSegTransMaxRedLen<double> = 48;
+template <> inline constexpr int kGemvSegTransMaxRedLen<std::complex<double>> = 64;
+
+// ---- GATE 2: WHICH W ------------------------------------------------------
+// W = 8 (four lanes per output) at the short end, W = 4 (eight lanes) at the
+// long end of the admitted band, with the switch point per type. Transcribed
+// from the same CSV by taking, per type, the W with the best WORST cell over
+// both out_len levels -- not the best mean, because a rule fitted to the mean
+// admits the cell that loses.
+//
+// THE SECTOR-FLOOR ARGUMENT IS REFUTED BELOW red_len ~ 32, AND THAT IS A
+// MEASURED CORRECTION. The plan predicted W would be bounded by "L*sizeof(T)
+// must reach a 32-byte sector", giving W <= 4 for float. Measured: float at
+// out_len = 2048, red_len <= 16 runs 5.16x-5.91x at W = 8 (L = 4, i.e. 16-byte
+// runs, HALF a sector) against 3.34x-3.40x at W = 4. Below the warp width the
+// kernel is not sector-bound at all -- body 3 is leaving 32-L of 32 lanes idle,
+// and recovering them is worth more than the wasted half-sector. The floor does
+// re-assert itself at the long end, which is why the table turns to W = 4 there.
+template <typename T> inline constexpr int kGemvSegTransW8MaxRedLen = 0;
+template <> inline constexpr int kGemvSegTransW8MaxRedLen<float> = 24;
+template <> inline constexpr int kGemvSegTransW8MaxRedLen<std::complex<float>> = 16;
+template <> inline constexpr int kGemvSegTransW8MaxRedLen<double> = 32;
+template <> inline constexpr int kGemvSegTransW8MaxRedLen<std::complex<double>> = 32;
+
+// ---- GATE 3: THE LAUNCH MUST BE BIG ENOUGH TO GIVE ONE AWAY ---------------
+// BODY 5 LAUNCHES W TIMES FEWER SUB-GROUPS THAN BODY 3 -- (out_len*batch)/W
+// against out_len*batch -- so a shape whose whole launch is already small is
+// paying parallelism it cannot spare for a fold it barely runs.
+//
+// THIS GATE EXISTS BECAUSE MY OWN GRID COULD NOT SEE THE REGIME IT GUARDS, and
+// that is campaign trap 8 committed and then caught. The (out_len, red_len)
+// plane in experiments/wp8_gemv/plane_cells.txt starts at out_len = 64 and
+// reported 83 admitted cells with ZERO below 1.00x. Re-running the WP7 audit's
+// parity grid -- which reaches out_len = 1 -- then showed the native arm 3-6%
+// SLOWER at out_len = 1 than it had been before the change. Walking the output
+// axis down (experiments/wp8_gemv/skinny_p{1,2}.csv, out_len 1..64) found 16
+// losing cells, worst 0.891x, every one of them at out_len*batch <= 4096:
+//
+//     out_len*batch   128    512   1024   2048   4096   >= 8192
+//     losing cells      4      7      2      2      1         0
+//     worst          0.891  0.957  0.978  0.983  0.998      n/a
+//
+// THE FLOOR IS A TABLE ON W, NOT ONE NUMBER, and the second row was bought with
+// two more passes. A first cut at 8*MAX_COMPUTE_UNITS removed eleven of the
+// sixteen; a re-run (skinny2_p{1,2}.csv) left five cells at 0.976x-0.998x, and a
+// THIRD AND FOURTH PASS AT 31 REPS (resid_p{3,4}.csv) separated them: `double`
+// recovered (0.986/1.002 -- noise) but THREE FLOAT CELLS REPRODUCED BELOW 1.00
+// IN BOTH PASSES -- out_len 4 at batch 512 (0.976/0.986), out_len 16 at batch
+// 128 (0.985/0.983), out_len 1 at batch 4096 (0.998/0.990). All three are float
+// at red_len = 32, i.e. in the W = 4 band.
+//
+// THAT BAND NEEDS A BIGGER LAUNCH, and the reason is not mysterious: W = 4 is
+// the LONG end of the admitted reduction, where body 3 is already near its roof
+// and the margin body 5 is playing for is thin -- 1.07x-1.20x rather than the
+// 3x-10x of the short end. A thin margin does not survive an 4x cut in the
+// launch unless the launch was large to begin with. Transcribed:
+//
+//   W = 8 band, floor 16*CU (2048 here):
+//     excluded, items 1024: double out_len 2 (0.986/1.002), cdouble out_len 2
+//                           (1.046/1.049 -- a small win given up)
+//     admitted, items 2048: cdouble 1.222/1.225, 1.228/1.220; double 1.043,
+//                           1.031/1.056     -- every admitted cell a win
+//   W = 4 band, floor 64*CU (8192 here):
+//     excluded, items 2048-4096: float 0.976/0.986, 0.985/0.983, 0.998/0.990,
+//                                1.003/1.005; cdouble 1.211, 1.361 (given up)
+//     admitted, items >= 8192:   float 1.080..1.638; cdouble 1.523..1.875
+//
+// It is a PARALLELISM condition read off the device -- not a footprint condition
+// and not a cache size. The quantity it bounds is the launch, which is exactly
+// what body 5 trades away. (An L2-residency term would be the forbidden kind;
+// route_gemv.hh:279-284 says why. This is not that.)
+//
+// EVERY CELL MEASURED ANYWHERE IN THIS PASS IS NOW AT OR ABOVE 1.00x INSIDE THE
+// GATE. The cost is seven small wins (1.02x-1.36x) on shapes whose whole launch
+// is a few thousand outputs; the alternative was shipping a reproduced 0.976x,
+// which GATE-E forbids.
+inline int gemv_seg_trans_min_items(int cu, int w) {
+    const int c = (cu > 0) ? cu : 1;
+    return (w >= 8 ? 16 : 64) * c;
+}
+
+// THE SPELLING KNOB. Body 5 and body 3 are two DRIVER SPELLINGS of one route,
+// not two routes and not two builds, so BATCHLAS_GEMV_ROUTE cannot separate
+// them; this is the only way to interleave them inside ONE process for GATE-B,
+// and the only way a test can reach body 3 at a shape where body 5 is the
+// default. src/extensions/getrs_native.cc:383-427's BATCHLAS_GETRS_LASWP is the
+// precedent, including the deviation from getrf's latching form:
+//
+// NOTHING IS LATCHED. getrf_left_laswp_mode() latches PRESENCE in a
+// function-local static to keep a getenv off a hot path, and that has been a
+// blind guard eleven times in this campaign -- once presence has latched FALSE
+// a later setenv is invisible, the test runs the DEFAULT arm and passes GREEN.
+// One getenv is ~100 ns against a gemv whose smallest cell in this pass is
+// 0.011 ms, and it is one getenv per LAUNCH, not one per work-item. Re-reading
+// unconditionally is what makes gemv_seg_trans_width_debug truthful at every
+// point in a process, including after unsetenv.
+//
+//   BATCHLAS_GEMV_SEGT = off   force body 3 (the pre-WP8 arm)
+//                      = auto  the shipped decision (the default)
+//                      = 2|4|8 force body 5 at that W, gate and all
+enum class SegTMode { kAuto, kOff, kForce2, kForce4, kForce8 };
+
+inline SegTMode gemv_segt_mode() {
+    const char* const s = std::getenv("BATCHLAS_GEMV_SEGT");
+    if (s == nullptr) return SegTMode::kAuto;
+    if (std::strcmp(s, "off") == 0) return SegTMode::kOff;
+    if (std::strcmp(s, "2") == 0) return SegTMode::kForce2;
+    if (std::strcmp(s, "4") == 0) return SegTMode::kForce4;
+    if (std::strcmp(s, "8") == 0) return SegTMode::kForce8;
+    return SegTMode::kAuto;
+}
+
+// WHICH SCALAR TYPES EMIT BODY 5. ALL FOUR, and that is a measured correction
+// to the plan, which budgeted for {double, complex<double>} on the strength of a
+// grid whose minimum red_len was 64. Walking red_len down to 1 -- which nothing
+// in WP7 had done; audit/parity.sh starts at 64 and the ncu ladder started at 32
+// and ran cdouble only -- shows every type collapsing below the warp width,
+// because body 3 puts 32 lanes on the reduction whatever its length. At
+// out_len = 2048, batch = 512, red_len = 8, body 3 runs at 261 GB/s for float
+// and 450 for cfloat against a 950 roof, and body 5 is worth 5.91x and 3.98x.
+// "A GRID THAT CANNOT REACH A REGIME IS NOT EVIDENCE ABOUT IT" applied to the
+// grid that was going to decide the instantiation set.
+template <typename T>
+inline constexpr bool kGemvSegTransEmit =
+    std::is_same_v<T, float> || std::is_same_v<T, double> ||
+    std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
+
+// THE WIDTH DECISION, IN **ONE** PLACE. The driver and the test-only query
+// below both call this; there is no second copy of the comparison. That is the
+// campaign's recurring two-copies-of-one-decision defect, which
+// getrs_native.cc:410-427 records being caught by its own break only because
+// the second copy existed.
+//
+// Returns 1 for "body 3" and W >= 2 for "body 5 at that W".
+template <typename T>
+inline int gemv_seg_trans_width(SegTMode mode, int red_len, int64_t items, int cu) {
+    if constexpr (!kGemvSegTransEmit<T>) {
+        static_cast<void>(mode);
+        static_cast<void>(red_len);
+        static_cast<void>(items);
+        static_cast<void>(cu);
+        return 1;
+    } else {
+        // THE FORCED SPELLINGS BYPASS ALL THREE GATES ON PURPOSE. That is what
+        // lets a measurement ask "what WOULD body 5 do here", which is the only
+        // way to show a gate is load-bearing rather than decorative, and what
+        // lets a test reach body 5 at a shape the gate declines.
+        switch (mode) {
+            case SegTMode::kOff:    return 1;
+            case SegTMode::kForce2: return 2;
+            case SegTMode::kForce4: return 4;
+            case SegTMode::kForce8: return 8;
+            case SegTMode::kAuto:   break;
+        }
+        static_assert(kGemvSegTransW8MaxRedLen<T> <= kGemvSegTransMaxRedLen<T>,
+                      "the W = 8 band must lie inside the admitted band");
+        static_assert(kGemvSegTransMaxW >= 8, "the W table selects 8 and 4");
+        if (red_len <= 0) return 1;
+        if (red_len > kGemvSegTransMaxRedLen<T>) return 1;
+        const int w = (red_len <= kGemvSegTransW8MaxRedLen<T>) ? 8 : 4;
+        if (items < gemv_seg_trans_min_items(cu, w)) return 1;
+        return w;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +1009,238 @@ Event gemv_cta_trans(Queue& ctx,
     return ctx.get_event();
 }
 
+// ===========================================================================
+// BODY 5 -- GemvSegTKernel<T, W>. {Native, CTA}, transA != NoTrans, GPU with an
+// ENUMERATED sub-group size of 32, SHORT REDUCTION (red_len <= 64).
+//
+// W OUTPUTS PER SUB-GROUP, L = 32/W LANES PER OUTPUT. This is body 4's idea
+// TRANSPOSED, and the important word is transposed rather than copied:
+//
+//     BODY 4 (NoTrans)      i = lane % out_len      jsub = lane / out_len
+//     BODY 5 (Trans)        s = lane % L            o    = lane / L
+//
+// i.e. body 4 makes the OUTPUT index vary fastest across lanes and body 5 makes
+// the REDUCTION index vary fastest. THAT INVERSION IS THE WHOLE POINT, and it
+// follows from the layout premise in gemv_native.hh: A(i,j) lives at i + j*ld,
+// so under NoTrans the contiguous memory index is the OUTPUT index i, while
+// under Trans it is the REDUCTION index i (we walk down one column). Lanes must
+// vary fastest along whichever index is contiguous. Writing body 5 with body
+// 4's `o = lane % W` compiles, gives the right answer, and inverts the
+// coalescing -- the way to reproduce body 4's "better sectors, slower kernel"
+// result with the sign flipped. Break `segTmap` holds it.
+//
+// WHAT IT BUYS, AND WHY IT IS THE FOLD AND NOT THE TRAFFIC. See the counter
+// table on kGemvSegTransMaxW above: body 3's fold is 32*5 = 160 FP64 adds per
+// output for `double` and 320 for `complex<double>`, on a part whose FP64 rate
+// is 1/64 of its FP32 rate, and ncu measures that pipe at 82-86% of peak while
+// DRAM sits at 40-66%. Body 5's fold is L*log2(L) adds per output -- 8 at
+// L = 4 -- a 20x cut on the term that is actually binding. The loop's red_len
+// useful FMAs per output are UNCHANGED; only the lane count serving each output
+// moves. Occupancy and sectors-per-load were never the defect and are not
+// touched.
+//
+// THE EARLY EXIT IS **NOT** SUB-GROUP UNIFORM, AND THAT IS A REAL TRAP THAT
+// BODY 3 DOES NOT HAVE. Body 3's `if (sg_out >= total) return;` is uniform BY
+// CONSTRUCTION: sg_out comes from the sub-group's own id, so all 32 lanes agree.
+// Body 5's sub-group covers W DIFFERENT outputs, so a tail sub-group can have
+// some lane groups in range and others past the end. A shuffle reached by only
+// part of a sub-group is undefined behaviour. So the sub-group returns as a
+// whole only on `base >= total`, which IS uniform, and the partial tail is
+// MASKED by `active`: out-of-range lane groups still execute the fold (with a
+// zero accumulator, which is the fold's identity) and are silenced at the load
+// and at the store. Their sg_out is also CLAMPED before any pointer arithmetic,
+// so no out-of-range address is even formed. Break `segTtail`.
+//
+// THE FOLD IS CLOSED AT STRIDE 1. Lane o*L + 0 accumulates exactly lanes
+// o*L + 0 .. o*L + L-1: the offsets descend L/2, L/4, ..., 1, and 32 % L == 0
+// so every group of L lanes is L-aligned and no dependency crosses a group
+// boundary. Lanes with s > 0 pick up their neighbours' partials and are never
+// read; only the last group's high lanes can shift past lane 31, exactly as
+// sg_sum's ladder already does in body 3. Break `segTfold` puts the stride at
+// L instead of 1 and turns it red.
+//
+// W IS A TEMPLATE PARAMETER. Body 4's recorded history is that a runtime W
+// fixed the short end and REGRESSED the long end below the body it replaced, at
+// better sectors-per-load AND better occupancy -- the loop, not the traffic.
+// See the measured table on gemv_seg_width.
+//
+// ZERO BYTES OF LOCAL MEMORY: the only collective is a sub-group shuffle, never
+// sycl::reduce_over_group. That is what keeps the recorded 48 KB launch hole
+// structurally unreachable in this TU.
+// ===========================================================================
+template <typename T, int W>
+Event gemv_seg_trans(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& A,
+                     const VectorView<T>& X,
+                     const VectorView<T>& Y,
+                     T alpha, T beta, bool conjugate) {
+    using D = typename DevMap<T>::type;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "W must be a power of two in [2, 32]");
+
+    constexpr int kSg = 32;
+    constexpr int kLanes = kSg / W;          // L -- lanes per output
+
+    const int m = A.rows();
+    const int n = A.cols();
+    const int batch = A.batch_size();
+
+    const int64_t items = static_cast<int64_t>(n) * batch;
+    // W FEWER SUB-GROUPS THAN BODY 3, and the unit handed to the ladder is the
+    // SUB-GROUP COUNT, not the output count. Body 3 passes items with shift 5;
+    // passing items here would over-launch by exactly W.
+    const int64_t sub_groups = (items + W - 1) / W;
+
+    const auto dev = ctx.device();
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    const int wg = gemv_wg_ladder(sub_groups, max_wg, cu, /*units_per_wg_shift=*/5);
+    const int sgs_per_wg = (wg / kSg) > 0 ? (wg / kSg) : 1;
+    const int64_t groups = (sub_groups + sgs_per_wg - 1) / sgs_per_wg;
+
+    ctx->submit([&](sycl::handler& h) {
+        // NO __restrict__, for ortho.cc:227-232's reason. See body 1.
+        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
+        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
+        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
+
+        const int64_t lda = A.ld();
+        const int64_t stride_a = A.stride();
+        const int64_t xinc = X.inc();
+        const int64_t stride_x = X.stride();
+        const int64_t yinc = Y.inc();
+        const int64_t stride_y = Y.stride();
+
+        D alpha_d, beta_d;
+        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
+        __builtin_memcpy(&beta_d, &beta, sizeof(D));
+
+        const bool alpha_zero = (alpha == T(0));
+        const bool beta_zero = (beta == T(0));
+        const bool conj = conjugate;
+
+        const int out_len = n;
+        const int red_len = m;
+        const int64_t total = items;
+        const int sgs = sgs_per_wg;
+
+        h.parallel_for<GemvSegTKernel<T, W>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
+                              sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(kSg)]] {
+                const auto sg = it.get_sub_group();
+                const int lane = static_cast<int>(sg.get_local_linear_id());
+                const int64_t sg_id =
+                    static_cast<int64_t>(it.get_group_linear_id()) * sgs +
+                    static_cast<int64_t>(sg.get_group_linear_id());
+                const int64_t base = sg_id * W;
+
+                // SUB-GROUP UNIFORM -- every lane computes the same `base`, so
+                // this returns all 32 lanes or none, and the fold below is
+                // never reached by a partial sub-group.
+                if (base >= total) return;
+
+                // THE MIRROR OF BODY 4: the lane index varies fastest in the
+                // REDUCTION, because under Trans that is the contiguous one.
+                const int s = lane % kLanes;         // slice of the reduction
+                const int o = lane / kLanes;         // which of the W outputs
+
+                const int64_t sg_out = base + o;
+                // MASKED, NOT RETURNED. A tail sub-group is partially in range.
+                const bool active = (sg_out < total);
+                // CLAMPED before any pointer arithmetic, so an inactive lane
+                // group never even forms an out-of-range address.
+                const int64_t sg_out_c = active ? sg_out : (total - 1);
+
+                const int64_t b = sg_out_c / out_len;
+                const int j = static_cast<int>(sg_out_c - b * out_len);
+
+                const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
+                const D* xb = x_ptr + b * stride_x;
+                D* yb = y_ptr + b * stride_y;
+
+                D acc{};
+                if (!alpha_zero && active) {
+                    // kLanes is a compile-time constant, so the trip count
+                    // (red_len - s + L - 1)/L and the address stride L are both
+                    // known and the loop unrolls. That is the whole reason W is
+                    // a template parameter.
+                    for (int i = s; i < red_len; i += kLanes) {
+                        D av = Acol[i];
+                        if constexpr (dev_is_complex_v<D>) {
+                            if (conj) av = dev_conj(av);
+                        }
+                        fma_acc(acc, av, xb[static_cast<int64_t>(i) * xinc]);
+                    }
+                }
+
+                // THE SEGMENTED FOLD: STRIDE 1, log2(L) steps, descending
+                // offsets. Body 4's fold is at stride out_len; body 5's is at
+                // stride 1 for the same reason its mapping is inverted.
+                if constexpr (dev_is_complex_v<D>) {
+                    auto re = acc.re, im = acc.im;
+                    for (int off = kLanes >> 1; off >= 1; off >>= 1) {
+                        re += sycl::shift_group_left(sg, re, off);
+                        im += sycl::shift_group_left(sg, im, off);
+                    }
+                    acc = D{re, im};
+                } else {
+                    for (int off = kLanes >> 1; off >= 1; off >>= 1) {
+                        acc += sycl::shift_group_left(sg, acc, off);
+                    }
+                }
+
+                // W lanes write instead of body 3's one, and when the W outputs
+                // fall inside one batch item they are contiguous in y.
+                if (s == 0 && active) {
+                    D out{};
+                    fma_acc(out, alpha_d, acc);
+                    if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(j) * yinc]);
+                    yb[static_cast<int64_t>(j) * yinc] = out;
+                }
+            });
+    });
+
+    return ctx.get_event();
+}
+
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// WHICH CTA KERNEL A GIVEN (queue, red_len) WOULD RESOLVE TO: 1 = body 3, and
+// W >= 2 = body 5 at that W. TEST-ONLY, and it exists because BOTH of the
+// things it reports have been blind guards in this campaign.
+//
+//   * "LINKED IS NOT REACHABLE". {Native, CTA} now names two kernels, so the
+//     resolved route column -- the campaign's usual instrument -- cannot tell
+//     a body-5 launch from a body-3 launch. A GATE-D break against body 5 that
+//     runs at a shape the gate sends to body 3 is VACUOUS and looks green.
+//     This is the only thing a test can observe that separates them.
+//
+//   * THE ENV. BATCHLAS_GEMV_SEGT is re-read per call and NOT latched, for
+//     getrs_native.cc:386-402's reason: a latched PRESENCE makes a later
+//     setenv invisible, the test runs the DEFAULT arm, and it passes green.
+//     That is the campaign's eleventh recorded blind guard.
+//
+// It resolves through the SAME function the launcher calls -- there is no second
+// copy of the gate -- and it reports 1 for any type body 5 is not emitted for
+// and for any device that does not enumerate a sub-group size of 32, which are
+// the two ways the launcher can decline after the gate has said yes.
+// ---------------------------------------------------------------------------
+template <typename T>
+int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch) {
+    if constexpr (!kGemvSegTransEmit<T>) {
+        static_cast<void>(ctx);
+        static_cast<void>(red_len);
+        static_cast<void>(out_len_times_batch);
+        return 1;
+    } else {
+        if (!ctx.device().supports_sub_group_size(32)) return 1;
+        return gemv_seg_trans_width<T>(
+            gemv_segt_mode(), red_len, out_len_times_batch,
+            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS)));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The two public entries.
@@ -784,6 +1309,43 @@ Event gemv_native_cta(Queue& ctx,
     }
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
 
+    // BODY 5 vs BODY 3 -- A DEVICE-AND-SHAPE CHOICE, NOT A ROUTE, exactly as
+    // body 4 vs body 1 is on the Direct side. Both compute the same y from the
+    // same inputs; body 5 only decomposes the reduction differently, so this
+    // decision is deliberately invisible to the routing vocabulary. It is NOT in
+    // supports() (that predicate is documented to carry correctness only, and a
+    // red_len cutoff there would be a speed cutoff in it) and NOT in preferred()
+    // (that would need a second native algorithm name for what is one route).
+    //
+    // CONSEQUENCE FOR THE ROUTE COLUMN, recorded in route_gemv.hh: {Native, CTA}
+    // now names TWO kernels, so a resolved route of `native:cta` no longer
+    // identifies which kernel ran. gemv_seg_trans_width_debug is what does.
+    //
+    // THE GATE IS ON red_len(), never out_len() -- see kGemvSegTransMaxRedLen.
+    // Under Trans/ConjTrans red_len() is A.rows().
+    //
+    // THE SUB-GROUP GATE IS THE ENUMERATED SIZE, never
+    // get_property(MAX_SUB_GROUP_SIZE), which returns sub_group_sizes()[0] and
+    // is wrong in both directions. Body 5 carries [[reqd_sub_group_size(32)]],
+    // for which the "accepted although it has no 32" direction is a launch
+    // abort. Same query and same reasoning as GemvShape::has_sg32.
+    if constexpr (kGemvSegTransEmit<T>) {
+        const int w = gemv_seg_trans_width<T>(
+            gemv_segt_mode(), A.rows(),
+            static_cast<int64_t>(A.cols()) * A.batch_size(),
+            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS)));
+        if (w >= 2 && ctx.device().supports_sub_group_size(32)) {
+            switch (w) {
+                case 8: return gemv_seg_trans<T, 8>(ctx, A, X, Y, alpha, beta,
+                                                    transA == Transpose::ConjTrans);
+                case 4: return gemv_seg_trans<T, 4>(ctx, A, X, Y, alpha, beta,
+                                                    transA == Transpose::ConjTrans);
+                default: return gemv_seg_trans<T, 2>(ctx, A, X, Y, alpha, beta,
+                                                     transA == Transpose::ConjTrans);
+            }
+        }
+    }
+
     return gemv_cta_trans<T>(ctx, A, X, Y, alpha, beta,
                              transA == Transpose::ConjTrans);
 }
@@ -823,7 +1385,8 @@ template <> bool gemv_cta_available<std::complex<double>>() { return true; }
         const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);      \
     template Event gemv_native_cta<fp>(                                        \
         Queue&, const MatrixView<fp, MatrixFormat::Dense>&,                    \
-        const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
+        const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);      \
+    template int gemv_seg_trans_width_debug<fp>(Queue&, int, int64_t);
 
 BATCHLAS_GEMV_NATIVE_INSTANTIATE(float)
 BATCHLAS_GEMV_NATIVE_INSTANTIATE(double)

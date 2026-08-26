@@ -225,6 +225,44 @@ Event getrs_blocked_dispatch(Queue& ctx,
                              GetrsSolveTrsm<T> solve_trsm = {});
 
 // ---------------------------------------------------------------------------
+// THE PERMUTATION SPELLING BOUNDARY, in nrhs, and the one number a test must
+// transcribe rather than re-derive.
+//
+// Below it the driver walks the interchange list per column (lu_laswp.hh's
+// lu_laswp_launch); at or above it the driver collapses the list to a gather in
+// local memory. BOTH ARE THE SAME PERMUTATION -- the choice is a speed decision
+// and never a correctness one, which is what makes
+// LuTest.GetrsPermutationSpellingsAgreeBitForBit a meaningful assertion.
+//
+// SET FROM THE A/B IN experiments/wp8_getrs/, per cell, not from an inequality;
+// the table is in src/extensions/getrs_native.cc's header note. It is a
+// PER-CALL boundary on B.cols() and buys no workspace at either side of itself:
+// the gather is in place.
+// ---------------------------------------------------------------------------
+inline constexpr int kGetrsPermGatherMinNrhs = 16;
+
+// ---------------------------------------------------------------------------
+// WHICH PERMUTATION SPELLING getrs_blocked_dispatch WOULD RESOLVE for (n, nrhs)
+// on THIS queue: 1 = the collapsed SLM gather, 0 = the LAPACK-faithful walk.
+// TEST-ONLY, and it exists because both of the things it reports have been blind
+// guards in this campaign:
+//
+//   * THE ENV. BATCHLAS_GETRS_LASWP's PRESENCE latches on first use, so a test
+//     that sets it after any earlier getrs call runs the DEFAULT arm and passes
+//     green. getrf_blocked.cc:278-283 records the same guard being pre-empted.
+//   * THE CAPACITY. The gather FALLS BACK to the walk rather than throwing when
+//     one column of B plus the two index arrays will not fit local memory
+//     (RouteTable<Op::getrs,T> has no field to advertise a laswp capacity). A
+//     test that believes it is exercising the gather at an order the tile cannot
+//     hold is measuring the walk -- "linked is not reachable", in miniature.
+//
+// It resolves through the SAME functions and the SAME capacity arithmetic the
+// driver uses; there is no second copy of either.
+// ---------------------------------------------------------------------------
+template <typename T>
+int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs);
+
+// ---------------------------------------------------------------------------
 // THE PIVOT FORMAT IS getrf's, AND IT IS BACKEND-DEPENDENT. A native getrs reads
 // the buffer a getrf wrote, and that buffer holds PACKED 1-BASED INT32 on CUDA and
 // ROCm (cublas.cc:1476 and rocsolver.cc:227 both do pivots.as_span<int>()) and

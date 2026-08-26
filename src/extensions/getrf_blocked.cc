@@ -86,6 +86,8 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -133,6 +135,40 @@ constexpr int getrf_nb_for_type() {
 template <typename T>
 inline int getrf_blocked_nb(int n) {
     return std::max(1, std::min(getrf_nb_for_type<T>(), n));
+}
+
+// ---------------------------------------------------------------------------
+// HOW THE LEFT-HAND INTERCHANGE IS SCHEDULED. Three spellings of ONE
+// composition -- see lu_laswp.hh's identity note -- kept selectable so the A/B
+// that chose between them can be re-run rather than re-derived.
+//
+//   InLoop      LAPACK's own schedule: (S-left) inside the block loop, P-1
+//               launches of the per-column walk. What WP6 shipped.
+//   DeferWalk   the same walk, re-scheduled to ONE pass after the loop, P-1
+//               launches with the suffix list. IDENTICAL TRAFFIC BY
+//               CONSTRUCTION -- the control that separates the SCHEDULE change
+//               from the KERNEL change, and it is expected to measure 1.00x.
+//   DeferGather the deferred pass served by the SLM-staged gather, one launch.
+//               The shipped arm.
+//
+// THE ENVIRONMENT READ COSTS NOTHING WHEN THE KNOB IS ABSENT: the presence test
+// is a function-local static, so a production process pays one getenv for its
+// lifetime and none per call. When the knob IS set the value is re-read on every
+// call, deliberately -- that is what lets an A/B harness flip arms BETWEEN
+// INTERLEAVED REPS INSIDE ONE PROCESS, which is the only way two driver
+// spellings can be interleaved at all (they are not two routes and not two
+// builds).
+// ---------------------------------------------------------------------------
+enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
+
+inline LeftLaswp getrf_left_laswp_mode() {
+    static const bool present = (std::getenv("BATCHLAS_GETRF_LASWP") != nullptr);
+    if (!present) return LeftLaswp::DeferGather;
+    const char* s = std::getenv("BATCHLAS_GETRF_LASWP");
+    if (s == nullptr) return LeftLaswp::DeferGather;
+    if (std::strcmp(s, "inloop") == 0) return LeftLaswp::InLoop;
+    if (std::strcmp(s, "defer_walk") == 0) return LeftLaswp::DeferWalk;
+    return LeftLaswp::DeferGather;
 }
 
 // The workspace layout. Described once and replayed by both the query and the
@@ -239,8 +275,13 @@ unsigned getrf_blocked_debug_params(Queue& ctx, int n) {
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const int ib0 = std::min(nb, n);
     const unsigned leaf = getrf_leaf_fits<T>(n, ib0, budget) ? 1u : 2u;
+    // Bits 24+: the LEFT-HAND INTERCHANGE SPELLING this call would resolve, from
+    // the SAME function the driver calls. Without it a test that sets
+    // BATCHLAS_GETRF_LASWP after the presence flag has already latched would run
+    // the DEFAULT arm and pass -- the eleventh blind guard, pre-empted.
+    const unsigned lmode = static_cast<unsigned>(getrf_left_laswp_mode());
 
-    return (leaf << 16) | static_cast<unsigned>(nb);
+    return (lmode << 24) | (leaf << 16) | static_cast<unsigned>(nb);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +373,10 @@ Event getrf_blocked_dispatch(Queue& ctx,
     }
 
     const int nb = getrf_blocked_nb<T>(n);
+    const LeftLaswp mode = getrf_left_laswp_mode();
+    const std::size_t local_mem_all = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
+    const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
     BumpAllocator pool(workspace);
     auto ws = getrf_blocked_layout<T>(ctx, pool, batch);
@@ -412,7 +457,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         // permuted by every later pivot, so P A = L U only holds if the finished
         // columns of L travel with the exchange. It is NOT covered by the leaf,
         // whose tile starts at column j0.
-        if (j0 > 0) {
+        if (mode == LeftLaswp::InLoop && j0 > 0) {
             (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                 ctx, a_ptr, ld, stride, /*ncols=*/j0, batch,
                 piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
@@ -451,6 +496,45 @@ Event getrf_blocked_dispatch(Queue& ctx,
                                 Transpose::NoTrans, Transpose::NoTrans,
                                 ComputePrecision::Default);
             if (!ctx.in_order()) ctx.wait();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // (S-left), DEFERRED. Column block r receives the transposition suffix
+    // [j0_{r+1}, n) in INCREASING k -- exactly the concatenation, in order, of
+    // the lists it would have received one panel at a time inside the loop. The
+    // identity, and the proof that no later step reads a column below j0, are in
+    // lu_laswp.hh's note; the last block receives nothing.
+    //
+    // EVERY EXTENT IS DERIVED FROM ib AND j0, NEVER FROM nb -- the short final
+    // panel rule, restated here because this loop is the one place the driver
+    // walks the block list a second time and a `for (r) { ... r*nb + nb ... }`
+    // written from the block COUNT would read past the pivot list at n = 129.
+    // -----------------------------------------------------------------------
+    if (mode != LeftLaswp::InLoop) {
+        bool done = false;
+        if (mode == LeftLaswp::DeferGather) {
+            done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
+                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
+                n, nb, slm_budget, max_wg);
+            if (done && !ctx.in_order()) ctx.wait();
+        }
+        if (!done) {
+            // The FALLBACK, never a throw: the same composition spelled with the
+            // ordinary walk, one launch per column block. Reached when the
+            // staging tile will not fit local memory (n above ~6,000 for float,
+            // ~1,500 for cdouble on this box) and whenever the control arm is
+            // selected.
+            for (int c0 = 0; c0 < n; c0 += nb) {
+                const int ib = std::min(nb, n - c0);
+                const int k0 = c0 + ib;
+                if (k0 >= n) break;              // the last block: nothing deferred
+                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                    ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
+                    /*ncols=*/ib, batch,
+                    piv_ptr, /*piv_stride=*/n, /*k0=*/k0, /*k1=*/n, /*forward=*/true);
+                if (!ctx.in_order()) ctx.wait();
+            }
         }
     }
 

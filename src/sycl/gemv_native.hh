@@ -69,7 +69,104 @@
 //           output element, lanes striding the reduction index, hand-rolled
 //           shift_group_left ladder, total in lane 0. Fully coalesced.
 //
-// ALL THREE DECLARE ZERO BYTES OF LOCAL MEMORY. That is a property to verify,
+//   BODY 4  GemvSegNKernel<T,W>   {Native, Direct}, transA == NoTrans,
+//           out_len <= 16. W = 32/out_len lanes per output, one sub-group per
+//           BATCH ITEM, fold at stride out_len.
+//
+//   BODY 5  GemvSegTKernel<T,W>   {Native, CTA}, transA != NoTrans, SHORT
+//           REDUCTION -- red_len <= 32 for float, <= 16 for complex<float>,
+//           <= 48 for double and <= 64 for complex<double> -- AND a launch of at
+//           least 16*CU outputs (64*CU in the W = 4 band). W outputs per
+//           sub-group and L = 32/W lanes each, fold at stride 1 in log2(L)
+//           steps. Body 4's idea TRANSPOSED -- and transposed is the operative
+//           word: the lane index varies fastest in the REDUCTION here, because
+//           under Trans that is the contiguous direction.
+//
+//           {Native, CTA} THEREFORE NAMES TWO KERNELS. A resolved route column
+//           reading `native:cta` no longer says which one ran, and the campaign's
+//           usual "linked is not reachable" instrument is blind to the
+//           difference. gemv_seg_trans_width_debug below is what separates them,
+//           and route_gemv.hh's note on what the route column cannot tell you
+//           needs extending to say so.
+//
+// ---- WHY BODY 5 EXISTS, AND WHAT THE RECORDED MECHANISM GOT WRONG ---------
+// route_gemv.hh blamed body 3's short-reduction collapse on the shuffle LADDER
+// being "a fixed cost per output (5 steps, doubled to 10 for a complex
+// scalar)". That reading predicts `double` and `complex<float>` are hurt
+// EQUALLY -- both issue 10 hardware shuffles per fold. Measured on body 3 at
+// out_len = 2048, batch = 512, transA = Trans, DRAM-resident, GB/s:
+//
+//     red_len        32      64     128    2048 (each type's own roof)
+//     float       833.8   924.2   931.0    952.3
+//     double      547.5   928.6   932.2    953.8
+//     cfloat      921.2   925.4   932.7    954.0
+//     cdouble     434.5   708.5   932.5    952.2
+//
+// double and cfloat are 1.68x apart at red_len = 32 at identical bytes and
+// identical shuffle count. ncu on those launches gives the discriminator:
+// sm__pipe_fp64_cycles_active is 85.6/86.1/84.7% for cdouble and 85.0/82.7/58.3%
+// for double across red_len 32/64/128, and EXACTLY 0.00% for cfloat and float,
+// while occupancy holds at 79-93% and sectors-per-load is ideal throughout. The
+// fold is FP64 WORK on a 1/64-rate GeForce part: 32*5 = 160 double-adds per
+// output for `double` and 320 for `complex<double>`, against only red_len useful
+// FMAs. Body 5 cuts that to L*log2(L) -- 8 at L = 4.
+//
+// ---- WHAT BODY 5 IS WORTH, MEASURED --------------------------------------
+// experiments/wp8_gemv/plane_p{1,2}.csv: body 5 (the shipped `auto` decision)
+// against body 3, interleaved REP BY REP inside one process, 11 reps, median,
+// warm JIT, two independent passes, foreign compute-process count 0 on every
+// row, both arms checked against the same in-process host oracle. The worse of
+// the two passes is quoted. Ratio = body3_ms / body5_ms.
+//
+//   83 ADMITTED cells (body 5 ran):  geomean 3.277x, MIN 1.073x, MAX 10.49x,
+//                                    ZERO cells below 1.00x, zero below 1.05x
+//   53 DECLINED cells (gate sent both arms to body 3): 0.985x .. 1.006x
+//   cross-pass spread: worst 1.153, all but three cells under 1.05
+//   ConjTrans, separately: 36 admitted cells, geomean 2.734x, MIN 1.072x
+//
+// AND THE SKINNY REGIME, which the plane above could not reach and which is
+// where this pass found its own trap-8 defect (experiments/wp8_gemv/
+// skinny3_p{1,2}.csv, out_len walked from 1 to 64):
+//
+//   30 ADMITTED cells: geomean 1.566x, MIN 1.037x, MAX 3.043x, ZERO below 1.00x
+//   74 DECLINED cells: 0.977x .. 1.009x
+//
+// Body 3's own GB/s and body 5's, at out_len = 2048, batch = 512, Trans:
+//
+//   red_len        1      4      8     16     24     32     48     64    128
+//   float b3    59.6  148.2  263.7  484.3  655.6  832.3  914.6  924.0  927.0
+//   float b5   349.3  874.7 1557.3 2382.5  878.0  893.4      -      -      -
+//   cfloat b3  105.6  260.9  451.9  777.9  905.5  923.8  927.9  926.5  931.0
+//   cfloat b5  659.9 1629.1 1837.3  889.1      -      -      -      -      -
+//   double b3   33.4   83.2  149.8  282.1  415.0  545.9  818.6  930.2  930.8
+//   double b5  343.8  873.7 1512.7  882.9  897.6  901.6  915.9      -      -
+//   cdouble b3  26.6   66.0  118.5  224.2  329.6  434.1  456.4  708.5  930.8
+//   cdouble b5 269.0  663.5  861.7  891.4  904.1  910.5  919.3  923.8      -
+//
+// (a dash is where the gate declines and body 3 serves the call.)
+//
+// AN ODD ld COSTS BODY 5 SOMETHING AND NEVER INVERTS THE SIGN. A run starts at
+// (b*stride + j*ld + s), so an ld that is not a multiple of the run length
+// straddles an extra 32-byte sector. Measured at out_len = 2048, batch = 512
+// (experiments/wp8_gemv/oddld_p1.csv), packed ld vs odd ld:
+// cdouble red_len 8: 7.32x -> 6.65x; double red_len 8: 9.92x -> 5.59x;
+// cfloat red_len 8: 4.06x -> 2.13x; float red_len 32: 1.076x -> 1.062x.
+// Every admitted odd-ld cell stays at or above 1.06x. tests/gemv_tests.cc
+// exercises ld = 79 at m = 70, so this is a live layout and not a hypothetical.
+//
+// WHAT IS **NOT** CLAIMED, and it is a real window left open. The gates are on
+// red_len alone, and in the L2-RESIDENT regime they are too tight: at
+// out_len = 256, batch = 512 -- where A is 33-67 MB against this device's 72 MB
+// L2 -- body 5 at W = 4 measures 1.40x-2.09x for cfloat at red_len 24..64,
+// 2.62x for double at red_len 64 and 1.22x-1.71x for float at red_len 48..128,
+// all ABOVE their gates (experiments/wp8_gemv/above_p{1,2}.csv). The same
+// red_len at out_len = 2048 measures 0.986x-0.996x. Separating them needs a
+// FOOTPRINT term, which is the L2-residency reasoning route_gemv.hh:279-284
+// forbids in preferred() and which would be no better founded in a launcher.
+// The gate is therefore set where it never loses, and the L2 window is stated
+// rather than taken.
+//
+// ALL FIVE DECLARE ZERO BYTES OF LOCAL MEMORY. That is a property to verify,
 // not to assume -- it is what makes the recorded "48 KB launch hole"
 // (a dynamic-local-memory request in (49152-static, 49152] failing at enqueue;
 // 48896 passes, 49152 FAILS, 49664 passes; see potrf_cta.cc:259-296)
@@ -156,5 +253,31 @@ Event gemv_native_cta(Queue& ctx,
                       T alpha,
                       T beta,
                       Transpose transA);
+
+// ---------------------------------------------------------------------------
+// WHICH CTA KERNEL gemv_native_cta WOULD LAUNCH for (this queue, this red_len):
+// 1 = body 3 (one sub-group per output), W >= 2 = body 5 at that W.
+// TEST-ONLY.
+//
+// {Native, CTA} NAMES TWO KERNELS AS OF WP8, so the resolved route column --
+// the campaign's usual "linked is not reachable" instrument -- can no longer
+// tell which one ran. A GATE-D break against body 5 that executes at a shape
+// the gate sends to body 3 is VACUOUS and passes green. This query is what makes
+// such a break provably non-vacuous, and it is also what a test uses to reach
+// body 3 at a shape where body 5 is the default.
+//
+// It resolves through the SAME gate function the launcher calls, with the SAME
+// sub-group query and the SAME BATCHLAS_GEMV_SEGT reading; there is no second
+// copy of the decision. That defect -- two copies of one boundary, the driver's
+// flipped by a break while the test-visible copy kept the old sense and the
+// whole suite stayed GREEN -- is recorded at src/extensions/getrs_native.cc:410.
+// ---------------------------------------------------------------------------
+//
+// out_len_times_batch is the third gate's input: body 5 launches
+// (out_len*batch)/W sub-groups, i.e. W TIMES FEWER than body 3, and below
+// 8*MAX_COMPUTE_UNITS outputs it is giving away parallelism the shape cannot
+// spare. Pass A.cols() * A.batch_size(), which is what the launcher passes.
+template <typename T>
+int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch);
 
 }  // namespace batchlas::sycl_gemv

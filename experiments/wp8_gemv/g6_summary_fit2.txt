@@ -1,0 +1,50 @@
+# 213 cells, transA spellings ['C', 'T'], 34 arm-rows refused
+# 127 cells win >= 1.15x somewhere in the grid
+
+=== CLAUSES THAT PASS GATE-C (zero cells below 1.15x), by capture ===
+  red_len in [1,352] & out_len>=1 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [1,352] & out_len>=64 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [1,352] & out_len>=128 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [1,352] & out_len>=192 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [1,352] & out_len>=256 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [16,352] & out_len>=1 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [16,352] & out_len>=64 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [16,352] & out_len>=128 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [16,352] & out_len>=192 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [16,352] & out_len>=256 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [32,352] & out_len>=1 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [32,352] & out_len>=64 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [32,352] & out_len>=128 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [32,352] & out_len>=192 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [32,352] & out_len>=256 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [48,352] & out_len>=1 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [48,352] & out_len>=64 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [48,352] & out_len>=128 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [48,352] & out_len>=192 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [48,352] & out_len>=256 & batch>= 320 : n= 75 geo=2.627 min=1.1777
+  red_len in [56,352] & out_len>=1 & batch>= 320 : n= 68 geo=2.821 min=2.3741
+  red_len in [56,352] & out_len>=64 & batch>= 320 : n= 68 geo=2.821 min=2.3741
+  red_len in [56,352] & out_len>=128 & batch>= 320 : n= 68 geo=2.821 min=2.3741
+  red_len in [56,352] & out_len>=192 & batch>= 320 : n= 68 geo=2.821 min=2.3741
+  red_len in [56,352] & out_len>=256 & batch>= 320 : n= 68 geo=2.821 min=2.3741
+
+=== NAMED CANDIDATES, EACH WITH ITS REFUTING CELL ===
+  D3's clause  red[64,352] out>=256 batch>=320         n= 68 geo=2.821 min=2.3741 loss= 0 sub= 0 PASS
+  D3 conservative  red[64,352] out>=256 batch>=512     n= 48 geo=2.860 min=2.3960 loss= 0 sub= 0 PASS
+  widened low  red[48,352] out>=256 batch>=320         n= 75 geo=2.627 min=1.1777 loss= 0 sub= 0 PASS
+  widened batch  red[64,352] out>=256 batch>=128       n=127 geo=2.146 min=0.9259 loss=21 sub=31 FAIL
+      REFUTED BY cdouble out=256 red=96 b=256 C         0.9259  vendor   889.6 GB/s  native   823.6  96 MB
+  widened batch  red[64,352] out>=256 batch>=192       n=116 geo=2.260 min=0.9259 loss=15 sub=24 FAIL
+      REFUTED BY cdouble out=256 red=96 b=256 C         0.9259  vendor   889.6 GB/s  native   823.6  96 MB
+  widened batch  red[64,352] out>=256 batch>=256       n= 91 geo=2.499 min=0.9259 loss= 6 sub=11 FAIL
+      REFUTED BY cdouble out=256 red=96 b=256 C         0.9259  vendor   889.6 GB/s  native   823.6  96 MB
+  no upper red bound  red>=64 out>=256 batch>=320      n= 90 geo=2.278 min=1.0128 loss= 0 sub=14 FAIL
+      REFUTED BY cdouble out=1024 red=512 b=512 T       1.0128  vendor   929.5 GB/s  native   941.5  4096 MB
+  no out bound  red[64,352] batch>=320                 n= 68 geo=2.821 min=2.3741 loss= 0 sub= 0 PASS
+  out>=128  red[64,352] out>=128 batch>=320            n= 68 geo=2.821 min=2.3741 loss= 0 sub= 0 PASS
+  out>=192  red[64,352] out>=192 batch>=320            n= 68 geo=2.821 min=2.3741 loss= 0 sub= 0 PASS
+  no batch term at all  red[64,352] out>=256           n=173 geo=1.767 min=0.5417 loss=48 sub=70 FAIL
+      REFUTED BY cdouble out=512 red=128 b=64 T         0.5417  vendor  1764.2 GB/s  native   955.7  64 MB
+  footprint instead of batch  red[64,352] out>=256 MB>=256 n= 89 geo=2.455 min=0.9612 loss= 7 sub=13 FAIL
+      REFUTED BY cdouble out=512 red=128 b=256 C        0.9612  vendor   931.3 GB/s  native   895.1  256 MB
+  all four scalar types  red[64,352] out>=256 batch>=320 n= 68 geo=2.821 min=2.3741 loss= 0 sub= 0 PASS

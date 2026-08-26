@@ -325,9 +325,163 @@ struct RouteTable<Op::gemv, T> {
     //   56 are at or above cuBLAS. The 0.08x family needed a short OUTPUT and
     //   ortho only ever gives the NoTrans body a short REDUCTION, so it was never
     //   reachable from inside the library.
+    // =====================================================================
+    // WP8 ROUTING PASS: THE PRIZE ROUTES. The all-false verdict above stands
+    // for three of the four scalar types and for every shape outside the band
+    // below; what changed is that the grid which produced "no predicate exists"
+    // could not see the axis the effect lives on, and a finer one can.
+    //
+    // TWO THINGS HAD TO HAPPEN FIRST, AND BOTH ARE MEASUREMENTS, NOT OPINIONS.
+    //
+    // (1) THE CLAUSE FAMILY THAT WAS SEARCHED DID NOT CONTAIN `batch`.
+    //     experiments/wp7_gemv/audit/clause_search.py enumerates
+    //     (m band) x (n threshold) x (A threshold) and nothing else, so every
+    //     REFUTED verdict in clause_report.txt is a verdict about clauses that
+    //     cannot express the boundary. Re-searched with batch as a first-class
+    //     term (experiments/wp8_gemv/g6_clauses.py), a clause survives.
+    //
+    // (2) THE BAND'S LOWER EDGE WAS OUR KERNEL'S LIMIT, NOT cuBLAS'S. Before
+    //     WP8-I3's body 5, red_len 48 measured 0.67-0.79x -- the vendor was
+    //     ALREADY dipped there (561-648 GB/s) and the native CTA arm was stuck
+    //     at 442-449 GB/s by the short-reduction defect. Fitting the band before
+    //     that fix would have fitted it one grid step too high.
+    //
+    // WHAT cuBLAS ACTUALLY DOES, AND IT IS A DISCRETE SWITCH RATHER THAN A
+    // GRADIENT. At out_len 512, red_len 128, complex<double>, Trans, its
+    // throughput goes 894.9 / 919.4 / 930.1 GB/s at batch 128 / 192 / 256 --
+    // i.e. AT THE ROOF -- and then 360.4 / 359.7 / 363.1 / 358.4 at batch
+    // 320 / 384 / 448 / 512. One batch rung, a 2.6x fall, and it stays fallen.
+    // That is a kernel-selection threshold in the vendor, which is why no
+    // function of n*batch and no power law n^a*batch can describe it (both
+    // a > 1 and a < 1 are required simultaneously -- see the two refuting pairs
+    // in experiments/wp7_gemv/audit/README.md section 5), and why the honest
+    // predicate names batch outright.
+    //
+    // THE BAND IN red_len IS SHARP AT BOTH ENDS. At out_len 256/512, batch 512
+    // (experiments/wp8_gemv/g6_fit_p{1,2}.csv, grid B, red_len walked 8..512):
+    //     red_len   32     40     48     56     64    ...   320    352    384
+    //     ratio   0.95   1.10   1.31   1.16   2.41    ...  3.01   2.84   1.03
+    //     vendor   909    793    677    771    373    ...   310    329    906
+    // The vendor is back AT THE ROOF at red_len 384 (901-906 GB/s) and only
+    // partially dipped below 64 (677-909). 64 and 352 are therefore the rungs
+    // where the dip is SATURATED, and the cells that bracket them are measured
+    // non-winners: 0.9515 at red_len 32, 1.0304/1.0314 at red_len 384.
+    //
+    // THE out_len BOUNDARY IS BRACKETED TOO. At red_len 128, batch 512, walking
+    // out_len 32..2048: 0.559 (32), 0.546 (64), 0.989 (96), 0.994 (128), 0.999
+    // (192), then 2.32 (256). The cells below 256 are not losses we could fix --
+    // at out_len 32 and 64 cuBLAS reads 1597 and 1777 GB/s, ABOVE this device's
+    // ~1008 GB/s DRAM peak, because it is converting L2 residency into
+    // bandwidth. That is the family route_gemv.hh already declines to chase.
+    //
+    // ---- THE CLAUSE, AND EVERY BOUNDARY IT NAMES IS BRACKETED BY A CELL ----
+    //   scalar == complex<double>          (float, double and cfloat REFUTED
+    //                                       below, each with its cell)
+    //   route  == {Native, CTA}
+    //   transA != NoTrans                  (CTA has no NoTrans body at all)
+    //   64 <= red_len() <= 352             red_len(), NEVER out_len(): under
+    //                                      Trans red_len() is A.rows(). A
+    //                                      predicate on the wrong extent
+    //                                      inverts this window and that error
+    //                                      was caught twice in WP7.
+    //   out_len() >= 256
+    //   batch    >= 320
+    //
+    // WHERE THE CLAUSE WAS FITTED, AND WHAT ITS WEAKEST CELL ACTUALLY READS.
+    // The g6_fit grids all carry gpu=0 on every row: the clause was fitted on
+    // the DISPLAY GPU. The cross-device control taken at the time was valid but
+    // was taken at DRAM-RESIDENT footprint, and the clause's lowest-footprint
+    // admitted cell -- cdouble, out_len 256, red_len 64, batch 320 -- is 84 MB
+    // against a 72 MB L2, i.e. exactly on the boundary where the control does
+    // not hold. That cell is the noisiest in the clause and it is the only one
+    // where the fitting device flatters us:
+    //     device 0 (fit)            2.313
+    //     device 1, two passes      1.867 / 2.065   (adversarial review)
+    //     device 1, two more        2.394 / 2.091   (lead, idle box, GPU 1)
+    // The NATIVE arm agrees across devices to 3.5%; only the VENDOR arm moves,
+    // by ~20%, and only here. Read the floor as ~1.87, not as the fitted number.
+    // It clears the >= 1.15x bar by a wide margin either way, and every other
+    // admitted cell re-measured on the idle card sits at 2.25-2.49 -- so this is
+    // ONE L2-boundary corner, not the band. Recorded because a fitted minimum
+    // taken on a contended device is exactly the reading this pass otherwise
+    // spent its measurement budget learning not to trust.
+    //
+    // THE THREE TYPES THIS CLAUSE EXCLUDES, WITH THE CELL THAT EXCLUDES EACH --
+    // measured INSIDE the band, so this is a refutation and not an omission:
+    //   float    out=256 red=128 batch=512   0.9340
+    //   double   out=512 red=128 batch=1024  0.9722  (and 0.9746, 0.9749 beside)
+    //   cfloat   out=256 red=48  batch=512   0.6644  (cuBLAS 2637 GB/s: L2)
+    //
+    // AND THE WIDER CANDIDATES, EACH WITH ITS REFUTING CELL:
+    //   batch >= 256      0.9628 at out=512 red=128 batch=256 (cuBLAS 930.1)
+    //   batch >= 192      0.9616 at out=256 red=128 batch=192 (cuBLAS  873.7)
+    //   batch >= 128      0.9562 at out=512 red=128 batch=128 (cuBLAS  894.9)
+    //   no batch term     the same 0.9562 -- and BELOW 128 the region is not
+    //                     marginal, it is refuted outright: 46 cells inside the
+    //                     (red_len, out_len) band at batch 1..96 hold 27 LOSSES,
+    //                     worst 0.5417 at out=512 red=128 batch=64. A clause
+    //                     without a batch floor routes those.
+    //   A >= 256 MB instead of a batch term
+    //                     0.9628 at out=512 red=128 batch=256, 256 MB -- the
+    //                     footprint substitution is REFUTED by a cell, which is
+    //                     the answer to "isn't batch just a proxy for size".
+    //   red_len >= 48     THE ONE CANDIDATE THAT PASSES THE LETTER OF THE GATE
+    //                     AND IS STILL DECLINED, so the reasoning is spelled
+    //                     out. Over two passes it scores 88 cells, geomean
+    //                     2.135, MIN 1.1605, zero losses -- 0.9% above the bar.
+    //                     It is declined on a MECHANISM, not on a margin: at
+    //                     red_len 64..352 the vendor sits on the FLAT FLOOR of
+    //                     its dip, 304-386 GB/s at every out_len and every
+    //                     batch, so extrapolating the clause to the (out_len,
+    //                     batch) corners the grid did not reach is safe. At
+    //                     red_len 48 it is on the SLOPE -- 456 GB/s at batch
+    //                     128 climbing to 765 at batch 1024, still rising at the
+    //                     top of the ladder -- and the clause admits batches
+    //                     above 1024 and out_len above 2048 where the slope
+    //                     continues. Below it, red_len 40 is 1.1028 and red_len
+    //                     32 is 0.9515, so the region is genuinely ragged.
+    //   red_len unbounded above
+    //                     1.0304 at out=256 red=384 batch=512.
+    //
+    // THE UPPER EDGE OF 352 IS THE UNIVERSAL ONE, NOT THE ONLY ONE, because the
+    // dip is a staircase in all three axes and not a box. At out_len 2048 the
+    // vendor is STILL dipped at red_len 384 and 448 (313.6 and 317.2 GB/s,
+    // ratios 2.998 and 2.973) where at out_len 768 and 1024 it is back at the
+    // roof at the same red_len and batch (900.9 and 899.8 GB/s, 1.0406 and
+    // 1.0426). So the true boundary moves outward with out_len and 352 is where
+    // it sits for the SMALLEST admitted out_len. It closes for good at red_len
+    // 512 even at out_len 2048 (927.7 GB/s, 1.0166). Encoding the movement needs
+    // a two-variable boundary fitted on four out_len levels; the cells are here
+    // and the fit is not attempted.
+    //
+    // WHAT THIS CLAUSE GIVES UP, STATED RATHER THAN BURIED. At out_len >= 768
+    // the vendor is dipped at EVERY batch measured, down to 128, so a second
+    // disjunct `out_len() >= 768 && batch >= 128` would capture roughly 18 more
+    // measured cells at 2.26x-2.91x with no loss anywhere in the grid. It is NOT
+    // shipped, for one reason: 128 is the LOWEST batch that grid ever reached at
+    // those out_len, so the floor is the edge of the sampled range rather than a
+    // bracketed boundary -- which is precisely the objection WP7's own audit
+    // raised against its `A >= 1024 MB` candidate, and this pass is not going to
+    // commit the error it is here to avoid. The bracketing sweep is one cell
+    // list (experiments/wp8_gemv/g6_cells3.py, grids H and I) and is named as
+    // open work.
+    // =====================================================================
     static bool preferred(Route r, const GemvShape& s) {
-        static_cast<void>(r);
-        static_cast<void>(s);
+        // Only the CTA tier. Direct is the NoTrans/CPU arm and nothing in this
+        // window is about it; a true there would let the walk stop on Direct for
+        // a shape CTA cannot serve, on the strength of a CTA measurement.
+        if (!is_native(r) || r.algo != Algorithm::CTA) return false;
+
+        if constexpr (std::is_same_v<T, std::complex<double>>) {
+            // Redundant with supports(), and deliberately so: this is a SPEED
+            // predicate about the transposed kernel, and a reader has to be able
+            // to see that without holding supports() in their head.
+            if (s.transA == Transpose::NoTrans) return false;
+
+            const int64_t red = s.red_len();   // == A.rows() under Trans
+            const int64_t out = s.out_len();   // == A.cols() under Trans
+            return red >= 64 && red <= 352 && out >= 256 && s.batch >= 320;
+        }
         return false;
     }
 

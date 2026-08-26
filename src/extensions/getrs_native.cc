@@ -41,10 +41,103 @@
 // getrf then getri, and the public layer reaches getrs only through
 // linalg::solve (linalg-ops.hh:343-344), at nrhs = 1.
 //
+// WP8-I2 UPDATE: THE GATHER SHIPPED, AND THE COST THIS NOTE BUDGETED FOR IT --
+// AN OUT-OF-PLACE RHS PLUS AN int32[n] PER ITEM -- TURNED OUT NOT TO EXIST.
+//
+// The note below was right that the gather pays only at wide nrhs and right that
+// a workspace bought for it would be charged to every narrow call by the
+// facade's tier-max. It was wrong about ONE thing, and that one thing was the
+// whole objection: the collapse does not need a workspace. The prototype it was
+// costed from (experiments/wp6_lu/baseline/lubench.cpp:163-180) built the row
+// map in a GLOBAL int32[n] per item and gathered into a SEPARATE global buffer S
+// -- and then never copied the answer back, so its 1.55x also omitted a full
+// extra pass. Doing the permutation in LOCAL memory, one work-group per matrix
+// item, removes both buffers AND the copy-back: the tile is read coalesced from
+// B and written permuted back to B's own addresses. getrs_blocked_buffer_size
+// therefore still returns 0 at every shape and every width, and
+// LuTest.GetrsPermGatherBuysNoWorkspace is what keeps that true.
+//
+// WHAT IT IS WORTH, MEASURED PER CELL against the arm it replaces (the walk),
+// interleaved rep by rep INSIDE ONE PROCESS via BATCHLAS_GETRS_LASWP, 11 reps,
+// median, warm JIT, CUDA_VISIBLE_DEVICES pinned, zero foreign compute processes
+// on every row, TWO independent passes with the WORSE quoted, the two arms'
+// solutions asserted BIT-IDENTICAL on every row, and the resolved spelling read
+// back per arm so a silent fallback cannot report a flat 1.00x
+// (experiments/wp8_getrs/ab_p{1,2}.csv, ab_summary.txt). One saturating batch per
+// order; 4 types x 5 orders x 6 widths:
+//
+//   nrhs      cells  geomean     min      max
+//      1        20   0.9993   0.9953   1.0031     <- the walk's own noise
+//      2        19   0.9996   0.9963   1.0026
+//      4        20   0.9997   0.9964   1.0027
+//      8        20   1.0011   0.9980   1.0256     <- LAST width that buys nothing
+//     16        20   1.1182   1.0004   1.2941     <- FIRST width that pays
+//     24        20   1.1511   1.0108   1.3414
+//     32        20   1.2148   1.0141   1.4482
+//     64        20   1.4171   1.0295   2.2392
+//    128        20   1.5728   1.0411   2.7873
+//
+//   (nrhs 2, 8 and 24 are a SEPARATE sweep, ab_bnd_p{1,2}.csv, run for exactly
+//   one reason: the main grid samples 4 and then 16, so it BRACKETS the boundary
+//   without measuring either rung the boundary separates. GATE-C says transcribe
+//   a boundary from a CSV rather than infer it from an inequality, and that
+//   applies to this constant as much as to a preferred() clause. One row of that
+//   sweep was refused for relsd > 0.10 -- float n=64 nrhs=2 batch=8192 -- and
+//   is named rather than dropped.)
+//
+//   ADMITTED SET (nrhs >= kGetrsPermGatherMinNrhs = 16): 80 cells, geomean
+//   1.3191, MIN 1.0004, ZERO cells below 1.00.
+//     float 1.5799 (1.118-2.787)   cfloat  1.4766 (1.119-2.071)
+//     double 1.2061 (1.040-1.696)  cdouble 1.0761 (1.0004-1.261)
+//   Cross-pass median spread 1.0017, worst 1.0250, 0 of 240 arm-medians above
+//   1.10.
+//
+// THE BOUNDARY IS TRANSCRIBED, NOT INFERRED. Every one of the 50 cells that
+// measured below 1.00 across both sweeps is at nrhs <= 8 -- i.e. exactly the
+// region the boundary keeps on the walk -- and none is below 0.995. The rung
+// below the boundary (8) is 1.0011 and the rung at it (16) is 1.1182. Widening the default to nrhs = 1
+// would ship a 1.00x, which this campaign calls a revert; narrowing it to 32
+// would give up float's 1.12-1.27 and cfloat's 1.12-1.29 at nrhs = 16 for
+// nothing. cdouble is the marginal type at the boundary (1.0004 at n=512) and is
+// recorded as such rather than carved out: a per-type boundary would add a
+// decision surface with no measured payoff, since cdouble at nrhs = 32 is only
+// 1.01-1.09 either way.
+//
+// WHAT THE GATHER DOES *NOT* FIX, and this is the pass's negative result. It
+// makes the composition faster; it does not make the composition WIN. See the
+// ladder note under preferred() in route_getrs.hh -- at SATURATION the
+// composition's advantage over cuBLAS falls monotonically with batch, and the
+// recorded "nrhs=128 geomean 1.478x, 24 wins of 28" was measured at ONE batch
+// per order, above which no ladder existed anywhere in this tree.
+//
+// AN UNCLAIMED LEVER IN THIS VERY KERNEL, named rather than left for someone to
+// rediscover: THE GATHER IS PARALLEL OVER BATCH ONLY. Its launch is
+// nd_range<1>(batch * wg, wg) with wg = 256, i.e. exactly `batch` work-groups.
+// At the shipped clause's own batch floor of 128 that is 128 groups on a 128-SM
+// RTX 4090 -- ONE WAVE, no cross-group latency hiding, 32,768 work-items on a
+// part that holds 196,608. The getrf gather in lu_laswp.hh does NOT have this:
+// it is nblk*batch groups (896 at n=256, batch=128). This is the campaign's
+// signature defect -- "4 kernels parallel over batch ONLY" -- and it is present
+// here in the arm this pass shipped.
+//
+// It is an UNCLAIMED LEVER AND NOT A DEFECT, and the distinction is measured:
+// the gather never loses to the walk it replaces (A/B minimum 1.0004 over 80
+// admitted cells, zero cells below 1.00). So nothing regressed; there is simply
+// headroom that a (column-block x batch) decomposition, mirroring lu_laswp.hh,
+// would collect. Not attempted here because the ladder that justifies the
+// clause was measured against THIS geometry, and changing the geometry would
+// invalidate it. Related and also unprofiled: the header prices the serial SLM
+// index walk at "~3% at n=1024 batch=128"; an independent estimate from
+// dependent-swap latency puts it nearer 10%. Neither figure comes from a
+// profile, and both should, before anyone spends effort on either.
+//
+// ---- THE ORIGINAL NOTE, KEPT BECAUSE ITS REASONING STILL HOLDS AT nrhs = 1 ----
+//
 // WHY THE INTERCHANGE WALK AND NOT THE GATHER, stated as a decision rather than
 // made by accident. The gather is worth +0.38 of geomean at nrhs = 64 and
-// NOTHING at nrhs = 1, and it costs an OUT-OF-PLACE RHS plus an int32[n] per item
-// for the collapsed permutation.
+// NOTHING at nrhs = 1 (MEASURED at 0.9993 above, so this half was exactly
+// right), and the prototype it was costed from paid an OUT-OF-PLACE RHS plus an
+// int32[n] per item for the collapsed permutation.
 //
 // THE BUFFER FIGURE MUST BE READ AT THE nrhs THAT DECIDES, and the one this note
 // used to quote was not. 67,371,008 B is the buffer at n=2048, nrhs=64,
@@ -53,14 +146,7 @@
 // buffer is n*batch*sizeof(T) = 262,144 B, i.e. 257x smaller, and the argument
 // against buying it is NOT the memory. It is that at nrhs=1 the gather buys
 // nothing measurable: the loss there is in the two triangular solves (0.36x
-// either way), not in the interchange. getri gets the same collapse for FREE (it
-// writes P straight into C, no permutation kernel and no workspace at all) and
-// takes it; getrs would have to buy it, at the one nrhs where the library
-// actually calls it the purchase buys nothing, and the workspace would enter
-// the facade's max(native, vendor) for every getrs in the process. The walk
-// therefore ships, the buffer-size query stays 0, and the gather is left to the
-// routing step -- where a preferred() window on GetrsShape::nrhs() is the thing
-// that would justify paying for it.
+// either way), not in the interchange.
 
 #include "getrs_native.hh"
 #include "lu_laswp.hh"
@@ -73,6 +159,8 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -85,7 +173,301 @@ namespace {
 // LASWP kernel. See lu_laswp.hh.
 struct GetrsLaswpTag {};
 
+// The kernel name for the collapsed permutation below. Local to this TU, so
+// unlike lu_laswp.hh's templates it needs no tag: nothing else instantiates it.
+template <typename T> class GetrsPermGatherKernel;
+
+// ===========================================================================
+// THE COLLAPSED PERMUTATION, AND THE REASON IT NEEDS NO WORKSPACE AT ALL.
+//
+// WHAT IT REPLACES. lu_laswp_launch's per-column WALK: work-item (b, c) walks
+// k = 0..n-1 down its own column of B, swapping col[k] with col[ipiv[k]-1]. Its
+// cost is the p SIDE -- the pivot row of each step is scattered over [0, n), so
+// every touch is its own DRAM sector, ~(32 + sizeof(T)) bytes of traffic per
+// element actually moved. That is 9x for float, 5x for double and cfloat, 3x for
+// cdouble. lu_laswp.hh's header states the mechanism and the sector unit is not
+// modelled: WP8-I1 settled it with ncu counters (one 32 B sector per 4 B float
+// element, load AND store).
+//
+// THE COLLAPSE. Apply the transposition list ONCE to an identity INDEX array --
+// after which idxs[i] is the original row now sitting at position i -- and then
+// move data with dst[i] = src[idxs[i]], which is contiguous in i. Both sides of
+// the data move are then coalesced and the traffic is 2*sizeof(T) per element.
+//
+// WHY THIS ONE IS IN PLACE AND THE PROTOTYPE'S WAS NOT, which is the whole
+// difference between this and the "out-of-place RHS plus an int32[n] per item"
+// the file header (and the WP6 plan) budget for. The prototype
+// (experiments/wp6_lu/baseline/lubench.cpp:163-180) built the map in a GLOBAL
+// int32[n] per item with a batch-only-parallel kernel, then gathered B into a
+// separate global buffer S and solved there -- 2 buffers, and it never copied
+// the answer back (it probed the residual on S, :512-548), so a real driver
+// would have owed one more full pass on top.
+//
+// Staging the column in LOCAL memory removes both. One work-group per matrix
+// item holds the index array AND a Cs-column tile in SLM; it reads a tile of B
+// coalesced, barriers, and writes B[i] = tile[idxs[i]] back to the SAME
+// addresses. The permutation happens inside local memory, so:
+//   * no out-of-place RHS               -> getrs_blocked_buffer_size stays 0
+//   * no global int32[n] per item       -> and no second kernel to build it
+//   * no copy-back pass                 -> the answer is already in the caller's B
+// The facade's max over EVERY SUPPORTED NATIVE TIER (factorization.cc:846-866)
+// therefore cannot bill a narrow caller for a wide one, because there is nothing
+// to bill: both tiers still query 0 at every shape. That removes the tier-max
+// hazard rather than gating around it.
+//
+// THE SERIAL PHASE is n SLM int swaps by one work-item, paid ONCE PER ITEM
+// rather than once per column -- which is why the map is built on the index
+// array and not on the data. Walking the data in SLM would need the whole
+// n x nrhs block resident and one work-item per column.
+//
+// THE DIRECTION. `forward` walks k = 0..n-1 and builds P; !forward walks
+// k = n-1..0 and builds P^{-1} = P^T. That is the SAME correspondence
+// lu_laswp_launch's two branches carry, and it is what the transposed getrs
+// needs: the permutation moves to the OUTPUT and is applied in reverse.
+//
+// CAPACITY IS A FALLBACK, NEVER A THROW: if one column plus the two int arrays
+// will not fit local memory this enqueues nothing and returns false, and the
+// caller re-schedules the identical composition with the ordinary walk.
+// RouteTable<Op::getrs,T> has no field to advertise a laswp capacity, and
+// route_potrf.hh:442-454 records what a capacity the table cannot see costs.
+// ===========================================================================
+
+// The DATA tile's share of local memory. lu_laswp.hh:340-347's constant and its
+// reason, repeated rather than shared because that one is sized for a getrf
+// block-suffix and this is a whole right-hand side: the tile is a pure streaming
+// staging buffer, so every byte beyond what keeps the loads in flight buys
+// nothing and costs work-group occupancy.
+constexpr std::size_t kGetrsPermTileCap = 24576;
+
+// The 48 KB LAUNCH HOLE (getrf_cta.cc:109-146, lu_laswp.hh:328-338). A property
+// of the static shared memory the compiler emits, which no source controls.
+constexpr std::size_t kGetrsPermHoleLo = 47104;
+constexpr std::size_t kGetrsPermHoleHi = 49664;
+constexpr std::size_t kGetrsPermHolePadTo = 49920;
+
+constexpr std::size_t getrs_perm_hole_padded(std::size_t bytes) {
+    return (bytes > kGetrsPermHoleLo && bytes <= kGetrsPermHoleHi) ? kGetrsPermHolePadTo
+                                                                  : bytes;
+}
+
+// THE CAPACITY, in ONE place. The launcher and the debug query below both call
+// it, so "would the gather run" and "does the gather run" cannot drift -- which
+// is the failure mode a second copy of this arithmetic would create, and the one
+// route_potrf.hh:442-454 records.
+template <typename T>
+bool getrs_perm_gather_fits(int n, std::size_t slm_budget) {
+    if (n <= 0) return false;
+    const std::size_t int_bytes = 2u * static_cast<std::size_t>(n) * sizeof(int);
+    if (slm_budget <= int_bytes) return false;
+    const std::size_t col_bytes =
+        static_cast<std::size_t>(n | 1) * sizeof(typename sycl_device::DevMap<T>::type);
+    return (slm_budget - int_bytes) >= col_bytes;
+}
+
+template <typename T>
+bool getrs_perm_gather_launch(Queue& ctx,
+                              T* base, int ld, int stride, int nrhs, int batch,
+                              const int* piv, int piv_stride, int n,
+                              bool forward,
+                              std::size_t slm_budget, int max_wg) {
+    if (nrhs <= 0 || batch <= 0 || n <= 0) return true;
+
+    using DM = sycl_device::DevMap<T>;
+    using D = typename DM::type;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+
+    // ODD leading dimension: the permuted read tile[col*ldt + idxs[row]] is
+    // random in the row index, so an even ldt would put a whole column in one
+    // bank (getrf_cta.cc:72-79).
+    const int ldt = n | 1;
+    const std::size_t int_bytes = 2u * static_cast<std::size_t>(n) * sizeof(int);
+    if (!getrs_perm_gather_fits<T>(n, slm_budget)) return false;
+
+    const std::size_t col_bytes = static_cast<std::size_t>(ldt) * sizeof(D);
+    std::size_t data_budget = slm_budget - int_bytes;
+    if (data_budget > kGetrsPermTileCap) data_budget = kGetrsPermTileCap;
+    std::size_t cs = data_budget / col_bytes;
+    if (cs == 0) {
+        // The CAP, not the device, is what refused. Retry against the whole
+        // budget: a one-column tile is still a valid tile.
+        cs = (slm_budget - int_bytes) / col_bytes;
+        if (cs == 0) return false;
+    }
+    if (cs > static_cast<std::size_t>(nrhs)) cs = static_cast<std::size_t>(nrhs);
+    const int Cs = static_cast<int>(cs);
+
+    std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
+    const std::size_t raw = int_bytes + tile_elems * sizeof(D);
+    const std::size_t padded = getrs_perm_hole_padded(raw);
+    // The pad target is an ABSOLUTE 49920 B, so on a device whose whole local
+    // memory is 48 KB it would ask for more than exists and turn a slow launch
+    // into a failed one. Padding is a performance fix, so it defers to the
+    // budget: above it, the unpadded tile launches and simply sits in the hole.
+    if (padded > raw && padded <= slm_budget) {
+        tile_elems = (padded - int_bytes + sizeof(D) - 1) / sizeof(D);
+    }
+
+    int wg = (max_wg < 256) ? max_wg : 256;
+    if (wg < 32) wg = 32;
+
+    D* const bp = reinterpret_cast<D*>(base);
+
+    ctx->submit([&](sycl::handler& h) {
+        sycl::local_accessor<int, 1> ints(
+            sycl::range<1>(2u * static_cast<std::size_t>(n)), h);
+        sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
+
+        h.parallel_for<GetrsPermGatherKernel<T>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
+                                             static_cast<std::size_t>(wg)),
+                              sycl::range<1>(static_cast<std::size_t>(wg))),
+            [=](sycl::nd_item<1> it) {
+                const auto grp = it.get_group();
+                const int b = static_cast<int>(it.get_group(0));
+                const int lid = static_cast<int>(it.get_local_id(0));
+
+                int* const idxs = &ints[0];
+                int* const ips = &ints[static_cast<std::size_t>(n)];
+
+                D* const Bb = bp + static_cast<std::ptrdiff_t>(b) * stride;
+                const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
+
+                for (int i = lid; i < n; i += wg) {
+                    int p = ip[i] - 1;          // GLOBAL 1-BASED on the wire
+                    // ?GETRF's contract is p >= k, so p is in [i, n). Clamped
+                    // anyway: an out-of-range value here would corrupt the index
+                    // array for the WHOLE item, where the global walk would
+                    // corrupt one column.
+                    if (p < 0 || p >= n) p = i;
+                    ips[i] = p;
+                    idxs[i] = i;
+                }
+                sycl::group_barrier(grp);
+
+                // THE ONLY SERIAL PHASE, and it is on the INT array. Paid once
+                // per item, not once per column.
+                if (lid == 0) {
+                    if (forward) {
+                        for (int k = 0; k < n; ++k) {
+                            const int p = ips[k];
+                            if (p != k) { const int t = idxs[k]; idxs[k] = idxs[p]; idxs[p] = t; }
+                        }
+                    } else {
+                        // REVERSE ORDER. P = S_{n-1}...S_0, so the same list
+                        // applied forwards computes P, not P^T. Every
+                        // transposition is its own inverse, which is why only
+                        // the ORDER changes -- lu_laswp_launch:232-247's note.
+                        for (int k = n - 1; k >= 0; --k) {
+                            const int p = ips[k];
+                            if (p != k) { const int t = idxs[k]; idxs[k] = idxs[p]; idxs[p] = t; }
+                        }
+                    }
+                }
+                sycl::group_barrier(grp);
+
+                for (int cb = 0; cb < nrhs; cb += Cs) {
+                    const int cw = ((nrhs - cb) < Cs) ? (nrhs - cb) : Cs;
+
+                    // Flat over (column, row) with the ROW fastest, so
+                    // consecutive work-items take consecutive rows of one column
+                    // -- the one contiguous direction in column-major.
+                    int col = lid / n;
+                    int row = lid - col * n;
+                    while (col < cw) {
+                        tile[static_cast<std::size_t>(col) * ldt + row] =
+                            Bb[static_cast<std::ptrdiff_t>(cb + col) * ld + row];
+                        row += wg;
+                        while (row >= n) { row -= n; ++col; }
+                    }
+                    sycl::group_barrier(grp);
+
+                    col = lid / n;
+                    row = lid - col * n;
+                    while (col < cw) {
+                        Bb[static_cast<std::ptrdiff_t>(cb + col) * ld + row] =
+                            tile[static_cast<std::size_t>(col) * ldt + idxs[row]];
+                        row += wg;
+                        while (row >= n) { row -= n; ++col; }
+                    }
+                    // The tile is re-read on the next chunk, so the write-back
+                    // must complete before it is overwritten.
+                    sycl::group_barrier(grp);
+                }
+            });
+    });
+    return true;
+}
+
+// THE SPELLING KNOB, and it is load-bearing twice over: it is the only way two
+// DRIVER SPELLINGS -- not two routes, not two builds -- can be interleaved
+// inside ONE process for GATE-B, and it is the only way a test can reach the
+// walk once the gather is the default. getrf's BATCHLAS_GETRF_LASWP is the
+// precedent. The PRESENCE test is a function-local static (one getenv per
+// process); the VALUE is re-read per call only when the variable is set at all.
+enum class PermSpelling { kDefault, kWalk, kGather };
+
+// NOTHING IS LATCHED HERE, and that is a DELIBERATE DEVIATION from
+// getrf_left_laswp_mode() (getrf_blocked.cc:164-172), which latches PRESENCE in
+// a function-local static and re-reads only the value.
+//
+// WHY. That split exists to keep a getenv off a hot path, and it costs a test
+// hazard the campaign has now recorded eleven times: once presence has latched
+// FALSE, a later setenv is invisible and the test runs the DEFAULT arm and
+// passes green. getrf pre-empted it by exporting the resolved mode. getrs pays
+// nothing to avoid it outright: one getenv is ~100 ns against an op whose
+// SMALLEST measured cell in this pass is 0.31 ms, i.e. 3e-4 of one call, and it
+// is one call per getrs and not one per block step. Re-reading unconditionally
+// makes getrs_perm_spelling_debug BELOW truthful at every point in a process,
+// including after unsetenv, which is what lets a test assert the DEFAULT
+// boundary and the two overrides in the same binary.
+PermSpelling perm_spelling() {
+    const char* const s = std::getenv("BATCHLAS_GETRS_LASWP");
+    if (s == nullptr) return PermSpelling::kDefault;
+    if (std::strcmp(s, "walk") == 0) return PermSpelling::kWalk;
+    if (std::strcmp(s, "gather") == 0) return PermSpelling::kGather;
+    return PermSpelling::kDefault;
+}
+
+// THE SPELLING DECISION, IN **ONE** PLACE -- and this is a defect that was
+// CAUGHT BY ITS OWN BREAK rather than avoided by design. The driver and the
+// test-only query below each carried their own copy of the nrhs comparison, one
+// spelled `nrhs >= kGetrsPermGatherMinNrhs` and the other `nrhs <
+// kGetrsPermGatherMinNrhs`. Break `boundary_inverted` flipped the driver's copy
+// and the whole suite stayed GREEN: the query, which is the only thing any test
+// can observe, kept the old sense. That is the campaign's recurring
+// two-copies-of-one-decision defect, in a function written to prevent exactly
+// that for the CAPACITY and then not applied to the BOUNDARY. There is now one
+// copy and both callers use it.
+bool getrs_perm_use_gather(PermSpelling sp, int nrhs) {
+    if (sp == PermSpelling::kWalk) return false;
+    if (sp == PermSpelling::kGather) return true;
+    return nrhs >= kGetrsPermGatherMinNrhs;
+}
+
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// WHICH PERMUTATION SPELLING THIS CALL WOULD RESOLVE, from the SAME function the
+// driver calls, and the SAME capacity arithmetic. Exported for tests only.
+//
+// Two things a test cannot otherwise see, and both have been blind guards in
+// this campaign:
+//   * the ENV: a test that sets BATCHLAS_GETRS_LASWP after presence has latched
+//     runs the default arm and passes (getrf_blocked.cc:278-283's eleventh);
+//   * the CAPACITY: the gather FALLS BACK to the walk rather than throwing, so a
+//     test that believes it is exercising the gather at an order the tile cannot
+//     hold is measuring the walk. `linked is not reachable` in miniature.
+// Returns 1 for the gather and 0 for the walk.
+// ---------------------------------------------------------------------------
+template <typename T>
+int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
+    if (!getrs_perm_use_gather(perm_spelling(), nrhs)) return 0;
+    const auto dev = ctx.device();
+    if (dev.type != DeviceType::GPU) return 0;
+    const std::size_t lm = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
+    const std::size_t budget = (lm > 4096) ? (lm - 4096) : 0;
+    return getrs_perm_gather_fits<T>(n, budget) ? 1 : 0;
+}
 
 // ---------------------------------------------------------------------------
 // THE CAPABILITY FLAG. TRUE for all four types.
@@ -231,10 +613,32 @@ Event getrs_blocked_dispatch(Queue& ctx,
     // and vendor arms is reachable and they must agree bit for bit.
     auto piv_i32 = pivots.as_span<int>();
 
-    if (transA == Transpose::NoTrans) {
-        (void)lu_native::lu_laswp_launch<GetrsLaswpTag, T>(
+    // THE PERMUTATION SEAM. Both spellings compute the SAME permutation of the
+    // same buffer, in place; which one runs is a performance decision and never
+    // a correctness one, which is what makes
+    // GetrsTest.PermutationSpellingsAgreeBitForBit a meaningful assertion.
+    const std::size_t local_mem_all = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
+    const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const bool want_gather = getrs_perm_use_gather(perm_spelling(), nrhs);
+
+    auto apply_perm = [&](bool forward) -> Event {
+        if (want_gather &&
+            getrs_perm_gather_launch<T>(ctx, B.data_ptr(), B.ld(), B.stride(), nrhs,
+                                        batch, piv_i32.data(), /*piv_stride=*/n, n,
+                                        forward, slm_budget, max_wg)) {
+            return ctx.get_event();
+        }
+        // FALLBACK, not a throw: the gather refuses when one column of B plus the
+        // two int arrays will not fit local memory, and the walk is the identical
+        // composition.
+        return lu_native::lu_laswp_launch<GetrsLaswpTag, T>(
             ctx, B.data_ptr(), B.ld(), B.stride(), nrhs, batch,
-            piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, /*forward=*/true);
+            piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, forward);
+    };
+
+    if (transA == Transpose::NoTrans) {
+        (void)apply_perm(/*forward=*/true);
         // In-order queues give the ordering for free; an out-of-order one does
         // not, and every dependent boundary in this schedule carries its guard.
         if (!ctx.in_order()) ctx.wait();
@@ -256,11 +660,10 @@ Event getrs_blocked_dispatch(Queue& ctx,
     (void)solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Lower, transA, Diag::Unit);
     if (!ctx.in_order()) ctx.wait();
 
-    // F^{-1}: the SAME list, walked BACKWARDS. This is the half of the transposed
-    // case that a NoTrans test cannot see.
-    return lu_native::lu_laswp_launch<GetrsLaswpTag, T>(
-        ctx, B.data_ptr(), B.ld(), B.stride(), nrhs, batch,
-        piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, /*forward=*/false);
+    // F^{-1}: the SAME list, REVERSED. This is the half of the transposed case
+    // that a NoTrans test cannot see -- and under the collapsed spelling it is
+    // the reversed walk over the INDEX array, not over the data.
+    return apply_perm(/*forward=*/false);
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +677,8 @@ Event getrs_blocked_dispatch(Queue& ctx,
     template Event getrs_blocked_dispatch<T>(                                              \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&,                                 \
         const MatrixView<T, MatrixFormat::Dense>&, Transpose,                              \
-        Span<int64_t>, Span<std::byte>, GetrsSolveTrsm<T>);
+        Span<int64_t>, Span<std::byte>, GetrsSolveTrsm<T>);                                \
+    template int getrs_perm_spelling_debug<T>(Queue&, int, int);
 
 BATCHLAS_GETRS_INSTANTIATE(float)
 BATCHLAS_GETRS_INSTANTIATE(double)

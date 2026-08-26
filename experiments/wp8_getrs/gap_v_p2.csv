@@ -1,0 +1,6 @@
+op,type,n,nrhs,batch,med_ms,mean_ms,relsd,GFLOPs,resid,ws,route,extra,ntpiv,flag,foreign
+getrs,cfloat,64,128,512,0.8347,0.8348,0.0013,643.22,3.334e-07,0,vendor:auto|vendor:auto,3.209e-07,59,ok,0
+getrs,cfloat,64,128,1024,1.3063,1.3072,0.0021,821.95,2.767e-07,0,vendor:auto|vendor:auto,3.209e-07,60,ok,0
+getrs,cfloat,128,128,512,2.1722,2.1727,0.0011,988.61,4.382e-07,0,vendor:auto|vendor:auto,3.720e-07,116,ok,0
+getrs,cfloat,256,128,512,6.0979,6.1000,0.0013,1408.66,4.148e-07,0,vendor:auto|vendor:auto,4.126e-07,251,ok,0
+getrs,cfloat,512,128,256,8.4858,8.6155,0.0470,2024.55,5.656e-07,0,vendor:auto|vendor:auto,5.946e-07,504,ok,0

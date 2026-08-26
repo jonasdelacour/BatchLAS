@@ -1653,6 +1653,33 @@ constexpr Route kGetriAuto{Origin::Auto, Algorithm::Auto};
 
 constexpr Route kVendorAuto{Origin::Vendor, Algorithm::Auto};
 
+// ---- THE OTHER THREE SCALAR TYPES, NAMED ONCE ------------------------------
+//
+// WHY THIS BLOCK EXISTS, AND IT IS A REPAIR OF THE SAME CLASS THE FILE ALREADY
+// RECORDS TWICE. Every LU helper above builds a shape with `s.scalar =
+// ScalarKind::F32` and every alias above instantiates the table at `float`.
+// preferred() decides on the TABLE's T (`if constexpr (std::is_same_v<T, ...>)`)
+// and NOT on s.scalar, so a per-type clause -- and WP8 lands three of them --
+// has its cfloat, double and cdouble boundaries checked by NOTHING unless the
+// table is instantiated at those types. A sweep that varies s.scalar tests float
+// three times and reports green through an inverted double clause.
+//
+// NOTE that the helpers still build shapes carrying `scalar = F32`. That is
+// harmless for the DECISION -- preferred() reads the table's T and never
+// s.scalar -- but it means a route_diff capture reads F32 on every synthetic row
+// in this file, whatever type the table was instantiated at. Filter those rows
+// on `backend == AUTO` and read them as "the pure layer ran", not as "the
+// library routed a float".
+using GetrfTableD  = RouteTable<Op::getrf, double>;
+using GetrfTableCF = RouteTable<Op::getrf, std::complex<float>>;
+using GetrfTableCD = RouteTable<Op::getrf, std::complex<double>>;
+using GetrsTableD  = RouteTable<Op::getrs, double>;
+using GetrsTableCF = RouteTable<Op::getrs, std::complex<float>>;
+using GetrsTableCD = RouteTable<Op::getrs, std::complex<double>>;
+using GetriTableD  = RouteTable<Op::getri, double>;
+using GetriTableCF = RouteTable<Op::getri, std::complex<float>>;
+using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
+
 } // namespace
 
 TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
@@ -1906,33 +1933,79 @@ TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
     EXPECT_FALSE(is_native(resolve_getrf_route<float>(kGetrfAuto, f, false)));
 }
 
-TEST(RouteGetrf, PreferredIsFalseEverywhere) {
-    // The merge state, asserted rather than assumed. With preferred() all-false,
-    // Origin::Auto takes the vendor for every shape, so no existing decision can
-    // move -- which is what makes the scaffolding gate ("same passes, same
-    // failures, same messages") a real gate. Delete this test when a measured
-    // window lands, and replace it with clauses citing the cells.
-    for (int64_t order : {1, 32, 40, 128, 512, 2048}) {
-        for (int64_t batch : {1, 2, 128, 8192}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s));
-            EXPECT_FALSE(GetrfTable::preferred(kGetrfBlocked, s));
+// THE MEASURED ORDER WINDOW (WP8 routing pass), replacing the all-false sweep.
+// Its own note said "delete this test when a measured window lands, and replace
+// it with clauses citing the cells"; this is that replacement, and the cells are
+// in route_getrf.hh beside the clause.
+//
+// TWO STRUCTURAL POINTS THIS CASE PINS, BOTH OF WHICH A SIMPLER SWEEP MISSES.
+//  1. THE CLAUSE NAMES Algorithm::Blocked, NOT "native". The CTA arm is a
+//     different kernel and it LOSES where it serves (float n=128 reads
+//     0.773-0.872 of cuBLAS). cta_max_n is passed large here on purpose, so CTA
+//     is SUPPORTED at every order in the loop and a clause that forgot the algo
+//     test would be caught by the resolved-route assertion rather than hidden by
+//     supports().
+//  2. IT IS PER TYPE. float's boundary is 256 and cfloat's is 512; a loop that
+//     only varied s.scalar would test float four times, because preferred()
+//     reads the TABLE's T.
+TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
+    for (int64_t batch : {1, 2, 128, 8192}) {
+        for (int64_t order : {256, 257, 512, 2048}) {
+            const auto s = getrf_shape(order, batch, /*cta_max_n=*/4096);
+            EXPECT_TRUE(GetrfTable::preferred(kGetrfBlocked, s))
+                << "float order " << order << " batch " << batch;
+            EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s))
+                << "the CTA arm is NOT in the window: float n=128, where it "
+                   "serves, reads 0.825/0.773/0.872 at batch 256/512/1024";
             EXPECT_FALSE(GetrfTable::preferred(kVendorAuto, s))
                 << "the vendor is where the walk ENDS, never itself preferred";
+            const Route r = resolve_getrf_route<float>(kGetrfAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
+                << "float order " << order << " batch " << batch
+                << ": CTA is supported here (cta_max_n = 4096) and must still not "
+                   "be selected -- the clause names Blocked";
+        }
+        for (int64_t order : {1, 32, 40, 128, 255}) {
+            const auto s = getrf_shape(order, batch, 4096);
+            EXPECT_FALSE(GetrfTable::preferred(kGetrfBlocked, s)) << "float order " << order;
+            EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s));
             EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, true)))
                 << "order " << order << " batch " << batch;
         }
+        // cfloat: 512, not 256. I1's grid puts cfloat n=256 batch=128 at 0.884,
+        // which is why the two boundaries differ by one grid step.
+        for (int64_t order : {512, 513, 2048}) {
+            const auto s = getrf_shape(order, batch, 4096);
+            EXPECT_TRUE(GetrfTableCF::preferred(kGetrfBlocked, s)) << "cfloat order " << order;
+            const Route r = resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked);
+        }
+        for (int64_t order : {1, 128, 256, 511}) {
+            const auto s = getrf_shape(order, batch, 4096);
+            EXPECT_FALSE(GetrfTableCF::preferred(kGetrfBlocked, s))
+                << "cfloat order " << order << ": n=256 batch=128 is 0.884";
+            EXPECT_TRUE(is_vendor(
+                resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true)));
+        }
+        // double and cdouble: nothing, at any order. double's best cell anywhere
+        // is 1.067 and cdouble's is 1.012; `double order >= 512` would admit
+        // 0.933 / 0.813 / 0.743 at batch 256 / 512 / 1024.
+        for (int64_t order : {1, 128, 256, 512, 1024, 2048}) {
+            const auto s = getrf_shape(order, batch, 4096);
+            EXPECT_FALSE(GetrfTableD::preferred(kGetrfBlocked, s)) << "double order " << order;
+            EXPECT_FALSE(GetrfTableCD::preferred(kGetrfBlocked, s)) << "cdouble order " << order;
+            EXPECT_TRUE(is_vendor(resolve_getrf_route<double>(kGetrfAuto, s, true)));
+            EXPECT_TRUE(is_vendor(
+                resolve_getrf_route<std::complex<double>>(kGetrfAuto, s, true)));
+        }
     }
-    // ...and the other three scalar types, spelled out: were the table ever to
-    // become `if constexpr (is_same_v<T, float>)`, a loop that only varied
-    // s.scalar would test float three times.
-    const auto s = getrf_shape(256, 512, 4096);
-    EXPECT_FALSE((RouteTable<Op::getrf, double>::preferred(kGetrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::getrf, std::complex<float>>::preferred(kGetrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::getrf, std::complex<double>>::preferred(kGetrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::getrf, double>::preferred(kGetrfBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getrf, std::complex<float>>::preferred(kGetrfBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getrf, std::complex<double>>::preferred(kGetrfBlocked, s)));
+
+    // THE WINDOW IS NOT A CORRECTNESS GATE. Inside it, on a build with no
+    // blocked driver, preferred() must still say yes and supports() must say no.
+    const auto absent = getrf_shape(512, 256, /*cta_max_n=*/0);
+    EXPECT_TRUE(GetrfTable::preferred(kGetrfBlocked, absent));
+    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, absent));
+    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, absent, true)));
 }
 
 TEST(RouteGetrf, BareOriginResolvesToASpecificAlgorithm) {
@@ -2293,15 +2366,116 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
             << "cdouble nrhs=4 is 0.577x at n=32 and dips mid-ladder at n=128 and 1024";
     }
 
-    // ---- outside the window, EVERY type takes the vendor -------------------
-    for (int64_t nrhs : {5, 8, 16, 64}) {
+    // ---- outside EVERY window, EVERY type takes the vendor ------------------
+    // nrhs 64 USED TO BE IN THIS LOOP and is not any more: WP8 lands clause C,
+    // which prefers the COMPOSITION for float at nrhs >= 64. That is the whole
+    // point of an armed guard -- this loop went red when the clause landed and
+    // had to be moved, rather than the clause landing unnoticed.
+    for (int64_t nrhs : {5, 8, 16, 32, 63}) {
         const auto s = getrs_shape(/*order=*/256, nrhs, /*batch=*/512);
         EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, s)) << "float nrhs " << nrhs;
-        EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s));
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, s))
+            << "float nrhs " << nrhs << " is BELOW clause C's boundary of 64; the "
+               "measured cell just under it is 0.9069 at n=64 nrhs=32 batch=4096";
         EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)))
             << "nrhs " << nrhs << " is outside the window and must take the vendor";
-        EXPECT_FALSE((RouteTable<Op::getrs, double>::preferred(kGetrsCta, s)));
-        EXPECT_FALSE((RouteTable<Op::getrs, std::complex<double>>::preferred(kGetrsCta, s)));
+        EXPECT_FALSE((GetrsTableD::preferred(kGetrsCta, s)));
+        EXPECT_FALSE((GetrsTableCD::preferred(kGetrsCta, s)));
+    }
+
+    // ---- CLAUSE C: THE WIDE-nrhs COMPOSITION WINDOW (WP8 routing pass) ------
+    //
+    // AXIS: GetrsShape::nrhs(), which is B.cols(). NOT order(). A predicate on
+    // the wrong extent inverts this window -- it would admit the wide-ORDER
+    // narrow-RHS calls where the composition measures 0.09-0.36x of the vendor
+    // -- and that error was caught twice in WP7. The order loop below exists to
+    // prove the clause does NOT read order: every order gives the same answer.
+    //
+    // THE BOUNDARY IS PER TYPE and comes from experiments/wp8_getrs/
+    // clause_summary.txt, two native passes and two vendor passes, quoted at the
+    // worse pass: float >= 64 (30 cells, geomean 2.837, min 1.765) and double
+    // >= 128 (15 cells, geomean 1.865, min 1.279). cfloat and cdouble earn
+    // nothing at any width and each has its refuting cell in route_getrs.hh.
+    //
+    // AND CLAUSE C CARRIES A BATCH FLOOR, WHICH CLAUSES A AND B DO NOT. It is
+    // CONSERVATIVE and known to be: at nrhs = 128 the composition still wins by
+    // 3.56x-5.96x at batch 32 and 64, so the floor gives up measured wins rather
+    // than excluding measured losses. It is set at the campaign's saturation
+    // rung because below 32 the region is ragged and the only readings there
+    // came from a contaminated sweep. Both sides of it are pinned below.
+    for (int64_t order : {32, 64, 128, 512, 1024, 2048}) {
+        for (int64_t batch : {128, 129, 4096}) {
+            // float: IN at 64, OUT at 63.
+            const auto f_in  = getrs_shape(order, /*nrhs=*/64, batch);
+            const auto f_out = getrs_shape(order, /*nrhs=*/63, batch);
+            EXPECT_TRUE(GetrsTable::preferred(kGetrsBlocked, f_in))
+                << "clause C float, order " << order << " batch " << batch;
+            EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, f_out));
+            EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, f_in))
+                << "the FUSED tier must stay unpreferred at nrhs 64; it cannot "
+                   "even serve it (kGetrsFusedMaxRhs = 8) and a true here would "
+                   "make the walk stop on a route supports() then refuses";
+            const Route r = resolve_getrs_route<float>(kGetrsAuto, f_in, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
+                << "float nrhs=64 order " << order << " batch " << batch;
+            EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, f_out, true)));
+
+            // double: IN at 128, OUT at 127 AND OUT at 64 -- the half most
+            // likely to be widened by someone who reads "nrhs >= 64" and drops
+            // the type test. Its refuting cell is 0.9984 at n=64 nrhs=64 b=2048.
+            const auto d_in  = getrs_shape(order, /*nrhs=*/128, batch);
+            const auto d_127 = getrs_shape(order, /*nrhs=*/127, batch);
+            const auto d_64  = getrs_shape(order, /*nrhs=*/64,  batch);
+            EXPECT_TRUE(GetrsTableD::preferred(kGetrsBlocked, d_in));
+            EXPECT_FALSE(GetrsTableD::preferred(kGetrsBlocked, d_127));
+            EXPECT_FALSE(GetrsTableD::preferred(kGetrsBlocked, d_64));
+            EXPECT_TRUE(is_native(resolve_getrs_route<double>(kGetrsAuto, d_in, true)));
+            EXPECT_TRUE(is_vendor(resolve_getrs_route<double>(kGetrsAuto, d_64, true)));
+
+            // cfloat and cdouble: NOTHING, at any width. cfloat scored a clean
+            // 15 cells / geomean 1.974 / min 1.482 on the directly measured
+            // rungs and was in the clause until the gap sweep found 0.9944 at
+            // n=64 nrhs=128 b=1024 -- a dip in the MIDDLE of its ladder, with
+            // 1.2901 at b=512 and 1.4824 at b=2048 on either side of it, which
+            // no boundary in batch, order or nrhs can exclude.
+            for (int64_t q : {64, 128, 256}) {
+                const auto s = getrs_shape(order, q, batch);
+                EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, s))
+                    << "cfloat nrhs " << q << ": mid-ladder dip at n=64 b=1024";
+                EXPECT_FALSE(GetrsTableCD::preferred(kGetrsBlocked, s))
+                    << "cdouble nrhs " << q << ": 0.9238 at n=128 nrhs=128 b=1024, "
+                       "and 12 losses of 13 at nrhs 64";
+                EXPECT_TRUE(is_vendor(resolve_getrs_route<std::complex<float>>(
+                    kGetrsAuto, s, true)));
+                EXPECT_TRUE(is_vendor(resolve_getrs_route<std::complex<double>>(
+                    kGetrsAuto, s, true)));
+            }
+        }
+    }
+
+    // THE CLAUSE IS ON nrhs AND NOT ON order, PROVED BY CONSTRUCTION. Hold nrhs
+    // and sweep order over four decades: the answer may not move. If the
+    // predicate were spelled `s.order() >= 64` this loop is what goes red.
+    {
+        bool in_all = true, out_all = false;
+        for (int64_t order : {1, 2, 8, 63, 64, 65, 1000, 100000}) {
+            in_all  &= GetrsTable::preferred(kGetrsBlocked, getrs_shape(order, 64, 512));
+            out_all |= GetrsTable::preferred(kGetrsBlocked, getrs_shape(order, 63, 512));
+        }
+        EXPECT_TRUE(in_all)  << "clause C must admit nrhs=64 at EVERY order";
+        // ...and the batch floor, from both sides, at a width and an order that
+        // are both well inside the window.
+        EXPECT_TRUE (GetrsTable::preferred(kGetrsBlocked, getrs_shape(512, 128, 128)));
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, getrs_shape(512, 128, 127)));
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, getrs_shape(512, 128, 1)))
+            << "clause C must not route batch 1: the low end is ragged and the "
+               "only readings there came from a contaminated sweep";
+        EXPECT_TRUE (GetrsTableD::preferred(kGetrsBlocked, getrs_shape(512, 128, 128)));
+        EXPECT_FALSE(GetrsTableD::preferred(kGetrsBlocked, getrs_shape(512, 128, 127)));
+        EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(
+            kGetrsAuto, getrs_shape(512, 128, 127), true)));
+        EXPECT_FALSE(out_all) << "clause C must refuse nrhs=63 at EVERY order -- a "
+                                 "true here means the predicate is reading order()";
     }
 
     // THE WINDOW IS NOT A CORRECTNESS GATE, and this is the pairing that keeps a
@@ -2510,21 +2684,77 @@ TEST(RouteGetri, CorrectnessGatesIncludeTheOnesInheritedFromTrsm) {
            "transcribed ceiling here could not fire and would read as live";
 }
 
-TEST(RouteGetri, PreferredIsFalseEverywhereAndAbsentDriverIsUnsupported) {
-    for (int64_t order : {1, 32, 40, 128, 512, 2048}) {
-        for (int64_t batch : {1, 2, 128, 8192}) {
+// THE MEASURED ORDER WINDOW (WP8 routing pass), replacing the all-false sweep
+// this case used to be. The old sweep varied order x batch for SCALAR FLOAT ONLY
+// and checked the other three types at ONE shape; a per-type clause needs a
+// per-type sweep or its cfloat and double boundaries are guarded by nothing.
+//
+// THE AXIS IS GetriShape::order(), which is `k`. There is NO batch term, and
+// that is measured rather than omitted: at batch 1..32 the native driver beats
+// cuBLAS by 1.7x-28x for every type at every order measured, because cuBLAS's
+// batched getri is a per-item loop there.
+TEST(RouteGetri, PreferredIsTheMeasuredOrderWindowPerType) {
+    for (int64_t batch : {1, 2, 4, 128, 8192}) {
+        // ---- float: IN at 128, OUT at 127 and at 64 -----------------------
+        for (int64_t order : {128, 129, 256, 512, 2048}) {
             const auto s = getri_shape(order, batch);
-            EXPECT_FALSE(GetriTable::preferred(kGetriBlocked, s));
-            EXPECT_FALSE(GetriTable::preferred(kVendorAuto, s));
-            EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, s, true)))
-                << "order " << order << " batch " << batch;
+            EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, s))
+                << "float order " << order << " batch " << batch;
+            EXPECT_FALSE(GetriTable::preferred(kVendorAuto, s))
+                << "preferred() is asked only of NATIVE routes";
+            const Route r = resolve_getri_route<float>(kGetriAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
+                << "float order " << order << " batch " << batch;
+        }
+        for (int64_t order : {1, 32, 40, 64, 127}) {
+            const auto s = getri_shape(order, batch);
+            EXPECT_FALSE(GetriTable::preferred(kGetriBlocked, s))
+                << "float order " << order << ": n=64 LOSES at 0.856 (batch 8192) "
+                   "and 0.853 (batch 16384)";
+            EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, s, true)));
+        }
+
+        // ---- cfloat: IN at 256, OUT at 255 and at 128 ---------------------
+        // The old header put the crossover at 128 for cfloat as well as float.
+        // It is wrong: cfloat n=128 is an OUTRIGHT LOSS at 0.71 in the middle of
+        // its own ladder, which is why the boundary is per type and not shared.
+        for (int64_t order : {256, 257, 512, 2048}) {
+            const auto s = getri_shape(order, batch);
+            EXPECT_TRUE(GetriTableCF::preferred(kGetriBlocked, s))
+                << "cfloat order " << order << " batch " << batch;
+            const Route r = resolve_getri_route<std::complex<float>>(kGetriAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked);
+        }
+        for (int64_t order : {1, 64, 128, 129, 255}) {
+            const auto s = getri_shape(order, batch);
+            EXPECT_FALSE(GetriTableCF::preferred(kGetriBlocked, s))
+                << "cfloat order " << order << ": n=128 is 0.71 at batch 512";
+            EXPECT_TRUE(is_vendor(
+                resolve_getri_route<std::complex<float>>(kGetriAuto, s, true)));
+        }
+
+        // ---- double and cdouble: NOTHING, at any order --------------------
+        // double is the near-miss and the one most likely to be widened: n=512
+        // is clean at 1.296-1.311, but n=256 is 1.12-1.16 (below the bar without
+        // losing), n=1024 is 1.1551-1.1619 and FALLING with the last rung
+        // measured being the lowest, and n=2048 is 1.085 outright. A clause
+        // admitting exactly one order is the leg predicate this campaign has
+        // already found twice. cdouble loses at n=512 (0.954) and tops out at
+        // 1.136 anywhere.
+        for (int64_t order : {1, 64, 128, 256, 512, 1024, 2048}) {
+            const auto s = getri_shape(order, batch);
+            EXPECT_FALSE(GetriTableD::preferred(kGetriBlocked, s))
+                << "double order " << order << " earned no window";
+            EXPECT_FALSE(GetriTableCD::preferred(kGetriBlocked, s))
+                << "cdouble order " << order << " earned no window";
+            EXPECT_TRUE(is_vendor(resolve_getri_route<double>(kGetriAuto, s, true)));
+            EXPECT_TRUE(is_vendor(
+                resolve_getri_route<std::complex<double>>(kGetriAuto, s, true)));
         }
     }
-    const auto s = getri_shape(256, 2048);
-    EXPECT_FALSE((RouteTable<Op::getri, double>::preferred(kGetriBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getri, std::complex<float>>::preferred(kGetriBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::getri, std::complex<double>>::preferred(kGetriBlocked, s)));
+}
 
+TEST(RouteGetri, AbsentDriverIsUnsupported) {
     // ABSENT DRIVER -- what this build reports today.
     const auto absent = getri_shape(64, 256, /*blocked_available=*/false);
     EXPECT_FALSE(GetriTable::supports(kGetriBlocked, absent));
@@ -2532,6 +2762,25 @@ TEST(RouteGetri, PreferredIsFalseEverywhereAndAbsentDriverIsUnsupported) {
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, absent, false)));
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, absent, true)));
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriNativeBare, absent, true)));
+
+    // ...AND INSIDE THE WINDOW, WHICH IS THE HALF THAT ONLY MATTERS NOW THAT
+    // THERE IS ONE. preferred() must still say yes -- it is a SPEED predicate and
+    // repeating the capability test in it is the defect route_resolve.hh:60-70
+    // records -- while supports() says no and the vendor takes the shape.
+    const auto in_window_absent = getri_shape(512, 256, /*blocked_available=*/false);
+    EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, in_window_absent));
+    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, in_window_absent));
+    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, in_window_absent, true)));
+    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, in_window_absent, false)))
+        << "vendor-free with no driver must say 'needs a vendor', not invent a route";
+
+    // A NETLIB queue is a CORRECTNESS refusal (the pivot format disagrees), and
+    // the window must not override it.
+    auto netlib = getri_shape(512, 256);
+    netlib.backend = Backend::NETLIB;
+    EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, netlib));
+    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, netlib));
+    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, netlib, true)));
 }
 
 TEST(RouteGetri, BareOriginResolvesToASpecificAlgorithm) {
@@ -2805,18 +3054,180 @@ TEST(RouteGemv, HeterogeneousBatchIsRefusedByBothNativeTiers) {
 // roof on 90 of 92 reproducing cells. This case is what makes a future clause
 // VISIBLE: land one and this goes red, and whoever lands it has to come here and
 // say which cells it is for.
-TEST(RouteGemv, PreferredIsAllFalseAcrossTheMeasuredSpread) {
-    for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-        for (int64_t m : {1, 4, 32, 64, 128, 256, 320, 384, 1024}) {
+// THE float TABLE IS STILL ALL-FALSE EVERYWHERE, AND THAT IS NOW A CLAUSE OF ITS
+// OWN RATHER THAN THE DEFAULT. WP8 lands a complex<double> window; this case
+// pins that it did not leak into the other three types. It cannot see the window
+// at all -- GemvTable is RouteTable<Op::gemv, float> -- which is exactly why the
+// cdouble cases below had to be written separately, and why a suite that only
+// counts 91/91 is not evidence about a per-type clause.
+TEST(RouteGemv, PreferredIsAllFalseForTheThreeTypesThatDidNotEarnAWindow) {
+    using GemvTableD  = RouteTable<Op::gemv, double>;
+    using GemvTableCF = RouteTable<Op::gemv, std::complex<float>>;
+    const Transpose ts[3] = {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans};
+    for (Transpose t : ts) {
+        for (int64_t m : {1, 4, 32, 64, 128, 256, 320, 352, 384, 1024}) {
             for (int64_t n : {8, 64, 256, 512, 2048}) {
-                for (int64_t batch : {1, 128, 512, 4096}) {
+                for (int64_t batch : {1, 128, 320, 512, 4096}) {
                     const auto s = gemv_shape(m, n, batch, t);
-                    EXPECT_FALSE(GemvTable::preferred(kGemvCta, s));
+                    EXPECT_FALSE(GemvTable::preferred(kGemvCta, s))
+                        << "float m " << m << " n " << n << " batch " << batch
+                        << ": refuted at out_len 256, red_len 128, batch 512 (0.9340)";
                     EXPECT_FALSE(GemvTable::preferred(kGemvDirect, s));
+                    EXPECT_FALSE(GemvTableD::preferred(kGemvCta, s))
+                        << "double: refuted at out_len 512, red_len 128, batch 1024 (0.9722)";
+                    EXPECT_FALSE(GemvTableCF::preferred(kGemvCta, s))
+                        << "cfloat: refuted at out_len 256, red_len 48, batch 512 (0.6644)";
                 }
             }
         }
     }
+}
+
+// ---- THE complex<double> TRANSPOSED WINDOW (WP8 routing pass) ---------------
+//
+// THE AXES ARE out_len() AND red_len(), AND THE WHOLE POINT OF SPELLING THEM
+// THAT WAY IS THAT THEY SWAP WITH transA. gemv_shape() takes (m, n), so every
+// case below converts ONCE, here, and never reasons in m and n again:
+// under Trans and ConjTrans, out_len == n == cols and red_len == m == rows.
+namespace {
+GemvShape gemv_band(int64_t out_len, int64_t red_len, int64_t batch, Transpose t) {
+    return gemv_shape(/*m=*/red_len, /*n=*/out_len, batch, t);
+}
+using GemvTableCD = RouteTable<Op::gemv, std::complex<double>>;
+} // namespace
+
+TEST(RouteGemv, CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned) {
+    const Transpose trs[2] = {Transpose::Trans, Transpose::ConjTrans};
+
+    // INSIDE, both transposed spellings. ortho.cc issues ConjTrans for every
+    // complex type, so C is the LIVE path and pinning only T would guard the
+    // wrong half of a clause that says `transA != NoTrans`.
+    for (Transpose t : trs) {
+        for (int64_t out : {256, 512, 1024, 4096}) {
+            for (int64_t red : {64, 128, 256, 352}) {
+                for (int64_t b : {320, 512, 4096}) {
+                    const auto s = gemv_band(out, red, b, t);
+                    EXPECT_TRUE(GemvTableCD::preferred(kGemvCta, s))
+                        << "out_len " << out << " red_len " << red << " batch " << b;
+                    EXPECT_FALSE(GemvTableCD::preferred(kGemvDirect, s))
+                        << "the Direct tier must never be preferred by this clause: "
+                           "the measurement is of the CTA kernel";
+                    EXPECT_FALSE(GemvTableCD::preferred(kVendorAuto, s));
+                    const Route r = resolve_gemv_route<std::complex<double>>(
+                        kGemvAuto, s, /*vendor_available=*/true);
+                    EXPECT_TRUE(is_native(r) && r.algo == Algorithm::CTA)
+                        << "out_len " << out << " red_len " << red << " batch " << b;
+                }
+            }
+        }
+    }
+
+    // ---- EVERY BOUNDARY, FROM BOTH SIDES, EACH WITH ITS MEASURED CELL ------
+    for (Transpose t : trs) {
+        // red_len lower edge: 64 in, 63 out. Below it the vendor is only
+        // PARTIALLY dipped and the margin falls under the 1.15x bar
+        // (1.1028 at red_len 40) or inverts (0.9515 at red_len 32).
+        EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512,  64, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  63, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  48, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  32, 512, t)));
+        // red_len upper edge: 352 in, 353 out. cuBLAS is back at the roof
+        // (901-906 GB/s) at 384 and the ratio there is 1.0304 / 1.0314.
+        EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512, 352, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 353, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 384, 512, t)));
+        // out_len lower edge: 256 in, 255 out. At out_len 192 the ratio is
+        // 0.9988; at 64 and 32 cuBLAS reads 1777 and 1597 GB/s, above this
+        // device's DRAM peak, because it is converting L2 residency into
+        // bandwidth -- the family route_gemv.hh declines to chase.
+        EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(256, 128, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(255, 128, 512, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(192, 128, 512, t)));
+        // batch floor: 320 in, 319 out. This is cuBLAS's own kernel-selection
+        // threshold, not a fitted constant: at out_len 512 red_len 128 it runs
+        // 930.1 GB/s at batch 256 and 360.4 at batch 320.
+        EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 320, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 319, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 256, t)));
+        EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 128, t)));
+        for (int64_t b : {1, 2, 128, 256, 319}) {
+            EXPECT_TRUE(is_vendor(resolve_gemv_route<std::complex<double>>(
+                kGemvAuto, gemv_band(512, 128, b, t), true)))
+                << "below the batch floor the vendor must still take it, batch " << b;
+        }
+    }
+
+    // NoTrans IS EXCLUDED, and by the clause itself rather than only by
+    // supports(). Under NoTrans out_len and red_len SWAP, so a shape that is
+    // inside the band transposed is a different shape entirely untransposed --
+    // this is the pairing that catches a predicate written on the wrong extent.
+    for (int64_t out : {256, 512, 1024}) {
+        for (int64_t red : {64, 128, 256}) {
+            const auto s = gemv_shape(/*m=*/out, /*n=*/red, 512, Transpose::NoTrans);
+            EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, s));
+            EXPECT_FALSE(GemvTableCD::preferred(kGemvDirect, s));
+            EXPECT_TRUE(is_vendor(resolve_gemv_route<std::complex<double>>(
+                kGemvAuto, s, true)));
+        }
+    }
+}
+
+// THE CLAUSE READS red_len() AND out_len(), NOT m AND n -- PROVED BY TRANSPOSING
+// A SINGLE SHAPE AND REQUIRING THE ANSWER TO MOVE.
+//
+// This is the case that would have caught the WP7 defect twice over. Take the
+// physical matrix A with 128 rows and 512 columns. Transposed it is red_len 128,
+// out_len 512 -- INSIDE the band. Untransposed it is out_len 128, red_len 512 --
+// outside on BOTH terms. A predicate spelled `s.m >= 64 && s.m <= 352 &&
+// s.n >= 256` returns the same answer for both and this case stays green; the
+// clause as written returns different answers, which is the whole content of
+// "name the axis explicitly".
+TEST(RouteGemv, TheBandIsOnRedLenAndInvertsUnderNoTrans) {
+    auto A = gemv_shape(/*m=*/128, /*n=*/512, /*batch=*/512, Transpose::Trans);
+    EXPECT_EQ(A.red_len(), 128);
+    EXPECT_EQ(A.out_len(), 512);
+    EXPECT_TRUE(GemvTableCD::preferred(kGemvCta, A));
+
+    auto B = A; B.transA = Transpose::NoTrans;
+    EXPECT_EQ(B.red_len(), 512);
+    EXPECT_EQ(B.out_len(), 128);
+    EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, B));
+
+    // And the mirror image: 512 rows by 128 columns is OUTSIDE transposed
+    // (red_len 512 > 352, out_len 128 < 256) although its m and n are exactly
+    // A's swapped.
+    auto C = gemv_shape(/*m=*/512, /*n=*/128, /*batch=*/512, Transpose::Trans);
+    EXPECT_EQ(C.red_len(), 512);
+    EXPECT_EQ(C.out_len(), 128);
+    EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, C));
+}
+
+// THE WINDOW IS NOT A CORRECTNESS GATE, AND A CAPABILITY THE BUILD DOES NOT HAVE
+// STILL WINS OVER IT. Inside the band but on a device that does not enumerate a
+// sub-group size of 32, or in a build with no CTA kernel linked, supports() must
+// refuse and the vendor must take it -- otherwise the clause selects a launch
+// that is not there.
+TEST(RouteGemv, TheWindowNeverOutrunsTheCapability) {
+    const auto ok = gemv_band(512, 128, 512, Transpose::Trans);
+    EXPECT_TRUE(GemvTableCD::preferred(kGemvCta, ok));
+    EXPECT_TRUE(GemvTableCD::supports(kGemvCta, ok));
+
+    auto nosg = gemv_shape(128, 512, 512, Transpose::Trans, /*is_gpu=*/true,
+                           /*has_sg32=*/false);
+    EXPECT_TRUE(GemvTableCD::preferred(kGemvCta, nosg))
+        << "preferred() must NOT repeat the capability test -- a pinned "
+           "native:cta on such a device has to fall through supports(), not "
+           "silently resolve elsewhere for the wrong reason";
+    EXPECT_FALSE(GemvTableCD::supports(kGemvCta, nosg));
+    EXPECT_TRUE(is_vendor(resolve_gemv_route<std::complex<double>>(kGemvAuto, nosg, true)));
+
+    auto nocta = gemv_shape(128, 512, 512, Transpose::Trans, true, true,
+                            /*direct_available=*/true, /*cta_available=*/false);
+    EXPECT_FALSE(GemvTableCD::supports(kGemvCta, nocta));
+    EXPECT_TRUE(is_vendor(resolve_gemv_route<std::complex<double>>(kGemvAuto, nocta, true)));
+    // ...and vendor-free it must still find the Direct arm rather than nothing.
+    const Route f = resolve_gemv_route<std::complex<double>>(kGemvAuto, nocta, false);
+    EXPECT_TRUE(is_native(f) && f.algo == Algorithm::Direct);
 }
 
 // WITH preferred() ALL-FALSE, AN AUTO GEMV IS THE VENDOR WHEREVER THERE IS ONE

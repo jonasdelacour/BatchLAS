@@ -1,0 +1,11 @@
+getrf:float:256:1:256
+getrf:float:256:1:1024
+getrf:float:512:1:128
+getrf:float:512:1:512
+getrf:float:512:1:1024
+getrf:float:1024:1:128
+getrf:float:1024:1:512
+getrf:float:2048:1:128
+getrf:double:512:1:512
+getrf:cfloat:512:1:512
+getrf:cdouble:512:1:256

@@ -382,10 +382,133 @@ struct RouteTable<Op::getrf, T> {
     //     native arm spends 48.5% panel + 33.6% laswp + 9.2% gemm + 8.8% trsm
     //     across four kernels per block step where cuBLAS does the whole
     //     factorisation in ONE fused kernel at 99.9%.
+    //
+    // ---- WP8-I1: THE LASWP HALF OF THAT LAST BULLET IS NOW CLOSED, AND THE
+    //      "FOUR KERNELS VS ONE FUSED KERNEL" READING OF IT DID NOT SURVIVE ----
+    //
+    // THE FUSION READING IS REFUTED BY ARITHMETIC THIS TREE ALREADY HELD. The
+    // blocked arm launches 5P-4 kernels per call (16 at n=128, confirmed
+    // launch-for-launch by nsys). At 5 us a launch that is 80 us at n=128, which
+    // is 0.12% of the 67.1 ms native call at batch 8192 and 8.7% of the
+    // native-minus-vendor gap at the smallest saturating batch -- falling
+    // monotonically with batch and never explaining the gap. And the fused arm
+    // ALREADY EXISTS: float n <= 155 resolves native:cta, ONE kernel with no
+    // laswp and no decomposition, and it measures 0.77-1.00x. The decomposition
+    // costs DATA MOVEMENT, not launches.
+    //
+    // WHAT SHIPPED INSTEAD. (S-left) -- the interchange applied to the finished
+    // columns -- is deferred to one SLM-staged permutation gather after the block
+    // loop (lu_laswp.hh's deferral identity and lu_laswp_deferred_left_launch).
+    // Unconditional, no shape gate, no crossover, no extra workspace, and the
+    // three spellings are asserted BIT-IDENTICAL by
+    // LuTest.LeftInterchangeSpellingsAgreeBitForBit.
+    //
+    // MEASURED AGAINST THE ARM IT REPLACES, vendor-free, interleaved inside one
+    // process, 11 reps, median, two passes, batch >= 128, 58 native:blocked
+    // cells: geomean 1.207x, min 1.018x, ZERO cells below 1.00, cross-pass median
+    // spread 1.0011 / worst 1.033. float 1.350x, cfloat 1.305x, double 1.138x,
+    // cdouble 1.074x. The native:cta rows measure 0.9995x -- the change cannot
+    // reach them.
+    //
+    // AGAINST cuBLAS ON THE SAME 62-CELL GRID (batch 128..1024, order 128..2048,
+    // all four types) the getrf geomean moves 0.839x -> 1.002x, 20 wins -> 28:
+    //     float   1.273x -> 1.594x      cfloat  0.974x -> 1.271x
+    //     double  0.629x -> 0.716x      cdouble 0.610x -> 0.659x
+    // The float/cfloat families are now the story; double and cdouble are NOT
+    // closed by this and will not be closed by anything short of a
+    // register-resident fused panel, which is a work package and not a lever.
+    //
+    // ---- THE WINDOW THIS FUNCTION SHOULD CARRY, RECOMMENDED NOT APPLIED ------
+    // The routing pass owns preferred(); WP8-I1 owned the kernel. Transcribed
+    // from experiments/wp8_getrf/after_nv_p{1,2}.csv against base_v_p{1,2}.csv,
+    // ratio = vendor_med / native_med, every cell reproduced in two passes:
+    //
+    //   float, order >= 256, batch >= 128   -- 12 cells, min 1.254, no loss
+    //     n=256  b128 1.254  b256 1.279  b512 1.567  b1024 1.675
+    //     n=512  b128 2.350  b256 1.988  b512 1.737  b1024 2.183
+    //     n=1024 b128 2.773  b256 2.186  b512 2.237
+    //     n=2048 b128 3.091
+    //   cfloat, order >= 512, batch >= 128  --  8 cells, min 1.528, no loss
+    //     n=512  b128 1.811  b256 1.528  b512 1.682  b1024 1.609
+    //     n=1024 b128 2.124  b256 1.829  b512 2.088
+    //     n=2048 b128 2.754
+    //
+    // AND THE CELLS THAT REFUSE THE OBVIOUS WIDER CLAUSES, so they are not
+    // rediscovered: `float order >= 128` steals the native:cta rows at
+    // 0.825/0.773/0.872 (batch 256/512/1024); `cfloat order >= 256` admits
+    // b=128 at 0.884; `double order >= 512` admits b=256/512/1024 at
+    // 0.933/0.813/0.748 and its best cell anywhere is 1.067; cdouble's best cell
+    // anywhere is 1.012. Neither double family earns a window at any order.
+    //
+    // THE BATCH FLOOR IS A POLICY CHOICE, NOT A MEASURED ONE: this grid starts at
+    // batch 128 and nothing below it was re-measured after the change.
+    //
+    // =====================================================================
+    // WP8 ROUTING PASS: THE WINDOW LANDS, AND THE GRID ABOVE HAD TO BE
+    // RE-MEASURED BEFORE IT COULD.
+    //
+    // WHY RE-MEASURED. WP8-I1's sweep ran with GPU=0, the default of its own
+    // runner. Device 0 on this box drives the display, and this pass then found
+    // a second and larger effect on top of that: a getrf sweep on device 1 run
+    // CONCURRENTLY with a gemv sweep on device 0 reads getrf float n=256
+    // batch=128 at 3.31-5.51 ms against 1.006 ms on an idle box, and the RATIO
+    // moves 1.254 -> 1.764. Two RTX 4090s in one chassis are not two independent
+    // machines: same NUMA node, same CPU affinity mask, one UVM driver, and
+    // lubench6 runs on managed memory. The per-row foreign() guard reports 0
+    // (--query-compute-apps is PER DEVICE) and rel_sd stays at 0.0004-0.017, so
+    // neither instrument sees it. getri and gemv were unaffected -- their timed
+    // regions are long and device-resident -- and getrf, whose timed region is
+    // 1-8 ms of launch-bound work, was affected by up to 5x.
+    //
+    // So the numbers below come from experiments/wp8_getri/lu_c1.csv, taken on
+    // device 1 with NOTHING ELSE ON THE BOX. The clause is I1's recommendation,
+    // tested rather than inherited.
+    //
+    // AND BE PRECISE ABOUT WHAT "REPRODUCED" MEANS HERE, because the gate says
+    // two passes and this is not two passes. lu_c2.csv holds 45 rows and ZERO
+    // getrf rows -- it is a getri pass -- so an earlier draft of this comment
+    // cited a file that could not support it. The second source for getrf is
+    // WP8-I1's own record, taken on the OTHER DEVICE, in a different session,
+    // from a different binary. That is arguably stronger evidence than a repeat
+    // of the same run, since it varies the device as well as the session; it is
+    // not the same claim, and the header should not say it is. 26 cells are
+    // common to the two sources: median spread 1.0053, worst 1.0311, none above
+    // 1.10.
+    //
+    // AND THE RE-MEASURE VINDICATES IT. Run alone, device 1 reproduces I1's
+    // device-0 figures to within 1% on every cell of the clause and both its
+    // boundaries -- so the display GPU was NOT the problem and the concurrent
+    // sweep was:
+    //   float  n=128 b128  I1 1.0037  clean 1.0037     n=128 b512  0.7727 / 0.7757
+    //   float  n=256 b128     1.2541        1.2626     n=256 b512  1.5665 / 1.5658
+    //   float  n=256 b1024    1.6239        1.5750     n=512 b128  2.3504 / 2.3455
+    //   float  n=512 b512     1.7369        1.7400
+    //   cfloat n=128 b128     0.4891        0.4920     n=256 b128  0.8844 / 0.8851
+    //   cfloat n=256 b512     1.4070        1.4326     n=256 b1024 1.1921 / 1.1880
+    //   cfloat n=512 b128     1.8113        1.7748     n=512 b512  1.6823 / 1.6718
+    //   cfloat n=512 b1024    1.6087        1.6065
+    // The two BOUNDARIES are bracketed from below by measured non-winners in
+    // both records: float n=128 (the native:cta rows) at 0.776-1.004, and cfloat
+    // n=256 at 0.885 (batch 128) with 1.188 at batch 1024 still under the 1.15
+    // bar. That is why the two thresholds differ by one grid step.
+    //
+    // NO BATCH TERM. The grid runs batch 128..1024 at every admitted order and
+    // the window is flat across it; below 128 nothing was measured after the
+    // kernel change, and that is stated as a bound rather than fitted away.
+    // =====================================================================
     static bool preferred(Route r, const GetrfShape& s) {
-        static_cast<void>(r);
-        static_cast<void>(s);
-        return false;
+        if (!is_native(r)) return false;
+
+        // BLOCKED ONLY. The CTA arm is a different kernel with its own
+        // measurement, and it LOSES: float n=128 (which is where CTA serves,
+        // cta_max_n being 155 for float on this device) reads 0.825 / 0.773 /
+        // 0.872 of cuBLAS at batch 256 / 512 / 1024. Writing the clause on the
+        // order alone and letting the tier ladder sort it out would admit those.
+        if (r.algo != Algorithm::Blocked) return false;
+
+        if constexpr (std::is_same_v<T, float>)               return s.order() >= 256;
+        if constexpr (std::is_same_v<T, std::complex<float>>) return s.order() >= 512;
+        return false;   // double and cdouble earn nothing at any order
     }
 
     // ---- native_tier_preferred IS DECLARED, AND IT IS MEASURED ------------

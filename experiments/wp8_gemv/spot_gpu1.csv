@@ -1,0 +1,9 @@
+arm,type,m,n,batch,transA,route,median_ms,mean_ms,rel_sd,GBs,frac_of_950,relerr,ld,out_len,red_len,MB,foreign
+vendor,cdouble,64,64,512,T,vendor:auto,0.02533,0.02553,0.0223,1366.2,1.438,0.00e+00,64,64,64,32,0
+native:cta,cdouble,64,64,512,T,native:cta,0.05480,0.05475,0.0029,631.5,0.665,0.00e+00,64,64,64,32,0
+vendor,cdouble,64,256,512,T,vendor:auto,0.37770,0.37778,0.0041,362.3,0.381,0.00e+00,64,256,64,128,0
+native:cta,cdouble,64,256,512,T,native:cta,0.20014,0.20015,0.0016,683.7,0.720,0.00e+00,64,256,64,128,0
+vendor,cdouble,128,512,512,T,vendor:auto,1.50783,1.50850,0.0146,359.5,0.378,0.00e+00,128,512,128,512,0
+native:cta,cdouble,128,512,512,T,native:cta,0.59201,0.59170,0.0011,915.7,0.964,0.00e+00,128,512,128,512,0
+vendor,cdouble,64,2048,512,T,vendor:auto,2.86535,2.87054,0.0240,380.8,0.401,0.00e+00,64,2048,64,1024,0
+native:cta,cdouble,64,2048,512,T,native:cta,1.53856,1.53909,0.0011,709.1,0.746,0.00e+00,64,2048,64,1024,0

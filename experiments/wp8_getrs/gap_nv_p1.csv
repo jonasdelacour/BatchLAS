@@ -1,0 +1,6 @@
+op,type,n,nrhs,batch,med_ms,mean_ms,relsd,GFLOPs,resid,ws,route,extra,ntpiv,flag,foreign
+getrs,cfloat,64,128,512,0.6504,0.6503,0.0059,825.50,5.562e-07,0,native:cta|native:blocked,3.661e-07,59,ok,0
+getrs,cfloat,64,128,1024,1.3152,1.3162,0.0040,816.44,3.797e-07,0,native:cta|native:blocked,3.790e-07,60,ok,0
+getrs,cfloat,128,128,512,1.5864,1.5910,0.0086,1353.65,2.362e-07,0,native:blocked|native:blocked,3.660e-07,116,ok,0
+getrs,cfloat,256,128,512,3.9124,3.9369,0.0185,2195.59,4.461e-07,0,native:blocked|native:blocked,3.520e-07,251,ok,0
+getrs,cfloat,512,128,256,4.8604,4.8649,0.0041,3534.68,3.790e-07,0,native:blocked|native:blocked,3.614e-07,504,ok,0
