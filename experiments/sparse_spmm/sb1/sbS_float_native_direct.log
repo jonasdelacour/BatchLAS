@@ -1,0 +1,11 @@
+2775 MHz, 55
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      1       0       0       1       0       100         0.021769    1.1062e-05  2.2318e+05  75.264      31.235      21.769      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      2       0       0       1       0       100         0.023948    7.8125e-05  2.2318e+05  136.83      56.785      11.974      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      4       0       0       1       0       100         0.030382    0.00018927  2.2318e+05  215.71      89.519      7.5955      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      8       0       0       1       0       100         0.044648    2.2576e-05  2.2318e+05  293.56      121.83      5.5811      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      16      0       0       1       0       100         0.081834    2.9445e-05  2.2318e+05  320.34      132.94      5.1146      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      32      0       0       1       0       100         0.078249    0.00019089  2.2318e+05  670.02      278.06      2.4453      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      64      0       0       1       0       100         0.16142     0.00078518  2.2318e+05  649.59      269.58      2.5222      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     0       0       1       0       100         0.34021     0.00090391  2.2318e+05  616.42      255.82      2.6579      32768       16          
+2775 MHz, 59

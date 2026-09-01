@@ -1,0 +1,449 @@
+== 704 joined rows, 649 usable (chk agrees + rel_sd <= 0.02), 55 dropped
+== 0 rows dropped for chk disagreement / no-op
+
+== ACCEPTANCE-GATE POPULATION: saturated AND batch >= 128 -> 380 rows
+   279 meet t_native <= 1.1*t_vendor, 101 do NOT
+   THE NON-WINNERS (these are the boundary brackets):
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  55.42940 tn= 166.26100 ratio= 3.000 | GB/s v=   72.8 n=   24.3 | fp=  4034.9MB    sat=Y relsd=0.0057
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=  13.85410 tn=  39.08620 ratio= 2.821 | GB/s v=   72.8 n=   25.8 | fp=  1008.7MB    sat=Y relsd=0.0062
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  27.68460 tn=  69.17610 ratio= 2.499 | GB/s v=   72.9 n=   29.2 | fp=  2017.5MB    sat=Y relsd=0.0048
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=   3.55502 tn=   8.31853 ratio= 2.340 | GB/s v=   70.9 n=   30.3 | fp=   252.2MB    sat=Y relsd=0.0036
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  14.15670 tn=  32.64210 ratio= 2.306 | GB/s v=   71.3 n=   30.9 | fp=  1008.7MB    sat=Y relsd=0.0032
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=0 | tv=   0.29056 tn=   0.59113 ratio= 2.034 | GB/s v=  389.8 n=  191.6 | fp=    87.0MB    sat=Y relsd=0.0018
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=0 | tv=   0.73463 tn=   1.45619 ratio= 1.982 | GB/s v=  284.0 n=  143.3 | fp=   156.2MB    sat=Y relsd=0.0036
+     cfloat   tA=0 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=0 | tv=   0.39560 tn=   0.78380 ratio= 1.981 | GB/s v=  527.5 n=  266.2 | fp=   156.2MB    sat=Y relsd=0.0042
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=0 | tv=   0.30100 tn=   0.58756 ratio= 1.952 | GB/s v=  289.1 n=  148.1 | fp=    87.0MB    sat=Y relsd=0.0015
+     cfloat   tA=0 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=0 | tv=   0.41753 tn=   0.80730 ratio= 1.934 | GB/s v=  374.2 n=  193.5 | fp=   156.2MB    sat=Y relsd=0.0041
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=0 | tv=   0.73510 tn=   1.39912 ratio= 1.903 | GB/s v=  283.9 n=  149.1 | fp=   156.2MB    sat=Y relsd=0.0054
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=0 | tv=   0.74595 tn=   1.41111 ratio= 1.892 | GB/s v=  209.4 n=  110.7 | fp=   156.2MB    sat=Y relsd=0.0047
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=   6.95870 tn=  12.88180 ratio= 1.851 | GB/s v=   75.0 n=   40.5 | fp=   522.2MB    sat=Y relsd=0.0066
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=0 | tv=   0.76549 tn=   1.41522 ratio= 1.849 | GB/s v=  331.5 n=  179.3 | fp=   203.4MB    sat=Y relsd=0.0037
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=0 | tv=   0.75438 tn=   1.36125 ratio= 1.804 | GB/s v=  207.1 n=  114.8 | fp=   156.2MB    sat=Y relsd=0.0167
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=0 | tv=   0.29606 tn=   0.53296 ratio= 1.800 | GB/s v=  382.5 n=  212.5 | fp=    87.0MB    sat=Y relsd=0.0047
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=0 | tv=   0.77179 tn=   1.37698 ratio= 1.784 | GB/s v=  263.6 n=  147.7 | fp=   203.4MB    sat=Y relsd=0.0043
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  27.78050 tn=  49.13870 ratio= 1.769 | GB/s v=   75.2 n=   42.5 | fp=  2088.8MB    sat=Y relsd=0.0028
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=0 | tv=   0.30672 tn=   0.53278 ratio= 1.737 | GB/s v=  283.7 n=  163.4 | fp=    87.0MB    sat=Y relsd=0.0050
+     float    tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=0 | tv=   0.34670 tn=   0.54187 ratio= 1.563 | GB/s v=  417.4 n=  267.1 | fp=   119.5MB    sat=Y relsd=0.0039
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  14.16040 tn=  21.58390 ratio= 1.524 | GB/s v=   73.8 n=   48.4 | fp=  1044.4MB    sat=Y relsd=0.0042
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  50.86490 tn=  75.79100 ratio= 1.490 | GB/s v=   41.1 n=   27.6 | fp=  2088.8MB    sat=Y relsd=0.0087
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=1 | tv=   3.44548 tn=   5.12422 ratio= 1.487 | GB/s v=  116.0 n=   78.0 | fp=   294.7MB    sat=Y relsd=0.0076
+     float    tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=0 pat=0 | tv=   0.35815 tn=   0.53140 ratio= 1.484 | GB/s v=  333.8 n=  225.0 | fp=   119.5MB    sat=Y relsd=0.0012
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=1 | tv=   3.40608 tn=   5.04583 ratio= 1.481 | GB/s v=  117.3 n=   79.2 | fp=   294.7MB    sat=Y relsd=0.0104
+     float    tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=0 | tv=   0.35224 tn=   0.52047 ratio= 1.478 | GB/s v=  410.8 n=  278.0 | fp=   119.5MB    sat=Y relsd=0.0082
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=   7.75898 tn=  11.36750 ratio= 1.465 | GB/s v=   67.3 n=   45.9 | fp=   522.2MB    sat=Y relsd=0.0037
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=1 | tv=   3.53688 tn=   5.06974 ratio= 1.433 | GB/s v=   83.3 n=   58.1 | fp=   294.7MB    sat=Y relsd=0.0060
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.52918 tn=   5.05585 ratio= 1.433 | GB/s v=   83.5 n=   58.3 | fp=   294.7MB    sat=Y relsd=0.0080
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   7.01051 tn=  10.01710 ratio= 1.429 | GB/s v=   84.1 n=   58.8 | fp=   589.3MB    sat=Y relsd=0.0043
+     float    tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=0 | tv=   0.36237 tn=   0.51302 ratio= 1.416 | GB/s v=  329.9 n=  233.0 | fp=   119.5MB    sat=Y relsd=0.0013
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.49295 tn=   4.94245 ratio= 1.415 | GB/s v=   84.4 n=   59.6 | fp=   294.7MB    sat=Y relsd=0.0098
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=  12.73200 tn=  17.78540 ratio= 1.397 | GB/s v=   41.0 n=   29.4 | fp=   522.2MB    sat=Y relsd=0.0022
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=  27.98190 tn=  38.69660 ratio= 1.383 | GB/s v=   84.2 n=   60.9 | fp=  2357.2MB    sat=Y relsd=0.0020
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=  13.94030 tn=  18.60590 ratio= 1.335 | GB/s v=   84.5 n=   63.3 | fp=  1178.6MB    sat=Y relsd=0.0021
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=1 | tv=   1.75773 tn=   2.33142 ratio= 1.326 | GB/s v=  118.7 n=   89.5 | fp=   156.2MB    sat=Y relsd=0.0028
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=1 | tv=   1.75761 tn=   2.30938 ratio= 1.314 | GB/s v=   88.9 n=   67.7 | fp=   156.2MB    sat=Y relsd=0.0034
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=   7.21779 tn=   9.40518 ratio= 1.303 | GB/s v=   81.6 n=   62.7 | fp=   589.3MB    sat=Y relsd=0.0043
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=   6.60057 tn=   8.56652 ratio= 1.298 | GB/s v=   39.6 n=   30.5 | fp=   261.1MB    sat=Y relsd=0.0013
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=1 | tv=   3.32940 tn=   4.31936 ratio= 1.297 | GB/s v=  141.7 n=  109.2 | fp=   371.2MB    sat=Y relsd=0.0018
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=1 | tv=   3.33105 tn=   4.27077 ratio= 1.282 | GB/s v=  141.7 n=  110.5 | fp=   371.2MB    sat=Y relsd=0.0021
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=1 | tv=   1.84319 tn=   2.35922 ratio= 1.280 | GB/s v=  137.7 n=  107.6 | fp=   203.4MB    sat=Y relsd=0.0043
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=1 | tv=   1.75474 tn=   2.24009 ratio= 1.277 | GB/s v=  118.9 n=   93.2 | fp=   156.2MB    sat=Y relsd=0.0024
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   1.75422 tn=   2.23748 ratio= 1.275 | GB/s v=   89.1 n=   69.8 | fp=   156.2MB    sat=Y relsd=0.0035
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   1.77089 tn=   2.25697 ratio= 1.274 | GB/s v=   83.2 n=   65.3 | fp=   147.3MB    sat=Y relsd=0.0027
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.55234 tn=   4.52675 ratio= 1.274 | GB/s v=   88.0 n=   69.0 | fp=   312.5MB    sat=Y relsd=0.0043
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   1.63426 tn=   2.07326 ratio= 1.269 | GB/s v=  113.6 n=   89.5 | fp=   185.6MB    sat=Y relsd=0.0033
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=  14.15050 tn=  17.91520 ratio= 1.266 | GB/s v=   88.3 n=   69.8 | fp=  1249.9MB    sat=Y relsd=0.0010
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   1.75666 tn=   2.22066 ratio= 1.264 | GB/s v=   88.9 n=   70.4 | fp=   156.2MB    sat=Y relsd=0.0036
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   1.68503 tn=   2.12380 ratio= 1.260 | GB/s v=  120.7 n=   95.8 | fp=   203.4MB    sat=Y relsd=0.0041
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   0.85429 tn=   1.07667 ratio= 1.260 | GB/s v=  119.1 n=   94.5 | fp=   101.7MB    sat=Y relsd=0.0055
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=0 | tv=   1.26672 tn=   1.57465 ratio= 1.243 | GB/s v=  200.3 n=  161.2 | fp=   203.4MB    sat=Y relsd=0.0030
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   3.44100 tn=   4.27251 ratio= 1.242 | GB/s v=  107.9 n=   86.9 | fp=   371.2MB    sat=Y relsd=0.0040
+     cdouble  tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=  13.71720 tn=  16.99370 ratio= 1.239 | GB/s v=  108.2 n=   87.4 | fp=  1484.8MB    sat=Y relsd=0.0017
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=0 | tv=   1.19747 tn=   1.47856 ratio= 1.235 | GB/s v=  174.3 n=  141.1 | fp=   156.2MB    sat=Y relsd=0.0038
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=0 | tv=   1.21880 tn=   1.50461 ratio= 1.235 | GB/s v=  208.2 n=  168.7 | fp=   203.4MB    sat=Y relsd=0.0031
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=0 pat=1 | tv=   3.42343 tn=   4.20651 ratio= 1.229 | GB/s v=  108.4 n=   88.2 | fp=   371.2MB    sat=Y relsd=0.0021
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=1 | tv=   1.84312 tn=   2.25865 ratio= 1.225 | GB/s v=  137.7 n=  112.3 | fp=   203.4MB    sat=Y relsd=0.0033
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   1.85122 tn=   2.26752 ratio= 1.225 | GB/s v=  109.9 n=   89.7 | fp=   203.4MB    sat=Y relsd=0.0066
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  26.41280 tn=  32.21770 ratio= 1.220 | GB/s v=   39.5 n=   32.4 | fp=  1044.4MB    sat=Y relsd=0.0025
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=0 | tv=   1.18953 tn=   1.45058 ratio= 1.219 | GB/s v=  175.4 n=  143.9 | fp=   156.2MB    sat=Y relsd=0.0039
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.43664 tn=   4.17497 ratio= 1.215 | GB/s v=  108.0 n=   88.9 | fp=   371.2MB    sat=Y relsd=0.0075
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=0 pat=1 | tv=   1.89784 tn=   2.30478 ratio= 1.214 | GB/s v=  107.2 n=   88.3 | fp=   203.4MB    sat=Y relsd=0.0053
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=   1.92062 tn=   2.32989 ratio= 1.213 | GB/s v=   68.0 n=   56.0 | fp=   130.5MB    sat=Y relsd=0.0013
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.44328 tn=   4.17399 ratio= 1.212 | GB/s v=  107.8 n=   88.9 | fp=   371.2MB    sat=Y relsd=0.0064
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   1.90676 tn=   2.31103 ratio= 1.212 | GB/s v=  106.7 n=   88.0 | fp=   203.4MB    sat=Y relsd=0.0129
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=   7.17148 tn=   8.68422 ratio= 1.211 | GB/s v=   87.1 n=   72.0 | fp=   625.0MB    sat=Y relsd=0.0019
+     cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   6.85961 tn=   8.27675 ratio= 1.207 | GB/s v=  108.2 n=   89.7 | fp=   742.4MB    sat=Y relsd=0.0048
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   0.91730 tn=   1.09783 ratio= 1.197 | GB/s v=   65.2 n=   54.4 | fp=    59.8MB L2 sat=Y relsd=0.0108
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=0 pat=0 | tv=   1.29863 tn=   1.54500 ratio= 1.190 | GB/s v=  156.6 n=  131.7 | fp=   203.4MB    sat=Y relsd=0.0024
+     double   tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   7.09592 tn=   8.42289 ratio= 1.187 | GB/s v=  114.7 n=   96.6 | fp=   813.7MB    sat=Y relsd=0.0010
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.56910 tn=   4.23642 ratio= 1.187 | GB/s v=  114.0 n=   96.0 | fp=   406.8MB    sat=Y relsd=0.0031
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=0 | tv=   1.22315 tn=   1.42709 ratio= 1.167 | GB/s v=  127.7 n=  109.5 | fp=   156.2MB    sat=Y relsd=0.0038
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=1 | tv=   3.51106 tn=   4.09407 ratio= 1.166 | GB/s v=   72.3 n=   62.0 | fp=   203.4MB    sat=Y relsd=0.0022
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=0 | tv=   1.28824 tn=   1.50100 ratio= 1.165 | GB/s v=  157.9 n=  135.5 | fp=   203.4MB    sat=Y relsd=0.0038
+     float    tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  128 tB=0 beta=0 pat=1 | tv=   6.76866 tn=   7.87701 ratio= 1.164 | GB/s v=   41.2 n=   35.4 | fp=   278.9MB    sat=Y relsd=0.0038
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   0.83854 tn=   0.97581 ratio= 1.164 | GB/s v=  110.7 n=   95.1 | fp=    92.8MB    sat=Y relsd=0.0018
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=1 | tv=   3.51537 tn=   4.07737 ratio= 1.160 | GB/s v=   72.2 n=   62.2 | fp=   203.4MB    sat=Y relsd=0.0020
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=  25.72820 tn=  29.73500 ratio= 1.156 | GB/s v=   48.6 n=   42.0 | fp=  1249.9MB    sat=Y relsd=0.0013
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   1.63582 tn=   1.89025 ratio= 1.156 | GB/s v=   62.2 n=   53.8 | fp=   101.7MB    sat=Y relsd=0.0066
+     float    tA=1 m= 4096 nnz/row= 16 nrhs= 50 b=  512 tB=0 beta=0 pat=1 | tv=  27.04280 tn=  31.24290 ratio= 1.155 | GB/s v=   41.3 n=   35.7 | fp=  1115.7MB    sat=Y relsd=0.0016
+     double   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=0 | tv=   1.21481 tn=   1.40187 ratio= 1.154 | GB/s v=  128.6 n=  111.5 | fp=   156.2MB    sat=Y relsd=0.0031
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   6.44403 tn=   7.42369 ratio= 1.152 | GB/s v=   48.5 n=   42.1 | fp=   312.5MB    sat=Y relsd=0.0017
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   3.08444 tn=   3.54536 ratio= 1.149 | GB/s v=   66.0 n=   57.4 | fp=   203.4MB    sat=Y relsd=0.0052
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.52721 tn=   4.05255 ratio= 1.149 | GB/s v=   57.7 n=   50.2 | fp=   203.4MB    sat=Y relsd=0.0081
+     float    tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  128 tB=0 beta=0 pat=1 | tv=   1.70097 tn=   1.94978 ratio= 1.146 | GB/s v=   70.3 n=   61.3 | fp=   119.5MB    sat=Y relsd=0.0038
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=0 pat=1 | tv=   3.55090 tn=   4.03207 ratio= 1.136 | GB/s v=   57.3 n=   50.5 | fp=   203.4MB    sat=Y relsd=0.0074
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   6.52123 tn=   7.40176 ratio= 1.135 | GB/s v=   62.4 n=   55.0 | fp=   406.8MB    sat=Y relsd=0.0020
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=1 | tv=   3.32089 tn=   3.76552 ratio= 1.134 | GB/s v=   62.8 n=   55.4 | fp=   156.2MB    sat=Y relsd=0.0016
+     cfloat   tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.52085 tn=   3.98189 ratio= 1.131 | GB/s v=   57.8 n=   51.1 | fp=   203.4MB    sat=Y relsd=0.0066
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=1 | tv=   3.32189 tn=   3.75318 ratio= 1.130 | GB/s v=   47.0 n=   41.6 | fp=   156.2MB    sat=Y relsd=0.0017
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=1 | tv=   3.31351 tn=   3.71943 ratio= 1.123 | GB/s v=   63.0 n=   56.1 | fp=   156.2MB    sat=Y relsd=0.0016
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.30661 tn=   3.70560 ratio= 1.121 | GB/s v=   47.3 n=   42.2 | fp=   156.2MB    sat=Y relsd=0.0040
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=1 | tv=   1.82760 tn=   2.03875 ratio= 1.116 | GB/s v=   62.0 n=   55.5 | fp=    87.0MB    sat=Y relsd=0.0049
+     cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=0 | tv=   2.56137 tn=   2.85715 ratio= 1.115 | GB/s v=  184.2 n=  165.2 | fp=   371.2MB    sat=Y relsd=0.0015
+     float    tA=1 m= 4096 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.47228 tn=   3.86150 ratio= 1.112 | GB/s v=   50.1 n=   45.1 | fp=   174.1MB    sat=Y relsd=0.0048
+     cfloat   tA=1 m= 4096 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=  12.63370 tn=  14.04940 ratio= 1.112 | GB/s v=   64.4 n=   57.9 | fp=   813.7MB    sat=Y relsd=0.0007
+     float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=0 pat=1 | tv=   1.83904 tn=   2.04500 ratio= 1.112 | GB/s v=   47.3 n=   42.6 | fp=    87.0MB    sat=Y relsd=0.0036
+     double   tA=1 m= 1024 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=   3.95372 tn=   4.39314 ratio= 1.111 | GB/s v=   79.0 n=   71.1 | fp=   312.5MB    sat=Y relsd=0.0070
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  512 tB=0 beta=0 pat=1 | tv=  13.31260 tn=  14.77310 ratio= 1.110 | GB/s v=   46.9 n=   42.3 | fp=   625.0MB    sat=Y relsd=0.0019
+     cfloat   tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   3.32216 tn=   3.68229 ratio= 1.108 | GB/s v=   47.0 n=   42.4 | fp=   156.2MB    sat=Y relsd=0.0040
+   best  float    tA=0 m= 1024 nnz/row=  3 nrhs=  1 b= 1024 tB=0 beta=0 pat=0 | tv=   0.31461 tn=   0.01015 ratio= 0.032 | GB/s v=  120.0 n= 3718.4 | fp=    37.8MB L2 sat=Y relsd=0.0069
+   worst float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=0 pat=1 | tv=   1.84705 tn=   2.03172 ratio= 1.100 | GB/s v=   47.1 n=   42.8 | fp=    87.0MB    sat=Y relsd=0.0071
+
+== CROSS-PASS: 380/380 gate rows present in both passes; 1 with ratio spread > 1.10
+   float    tA=0 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=1 beta=1 pat=1 | tv=   0.49415 tn=   0.26322 ratio= 0.533 | GB/s v=  292.8 n=  549.8 | fp=   119.5MB    sat=Y relsd=0.0033 ratio2=0.478 spread=1.114
+   worst spread 1.1144; median 1.0034
+   4 gate rows FLIPPED side of the 1.1 line between passes
+     FLIP cdouble  tA=1 m= 1024 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=1 pat=0 | tv=   2.56137 tn=   2.85715 ratio= 1.115 | GB/s v=  184.2 n=  165.2 | fp=   371.2MB    sat=Y relsd=0.0015 ratio2=1.093
+     FLIP cdouble  tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=0 beta=1 pat=0 | tv=   2.63038 tn=   2.88615 ratio= 1.097 | GB/s v=  151.9 n=  138.4 | fp=   294.7MB    sat=Y relsd=0.0059 ratio2=1.104
+     FLIP float    tA=1 m= 2048 nnz/row= 16 nrhs= 25 b=  128 tB=1 beta=1 pat=1 | tv=   1.82760 tn=   2.03875 ratio= 1.116 | GB/s v=   62.0 n=   55.5 | fp=    87.0MB    sat=Y relsd=0.0049 ratio2=1.099
+     FLIP float    tA=1 m= 2048 nnz/row= 16 nrhs= 12 b=  512 tB=0 beta=0 pat=1 | tv=   3.69515 tn=   4.03328 ratio= 1.092 | GB/s v=   64.7 n=   59.3 | fp=   239.1MB    sat=Y relsd=0.0129 ratio2=1.117
+
+== BY REGIME (saturated rows only)
+  lanczos  nnz/row=3, nrhs<=2      transA=0: n=  55 min=0.032 p25=0.067 med=0.116 p75=0.231 max=0.481
+      float    n=  9 min=0.032 med=0.067 max=0.072 (>1.1: 0)
+      double   n= 14 min=0.047 med=0.112 max=0.141 (>1.1: 0)
+      cfloat   n= 16 min=0.042 med=0.080 max=0.128 (>1.1: 0)
+      cdouble  n= 16 min=0.209 med=0.438 max=0.481 (>1.1: 0)
+  lanczos  nnz/row=3, nrhs<=2      transA=1: n=  57 min=0.054 p25=0.233 med=0.337 p75=0.554 max=0.918
+      float    n= 10 min=0.054 med=0.321 max=0.334 (>1.1: 0)
+      double   n= 16 min=0.138 med=0.278 max=0.367 (>1.1: 0)
+      cfloat   n= 15 min=0.119 med=0.337 max=0.656 (>1.1: 0)
+      cdouble  n= 16 min=0.274 med=0.558 max=0.918 (>1.1: 0)
+  LOBPCG   nnz/row=16, nrhs 12-50  transA=0: n= 166 min=0.253 p25=0.436 med=0.564 p75=0.693 max=1.981
+      float    n= 41 min=0.253 med=0.442 max=0.713 (>1.1: 0)
+      double   n= 41 min=0.269 med=0.513 max=0.804 (>1.1: 0)
+      cfloat   n= 42 min=0.391 med=0.762 max=1.981 (>1.1: 2)
+      cdouble  n= 42 min=0.274 med=0.583 max=0.722 (>1.1: 0)
+  LOBPCG   nnz/row=16, nrhs 12-50  transA=1: n= 179 min=0.878 p25=1.073 med=1.155 p75=1.277 max=3.000
+      float    n= 44 min=0.936 med=1.084 max=2.034 (>1.1: 16)
+      double   n= 44 min=0.956 med=1.214 max=1.851 (>1.1: 37)
+      cfloat   n= 46 min=0.953 med=1.131 max=1.982 (>1.1: 30)
+      cdouble  n= 45 min=0.878 med=1.239 max=3.000 (>1.1: 36)
+
+== DISTANCE FROM THE DRAM ROOF (1008 GB/s), saturated non-L2 rows only
+  float    n= 60 vendor 0.03-0.46 x roof   native 0.04-0.86 x roof
+  double   n= 73 vendor 0.07-0.23 x roof   native 0.04-2.08 x roof
+  cfloat   n= 72 vendor 0.04-0.57 x roof   native 0.03-3.13 x roof
+  cdouble  n= 83 vendor 0.07-0.39 x roof   native 0.02-0.87 x roof
+  (169 further saturated rows are L2-RESIDENT and are excluded from the roof comparison entirely; their ideal-model GB/s exceeds the DRAM pin because the traffic never reaches DRAM.)
+
+== SATURATION LADDERS (per-item us; '*' = saturated)
+  ('cdouble', 0, 1024, 3, 1, 0, 0, 0)
+     vendor 8:2.121 32:0.796 64:0.514 256:0.358 512:0.335* 1024:0.324*
+     native 8:0.362 32:0.131 64:0.103 256:0.076* 512:0.070* 1024:0.114*
+  ('cdouble', 0, 1024, 3, 1, 0, 0, 1)
+     vendor 32:0.796 64:0.514 128:0.409 256:0.357 512:0.335* 1024:0.324*
+     native 32:0.234 64:0.185 128:0.162 256:0.162 512:0.148* 1024:0.146*
+  ('cdouble', 0, 1024, 3, 2, 0, 0, 0)
+     vendor 64:0.584 128:0.446 256:0.386 512:0.358* 1024:0.347*
+     native 64:0.116 128:0.100 256:0.089* 512:0.083* 1024:0.149*
+  ('cdouble', 0, 1024, 3, 2, 0, 0, 1)
+     vendor 8:2.247 32:0.870 64:0.586 128:0.449 256:0.387 512:0.359* 1024:0.348*
+     native 8:0.633 32:0.251 64:0.194 128:0.171* 256:0.172* 512:0.158* 1024:0.168*
+  ('cdouble', 0, 1024, 16, 25, 0, 0, 1)
+     vendor 8:15.139 32:13.753* 128:13.495* 512:13.583*
+     native 8:8.255 32:6.926* 128:6.568* 512:6.366*
+  ('cdouble', 0, 1024, 16, 50, 0, 0, 1)
+     vendor 8:28.204* 32:26.579* 128:26.642* 512:26.609*
+     native 8:18.329 32:13.750* 128:12.939* 512:12.635*
+  ('cdouble', 0, 2048, 16, 12, 0, 0, 1)
+     vendor 8:14.941 32:13.614* 128:13.348* 512:13.427*
+     native 8:8.764 32:8.487 128:7.864* 512:7.523*
+  ('cdouble', 0, 2048, 16, 25, 0, 0, 1)
+     vendor 8:28.590* 32:27.165* 128:27.234* 512:27.210*
+     native 8:21.501 32:16.948* 128:16.065* 512:15.779*
+  ('cdouble', 0, 2048, 16, 50, 0, 0, 1)
+     vendor 8:54.120* 32:52.938* 128:53.280* 512:53.258*
+     native 8:35.856 32:32.627* 128:31.323* 512:31.035*
+  ('cdouble', 0, 4096, 16, 12, 0, 0, 1)
+     vendor 8:28.203* 32:26.789* 128:26.867* 512:26.830*
+     native 8:21.953 32:18.323* 128:17.705* 512:17.473*
+  ('cdouble', 0, 4096, 16, 25, 0, 0, 1)
+     vendor 8:55.307* 32:54.155* 128:54.868* 512:54.582*
+     native 8:40.624 32:37.987* 128:37.080* 512:36.847*
+  ('cdouble', 0, 4096, 16, 50, 0, 0, 1)
+     vendor 8:106.527* 32:106.984* 128:107.039* 512:106.717*
+     native 8:76.962* 32:74.107* 128:73.117* 512:72.939*
+  ('cdouble', 1, 1024, 3, 1, 0, 0, 0)
+     vendor 64:0.514 128:0.405 256:0.355* 512:0.334* 1024:0.323*
+     native 64:0.157 128:0.121 256:0.103 512:0.091* 1024:0.121*
+  ('cdouble', 1, 1024, 3, 1, 0, 0, 1)
+     vendor 8:2.197 32:0.786 64:0.512 128:0.405 256:0.355* 512:0.333* 1024:0.323*
+     native 8:0.725 32:0.287 64:0.207 128:0.169 256:0.144 512:0.130* 1024:0.156*
+  ('cdouble', 1, 1024, 3, 2, 0, 0, 0)
+     vendor 32:0.862 64:0.690 128:0.430 256:0.367 512:0.340* 1024:0.329*
+     native 32:0.283 64:0.238 128:0.201 256:0.191 512:0.174* 1024:0.223*
+  ('cdouble', 1, 1024, 3, 2, 0, 0, 1)
+     vendor 64:0.688 128:0.436 256:0.372 512:0.345* 1024:0.334*
+     native 64:0.324 128:0.274 256:0.251* 512:0.237* 1024:0.306*
+  ('cdouble', 1, 1024, 16, 12, 0, 0, 1)
+     vendor 8:9.167 32:7.176* 128:6.551* 512:6.725*
+     native 8:9.566 32:8.120* 128:7.623* 512:8.152*
+  ('cdouble', 1, 1024, 16, 25, 0, 0, 1)
+     vendor 8:16.078 32:13.990* 128:13.835* 512:14.097*
+     native 8:17.819 32:14.990* 128:17.633* 512:18.369*
+  ('cdouble', 1, 1024, 16, 50, 0, 0, 1)
+     vendor 8:29.057* 32:26.889* 128:27.774* 512:27.650*
+     native 8:33.000 32:28.660* 128:64.989* 512:63.754*
+  ('cdouble', 1, 2048, 16, 12, 0, 0, 1)
+     vendor 8:14.769 32:12.478* 128:12.768* 512:13.398*
+     native 8:15.766* 32:14.451* 128:16.197* 512:16.166*
+  ('cdouble', 1, 2048, 16, 25, 0, 0, 1)
+     vendor 8:27.638 32:24.868* 128:27.289* 512:27.227*
+     native 8:30.616* 32:28.450* 128:38.613* 512:36.340*
+  ('cdouble', 1, 4096, 16, 12, 0, 0, 1)
+     vendor 8:27.224 32:24.528* 128:26.883* 512:26.791*
+     native 8:27.357* 32:29.008* 128:33.379* 512:33.191*
+  ('cdouble', 1, 4096, 16, 25, 0, 0, 1)
+     vendor 8:51.017* 32:52.292* 128:54.770* 512:54.652*
+     native 8:56.293* 32:73.114* 128:78.259* 512:75.579*
+  ('cdouble', 1, 4096, 16, 50, 0, 0, 1)
+     vendor 8:98.467* 32:108.701* 128:108.235* 512:108.261*
+     native 8:111.230* 32:303.195* 128:305.361* 512:324.729*
+  ('cfloat', 0, 1024, 3, 1, 0, 0, 0)
+     vendor 32:0.802 128:0.378 512:0.319* 1024:0.311*
+     native 32:0.092 128:0.027 512:0.015 1024:0.013*
+  ('cfloat', 0, 1024, 3, 1, 0, 0, 1)
+     vendor 64:0.469 128:0.382 256:0.337* 512:0.319* 1024:0.311*
+     native 64:0.058 128:0.038 256:0.030 512:0.026* 1024:0.024*
+  ('cfloat', 0, 1024, 3, 2, 0, 0, 0)
+     vendor 128:0.397 256:0.338* 512:0.320* 1024:0.312*
+     native 128:0.029 256:0.022 512:0.017* 1024:0.023*
+  ('cfloat', 0, 1024, 3, 2, 0, 0, 1)
+     vendor 32:0.673 128:0.380 256:0.338* 512:0.320* 1024:0.311*
+     native 32:0.119 128:0.050 256:0.040* 512:0.038* 1024:0.038*
+  ('cfloat', 0, 1024, 16, 12, 0, 0, 1)
+     vendor 8:3.505 32:2.172* 128:2.014* 512:1.996*
+     native 8:2.181 32:1.572 128:1.083* 512:1.151*
+  ('cfloat', 0, 1024, 16, 25, 0, 0, 1)
+     vendor 8:4.956 32:4.162* 128:4.012* 512:4.078*
+     native 8:3.653 32:2.519* 128:2.329* 512:2.394*
+  ('cfloat', 0, 1024, 16, 50, 0, 0, 1)
+     vendor 8:8.731* 32:8.025* 128:7.993* 512:8.103*
+     native 8:7.040 32:4.428* 128:4.639* 512:4.655*
+  ('cfloat', 0, 2048, 16, 12, 0, 0, 1)
+     vendor 8:6.801 32:5.406 128:4.885* 512:5.104*
+     native 8:4.871 32:3.664* 128:3.459* 512:3.572*
+  ('cfloat', 0, 2048, 16, 25, 0, 0, 1)
+     vendor 8:11.616 32:10.210* 128:9.692* 512:9.809*
+     native 8:9.487 32:6.837* 128:7.370* 512:7.512*
+  ('cfloat', 0, 2048, 16, 50, 0, 0, 1)
+     vendor 8:20.193* 32:19.092* 128:19.225* 512:19.257*
+     native 8:18.630 32:13.812* 128:14.646* 512:14.830*
+  ('cfloat', 0, 4096, 16, 12, 0, 0, 1)
+     vendor 8:11.958 32:10.708* 128:10.860* 512:10.551*
+     native 8:11.366 32:9.469* 128:9.661* 512:9.633*
+  ('cfloat', 0, 4096, 16, 25, 0, 0, 1)
+     vendor 8:22.252* 32:20.904* 128:20.995* 512:20.973*
+     native 8:22.169 32:20.044* 128:20.136* 512:20.074*
+  ('cfloat', 0, 4096, 16, 50, 0, 0, 1)
+     vendor 8:41.751* 32:40.678* 128:41.028* 512:41.397*
+     native 8:39.589* 32:39.882* 128:39.721* 512:39.698*
+  ('cfloat', 1, 1024, 3, 1, 0, 0, 0)
+     vendor 8:2.434 128:0.383 256:0.340* 512:0.321* 1024:0.312*
+     native 8:0.665 128:0.059 256:0.048 512:0.041 1024:0.037*
+  ('cfloat', 1, 1024, 3, 1, 0, 0, 1)
+     vendor 32:0.685 64:0.487 128:0.385 256:0.341* 512:0.321* 1024:0.312*
+     native 32:0.231 64:0.170 128:0.135 256:0.121 512:0.110* 1024:0.105*
+  ('cfloat', 1, 1024, 3, 2, 0, 0, 0)
+     vendor 8:2.069 32:0.679 64:0.479 128:0.383 256:0.341* 512:0.322* 1024:0.313*
+     native 8:0.664 32:0.167 64:0.115 128:0.091 256:0.078 512:0.071* 1024:0.068*
+  ('cfloat', 1, 1024, 3, 2, 0, 0, 1)
+     vendor 8:2.109 32:0.723 64:0.513 128:0.399 256:0.349 512:0.325* 1024:0.314*
+     native 8:0.749 32:0.325 64:0.261 128:0.230 256:0.216* 512:0.204* 1024:0.200*
+  ('cfloat', 1, 1024, 16, 12, 0, 0, 1)
+     vendor 8:9.296 32:7.447* 128:6.942* 512:6.877*
+     native 8:9.244 32:8.293 128:7.513* 512:7.777*
+  ('cfloat', 1, 1024, 16, 25, 0, 0, 1)
+     vendor 8:16.573 32:14.745* 128:14.406* 512:14.461*
+     native 8:17.112 32:14.966* 128:14.728* 512:14.957*
+  ('cfloat', 1, 1024, 16, 50, 0, 0, 1)
+     vendor 8:30.599* 32:28.664* 128:28.525* 512:28.656*
+     native 8:29.776* 32:27.324* 128:29.079* 512:31.387*
+  ('cfloat', 1, 2048, 16, 12, 0, 0, 1)
+     vendor 8:14.886 32:13.165* 128:12.780* 512:12.737*
+     native 8:16.367 32:15.601* 128:14.768* 512:14.457*
+  ('cfloat', 1, 2048, 16, 25, 0, 0, 1)
+     vendor 8:28.223* 32:26.144* 128:25.833* 512:26.001*
+     native 8:29.045* 32:29.083* 128:28.950* 512:28.854*
+  ('cfloat', 1, 2048, 16, 50, 0, 0, 1)
+     vendor 8:52.283* 32:50.883* 128:51.567* 512:51.587*
+     native 8:54.467* 32:55.062* 128:66.926* 512:62.925*
+  ('cfloat', 1, 4096, 16, 12, 0, 0, 1)
+     vendor 8:25.671* 32:23.900* 128:24.097* 512:24.675*
+     native 8:27.213* 32:25.966* 128:27.698* 512:27.440*
+  ('cfloat', 1, 4096, 16, 25, 0, 0, 1)
+     vendor 8:49.870* 32:48.628* 128:50.344* 512:50.250*
+     native 8:52.347* 32:52.181* 128:57.998* 512:58.076*
+  ('cfloat', 1, 4096, 16, 50, 0, 0, 1)
+     vendor 8:96.552* 32:97.370* 128:99.469* 512:99.346*
+     native 8:100.698* 32:117.958* 128:138.948* 512:148.029*
+  ('double', 0, 1024, 3, 1, 0, 0, 0)
+     vendor 8:2.037 32:0.688 64:0.485 128:0.386 256:0.341* 512:0.322* 1024:0.312*
+     native 8:0.364 32:0.090 64:0.049 128:0.032 256:0.022 512:0.017 1024:0.015*
+  ('double', 0, 1024, 3, 1, 0, 0, 1)
+     vendor 8:2.052 32:0.683 128:0.390 256:0.341* 512:0.321* 1024:0.312*
+     native 8:0.426 32:0.119 128:0.048 256:0.040 512:0.033 1024:0.030*
+  ('double', 0, 1024, 3, 2, 0, 0, 0)
+     vendor 8:2.095 64:0.510 256:0.348 512:0.325* 1024:0.315*
+     native 8:0.363 64:0.050 256:0.026 512:0.020* 1024:0.035*
+  ('double', 0, 1024, 3, 2, 0, 0, 1)
+     vendor 64:0.512 256:0.349 512:0.325* 1024:0.314*
+     native 64:0.076 256:0.044* 512:0.042* 1024:0.042*
+  ('double', 0, 1024, 16, 12, 0, 0, 1)
+     vendor 8:4.764 32:3.277 128:2.936* 512:2.869*
+     native 8:1.956 32:1.589 128:1.043* 512:1.035*
+  ('double', 0, 1024, 16, 25, 0, 0, 1)
+     vendor 8:7.468 32:6.059* 128:5.721* 512:5.755*
+     native 8:3.253 32:2.551 128:2.119* 512:2.098*
+  ('double', 0, 1024, 16, 50, 0, 0, 1)
+     vendor 8:13.035 32:11.473* 128:11.181* 512:11.219*
+     native 8:6.825 32:4.166* 128:4.073* 512:4.018*
+  ('double', 0, 2048, 16, 25, 0, 0, 1)
+     vendor 8:13.539 32:11.834* 128:11.503* 512:11.572*
+     native 8:9.089 32:6.137* 128:6.330* 512:6.373*
+  ('double', 0, 2048, 16, 50, 0, 0, 1)
+     vendor 8:24.211* 32:22.543* 128:22.589* 512:22.559*
+     native 8:17.288 32:11.900* 128:12.399* 512:12.462*
+  ('double', 0, 4096, 16, 12, 0, 0, 1)
+     vendor 8:13.834 32:11.979* 128:11.615* 512:11.662*
+     native 8:11.064 32:8.782* 128:8.893* 512:8.866*
+  ('double', 0, 4096, 16, 25, 0, 0, 1)
+     vendor 8:25.048* 32:23.240* 128:23.262* 512:23.225*
+     native 8:20.576 32:18.380* 128:18.419* 512:18.351*
+  ('double', 0, 4096, 16, 50, 0, 0, 1)
+     vendor 8:46.752* 32:45.181* 128:45.420* 512:45.354*
+     native 8:36.223* 32:36.332* 128:36.348* 512:36.285*
+  ('double', 1, 1024, 3, 1, 0, 0, 0)
+     vendor 8:2.078 256:0.342* 512:0.323* 1024:0.313*
+     native 8:0.649 256:0.054 512:0.047* 1024:0.043*
+  ('double', 1, 1024, 3, 1, 0, 0, 1)
+     vendor 8:2.091 64:0.491 128:0.388 256:0.343* 512:0.322* 1024:0.313*
+     native 8:0.658 64:0.120 128:0.086 256:0.072 512:0.063* 1024:0.058*
+  ('double', 1, 1024, 3, 2, 0, 0, 0)
+     vendor 64:0.625 128:0.418 256:0.349 512:0.326* 1024:0.316*
+     native 64:0.127 128:0.107 256:0.093 512:0.086* 1024:0.084*
+  ('double', 1, 1024, 3, 2, 0, 0, 1)
+     vendor 64:0.629 128:0.398 256:0.349 512:0.325* 1024:0.315*
+     native 64:0.167 128:0.137 256:0.124 512:0.114* 1024:0.109*
+  ('double', 1, 1024, 16, 12, 0, 0, 1)
+     vendor 8:5.883 32:4.245 128:3.694* 512:3.616*
+     native 8:5.256 32:4.525 128:4.022* 512:4.429*
+  ('double', 1, 1024, 16, 25, 0, 0, 1)
+     vendor 8:9.715 32:8.033* 128:7.688* 512:7.722*
+     native 8:10.446 32:7.876* 128:8.142* 512:8.580*
+  ('double', 1, 1024, 16, 50, 0, 0, 1)
+     vendor 8:17.069 32:15.243* 128:15.005* 512:15.154*
+     native 8:17.592 32:14.579* 128:18.202* 512:22.202*
+  ('double', 1, 2048, 16, 12, 0, 0, 1)
+     vendor 8:8.592 32:7.048* 128:6.674* 512:6.971*
+     native 8:8.813* 32:8.255* 128:8.411* 512:8.274*
+  ('double', 1, 2048, 16, 25, 0, 0, 1)
+     vendor 8:15.513 32:13.796* 128:13.724* 512:14.007*
+     native 8:16.026* 32:15.251* 128:17.349* 512:16.961*
+  ('double', 1, 2048, 16, 50, 0, 0, 1)
+     vendor 8:28.780* 32:26.750* 128:27.759* 512:27.657*
+     native 8:30.226* 32:29.670* 128:46.853 512:42.156*
+  ('double', 1, 4096, 16, 12, 0, 0, 1)
+     vendor 8:14.768 32:12.880* 128:13.164* 512:13.859*
+     native 8:13.985* 32:14.703* 128:16.592* 512:16.451*
+  ('double', 1, 4096, 16, 25, 0, 0, 1)
+     vendor 8:26.981* 32:25.231* 128:27.753* 512:27.638*
+     native 8:27.953* 32:29.687* 128:35.365* 512:34.991*
+  ('double', 1, 4096, 16, 50, 0, 0, 1)
+     vendor 8:50.640* 32:51.742* 128:54.365* 512:54.259*
+     native 8:53.463* 32:72.253* 128:100.639* 512:95.974*
+  ('float', 0, 1024, 3, 1, 0, 0, 0)
+     vendor 128:0.389 256:0.332* 512:0.315* 1024:0.307*
+     native 128:0.023 256:0.016 512:0.012 1024:0.010*
+  ('float', 0, 1024, 3, 1, 0, 0, 1)
+     vendor 32:0.796 64:0.461 128:0.407 256:0.332* 512:0.315* 1024:0.307*
+     native 32:0.096 64:0.050 128:0.028 256:0.021 512:0.016 1024:0.015*
+  ('float', 0, 1024, 3, 2, 0, 0, 0)
+     vendor 8:2.021 32:0.661 64:0.578 128:0.375 256:0.334* 512:0.316* 1024:0.308*
+     native 8:0.366 32:0.092 64:0.046 128:0.024 256:0.016 512:0.013 1024:0.011*
+  ('float', 0, 1024, 3, 2, 0, 0, 1)
+     vendor 8:2.037 64:0.580 128:0.381 256:0.334* 512:0.316* 1024:0.308*
+     native 8:0.365 64:0.056 128:0.033 256:0.024 512:0.021* 1024:0.021*
+  ('float', 0, 1024, 16, 12, 0, 0, 1)
+     vendor 8:3.183 32:1.462 128:1.221* 512:1.199*
+     native 8:2.369 32:0.788 128:0.309* 512:0.491*
+  ('float', 0, 1024, 16, 25, 0, 0, 1)
+     vendor 8:3.390 32:2.292* 128:2.193* 512:2.162*
+     native 8:2.713 32:1.354 128:0.665* 512:0.809*
+  ('float', 0, 1024, 16, 50, 0, 0, 1)
+     vendor 8:5.110 32:4.097* 128:4.112* 512:4.103*
+     native 8:3.567 32:1.390* 128:1.298* 512:1.456*
+  ('float', 0, 2048, 16, 12, 0, 0, 1)
+     vendor 8:5.450 32:3.583* 128:3.694* 512:3.642*
+     native 8:3.459 32:2.326 128:1.173* 512:1.293*
+  ('float', 0, 2048, 16, 25, 0, 0, 1)
+     vendor 8:7.575 32:6.886* 128:6.661* 512:6.577*
+     native 8:5.453 32:2.462* 128:2.672* 512:2.658*
+  ('float', 0, 2048, 16, 50, 0, 0, 1)
+     vendor 8:13.578* 32:13.026* 128:12.962* 512:13.077*
+     native 8:9.981 32:5.563* 128:5.730* 512:5.780*
+  ('float', 0, 4096, 16, 12, 0, 0, 1)
+     vendor 8:12.417 32:8.919* 128:8.714* 512:8.667*
+     native 8:8.145 32:4.900* 128:5.312* 512:5.384*
+  ('float', 0, 4096, 16, 25, 0, 0, 1)
+     vendor 8:18.417* 32:17.301* 128:17.054* 512:17.123*
+     native 8:15.389 32:10.822* 128:11.399* 512:11.418*
+  ('float', 0, 4096, 16, 50, 0, 0, 1)
+     vendor 8:34.312* 32:33.416* 128:33.282* 512:33.282*
+     native 8:21.586* 32:23.163* 128:23.740* 512:23.668*
+  ('float', 1, 1024, 3, 1, 0, 0, 0)
+     vendor 128:0.411 256:0.336* 512:0.317* 1024:0.308*
+     native 128:0.041 256:0.027 512:0.020 1024:0.017*
+  ('float', 1, 1024, 3, 1, 0, 0, 1)
+     vendor 64:0.469 128:0.697 256:0.335* 512:0.317* 1024:0.308*
+     native 64:0.109 128:0.079 256:0.068 512:0.057* 1024:0.053*
+  ('float', 1, 1024, 3, 2, 0, 0, 0)
+     vendor 32:0.675 64:0.469 128:0.381 256:0.337* 512:0.318* 1024:0.309*
+     native 32:0.165 64:0.083 128:0.050 256:0.037 512:0.030 1024:0.027*
+  ('float', 1, 1024, 3, 2, 0, 0, 1)
+     vendor 32:0.683 128:0.382 256:0.337* 512:0.318* 1024:0.308*
+     native 32:0.210 128:0.128 256:0.113 512:0.103* 1024:0.098*
+  ('float', 1, 1024, 16, 12, 0, 0, 1)
+     vendor 8:5.736 32:4.260 128:3.981* 512:3.931*
+     native 8:5.032 32:4.121 128:4.015* 512:3.816*
+  ('float', 1, 1024, 16, 25, 0, 0, 1)
+     vendor 8:10.367 32:8.432* 128:8.051* 512:7.973*
+     native 8:10.526 32:8.169* 128:7.818* 512:7.897*
+  ('float', 1, 1024, 16, 50, 0, 0, 1)
+     vendor 8:17.791 32:15.871* 128:15.572* 512:15.747*
+     native 8:17.738 32:14.849* 128:15.236* 512:15.402*
+  ('float', 1, 2048, 16, 12, 0, 0, 1)
+     vendor 8:8.835 32:7.579* 128:7.166* 512:7.217*
+     native 8:9.084 32:8.736 128:8.577* 512:7.878*
+  ('float', 1, 2048, 16, 50, 0, 0, 1)
+     vendor 8:30.416* 32:28.544* 128:28.375* 512:28.517*
+     native 8:30.196* 32:28.311* 128:30.577* 512:29.989*
+  ('float', 1, 4096, 16, 12, 0, 0, 1)
+     vendor 8:14.907 32:13.551* 128:13.289* 512:13.429*
+     native 8:15.926* 32:15.316* 128:15.233* 512:14.558*
+  ('float', 1, 4096, 16, 25, 0, 0, 1)
+     vendor 8:28.429* 32:26.858* 128:27.127* 512:27.304*
+     native 8:29.325* 32:29.388* 128:30.168* 512:29.596*
+  ('float', 1, 4096, 16, 50, 0, 0, 1)
+     vendor 8:54.303* 32:52.892* 128:52.880* 512:52.818*
+     native 8:53.984* 32:56.863* 128:61.539* 512:61.021*

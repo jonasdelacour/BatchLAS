@@ -18,6 +18,7 @@
 #include <batchlas/blas/dispatch/route_getrs.hh>
 #include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
+#include <batchlas/blas/dispatch/route_spmm.hh>
 
 #include <complex>
 #include <cstdlib>
@@ -3363,4 +3364,931 @@ TEST(RouteGemv, OrderIsCtaThenDirectThenVendor) {
     EXPECT_EQ(GemvTable::order_begin()[1].origin, Origin::Native);
     EXPECT_EQ(GemvTable::order_begin()[1].algo, Algorithm::Direct);
     EXPECT_TRUE(is_vendor(GemvTable::order_begin()[2]));
+}
+
+// ===========================================================================
+// WP8 -- spmm. THE FIRST ROUTING TABLE THIS OP HAS EVER HAD, AND THE FIRST
+// ASSERTIONS ANY spmm DECISION HAS EVER CARRIED.
+//
+// Before WP8 the sparse facade had no route table at all: entry_points/sparse.cc
+// called the vendor unconditionally where one existed and threw NoRouteError
+// where one did not. So there is no prior behaviour to preserve here, only a new
+// decision surface to pin -- and the whole of it is invisible to every other
+// binary in the tree, for the same two reasons the gemv section above records:
+//   * VENDOR-PRESENT: preferred() SHIPPED ALL-FALSE and no longer is. The WP8
+//     clause (route_spmm.hh's preferred(), evidence in
+//     experiments/sparse_spmm/) moves the transA == NoTrans gather -- minus
+//     complex<float> with a transposed dense operand -- onto native:direct in
+//     EVERY build. The transposed scatter and every refused corner still
+//     resolve to vendor:auto. tests/spmm_tests.cc now exercises the native arm
+//     by default for the admitted shapes, which is what makes its unpinned
+//     vendor-present run the one that matters.
+//   * VENDOR-FREE: {Native, Direct} is the only native route, so a coverage row
+//     saying `native:direct` cannot distinguish the three kernel bodies behind
+//     it -- the launcher picks between them on transA, below the vocabulary.
+//
+// THE ONE STRUCTURAL PROPERTY WP8 EXISTS FOR is the same one WP7's Direct arm
+// has: NO is_gpu CLAUSE, so a native_cpu queue can take the route. It is worth
+// more here than it was for gemv. build-novendor has BATCHLAS_HAS_HOST_BACKEND 1
+// while BATCHLAS_HAS_LAPACKE and BATCHLAS_HAS_CBLAS are both 0
+// (cmake/BatchLASDependencies.cmake:310-318 sets the host backend from the
+// LIBRARIES being found while the other two additionally require their ENABLE
+// options), so the Backend::NETLIB spmm symbol EXISTS in that build and throws
+// NoRouteError today. Add `if (!s.is_gpu) return false;` to the Direct arm and
+// the vendor-free walk finds no route for those rows, the facade keeps throwing,
+// and half the burn-down this work package exists for moves by ZERO.
+//
+// THE V1 TRAP, AVOIDED DELIBERATELY AND CHECKED RATHER THAN ASSERTED.
+// spmm_shape() below sets format, gather_available AND scatter_available. Leave
+// any of them at its default and supports() is false on every shape, every
+// assertion in this section holds vacuously, and the section reports green
+// through a flip and its inverse -- which is exactly how getrs's 78/78 survived
+// a capability flip (:2943-2993). RouteSpmm.HelperIsArmed is written first and
+// must be read first: it takes each of the four gates away ONE AT A TIME and
+// requires the supports() answer to MOVE.
+//
+// AND THE ARMING WAS MEASURED, NOT ASSERTED. Seven breaks, each applied to the
+// named file, recompiled and run, then reverted:
+//
+//   break      file             red   named cases turned red
+//   --------------------------------------------------------------------------
+//   unarmed    this file        10    the helper stops setting gather_available
+//                                     and scatter_available -- i.e. THE V1 TRAP
+//                                     ITSELF. HelperIsArmed catches it, and so
+//                                     do nine others, so the section cannot go
+//                                     vacuous quietly.
+//   noformat   this file        10    the helper stops setting format
+//   gpugate    route_spmm.hh     2    `if (!s.is_gpu) return false;` added to
+//                                     the Direct arm -- THE WP8 DELIVERABLE
+//                                     FLIPPED. NoGpuGateOnDirect goes red, and
+//                                     in build-novendor every Backend::NETLIB
+//                                     spmm goes back to throwing NoRouteError.
+//   orflags    route_spmm.hh     2    the two capabilities collapsed into
+//                                     `gather_available || scatter_available`
+//   zeroext    route_spmm.hh     1    m == 0 / n == 0 refused instead of
+//                                     quick-returned -- ZeroExtentsAre...
+//                                     ALONE, which is what a single-purpose
+//                                     case should do
+//   clause     route_spmm.hh     3    a preferred() clause lands
+//                                     (`batch >= 128`, the shape of the first
+//                                     one anybody will try)
+//   order      route_spmm.hh     1    kSpmmOrder reversed
+//
+// TWO CAPABILITY FLAGS, NOT ONE, and they are not interchangeable. transA ==
+// NoTrans is served by the gather body; transA != NoTrans is served by the
+// scale+scatter PAIR. They are separate kernels with separate instantiations, so
+// a build can have one and not the other, and supports() consults exactly the
+// flag for the body that would actually run.
+//
+// A NOTE FOR WHOEVER READS THE NEXT route_diff. The cases below call
+// `resolve_spmm_route`, the INSTRUMENTED resolver, so each writes a coverage row
+// with `backend = AUTO`. They are fabricated shapes from a pure-layer test, not
+// decisions the library made, and several read `native:direct` even in a
+// vendor-present capture because they pass `vendor_available = false`
+// explicitly. Filter on `backend != AUTO` before concluding anything about what
+// the library routes. This is the file's existing practice, not an spmm
+// invention.
+// ===========================================================================
+
+namespace {
+
+SpmmShape spmm_shape(int64_t m, int64_t k, int64_t nrhs, int64_t batch,
+                     Transpose transA = Transpose::NoTrans,
+                     Transpose transB = Transpose::NoTrans,
+                     MatrixFormat format = MatrixFormat::CSR,
+                     bool is_gpu = true,
+                     bool gather_available = true,
+                     bool scatter_available = true,
+                     bool heterogeneous = false) {
+    SpmmShape s;
+    s.op = Op::spmm;
+    s.scalar = ScalarKind::F32;
+    s.backend = Backend::AUTO;
+    // THE FIELD MAPPING, ONCE, HERE: m = A.rows(), k = A.cols(), n = C.cols(),
+    // i.e. nrhs. Which of m and k is the OUTPUT extent swaps with transA, which
+    // is why the shape carries out_rows() and red_rows() and why no case below
+    // reasons in m and k again.
+    s.m = m;
+    s.k = k;
+    s.n = nrhs;
+    s.batch = batch;
+    s.transA = transA;
+    s.transB = transB;
+    s.is_gpu = is_gpu;
+    s.heterogeneous_batch = heterogeneous;
+    s.format = format;
+    s.gather_available = gather_available;
+    s.scatter_available = scatter_available;
+    return s;
+}
+
+using SpmmTable = RouteTable<Op::spmm, float>;
+constexpr Route kSpmmDirect{Origin::Native, Algorithm::Direct};
+constexpr Route kSpmmNativeBare{Origin::Native, Algorithm::Auto};
+constexpr Route kSpmmCta{Origin::Native, Algorithm::CTA};
+constexpr Route kSpmmAuto{Origin::Auto, Algorithm::Auto};
+
+constexpr Transpose kAllTrans[3] = {Transpose::NoTrans, Transpose::Trans,
+                                    Transpose::ConjTrans};
+
+} // namespace
+
+// THE HELPER IS ARMED. RUN THIS FIRST: if it fails, every other spmm assertion
+// in this file is vacuous and none of them means anything.
+//
+// Four gates, taken away ONE AT A TIME, each required to MOVE the answer. Taking
+// them away together would not distinguish "all four reach supports()" from "one
+// of them does", which is the precise shape of the getrs hole.
+TEST(RouteSpmm, HelperIsArmed) {
+    const auto gather  = spmm_shape(/*m=*/4096, /*k=*/4096, /*nrhs=*/25, /*batch=*/64);
+    const auto scatter = spmm_shape(4096, 4096, 25, 64, Transpose::Trans);
+    ASSERT_TRUE(SpmmTable::supports(kSpmmDirect, gather))
+        << "the baseline shape is not even supported: nothing below can be "
+           "distinguished from a table that refuses everything";
+    ASSERT_TRUE(SpmmTable::supports(kSpmmDirect, scatter));
+
+    // 1. gather_available, which serves transA == NoTrans and nothing else.
+    const auto no_gather = spmm_shape(4096, 4096, 25, 64, Transpose::NoTrans,
+                                      Transpose::NoTrans, MatrixFormat::CSR,
+                                      /*is_gpu=*/true, /*gather_available=*/false,
+                                      /*scatter_available=*/true);
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, no_gather))
+        << "gather_available is not reaching supports(): every NoTrans assertion "
+           "below would hold for the wrong reason, which is how getrs's 78/78 "
+           "survived a capability flip";
+
+    // 2. scatter_available, which serves transA != NoTrans and nothing else.
+    const auto no_scatter = spmm_shape(4096, 4096, 25, 64, Transpose::Trans,
+                                       Transpose::NoTrans, MatrixFormat::CSR,
+                                       /*is_gpu=*/true, /*gather_available=*/true,
+                                       /*scatter_available=*/false);
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, no_scatter))
+        << "scatter_available is not reaching supports()";
+
+    // 3. format. The helper defaults to CSR; if it did not, or if the gate were
+    //    dropped, a Dense view would reach a CSR kernel -- a wrong answer.
+    auto dense = gather;
+    dense.format = MatrixFormat::Dense;
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, dense))
+        << "format is not reaching supports()";
+
+    // 4. heterogeneous_batch, which OpShape carries and the helper writes.
+    auto het = gather;
+    het.heterogeneous_batch = true;
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, het))
+        << "heterogeneous_batch is not reaching supports()";
+}
+
+// THE WP8 DELIVERABLE, AS AN ASSERTION, AND THE ONLY ASSERTION IN THE TREE THAT
+// GUARDS IT DIRECTLY. Adding `if (!s.is_gpu) return false;` to the Direct arm
+// turns this red -- and, in build-novendor, leaves every Backend::NETLIB spmm
+// call throwing NoRouteError exactly as it does today.
+//
+// It is asserted for ALL NINE transpose pairs because all three bodies are plain
+// loops: zero local memory, no work-group or sub-group collective, no required
+// sub-group size, nothing a CPU device cannot execute. A gate added to only the
+// scatter half would be just as fatal to the burn-down and would survive a
+// NoTrans-only case.
+TEST(RouteSpmm, NoGpuGateOnDirect) {
+    for (Transpose ta : kAllTrans) {
+        for (Transpose tb : kAllTrans) {
+            const auto cpu = spmm_shape(/*m=*/512, /*k=*/512, /*nrhs=*/2, /*batch=*/8,
+                                        ta, tb, MatrixFormat::CSR, /*is_gpu=*/false);
+            EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, cpu))
+                << "Direct must serve a CPU device: the gather, scale and scatter "
+                   "bodies use no local memory and no group collective. This is "
+                   "the line that closes the Backend::NETLIB half of the "
+                   "burn-down, where the spmm symbol exists and throws today.";
+            const Route r = resolve_spmm_route<float>(kSpmmAuto, cpu,
+                                                      /*vendor_available=*/false);
+            EXPECT_TRUE(is_native(r)) << "vendor-free, a CPU spmm must still find a route";
+            EXPECT_EQ(r.algo, Algorithm::Direct);
+        }
+    }
+}
+
+// ALL NINE (transA, transB) COMBINATIONS ARE SERVED. This is what keeps the
+// transB == Trans layout lever available to callers: a caller holding B in the
+// other layout can pass it transposed instead of materialising a copy, and a
+// future "simplification" that refuses transB != NoTrans in the table would take
+// that away silently -- the pin would fall through to the vendor with no
+// diagnostic.
+TEST(RouteSpmm, AllNineTransposeCombinationsSupported) {
+    for (Transpose ta : kAllTrans) {
+        for (Transpose tb : kAllTrans) {
+            const auto s = spmm_shape(4096, 2048, 25, 128, ta, tb);
+            EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, s))
+                << "transA " << static_cast<int>(ta) << " transB "
+                << static_cast<int>(tb);
+            EXPECT_EQ(resolve_spmm_route<float>(kSpmmAuto, s,
+                                                /*vendor_available=*/false).algo,
+                      Algorithm::Direct)
+                << "transA " << static_cast<int>(ta) << " transB "
+                << static_cast<int>(tb);
+        }
+    }
+}
+
+// THE TWO FLAGS ARE INDEPENDENT AND SERVE DISJOINT HALVES OF THE transA AXIS.
+// A table that ORed them -- or that consulted only one -- would pass a shape to
+// a kernel this build does not contain, which is the TrsmShape::cta_max_n == 0
+// failure mode: selectable-but-unimplemented rather than unsupported.
+//
+// transB is swept inside both halves because it must NOT influence the choice:
+// the gather/scatter split is on transA alone.
+TEST(RouteSpmm, GatherAndScatterUseDifferentCapabilities) {
+    for (Transpose tb : kAllTrans) {
+        // Gather only: NoTrans is served, the two transposed spellings are not.
+        const auto g_no = spmm_shape(1024, 1024, 12, 64, Transpose::NoTrans, tb,
+                                     MatrixFormat::CSR, /*is_gpu=*/true,
+                                     /*gather_available=*/true,
+                                     /*scatter_available=*/false);
+        EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, g_no));
+        for (Transpose ta : {Transpose::Trans, Transpose::ConjTrans}) {
+            auto g_tr = g_no; g_tr.transA = ta;
+            EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, g_tr))
+                << "with no scatter body linked, a transposed spmm must be "
+                   "UNSUPPORTED rather than selected and then absent";
+            EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, g_tr, true)));
+        }
+
+        // Scatter only: exactly the inverse.
+        const auto s_no = spmm_shape(1024, 1024, 12, 64, Transpose::NoTrans, tb,
+                                     MatrixFormat::CSR, /*is_gpu=*/true,
+                                     /*gather_available=*/false,
+                                     /*scatter_available=*/true);
+        EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, s_no))
+            << "with no gather body linked, NoTrans must be UNSUPPORTED -- the "
+               "scatter flag says nothing about the NoTrans body";
+        for (Transpose ta : {Transpose::Trans, Transpose::ConjTrans}) {
+            auto s_tr = s_no; s_tr.transA = ta;
+            EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, s_tr));
+        }
+    }
+}
+
+// ONLY CSR HAS BODIES. This is a correctness gate, not a bet on sparse.cc's
+// instantiation list staying as it is: a Dense or COO view reaching a CSR kernel
+// reads row offsets that are not there, which is a wrong answer or a fault, not
+// a slow route.
+TEST(RouteSpmm, NonCsrFormatRefused) {
+    for (MatrixFormat f : {MatrixFormat::Dense, MatrixFormat::CSC, MatrixFormat::COO,
+                           MatrixFormat::SELL, MatrixFormat::BSR,
+                           MatrixFormat::BLOCKED_ELL}) {
+        for (Transpose ta : kAllTrans) {
+            const auto s = spmm_shape(1024, 1024, 12, 64, ta, Transpose::NoTrans, f);
+            EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, s))
+                << "format " << static_cast<int>(f);
+            EXPECT_TRUE(SpmmTable::supports(kVendorAuto, s));
+            EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, true)));
+            // And vendor-free there is nothing to fall back to, so the resolver
+            // returns the vendor as its honest "this needs one and there isn't
+            // one" signal (route_resolve.hh's automatic() tail) and the facade
+            // turns that into a diagnostic rather than a wrong answer.
+            EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, false)));
+        }
+    }
+    // The CSR control, so this case cannot pass by refusing everything.
+    EXPECT_TRUE(SpmmTable::supports(
+        kSpmmDirect, spmm_shape(1024, 1024, 12, 64, Transpose::NoTrans,
+                                Transpose::NoTrans, MatrixFormat::CSR)));
+}
+
+// A HETEROGENEOUS BATCH IS A CORRECTNESS GATE, not merely un-preferred: one
+// launch covers the batch with a single (ld, stride) tuple per DENSE operand, so
+// per-item extents on B or C would be read at the wrong addresses. spmm has no
+// analogue of gemm's heterogeneous walker.
+//
+// Note what this gate is NOT about. Per-item variation on the SPARSE side is
+// expressible only as nnz(b), every body handles that exactly through the
+// row-offset array, and a CSR MatrixView is never heterogeneous in the
+// active_rows_/active_cols_ sense at all (matrix.hh:1036-1042) -- so this gate
+// can only ever fire on the dense operands, which is what it is for.
+TEST(RouteSpmm, HeterogeneousBatchRefused) {
+    for (Transpose ta : kAllTrans) {
+        const auto het = spmm_shape(1024, 1024, 12, 64, ta, Transpose::NoTrans,
+                                    MatrixFormat::CSR, /*is_gpu=*/true,
+                                    /*gather_available=*/true,
+                                    /*scatter_available=*/true,
+                                    /*heterogeneous=*/true);
+        EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, het));
+        EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, het, true)));
+    }
+}
+
+// DEGENERATE EXTENTS, AND THIS CASE IS HALF OF A CONTRACT WITH THE LAUNCHER.
+//
+// m == 0 and n == 0 are LEGAL calls that stay SUPPORTED, so spmm_native_csr MUST
+// quick-return on the HOST -- before any submit -- when out_rows == 0 ||
+// nrhs == 0 || batch <= 0. Refusing them here instead would be the easy fix and
+// the wrong one: it sends a legal call to the vendor in one build and to nothing
+// at all in the other. A NEGATIVE extent or an empty batch has no launch
+// geometry and is refused.
+TEST(RouteSpmm, ZeroExtentsAreSupportedNegativeAreNot) {
+    EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, spmm_shape(0, 512, 12, 8)));
+    EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 512, 0, 8)));
+    EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 0, 12, 8)));
+    // ...and under a transposed transA, where m and k swap roles, both still
+    // stand: out_rows() is the one that is zero in the second call.
+    EXPECT_TRUE(SpmmTable::supports(
+        kSpmmDirect, spmm_shape(0, 512, 12, 8, Transpose::Trans)));
+    EXPECT_TRUE(SpmmTable::supports(
+        kSpmmDirect, spmm_shape(512, 0, 12, 8, Transpose::Trans)));
+
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, spmm_shape(-1, 512, 12, 8)));
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, -1, 12, 8)));
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 512, -1, 8)));
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 512, 12, 0)));
+    EXPECT_FALSE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 512, 12, -1)));
+    EXPECT_TRUE(is_vendor(
+        resolve_spmm_route<float>(kSpmmAuto, spmm_shape(512, 512, 12, 0), true)));
+}
+
+// Algorithm::Auto IS NOT ITSELF A NATIVE SPMM ROUTE. A bare `native` names no
+// body -- it is the `default:` arm -- so supports() must say false, or the walk
+// would stop on a route no dispatch tail can map to a kernel.
+//
+// The bare pin still RESOLVES, though, and to the one native route there is:
+// resolve_route walks the order restricted to the requested origin
+// (route_resolve.hh:153-163). Both halves are asserted, because the first
+// without the second would read as "a bare native pin is broken".
+TEST(RouteSpmm, BareNativeAutoIsNotSupported) {
+    const auto s = spmm_shape(4096, 4096, 25, 64);
+    EXPECT_FALSE(SpmmTable::supports(kSpmmNativeBare, s));
+    EXPECT_FALSE(SpmmTable::supports(kSpmmCta, s))
+        << "there is no CTA body; a pin naming one must be unsupported, not "
+           "selectable";
+    EXPECT_FALSE(SpmmTable::supports(Route{Origin::Native, Algorithm::Blocked}, s));
+    EXPECT_TRUE(SpmmTable::supports(kVendorAuto, s));
+
+    for (Transpose ta : kAllTrans) {
+        auto t = s; t.transA = ta;
+        const Route r = resolve_spmm_route<float>(kSpmmNativeBare, t, true);
+        EXPECT_TRUE(is_native(r));
+        EXPECT_EQ(r.algo, Algorithm::Direct)
+            << "a bare `native` must land on the one route that has a body";
+    }
+}
+
+// ===========================================================================
+// preferred() IS NO LONGER ALL-FALSE, AND THESE CASES PIN THE ACTUAL PREDICATE.
+//
+// The case that used to live here (RouteSpmm.PreferredIsAllFalse) asserted that
+// EVERY route, type and shape was un-preferred, and said in its own comment that
+// landing a clause must turn it red and force whoever landed it to come here and
+// name the cells with the CSV path. That is what happened; this block is the
+// replacement, not a deletion.
+//
+// THE SHIPPED CLAUSE, in words, so a reader of this file need not open the
+// header:
+//
+//     preferred(r, s) ==   is_native(r)
+//                       && r.algo == Algorithm::Direct
+//                       && s.format == MatrixFormat::CSR
+//                       && s.transA == Transpose::NoTrans
+//                       && !(T is complex<float> && s.transB != NoTrans)
+//
+// and NOTHING else -- no batch term, no extent term, no is_gpu term, no nnz
+// term. Evidence and the refuted alternatives are in route_spmm.hh's comment and
+// in experiments/sparse_spmm/{verdict.txt,cfedge1,cfedge2,sb1,sb2,smallbatch.txt}.
+//
+// WHY THIS IS ASSERTED AT BOTH LEVELS. Every case below checks the PREDICATE and
+// then the RESOLVED ROUTE with vendor_available = true, because the two can come
+// apart: a preferred() that answered true for {Vendor, Auto} would pin cuSPARSE
+// as "preferred" and make the native route unreachable while every
+// predicate-only assertion below still passed. Checking only the resolution, in
+// the other direction, would not distinguish "preferred" from "merely supported
+// with no vendor around".
+//
+// WHAT THIS PAIRING DOES *NOT* CATCH, MEASURED RATHER THAN GUESSED: reversing
+// kSpmmOrder. preferred() is false for the vendor entry, so the first walk skips
+// it wherever it sits and the decision is unchanged; the reversal was applied,
+// rebuilt and run, and only RouteSpmm.OrderIsExactlyTwoEntries goes red.
+//
+// EVERY BOUNDARY THE CLAUSE DRAWS IS ASSERTED FROM BOTH SIDES:
+//   origin/algo   native:direct accepted; vendor:auto, native:auto, native:cta,
+//                 native:blocked all refused
+//   format        CSR accepted; Dense/CSC/COO/SELL/BSR/BLOCKED_ELL refused
+//   transA        NoTrans accepted; Trans and ConjTrans refused -- A MEASURED
+//                 REFUSAL (169 of 458 saturated scatter cells over the 1.10
+//                 gate, worst 3.011), not an unmeasured corner
+//   type x transB complex<float> with transB != NoTrans refused, while the SAME
+//                 shape is accepted for float, double and complex<double>, and
+//                 complex<float> with transB == NoTrans is accepted
+//   batch         accepted at 1 and at 4096 alike -- the absence of a floor is
+//                 itself a measured decision (sb1/sb2) and is pinned so that
+//                 adding one turns this red
+// ===========================================================================
+
+namespace {
+
+// The three sibling tables, named once. float is `SpmmTable` above.
+using SpmmTableD  = RouteTable<Op::spmm, double>;
+using SpmmTableCF = RouteTable<Op::spmm, std::complex<float>>;
+using SpmmTableCD = RouteTable<Op::spmm, std::complex<double>>;
+
+constexpr Route kSpmmBlocked{Origin::Native, Algorithm::Blocked};
+
+} // namespace
+
+// THE CLAUSE ACCEPTS THE GATHER, FOR ALL FOUR TYPES, ACROSS THE WHOLE MEASURED
+// GRID AND BEYOND IT.
+//
+// The extents and batches swept here are the ones the measurement actually
+// covered (m 1024/2048/4096, nrhs 1..50, batch 1..4096 -- pass{1,2}, scl{1,2},
+// sb{1,2}) plus deliberate outliers on both ends, because the clause carries no
+// extent or batch term and a future one must turn this red rather than pass
+// unnoticed.
+TEST(RouteSpmm, PreferredAcceptsTheGatherForEveryType) {
+    for (int64_t m : {1, 64, 512, 1024, 2048, 4096, 65536}) {
+        for (int64_t nrhs : {1, 2, 3, 12, 25, 50}) {
+            for (int64_t batch : {1, 2, 4, 8, 64, 128, 512, 4096}) {
+                const auto s = spmm_shape(m, m, nrhs, batch);
+                EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
+                    << "float m " << m << " nrhs " << nrhs << " batch " << batch;
+                EXPECT_TRUE(SpmmTableD::preferred(kSpmmDirect, s));
+                EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, s));
+                EXPECT_TRUE(SpmmTableCF::preferred(kSpmmDirect, s))
+                    << "complex<float> is refused only with transB != NoTrans";
+
+                // ...and the decision that follows from it, WITH a vendor
+                // present. This is the half that a reversed kSpmmOrder breaks.
+                EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, s, true)))
+                    << "float m " << m << " nrhs " << nrhs << " batch " << batch
+                    << ": the gather must now win against a present vendor";
+                EXPECT_EQ(resolve_spmm_route<float>(kSpmmAuto, s, true).algo,
+                          Algorithm::Direct);
+            }
+        }
+    }
+
+    // A RECTANGULAR SPREAD TOO, because m == k above would hide a clause written
+    // on one extent and read on the other.
+    for (int64_t m : {512, 4096}) {
+        for (int64_t k : {64, 8192}) {
+            const auto s = spmm_shape(m, k, 25, 128);
+            EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, s)) << "m " << m << " k " << k;
+            EXPECT_TRUE(SpmmTableD::preferred(kSpmmDirect, s));
+            EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, s));
+        }
+    }
+}
+
+// THE BATCH AXIS HAS NO FLOOR, AND ITS ABSENCE IS A MEASURED DECISION.
+//
+// preferred() is consulted on EVERY call while the acceptance gate is stated at
+// batch >= 128, so the batch 1..64 corner was swept separately
+// (experiments/sparse_spmm/run_smallbatch.sh, sb1/, sb2/, smallbatch.txt): 0 of
+// 174 admitted rows at batch <= 64 exceed the 1.10 gate in both passes, and the
+// worst cell anywhere in that region is 1.078, INSIDE the gate. A floor needs a
+// measured non-winner outside the gate to bracket it and there is none.
+//
+// This case exists so that adding `s.batch >= N` -- the shape of the first
+// "obvious" tightening anybody will try, and the one the deliberate-break
+// exercise used -- goes red with a message that says where to look.
+TEST(RouteSpmm, PreferredHasNoBatchFloor) {
+    for (int64_t batch : {1, 2, 4, 8, 16, 32, 64, 127, 128, 129, 512, 4096}) {
+        const auto s = spmm_shape(/*m=*/4096, /*k=*/4096, /*nrhs=*/50, batch);
+        EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
+            << "batch " << batch << ": the clause carries NO batch term. If a "
+               "floor was just added, it needs a measured non-winner outside "
+               "the 1.10 gate to bracket it -- experiments/sparse_spmm/"
+               "smallbatch.txt has none at any rung, worst 1.078 at batch 4";
+        EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, s)) << "batch " << batch;
+        EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, s, true)))
+            << "batch " << batch;
+    }
+}
+
+// THE TRANSPOSED REFUSAL, WHICH IS MEASURED AND NOT AN OMISSION.
+//
+// 169 of 458 saturated batch >= 128 scatter cells are above the 1.10 gate,
+// median 1.030, worst 3.011 (experiments/sparse_spmm/verdict.txt). Every
+// narrower candidate was tried and refuted there too: nrhs <= 4 fails 11 of 204,
+// nrhs <= 2 fails 5 of 151, nrhs <= 1 fails 2 of 60, and the one that passes
+// (nrhs <= 2 AND type != complex<double>) is rejected because its true axis is
+// nnz/row, which SpmmShape deliberately cannot see.
+//
+// Both sides of the boundary are asserted on the SAME shape, so this cannot pass
+// by refusing everything: NoTrans is preferred, Trans and ConjTrans are not, and
+// with a vendor present the transposed shapes still resolve to it.
+TEST(RouteSpmm, PreferredRefusesEveryTransposedA) {
+    for (int64_t nrhs : {1, 2, 4, 12, 25, 50}) {
+        for (int64_t batch : {8, 128, 512, 1024}) {
+            const auto gather = spmm_shape(2048, 2048, nrhs, batch);
+            ASSERT_TRUE(SpmmTable::preferred(kSpmmDirect, gather))
+                << "the NoTrans control must be preferred or this case is "
+                   "passing by refusing everything";
+
+            for (Transpose ta : {Transpose::Trans, Transpose::ConjTrans}) {
+                for (Transpose tb : kAllTrans) {
+                    const auto s = spmm_shape(2048, 2048, nrhs, batch, ta, tb);
+                    EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, s))
+                        << "the scatter stays SUPPORTED -- the refusal is a "
+                           "speed decision, not a correctness one, and "
+                           "BATCHLAS_SPMM_ROUTE=native must still reach it";
+                    EXPECT_FALSE(SpmmTable::preferred(kSpmmDirect, s))
+                        << "transA " << static_cast<int>(ta) << " nrhs " << nrhs
+                        << " batch " << batch;
+                    EXPECT_FALSE(SpmmTableD::preferred(kSpmmDirect, s));
+                    EXPECT_FALSE(SpmmTableCF::preferred(kSpmmDirect, s));
+                    EXPECT_FALSE(SpmmTableCD::preferred(kSpmmDirect, s))
+                        << "complex<double> is the WORST scatter cell measured "
+                           "(3.011 at m=4096 nnz/row=16 nrhs=50 b=512)";
+                    EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, true)))
+                        << "vendor-present, a transposed spmm must still go to "
+                           "the vendor";
+                    // ...and vendor-FREE it must still reach the native bodies,
+                    // which is the entire burn-down. Un-preferred is not
+                    // unsupported.
+                    const Route free_route =
+                        resolve_spmm_route<float>(kSpmmAuto, s, false);
+                    EXPECT_TRUE(is_native(free_route));
+                    EXPECT_EQ(free_route.algo, Algorithm::Direct);
+                }
+            }
+        }
+    }
+}
+
+// THE ONE TYPE-CONDITIONAL BOUNDARY, ASSERTED FROM ALL FOUR SIDES.
+//
+// complex<float> with a transposed dense operand runs 1.71-1.73x slower than
+// cuSPARSE on a banded column pattern at nrhs >= 17
+// (experiments/sparse_spmm/cfedge{1,2}), and it is what refutes the
+// unconditional gather clause: cfloat tA=0 m=2048 nnz/row=16 nrhs=25 b=128 tB=1
+// beta=0 banded measures 1.934 / 1.872 (verdict.txt).
+//
+// The exclusion is (type AND transB) TOGETHER, so all four corners are pinned:
+//   complex<float> + transB != NoTrans   refused
+//   complex<float> + transB == NoTrans   accepted
+//   other types    + transB != NoTrans   accepted
+//   other types    + transB == NoTrans   accepted
+// Drop either half of the conjunction and one of these goes red.
+//
+// It is deliberately NOT narrowed by nrhs even though `nrhs >= 16` passes on
+// verdict.txt's grid: the threshold is a property of the BANDED column pattern
+// (the same family on the scattered pattern is 0.79-1.02 at every nrhs) and
+// SpmmShape has no column-pattern field and cannot acquire one. The nrhs sweep
+// below is what makes such a narrowing visible if anyone adds it.
+TEST(RouteSpmm, PreferredRefusesComplexFloatWithTransposedB) {
+    for (int64_t nrhs : {1, 2, 8, 12, 16, 17, 25, 32, 50}) {
+        for (int64_t batch : {1, 4, 128, 512}) {
+            for (Transpose tb : {Transpose::Trans, Transpose::ConjTrans}) {
+                const auto s = spmm_shape(2048, 2048, nrhs, batch,
+                                          Transpose::NoTrans, tb);
+                EXPECT_FALSE(SpmmTableCF::preferred(kSpmmDirect, s))
+                    << "complex<float> transB " << static_cast<int>(tb)
+                    << " nrhs " << nrhs << " batch " << batch
+                    << ": refused WHOLE, not by nrhs -- the boundary rides on "
+                       "the column pattern, which SpmmShape cannot see";
+                EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
+                    << "float on the identical cell: 0.36-0.94, never loses";
+                EXPECT_TRUE(SpmmTableD::preferred(kSpmmDirect, s));
+                EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, s))
+                    << "complex<double> on the identical cells: 0.66-0.69";
+            }
+
+            // The other side of the type-conditional: same type, transB NoTrans.
+            const auto ok = spmm_shape(2048, 2048, nrhs, batch);
+            EXPECT_TRUE(SpmmTableCF::preferred(kSpmmDirect, ok))
+                << "complex<float> with transB == NoTrans is IN the window "
+                   "(nrhs " << nrhs << " batch " << batch << ")";
+        }
+    }
+
+    // And the resolved decision, both ways, with a vendor present -- the level a
+    // reversed kSpmmOrder or a dropped conjunct actually shows up at.
+    const auto cf_tb = spmm_shape(2048, 2048, 25, 512, Transpose::NoTrans,
+                                  Transpose::Trans);
+    EXPECT_TRUE(is_vendor(
+        resolve_spmm_route<std::complex<float>>(kSpmmAuto, cf_tb, true)));
+    EXPECT_TRUE(is_native(
+        resolve_spmm_route<std::complex<double>>(kSpmmAuto, cf_tb, true)));
+    EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, cf_tb, true)));
+    // Vendor-FREE, even the refused complex<float> cell takes the native body:
+    // un-preferred is not unsupported, and this is the burn-down row.
+    EXPECT_TRUE(is_native(
+        resolve_spmm_route<std::complex<float>>(kSpmmAuto, cf_tb, false)));
+}
+
+// THE CLAUSE SPEAKS ONLY FOR {Native, Direct} AND ONLY FOR CSR.
+//
+// The route half matters because preferred() is asked about EVERY entry in
+// kSpmmOrder by automatic()'s first walk: a clause that answered true for
+// {Vendor, Auto} would pin the vendor as "preferred" and make the native route
+// unreachable in the vendor-present build no matter what the order says.
+//
+// The format half is the same correctness boundary supports() draws, restated
+// here because preferred() is consulted BEFORE supports() has any say in the
+// walk order and a reader should not have to prove the conjunction by hand.
+TEST(RouteSpmm, PreferredIsFalseForEveryOtherRouteAndFormat) {
+    const auto s = spmm_shape(4096, 4096, 25, 512);
+    ASSERT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
+        << "the control must be preferred or this case refuses everything";
+
+    for (const Route r : {kVendorAuto, kSpmmNativeBare, kSpmmCta, kSpmmBlocked}) {
+        EXPECT_FALSE(SpmmTable::preferred(r, s))
+            << "origin " << static_cast<int>(r.origin) << " algo "
+            << static_cast<int>(r.algo);
+        EXPECT_FALSE(SpmmTableD::preferred(r, s));
+        EXPECT_FALSE(SpmmTableCF::preferred(r, s));
+        EXPECT_FALSE(SpmmTableCD::preferred(r, s));
+    }
+
+    for (MatrixFormat f : {MatrixFormat::Dense, MatrixFormat::CSC, MatrixFormat::COO,
+                           MatrixFormat::SELL, MatrixFormat::BSR,
+                           MatrixFormat::BLOCKED_ELL}) {
+        const auto ns = spmm_shape(4096, 4096, 25, 512, Transpose::NoTrans,
+                                   Transpose::NoTrans, f);
+        EXPECT_FALSE(SpmmTable::preferred(kSpmmDirect, ns))
+            << "format " << static_cast<int>(f);
+        EXPECT_FALSE(SpmmTableCD::preferred(kSpmmDirect, ns));
+    }
+}
+
+// THE CLAUSE HAS NO is_gpu TERM EITHER, AND THAT IS THE OTHER HALF OF WP8's
+// DELIVERABLE. supports() has no GPU gate (RouteSpmm.NoGpuGateOnDirect); if
+// preferred() acquired one, a native_cpu queue would still be SERVED in a
+// vendor-free build but would go back to netlib -- which refuses every transpose
+// -- in a vendor-present one, silently.
+TEST(RouteSpmm, PreferredHasNoGpuTerm) {
+    for (int64_t batch : {1, 8, 128, 512}) {
+        const auto cpu = spmm_shape(1024, 1024, 12, batch, Transpose::NoTrans,
+                                    Transpose::NoTrans, MatrixFormat::CSR,
+                                    /*is_gpu=*/false);
+        EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, cpu)) << "batch " << batch;
+        EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, cpu));
+        EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, cpu, true)))
+            << "a CPU queue's NoTrans spmm must take the native gather even "
+               "with a vendor present";
+    }
+}
+
+// UN-PREFERRED IS NOT UNSUPPORTED, AND A PIN MUST STILL REACH THE SCATTER.
+//
+// This is the property that keeps BATCHLAS_SPMM_ROUTE=native honest after the
+// clause: the transposed bodies are refused by preferred() and served by
+// supports(), so a forced native route reaches them in BOTH builds. If the
+// refusal had been written into supports() instead -- the tempting
+// simplification -- the pin would fall through to the vendor with no diagnostic
+// and every transposed measurement would silently be cuSPARSE.
+TEST(RouteSpmm, ForcedNativeStillReachesTheRefusedScatter) {
+    for (Transpose ta : {Transpose::Trans, Transpose::ConjTrans}) {
+        const auto s = spmm_shape(2048, 2048, 50, 512, ta);
+        ASSERT_FALSE(SpmmTable::preferred(kSpmmDirect, s));
+        for (bool vendor : {true, false}) {
+            const Route pinned = resolve_spmm_route<float>(kSpmmDirect, s, vendor);
+            EXPECT_TRUE(is_native(pinned))
+                << "transA " << static_cast<int>(ta) << " vendor " << vendor
+                << ": a forced native:direct bypasses preferred() and must "
+                   "reach the scatter";
+            EXPECT_EQ(pinned.algo, Algorithm::Direct);
+            const Route bare = resolve_spmm_route<float>(kSpmmNativeBare, s, vendor);
+            EXPECT_TRUE(is_native(bare));
+            EXPECT_EQ(bare.algo, Algorithm::Direct);
+        }
+    }
+
+    // And the complex<float> cell the clause refuses by type, likewise.
+    const auto cf = spmm_shape(2048, 2048, 25, 512, Transpose::NoTrans,
+                               Transpose::Trans);
+    ASSERT_FALSE(SpmmTableCF::preferred(kSpmmDirect, cf));
+    const Route pinned =
+        resolve_spmm_route<std::complex<float>>(kSpmmDirect, cf, true);
+    EXPECT_TRUE(is_native(pinned));
+    EXPECT_EQ(pinned.algo, Algorithm::Direct);
+}
+
+// AN AUTO SPMM IS THE NATIVE ROUTE WHEREVER THE CLAUSE FIRES, THE VENDOR
+// WHEREVER IT DOES NOT, AND THE NATIVE ROUTE EVERYWHERE ONCE THE VENDOR IS GONE.
+//
+// THIS CASE USED TO ASSERT ROUTE-NEUTRALITY IN THE VENDOR-PRESENT BUILD. That
+// claim was true only while preferred() was all-false and is now FALSE BY
+// DESIGN: the WP8 clause exists precisely to move the gather off cuSPARSE. What
+// survives unchanged is the vendor-free half -- the entire burn-down -- and the
+// transposed half of the vendor-present build, which the measurement refused.
+//
+// The moved decisions are enumerated by scripts/route_diff.sh: spmm gather rows
+// move from vendor:auto to native:direct, and NOTHING ELSE in the tree moves.
+TEST(RouteSpmm, AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot) {
+    for (Transpose ta : kAllTrans) {
+        for (bool gpu : {true, false}) {
+            const auto s = spmm_shape(4096, 4096, 25, 128, ta, Transpose::NoTrans,
+                                      MatrixFormat::CSR, gpu);
+            const Route with_vendor = resolve_spmm_route<float>(kSpmmAuto, s, true);
+            if (ta == Transpose::NoTrans) {
+                EXPECT_TRUE(is_native(with_vendor))
+                    << "the gather is the measured window (worst-of-two 0.968, "
+                       "median 0.445 over 176 saturated cells) and must take "
+                       "native:direct even with cuSPARSE present";
+                EXPECT_EQ(with_vendor.algo, Algorithm::Direct);
+            } else {
+                EXPECT_TRUE(is_vendor(with_vendor))
+                    << "the scatter LOSES (169 of 458 saturated cells over the "
+                       "1.10 gate, worst 3.011) and must stay on the vendor";
+            }
+            const Route without_vendor = resolve_spmm_route<float>(kSpmmAuto, s, false);
+            EXPECT_TRUE(is_native(without_vendor));
+            EXPECT_EQ(without_vendor.algo, Algorithm::Direct);
+        }
+    }
+}
+
+// PINNING A ROUTE THE TABLE CANNOT SERVE IS SILENT, AND ITS OUTCOME DEPENDS ON
+// THE BUILD. This is not a bug being asserted as correct -- it is the campaign's
+// standing fall-through behaviour, and it has cost time repeatedly -- but it is
+// worth having in a test so nobody re-derives it from a benchmark that lies.
+//
+// BATCHLAS_SPMM_ROUTE=cta parses fine (route_env.hh's parse_algorithm_word knows
+// the word), supports() rejects it because there is no CTA body, and the run then
+// measures cuSPARSE while the operator believes it measured the native kernel. A
+// MISSPELLED value behaves the same way and is worse: ParsedRouteEnv::unparsed is
+// discarded at spmm_route.hh's `parsed.found ? parsed.route : legacy_unset_default`.
+//
+// SINCE THE preferred() CLAUSE LANDED THE FALL-THROUGH HAS TWO OUTCOMES IN THE
+// VENDOR-PRESENT BUILD, not one, and that makes the trap WORSE rather than
+// better: an unserviceable pin now lands on native:direct inside the preferred
+// window and on the vendor outside it. Both are asserted below, on shapes that
+// differ only in transA.
+TEST(RouteSpmm, SilentPinFallThrough) {
+    const auto s = spmm_shape(4096, 4096, 25, 128);
+    ASSERT_TRUE(SpmmTable::supports(kSpmmDirect, s))
+        << "the shape must be one Direct CAN serve, or this tests nothing";
+
+    const Route without_vendor = resolve_spmm_route<float>(kSpmmCta, s,
+                                                           /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(without_vendor));
+    EXPECT_EQ(without_vendor.algo, Algorithm::Direct)
+        << "vendor-free, a pin CTA cannot serve lands on native:direct -- NOT a "
+           "throw, and not nothing";
+
+    // OUTSIDE the preferred window -- transposed, which the measurement refused
+    // -- the original behaviour is unchanged: the pin silently becomes cuSPARSE.
+    const auto scatter = spmm_shape(4096, 4096, 25, 128, Transpose::Trans);
+    ASSERT_TRUE(SpmmTable::supports(kSpmmDirect, scatter));
+    ASSERT_FALSE(SpmmTable::preferred(kSpmmDirect, scatter));
+    const Route with_vendor = resolve_spmm_route<float>(kSpmmCta, scatter,
+                                                        /*vendor_available=*/true);
+    EXPECT_TRUE(is_vendor(with_vendor))
+        << "vendor-present and outside the preferred window, the SAME pin "
+           "resolves to the VENDOR, with no diagnostic: the outcome of a pin is "
+           "build-dependent, so only the resolved-route column can tell you "
+           "which arm actually ran";
+
+    // INSIDE it, the same unserviceable pin now lands on the NATIVE gather --
+    // still silently, and still not what was asked for. A benchmark that pinned
+    // `cta` and read a fast number would now be reading native:direct rather
+    // than cuSPARSE, which is a different wrong conclusion from the same bug.
+    const Route inside = resolve_spmm_route<float>(kSpmmCta, s,
+                                                   /*vendor_available=*/true);
+    EXPECT_TRUE(is_native(inside));
+    EXPECT_EQ(inside.algo, Algorithm::Direct);
+}
+
+// SpmmShape MUST NOT RE-DECLARE ANY OpShape FIELD. resolve_route SLICES it to
+// OpShape on the way into the coverage table (route_resolve.hh:212), so a
+// shadowing member would be written by the shape builder and then NOT copied:
+// every spmm coverage row and every route_diff row would report the default, the
+// gather and scatter arms -- which are different KERNELS, not different flags --
+// would collapse into ONE first-writer-wins row, and the collapse would be
+// invisible because the table itself would still behave correctly.
+//
+// transA and transB are both checked because both are in coverage's variant_key
+// (coverage.cc:52-58), and m because it is half of shape_class.
+TEST(RouteSpmm, ShapeDoesNotShadowOpShapeFields) {
+    SpmmShape s = spmm_shape(/*m=*/4096, /*k=*/2048, /*nrhs=*/25, /*batch=*/64,
+                             Transpose::ConjTrans, Transpose::Trans,
+                             MatrixFormat::CSR, /*is_gpu=*/false);
+    const OpShape& sliced = static_cast<const OpShape&>(s);
+    EXPECT_EQ(&s.transA, &sliced.transA)
+        << "SpmmShape re-declares transA: every spmm coverage row would report "
+           "NoTrans and the gather and scatter arms would collapse into one row";
+    EXPECT_EQ(&s.transB, &sliced.transB)
+        << "SpmmShape re-declares transB: the transB layout lever would be "
+           "invisible in every route_diff";
+    EXPECT_EQ(&s.m, &sliced.m)
+        << "SpmmShape re-declares m: shape_class would bucket the default";
+    EXPECT_EQ(&s.is_gpu, &sliced.is_gpu);
+    EXPECT_EQ(&s.batch, &sliced.batch);
+    EXPECT_EQ(sliced.transA, Transpose::ConjTrans);
+    EXPECT_EQ(sliced.transB, Transpose::Trans);
+    EXPECT_EQ(sliced.m, 4096);
+    EXPECT_EQ(sliced.k, 2048);
+    EXPECT_EQ(sliced.n, 25);
+    EXPECT_FALSE(sliced.is_gpu)
+        << "is_gpu is recorded for the coverage row and deliberately never read "
+           "by supports(); it still has to SURVIVE the slice";
+}
+
+// out_rows() AND red_rows() SWAP WITH transA. The shipped table still reads
+// NEITHER -- the WP8 preferred() clause is expressed in transA, transB, format
+// and type alone, with no extent term. This case is here to make the mapping
+// WRONG-PROOF for whoever adds the first clause or the first staged tier: the
+// design review rejected one whose staged B slab was sized over `m` when B has
+// red_rows() rows, which reads past the operand for every non-square A and is
+// invisible in a worked example because every worked example was square.
+TEST(RouteSpmm, OutRowsAndRedRowsSwapWithTransA) {
+    const auto no = spmm_shape(/*m=*/4096, /*k=*/64, /*nrhs=*/25, /*batch=*/8);
+    EXPECT_EQ(no.out_rows(), 4096);
+    EXPECT_EQ(no.red_rows(), 64);
+    EXPECT_EQ(no.nrhs(), 25);
+    for (Transpose t : {Transpose::Trans, Transpose::ConjTrans}) {
+        auto tr = no; tr.transA = t;
+        EXPECT_EQ(tr.out_rows(), 64)
+            << "under a transposed transA the output extent is A.cols(); a "
+               "predicate spelled `s.m` tests the reduction instead";
+        EXPECT_EQ(tr.red_rows(), 4096);
+        EXPECT_EQ(tr.nrhs(), 25) << "nrhs is C.cols() and does NOT swap";
+    }
+}
+
+// THE ORDER ARRAY HAS EXACTLY TWO ENTRIES, AND IT IS ASSERTED RATHER THAN
+// ASSUMED. Vendor-free, the vendor-off walk takes the FIRST supported native
+// route; vendor-present, automatic()'s first walk takes the first route that is
+// both supported AND preferred.
+//
+// A MEASURED CORRECTION, because the obvious thing to write here is wrong.
+// Reversing this array does NOT send the WP8-admitted shapes back to cuSPARSE:
+// preferred() returns false for {Vendor, Auto}, so the first walk skips that
+// entry wherever it sits, and the vendor-free walk filters on is_native() and
+// has exactly one candidate. The reversal was applied, rebuilt and run, and
+// THIS CASE IS THE ONLY ONE THAT GOES RED -- structurally, not through any
+// decision. Which is precisely why it has to exist: nothing else in the file
+// can see the array at all.
+//
+// A third entry would mean a second native tier, which would also need
+// native_tier_preferred() to arbitrate it -- the hook route_spmm.hh deliberately
+// does not declare, because a predicate with one candidate has no decision
+// behind it.
+TEST(RouteSpmm, OrderIsExactlyTwoEntries) {
+    ASSERT_EQ(SpmmTable::order_end() - SpmmTable::order_begin(), 2);
+    EXPECT_EQ(SpmmTable::order_begin()[0].origin, Origin::Native);
+    EXPECT_EQ(SpmmTable::order_begin()[0].algo, Algorithm::Direct);
+    EXPECT_EQ(SpmmTable::order_begin()[1].origin, Origin::Vendor);
+    EXPECT_EQ(SpmmTable::order_begin()[1].algo, Algorithm::Auto);
+    EXPECT_TRUE(is_vendor(SpmmTable::order_begin()[1]));
+}
+
+// THE ENV VARIABLE EXISTS WITHOUT A SINGLE LINE OF route_env.hh CHANGING, AND
+// THAT IS WORTH PINNING. parse_route_env synthesises the name from
+// op_env_stem(Op::spmm), whose stem comes from op_name and already spells
+// "spmm". A case in legacy_variable_for would INVENT a legacy spelling that
+// never shipped.
+TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
+    ClearRouteEnv clear(Op::spmm);
+
+    EXPECT_EQ(op_env_stem(Op::spmm), "SPMM");
+    EXPECT_TRUE(std::string(legacy_variable_for(Op::spmm)).empty())
+        << "no legacy spmm variable ever shipped";
+
+    {
+        const auto unset = parse_route_env(Op::spmm);
+        EXPECT_FALSE(unset.found);
+        EXPECT_EQ(legacy_unset_default(Op::spmm).origin, Origin::Auto);
+        EXPECT_EQ(legacy_unset_default(Op::spmm).algo, Algorithm::Auto);
+    }
+    {
+        // A bare algorithm implies Origin::Native.
+        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "direct");
+        const auto p = parse_route_env(Op::spmm);
+        ASSERT_TRUE(p.found) << "BATCHLAS_SPMM_ROUTE was not read at all";
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
+        EXPECT_EQ(p.source.variable, "BATCHLAS_SPMM_ROUTE");
+        EXPECT_FALSE(p.source.legacy);
+    }
+    {
+        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native:direct");
+        const auto p = parse_route_env(Op::spmm);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
+    }
+    {
+        // A bare origin leaves the algorithm free; the resolver picks the body.
+        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native");
+        const auto p = parse_route_env(Op::spmm);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Auto}));
+        EXPECT_EQ(resolve_spmm_route<float>(p.route,
+                                            spmm_shape(4096, 4096, 25, 64), true).algo,
+                  Algorithm::Direct);
+    }
+    {
+        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "vendor");
+        const auto p = parse_route_env(Op::spmm);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
+    }
+    {
+        // THE TYPO PATH. parse_route_env reports it, and every adapter in the
+        // tree -- spmm_route.hh included -- then DISCARDS `unparsed` and uses the
+        // unset default, so the run goes to the vendor with no message. The
+        // report is the only place the mistake is visible at all.
+        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "not-a-route");
+        const auto p = parse_route_env(Op::spmm);
+        EXPECT_FALSE(p.found);
+        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
+        EXPECT_EQ(legacy_unset_default(Op::spmm), (Route{Origin::Auto, Algorithm::Auto}))
+            << "and the value spmm_route.hh substitutes for it is plain Auto";
+    }
 }

@@ -48,6 +48,7 @@ set(TEST_TARGETS
     orgqr_tests
     transpose_tests
     iluk_tests
+    spmm_tests
     symm_tests
     hemm_tests
     herk_tests
@@ -153,7 +154,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests)
+    iluk_tests spmm_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #

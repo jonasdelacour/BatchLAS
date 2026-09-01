@@ -288,7 +288,19 @@ void append_static_rows(std::ostringstream& out) {
         {"potrf", solver_vendor_available<B>,        true},   // potrf_cta (Phase 1) + potrf_blocked (Phase 2)
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
-        {"spmm",  sparse_vendor_available<B>,        false},
+        // WP8 landed src/sycl/spmm_native.cc behind {Native, Direct}, all four
+        // scalar types. FLIPPED IN THE SAME STEP AS THE ENTRY-POINT WIRING
+        // (entry_points/sparse.cc's spmm and spmm_buffer_size), never before it.
+        // Same reading rule as every row above: this column answers "is the
+        // kernel IN THE BUILD", not "does traffic reach it". Since the WP8
+        // preferred() clause landed, a vendor-present build sends the
+        // transA==NoTrans gather to the NATIVE kernel (minus complex<float> with
+        // a transposed dense operand) and keeps the transposed scatter on
+        // cuSPARSE/rocSPARSE/netlib; a vendor-free build reaches the kernels for
+        // everything instead of throwing. Like gemv's, and unlike every other
+        // native tier here, this route has NO GPU GATE, so the `true` covers the
+        // native_cpu queue and the Backend::NETLIB rows it buys.
+        {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr: gather (transA=NoTrans) + scale & atomic scatter
     };
     for (const auto& e : entries) {
         // The scalar column was blank, which read as "all types". It is not:

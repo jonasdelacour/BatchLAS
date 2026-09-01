@@ -1,0 +1,2 @@
+name,arg0,arg1,arg2,arg3,arg4,arg5,arg6,arg7,iterations,avg_ms,stddev_ms,chk,GFLOPS,GB/s,Time (µs) / matrix,nnz/item,nnz/row
+"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",4096,16,50,512,0,0,1,0,20,54.4104,0.106199,2.53183e+06,246.677,74.1572,106.27,65536,16

@@ -1,0 +1,11 @@
+type    route          m nnz nrhs b tB be pat tA     wall/call  kernel/call  host/call   host%  kernels
+float   native_direct  1024 16 12 512 0 0 1 0          0.25988      0.25888    0.00100    0.4%  gather x619 0.2589ms
+float   vendor         1024 16 12 512 0 0 1 0          0.66637      0.67693   -0.01056   -1.6%  void cusparse::csrmm_alg1_kernel< x267 0.4974ms; void cusparse::<unnamed>::csr_partition_kern x267 0.1691ms; void cusparse::matrix_scalar_multiply_kernel x267 0.0104ms
+float   native_direct  1024 3 2 4096 0 0 1 0           0.20227      0.20087    0.00140    0.7%  gather x787 0.2009ms
+float   vendor         1024 3 2 4096 0 0 1 0           1.25856      1.26342   -0.00486   -0.4%  void cusparse::csrmm_alg1_kernel< x126 0.7978ms; void cusparse::<unnamed>::csr_partition_kern x126 0.4481ms; void cusparse::matrix_scalar_multiply_kernel x126 0.0175ms
+float   native_direct  1024 3 2 512 0 0 1 0            0.01196      0.01124    0.00071    6.0%  gather x12069 0.0112ms
+float   vendor         1024 3 2 512 0 0 1 0            0.16239      0.16461   -0.00222   -1.4%  void cusparse::csrmm_alg1_kernel< x939 0.1025ms; void cusparse::<unnamed>::csr_partition_kern x939 0.0591ms; void cusparse::matrix_scalar_multiply_kernel x939 0.0030ms
+float   native_direct  2048 16 25 128 0 0 1 0          0.33853      0.34594   -0.00741   -2.2%  gather x475 0.3459ms
+float   vendor         2048 16 25 128 0 0 1 0          0.86439      0.91118   -0.04679   -5.4%  void cusparse::csrmm_alg1_kernel< x211 0.8076ms; void cusparse::<unnamed>::csr_partition_kern x211 0.0923ms; void cusparse::matrix_scalar_multiply_kernel x211 0.0113ms
+float   native_direct  2048 16 25 128 0 0 1 1          2.10142      2.17493   -0.07351   -3.5%  scatter x78 2.1527ms; scale x78 0.0222ms
+float   vendor         2048 16 25 128 0 0 1 1          1.87837      1.99502   -0.11665   -6.2%  void cusparse::csrmm_alg1_kernel< x86 1.8914ms; void cusparse::<unnamed>::csr_partition_kern x86 0.0922ms; void cusparse::matrix_scalar_multiply_kernel x86 0.0113ms

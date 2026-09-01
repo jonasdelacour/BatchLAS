@@ -1,0 +1,11 @@
+2775 MHz, 53
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       0       0       1       100         0.015621    2.8483e-05  885.78      402.75      1476.9      0.030510    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       0       1       1       100         0.052788    4.7641e-05  2210.6      119.18      437.05      0.10310     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       1       0       1       100         0.016082    1.1839e-05  3.0382e+07  391.21      1695.4      0.031410    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       1       1       1       100         0.053196    0.00022281  3.8863e+07  118.27      512.54      0.10390     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       0       0       1       100         0.015468    1.2087e-05  845.28      406.75      1491.6      0.030210    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       0       1       1       100         0.052222    3.3227e-05  2155.0      120.48      441.78      0.10200     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       1       0       1       100         0.015842    1.3862e-05  2.9291e+07  397.13      1721.0      0.030942    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       1       1       1       100         0.052436    3.4461e-05  3.8109e+07  119.98      519.97      0.10241     3072        3           
+2775 MHz, 57

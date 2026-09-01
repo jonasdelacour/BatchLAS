@@ -1,0 +1,11 @@
+2775 MHz, 51
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       0       0       1       100         0.16265     0.00030774  885.78      38.680      141.84      0.31768     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       0       1       1       100         0.16273     0.00097307  2210.6      38.661      141.77      0.31784     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       1       0       1       100         0.15942     0.00014781  3.1250e+06  39.464      171.02      0.31137     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     0       1       1       1       100         0.15932     0.00017371  7.7990e+06  39.490      171.14      0.31117     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       0       0       1       100         0.16257     0.00099728  845.28      38.700      141.91      0.31752     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       0       1       1       100         0.16244     0.00014412  2155.0      38.731      142.03      0.31726     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       1       0       1       100         0.15916     0.00012623  2.9889e+06  39.528      171.30      0.31087     3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       512     1       1       1       1       100         0.15911     0.00011732  7.6028e+06  39.541      171.36      0.31077     3072        3           
+2775 MHz, 50

@@ -1,0 +1,11 @@
+2760 MHz, 58
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       0       0       0       100         0.16663     0.00014258  874.68      37.757      226.56      0.32545     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       0       1       0       100         0.16645     0.00015548  2210.6      37.799      226.81      0.32509     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       1       0       0       100         0.16189     0.00015422  3.0509e+06  38.863      285.01      0.31619     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       1       1       0       100         0.16179     0.00016394  7.7106e+06  38.887      285.18      0.31600     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       0       0       0       100         0.16676     0.00016144  830.12      37.727      226.37      0.32571     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       0       1       0       100         0.16661     0.00016337  2155.0      37.762      226.59      0.32540     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       1       0       0       100         0.16214     0.00017342  2.8888e+06  38.803      284.57      0.31668     3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       1       1       0       100         0.16194     0.00017542  7.5166e+06  38.851      284.92      0.31629     3072        3           
+2775 MHz, 55

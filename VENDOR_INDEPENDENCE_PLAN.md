@@ -11,13 +11,13 @@ quietly edited.
 
 ## Status
 
-**WP0–WP7 are complete, and their remaining measured performance gaps have been closed
-(see "The WP6/WP7 performance-closure pass"). WP8–WP9 are not started.**
+**WP0–WP8 are complete, and WP6/WP7's remaining measured performance gaps have been closed
+(see "The WP6/WP7 performance-closure pass"). WP9 is not started.**
 
 | | state |
 |---|---|
-| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **34/56** |
-| Vendor-present build | **55/56**, the one failure (`lanczos_tests`) pre-existing and unrelated |
+| Vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) | configures, compiles, links, loads and runs; `ctest -LE slow` **35/57** — and after WP8 the honest metric is the per-op `NoRouteError` census, not this number |
+| Vendor-present build | **56/57**, the one failure (`lanczos_tests`) pre-existing and unrelated |
 | `gemm` | vendor-free **complete** (184/184); default flipped `Vendor` → **`Auto`**; complex still vendor-preferred |
 | `trsm` | native, both tiers, all four scalar types; beats the vendor in **167 of 168** measured cells; vendor-free failures are **host-backend only** |
 | level-3 tile ops (`symm`/`syrk`/`syr2k`/`trmm`) | free of the CUDA object library, and reached rather than merely linked |
@@ -26,8 +26,9 @@ quietly edited.
 | `getrf` | native blocked arm, with the left-hand interchange **deferred out of the block loop and served by one SLM gather**. 1.207× over the arm it replaced; against cuBLAS **0.839× → 1.00–1.02×** overall, and 1.26–3.11× for `float`/`cfloat`, which is where `preferred()` now routes (`float` order ≥ 256, `cfloat` order ≥ 512). `double`/`cdouble` stay vendor-preferred and that is correct |
 | `getrs` | the composed driver's permutation has a second spelling — the interchange list collapsed to a **gather in local memory**, default at `nrhs >= 16`, **and it buys no workspace at all** (the budgeted out-of-place RHS was an artefact of the prototype). 1.319× over the walk across 80 cells, zero losses. `preferred()`: `float nrhs >= 64`, `double nrhs >= 128`, both at `batch >= 128` |
 | `getri` | unchanged kernel, but the measured win is now **routed**: `float` order ≥ 128, `cfloat` order ≥ 256 — 30 cells, geomean **4.18×**, min 1.20×. At `batch <= 32` the native driver beats cuBLAS by 1.7–28× for every type because the vendor's batched `getri` is a per-item loop there; that region is real, unrouted, and named as open work |
+| `spmm` | native **gather** (`transA = NoTrans`) and **scale + atomic scatter** (`Trans`/`ConjTrans`), four types, all nine `transA`/`transB` spellings, zero local memory, zero workspace, **no `is_gpu` gate**. The gather ships a `preferred()` window — CSR, `transA = NoTrans`, minus `complex<float>` with `transB != NoTrans` — over 176 saturated cells at worst-of-two **0.968**, median **0.445**, and **90–92 % of the 1008 GB/s DRAM roof for all four types** against cuSPARSE's 120–366 GB/s. The transposed scatter stays **vendor-first, measured**: 169 of 458 saturated cells over the gate, worst 3.011 |
 | M1 (vendor-free `ctest` green) | **not reached** — the gap is missing kernels, and it is now an enumerated list |
-| M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**; every other op is still vendor-first |
+| M2 (native-by-default per cell) | reached **for `gemm` and `trsm`**, and as measured *windows* for `getrf`, `getrs`, `getri`, `gemv` and now `spmm`'s gather arm; `potrf`, `spmm`'s transposed scatter and everything else are still vendor-first — the last two by measurement rather than by default |
 
 **Companion specifications** (each the output of a multi-agent design pass with adversarial
 critique, and each superseding the sketch in §5 of this document):
@@ -93,6 +94,10 @@ critique, and each superseding the sketch in §5 of this document):
 | WP7 R1 (repair) | the parity gate re-run on an (`out_len`, `red_len`) ladder that reaches `out_len = 1`, and the `NoTrans` short-output collapse fixed | the gate FAILED as first shipped — **15 of 192 cells below B6's 0.50× line, worst 0.08×**, 13 of them one family the original grid could not reach (its minimum `out_len` was 64). `src/sycl/gemv_native.cc` **body 4** (W lanes per output, `W` a **template parameter** — as a runtime value it was 2× slower and *regressed* `out_len >= 8`) takes that family from min 0.08/median 0.38 to **min 0.60/median 1.16/max 4.09**. Blockers **15 → 2**, both the stated `complex<double>` short-reduction weakness |
 | WP7 R2 (repair) | `gemv` gains a section in `tests/route_vocabulary_tests.cc`, which had **zero** `Op::gemv` assertions | 13 cases, suite 78 → **91**, covering all three CTA gates, the Direct arm's absent `is_gpu` clause (the WP7 deliverable, now an assertion), `preferred()` all-false over 540 shapes, `kGemvOrder`, the `out_len()`/`red_len()` swap and B2. **Arming proved by 7 breaks**, including the V1 trap itself |
 | WP3 S16 | the trailing-update GEMM goes through the **route table** instead of the native kernel unconditionally | **167 of 168 cells win**; the n=512 solve 18.8 ms → **11.19 ms** against a 14.28 ms vendor; `trsm_tests` 91/91, vendor-free failing set byte-identical |
+| WP8 S1–S4 | `RouteTable<Op::spmm, T>`, `src/sycl/spmm_native.cc` (the `NoTrans` gather and the `Trans`/`ConjTrans` scale + atomic scatter), the shape builder, the facade arm and the coverage flip | vendor-free `spmm_tests` **368/368**; vendor-free `spmm` `NoRouteError` **2 → 0** with every other op's count byte-identical; suite 34/56 → **35/57**, the joining suite being `spmm_tests` itself and passing. Zero local memory, zero workspace, **no `is_gpu` gate** |
+| WP8 S5 | `tests/spmm_tests.cc` — 368 cases over all four types, all nine `transA`/`transB` spellings, heterogeneous `nnz`, empty rows, padded strides, `alpha`/`beta` corners | four deliberate breaks applied, rebuilt, run and reverted. **One came back GREEN over all 352 cases then in the file** — the scatter's `nnz` bound (the eleventh blind guard, `VENDOR_FREE_BASELINE.md`); its poison is now an IN-RANGE sentinel and the break is red. Three pre-existing **vendor** defects fell out of the same suite and are fixed; two more are filed |
+| WP8 S6 | the first `spmm` measurement in this repository | **7 536 timed rows** (6 512 main + 1 024 small-batch), every sweep twice in independent processes, every route proved from `BATCHLAS_COVERAGE_OUT` — `experiments/sparse_spmm/README.md`. Gather at **90–92 % of the 1008 GB/s roof** for all four types vs cuSPARSE's 120–366; transposed scatter **169 of 458** saturated cells over the gate, worst 3.011 |
+| WP8 S7 | `preferred()` flipped onto what the measurement says — CSR + `transA = NoTrans`, minus `complex<float>` with `transB != NoTrans`, **no batch term** | 176 saturated cells, worst-of-two **0.968**, median 0.445; route census **65 moved decisions, all `spmm`, all `vendor:auto` → `native:direct`, all `transA = 0`**, zero non-`spmm` decisions moved. `route_vocabulary_tests` 110 → **116**, arming proved by four breaks — one of which refuted a comment this pass had already written |
 
 The milestone the S1-S3 steps reach: `-DBATCHLAS_ENABLE_CUBLAS=OFF` now configures to
 `BATCHLAS_HAS_CUDA_BACKEND 1` with `CUBLAS 0` and `CUSOLVER 0` — **a CUDA device with no
@@ -366,6 +371,225 @@ Two process points this pass established, both of which cost real time before th
    *uninitialized* while the unpadded ones used `::Random`, so every cross-`ld` ratio compared
    data content as well as leading dimension. Fixed, and the reference cell moved 0.34% — so the
    defect is real, but nobody knew that until it was checked.
+
+### WP8 has landed: native batched CSR SpMM — one arm ships, the other is a measured refusal
+
+`src/sycl/spmm_native.cc` gives `spmm` its first native route in this tree: a **gather** body
+for `transA == NoTrans`, and a **scale + atomic scatter** pair for `Trans`/`ConjTrans`. Four
+scalar types, all nine `(transA, transB)` spellings, **zero local memory and zero workspace**,
+and — as with WP7's `gemv`, and unlike every other native tier — **no `is_gpu` gate**.
+`route_spmm.hh`, `spmm_route.hh`, `sparse.cc` and `coverage.cc` are wired the WP0 way.
+
+Before this pass there was **no `spmm` measurement anywhere in the repository** — no row under
+`benchmarks/results/`, and `route_spmm.hh`'s own comment said so. There is now:
+`experiments/sparse_spmm/` holds **7 536 timed rows** — 6 512 in the main measurement and
+1 024 in the small-batch corner — with every sweep run **twice in independent processes**, one
+route per process, and every route proved from `BATCHLAS_COVERAGE_OUT` rather than from the
+environment variable that set it.
+
+> **Naming:** this package's experiments live in `experiments/sparse_spmm/`, not
+> `experiments/wp8_*`, because that prefix was already taken by the WP6/WP7
+> performance-closure pass (see the note on that section). The directory name is the subject,
+> not the package number.
+
+#### The burn-down number moved by one, and it is the wrong instrument — as forecast
+
+    ctest --test-dir build-novendor -LE slow
+    61% tests passed, 22 tests failed out of 57          <- i.e. 35 PASSED
+
+The suite that joined the run is **`spmm_tests` itself, and it passes** (368/368 vendor-free).
+The 22 *failing* names are byte-identical to the post-WP7 set: nothing left it, nothing joined
+it. Read alone, that line says WP8 did nothing.
+
+The metric that did move is the per-op `NoRouteError` census over
+`ctest -LE slow --rerun-failed --output-on-failure`:
+
+| op | after WP7 | after WP8 | op | after WP7 | after WP8 |
+|---|---|---|---|---|---|
+| `syev` | 87 | 87 | `syrk` | 12 | 12 |
+| `geqrf` | 44 | 44 | `her2k` | 12 | 12 |
+| `trsm` | 32 | 32 | `hemm` | 12 | 12 |
+| `ormqr` | 24 | 24 | `syr2k` | 10 | 10 |
+| `trmm` | 16 | 16 | `symm` | 8 | 8 |
+| `herk` | 16 | 16 | **`spmm`** | **2** | **0** |
+| `getri` | 16 | 16 | | | |
+
+`grep -c 'no route for spmm'` over that output is **0**, and every other count is unchanged
+digit for digit — which is simultaneously the WP8 deliverable and the evidence that nothing
+else moved. The suite count cannot show it, for the reason WP3 recorded one level up: the
+suites that still fail here fail on *other* ops. `iluk_tests` is the clearest case — it is
+17/17 vendor-present, and its four vendor-free failures are all named `Syevx*`, downstream of
+`syev`'s 87. It is a `syev` row, not an `spmm` row.
+
+Vendor-present: `spmm_tests` is **282 passed / 86 skipped / 0 failed** unpinned (was
+276 / 92 / 0 before the clause) and 368/368 pinned native; `ctest -LE slow` is **56/57**, the
+one failure `lanczos_tests`, pre-existing and reproduced identically under
+`BATCHLAS_SPMM_ROUTE=vendor`.
+
+#### The clause that ships, and the arm that does not
+
+```cpp
+if (!is_native(r) || r.algo != Algorithm::Direct) return false;
+if (s.format != MatrixFormat::CSR)               return false;
+if (s.transA != Transpose::NoTrans)              return false;   // a measured refusal
+if constexpr (std::is_same_v<T, std::complex<float>>)
+    if (s.transB != Transpose::NoTrans)          return false;   // one measured family
+return true;
+```
+
+**Unconditional — no batch term, and that is measured rather than assumed** (below). Over the
+**176** saturated, `batch >= 128` cells it moves, reproduced in two independent passes, it is
+worst-of-two **0.968**, median **0.445**, best **0.032**
+(`experiments/sparse_spmm/verdict.txt`, built from `pass{1,2}/joined.csv` and
+`scl{1,2}/joined.csv`). Unconditional `transA == NoTrans` moves 186 cells with exactly **one**
+over the 1.10 gate — `complex<float>`, m=2048, nnz/row=16, nrhs=25, batch=128, `transB=Trans`,
+banded, at 1.934 / 1.872 — and that cell is precisely what the `complex<float>` conjunct
+excludes.
+
+At unambiguous DRAM residency (footprint above 4 × L2 = 288 MB, `roof.txt`) the gather reads
+**906–931 GB/s = 90–92 % of this part's 1008 GB/s roof, for all four scalar types**, against
+cuSPARSE's **120–366 GB/s**. `nsys` (`nsys_split.txt`) says that is a kernel result and not a
+host-overhead one: both arms are > 93 % GPU-kernel time, cuSPARSE launches **three kernels per
+`spmm` call**, and one of them — `csr_partition_kernel`, re-run on **every** call — is **36 %
+of its GPU time**. The native arm launches one kernel.
+
+Every boundary in the clause carries its refuting cell and its CSV path in a ~145-line comment
+above the function, including the two candidates that were **rejected despite passing their own
+grid**: `nrhs >= 16` on the `complex<float>` conjunct (passes `verdict.txt` at worst 0.968 and
+moves 183 cells instead of 176 — rejected because the threshold is a property of the *banded
+column pattern*, which `SpmmShape` cannot see, and `cfedge{1,2}` shows the same family at
+1.71–1.73 there), and `transA != NoTrans && nrhs <= 2 && !cdouble` on the scatter arm (passes at
+worst 1.023 — rejected because its true axis is `nnz/row`, and `SpmmShape` has no `nnz` field
+either). **A clause can pass every cell in one sweep and still be fitted to an axis the shape
+does not carry.**
+
+The route census agrees field by field: **65 moved decisions, every one `spmm`, every one
+`vendor:auto` → `native:direct`, every one `transA = 0`; zero non-`spmm` decisions moved and
+none disappeared** (`scripts/route_diff.sh`, captures `wp8-before` / `wp8-after`,
+4 107 → 4 217 distinct decisions; census by `experiments/sparse_spmm/route_census.py`). The
+per-type split in that census **is the clause, read back out of the library**: `complex<float>`
+moves at `transB = NoTrans` only, the other three types move at all three `transB` spellings,
+and nothing at all moves at `transA != NoTrans`.
+
+#### The negative results, which are most of what this package measured
+
+1. **The transposed scatter arm has no shippable window, and it is not close.** Unconditional
+   `transA != NoTrans` moves 458 saturated cells with **169 of them over the 1.10 gate**,
+   median 1.030, worst **3.011** (`cdouble`, m=4096, nnz/row=16, nrhs=50, batch=512, banded,
+   reproducing 3.000 / 3.011). **Every `nrhs`-only clause fails**: `nrhs <= 4` is 11 of 204
+   over the gate, `nrhs <= 2` is 5 of 151, `nrhs <= 1` is still 2 of 60. The boundary is
+   `nnz/row`-dependent (`cdouble` at 3 nnz/row is 0.390 at `nrhs = 1`; at 16 nnz/row the same
+   width is 1.043–1.132) and **`SpmmShape` carries no `nnz` field**, deliberately —
+   `MatrixView::nnz()` is a per-item *capacity*, and the honest per-item spelling reads device
+   memory in a path where that is a segfault. The only passing clause needs an explicit
+   `complex<double>` exclusion, and the transposed arm **has zero in-tree C++ callers today**.
+   It stays vendor-first: a refusal with 458 measured cells behind it, not an omission.
+
+2. **The design phase's "parity at best in the LOBPCG regime" prediction was refuted — but the
+   reason it gave was CORRECT, and it binds both arms.** The gather beats cuSPARSE 1.3–4× at
+   LOBPCG shapes, and *not* by beating the column-major `op(B)` gather wall: in that regime
+   **neither** arm exceeds 0.52 × roof (vendor 0.06–0.16 ×, native 0.09–0.52 ×), which is
+   exactly the one-32-byte-sector-per-touch cost the design phase predicted. The margin comes
+   from somewhere else entirely — cuSPARSE paying that wall **and** re-partitioning the CSR on
+   every call. A correct mechanism can still predict the wrong outcome.
+
+3. **The spectacular lanczos ratios are an L2 artefact and shrink 4× at true saturation.**
+   `float`, m=1024, 3 nnz/row, nrhs=1: **0.032 at batch 1024** (37.8 MB, L2-resident) →
+   **0.131 at batch 4096** (151 MB, DRAM-resident), stable to batch 8192. And the two arms
+   saturate in different places: **cuSPARSE is flat from batch 256, the native gather is not
+   saturated until batch ≈ 4096**, because it is fast enough to stay latency-bound for longer.
+   Any headline quoted off the batch-512 grid alone would have been 4× too flattering; the
+   saturated, DRAM-resident figure is 0.13–0.43.
+
+4. **An `rel_sd`-only hygiene filter manufactured a passing unconditional clause by deleting
+   the one reproducible non-winner.** The `complex<float>` / `transB=Trans` / banded cell above
+   measures 1.934 and 1.872 in the two passes — reproducing to 3 % — but its pass-2 `rel_sd` is
+   0.033. Dropped on spread alone, the unconditional gather clause "passed" at a worst ratio of
+   1.019. `verdict.py` therefore admits a row when either arm's `rel_sd` ≤ 0.02 in both passes
+   **OR** the two passes' ratios agree within 5 %. Cross-pass reproduction is stronger evidence
+   about a row than its within-pass spread, and **a filter that can delete a reproducible
+   non-winner is a filter that manufactures windows.**
+
+5. **No batch floor is supportable, in either direction.** `preferred()` is consulted on every
+   call, so the batch 1–64 corner the saturated grid never covers was swept separately
+   (`sb{1,2}`, `smallbatch.txt`: 5 families × 4 types × 8 rungs, two passes, 1 024 timed rows).
+   Under the shipped clause **0 of 174 admitted rows at `batch <= 64` are over the gate**, and
+   **1 of 174 costs the caller any time at all** — `complex<float>`, m=4096, 16 nnz/row,
+   nrhs=50, scattered, **batch 4**, at 1.078 / 1.078 (+13.46 µs/call), which is *inside* the
+   1.10 gate and therefore brackets the recommendation instead of contradicting it. Equally
+   there is no spectacular small-batch win to protect with a special case: the ratios degrade
+   monotonically toward parity as batch falls (worst 0.992 at batch 1) and never through it.
+   **The small-batch ratios are launch-latency ratios, not kernel results**, and are quoted
+   only as evidence of no harm: the native per-call floor is ~2.9–3.4 µs and shape-independent
+   while the vendor's is 13.3–16.6 µs on the cheapest cell, and that gap is `spmm_vendor`'s
+   unhoistable per-call host chain (`setStream`, the `SpmmCsrBatchPlan` host walk, the
+   `cusparseSpMM_bufferSize` **re-query on every call**, the `BumpAllocator` carve).
+
+6. **The `complex<float>` gather margin is about 3 %, not the 2× the median suggests.** The
+   largest LOBPCG family (m=4096, 16 nnz/row, nrhs=50, scattered, `transB=NoTrans`) runs
+   0.910, 0.977, **1.078**, 0.956, 0.966, 0.978, 0.967, 0.964 at batch 1→128, against the
+   saturated grid's own worst-of-two of 0.968. That is a property of the cell, not of the batch
+   axis. The clause admits it on evidence, with the thinness recorded rather than averaged away.
+
+7. **The excluded `complex<float>` + `transB=Trans` family is not a saturation effect**, which
+   is the opposite of what batch-512-only evidence implied: it switches on between batch 4 and
+   batch 8 (0.581 → 1.447) and is worst in the *middle* of the ladder (2.18 at 32, 2.09 at 64,
+   1.94 at 128, 1.71–1.73 at 512), while `float`, `double` and `complex<double>` stay at
+   0.22–0.69 on the identical cells at every rung. Had it been a large-batch artefact a batch
+   floor would have been the cheap fix. **The exclusion costs a real, recorded win**: at batch
+   1–4 that same family is 0.520 / 0.524 / 0.581, i.e. a 1.7–1.9× native win the clause now
+   declines rather than buy back with a `batch <= 4` sub-clause on a type-conditional, on a
+   shape with no in-tree caller, whose boundary is one ladder rung wide.
+
+#### Three pre-existing defects in the VENDOR path, found here and fixed
+
+None was introduced by WP8, and all three were shipping wrong answers — or a dead process —
+before it. They surfaced because this is the first suite to cover the axes they live on.
+
+1. **`netlib_lapack.cc:248,272` — `spmm` read `A` at `alpha == 0` and `C` at `beta == 0`.**
+   Callers hand `spmm` a `BumpAllocator` allocation that is **not zeroed** (`mempool.hh`), and
+   `0 * NaN` is `NaN`, so an unread operand poisons the result instead of dropping out of it.
+   The host arm now skips the `alpha` term (which is also what keeps `B` unread) and
+   substitutes `T(0)` for the `beta` term — the guarantee the native bodies already made.
+
+2. **`cusparse.cc` mapped `ConjTrans` to `CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE` for REAL
+   scalars.** On a real scalar `ConjTrans` *is* `Trans`, and `CUDA_R_32F` / `CUDA_R_64F`
+   silently produced wrong results under the conjugating enum. It applied to **both** operands
+   — the dense one was wrong on its own, e.g. `transA = NoTrans, transB = ConjTrans` — and the
+   complex arms, where that enum is the distinct and correct operation, always passed, which is
+   why it survived.
+
+3. **The heterogeneous-`nnz` / padding over-read.** `cusparseCreateCsr` takes **one** `nnz` and
+   `cusparseCsrSetStridedBatch` adds no per-item one, while `backend_handle_impl.hh:63` handed
+   it `A.nnz()` — the per-item **capacity**, sized by the batch *maximum*
+   (`src/matrix.cc:473-478`, which zeroes only `row_offsets`). Every short item's descriptor
+   therefore claimed values and column indices the conversion never wrote, and cuSPARSE read
+   them: wrong last rows on `HeterogeneousNnzAcrossBatch`, and `CUDA_ERROR_ILLEGAL_ADDRESS`
+   with a dead process on the padding case. The fix stops lying to the descriptor — `nnz` taken
+   from the items' own row offsets for a uniform batch, and **one `cusparseSpMM` per item** for
+   a non-uniform one, which is the only shape the API offers. A homogeneous batch is unaffected
+   and takes the pre-existing single batched call, which is why every in-tree caller (lanczos,
+   LOBPCG, the benchmark) was unharmed and why this survived until a suite covered the axis.
+
+#### Two more, located and FILED rather than fixed
+
+* **`rocsparse.cc:30-31` and `:62-63` carry defect 2 unchanged** — `transA` and `transB` go
+  through `enum_convert<BackendLibrary::ROCSPARSE>` unconditionally, so a real-scalar
+  `ConjTrans` becomes `rocsparse_operation_conjugate_transpose` there too. **Unmeasured:
+  there is no AMD device on this machine**, so that rocSPARSE mishandles it the way cuSPARSE
+  did is *inferred from the cuSPARSE finding, not observed*. Filed, not fixed.
+* **`netlib_lapack.cc:508,520,537,549` — `trsm` reads `B` at `alpha == 0`**
+  (`T x = alpha * Bb.at(i, j, 0) - sum;`). The same `0 * NaN` family as defect 1, a different
+  op, and out of WP8's scope.
+
+#### What the suite could not see, and the instrument
+
+The arming exercise found one test axis **vacuous** and one comment **false**: the scatter's
+`nnz` bound was unguarded across the whole 352-case suite (the eleventh blind guard), and a
+claim that reversing `kSpmmOrder` would send admitted shapes back to cuSPARSE was written,
+then applied, then measured false. Both are recorded in `VENDOR_FREE_BASELINE.md`, along with
+the `backend != AUTO` filter the route census needs before it is readable at all — arguably a
+fifth defect of the coverage instrument.
 
 ### WP6 has landed: native LU — and the first work package that does not win
 
@@ -837,7 +1061,7 @@ Three numbers frame the size of the job:
 
 | | count |
 |---|---|
-| Public dense ops with **no** native implementation anywhere | **9** at the time of writing (`gemv`, `trsm`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `spmm`) — **now 8**: WP3 delivered `trsm` |
+| Public dense ops with **no** native implementation anywhere | **9** at the time of writing (`gemv`, `trsm`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `spmm`) — **now 0**: WP3 `trsm`, WP4 `potrf`, WP5 `geqrf`/`orgqr`, WP6 `getrf`/`getrs`/`getri`, WP7 `gemv`, WP8 `spmm`. That is a statement about **kernels existing**, not about the vendor-free suite being green (it is not) and not about what routes by default (`preferred()` ships a window for six of the nine) |
 | Portable level-3 kernels compiled **only** into the CUDA object library | **4** files (`symm`, `syrk`, `syr2k`, `trmm` custom dispatch) — **now 0**: WP1 freed all four |
 | Backends `with_backend` can dispatch to | **4** (CUDA, ROCM, MKL, NETLIB) — `Backend::SYCL` is in the enum and throws |
 
@@ -863,6 +1087,12 @@ These reach a vendor library and there is nothing else to reach.
 | `getrs` | `cublas.cc`, `netlib_lapack.cc:1147` | no | public API only |
 | `getri` | `cublas.cc`, `netlib_lapack.cc:1248` | no | `inv.cc:49` |
 | `spmm` | `cusparse.cc`, `rocsparse.cc`, `netlib_lapack.cc:218` | no | `lanczos.cc`, `syevx*.cc`, `ritz_values.cc` |
+
+> **The `Native?` column is the WP0 reading and every row of it is now stale**, `spmm` last:
+> WP3 delivered `trsm`, WP4 `potrf`, WP5 `geqrf`/`orgqr`, WP6 `getrf`/`getrs`/`getri`, WP7
+> `gemv` and WP8 `spmm` (gather **and** scatter). The table is kept as recorded so the WP0 →
+> today diff stays legible; the *consumers* column is still current and is still the reason
+> the ordering mattered.
 
 Note the second column of consumers. `ortho` alone pulls in **five** of these, and `ortho`
 sits under `syevx`, `lobpcg` and `lanczos`. There is no route to a vendor-free eigensolver
@@ -1536,9 +1766,10 @@ parity.
 ### The WP6/WP7 performance-closure pass — **DONE**
 
 > **Naming, so nobody is misled:** this pass's experiment directories are named
-> `experiments/wp8_*`. That is a collision with the WP8 below, which is **sparse `spmm`
-> and is still not started**. The directories are a closure pass over WP6 and WP7; the
-> `wp8_` prefix is a misnomer left in place rather than renamed across ~200 files.
+> `experiments/wp8_*`. That is a collision with WP8, which is **sparse `spmm`** and has
+> since landed. The `wp8_*` directories are a closure pass over WP6 and WP7; the prefix is a
+> misnomer left in place rather than renamed across ~200 files. **WP8's own measurement is in
+> `experiments/sparse_spmm/`**, named for its subject precisely because this prefix was taken.
 
 Six measured gaps were open after WP7. Four closed, one is now settled as *not a gap*,
 and one is deliberately left open with its arithmetic.
@@ -1641,7 +1872,24 @@ that device 0 here drives the display.
 * **`getrs double` is at 1.274× at `n=2048` and still declining with order.** `n=4096` is
   unmeasured and is the one place a future order could fall under the bar.
 
-### WP8 — sparse: `spmm`
+### WP8 — sparse: `spmm` — **DONE**
+
+**Outcome: `spmm` is vendor-free, and one of its two arms is also faster — the full write-up
+with every CSV is `experiments/sparse_spmm/README.md`; the section "WP8 has landed" above is
+the summary.** Three corrections to the sketch below:
+
+1. **"It buys the least" was right about breadth and wrong about the margin.** `spmm` is
+   indeed the least-shared code in the plan, but it is the one op where the vendor was found
+   nowhere near its own hardware: the native gather runs at **90–92 % of the 1008 GB/s DRAM
+   roof** and cuSPARSE at **12–36 %** of it. Every other package in this campaign was competing
+   with a vendor kernel at or near a roofline.
+2. **The `iluk` triangular solves are NOT in this package.** WP8 delivered `spmm` only.
+   `iluk_tests` is still in the vendor-free failing set, and its four failures are `Syevx*`
+   cases downstream of `syev` — a `syev` row, not a sparse one.
+3. **Half of the op stays vendor-first, by measurement.** The transposed scatter is complete
+   and correct but loses on 169 of 458 saturated cells (worst 3.011), and has zero in-tree C++
+   callers. Vendor-freedom for the transposed spelling is delivered; a *route* for it is not,
+   and no `nrhs` clause the shape can express recovers one.
 
 cuSPARSE / rocSPARSE are the last dense-adjacent dependency. Consumers: `lanczos`, `syevx`,
 `syevx_filtered`, `syevx_lobpcg`, `ritz_values`, `iluk`. A batched CSR SpMM (and the `iluk`

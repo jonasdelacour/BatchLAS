@@ -1,0 +1,11 @@
+2745 MHz, 65
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     0       0       0       0       100         0.13762     0.00014348  11906.      1462.9      868.62      0.26879     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     0       0       1       0       100         0.24816     0.00025320  53883.      811.29      481.71      0.48468     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     0       1       0       0       100         0.16813     0.0015864   4.0480e+07  1197.4      860.66      0.32839     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     0       1       1       0       100         0.27367     0.00033414  1.3363e+08  735.66      528.76      0.53451     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     1       0       0       0       100         0.14340     0.00019188  11707.      1403.9      833.61      0.28008     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     1       0       1       0       100         0.24052     0.0013316   53637.      837.06      497.02      0.46976     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     1       1       0       0       100         0.17256     0.00025416  3.9056e+07  1166.7      838.58      0.33703     16384       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    16      12      512     1       1       1       0       100         0.26387     0.0010591   1.3602e+08  762.98      548.40      0.51537     16384       16          
+2760 MHz, 64

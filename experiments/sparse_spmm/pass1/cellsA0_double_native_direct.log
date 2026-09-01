@@ -1,0 +1,11 @@
+2760 MHz, 57
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       0       0       0       100         0.010161    1.5203e-05  874.68      619.18      3715.3      0.019846    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       0       1       0       100         0.021693    4.2837e-05  2210.6      290.03      1740.3      0.042368    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       1       0       0       100         0.011999    8.4559e-06  3.6558e+07  524.35      3845.4      0.023435    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       1       1       0       100         0.022783    2.8577e-05  6.0137e+07  276.14      2025.1      0.044498    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       0       0       0       100         0.0098626   8.1855e-05  830.12      637.91      3827.7      0.019263    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       0       1       0       100         0.019399    2.6180e-05  2155.0      324.32      1946.0      0.037889    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       1       0       0       100         0.011782    6.6292e-05  3.5506e+07  533.98      3916.0      0.023012    3072        3           
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m1024    3       2       512     1       1       1       0       100         0.020623    2.3667e-05  6.2641e+07  305.07      2237.3      0.040279    3072        3           
+2760 MHz, 71

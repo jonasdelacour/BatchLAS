@@ -1,0 +1,11 @@
+2775 MHz, 63
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      1       1       0       0       0       100         0.019350    5.8547e-05  1.0896e+05  338.69      63.081      19.350      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      2       1       0       0       0       100         0.020425    0.00099383  1.0896e+05  641.73      119.52      10.212      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      4       1       0       0       0       100         0.026149    2.4764e-05  1.0896e+05  1002.5      186.71      6.5373      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      8       1       0       0       0       100         0.037266    0.00022936  1.0896e+05  1406.9      262.03      4.6582      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      16      1       0       0       0       100         0.064713    0.0032629   1.0896e+05  1620.3      301.79      4.0446      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      32      1       0       0       0       100         0.10959     0.0014230   1.0896e+05  1913.6      356.41      3.4247      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      64      1       0       0       0       100         0.22188     0.00056770  1.0896e+05  1890.4      352.08      3.4668      32768       16          
+[1m(BM_SPMM_Grid<std::complex<float>, batchlas::Backend::CUDA>)[0m2048    16      25      128     1       0       0       0       100         0.43528     0.014166    1.0896e+05  1927.2      358.94      3.4006      32768       16          
+2760 MHz, 64

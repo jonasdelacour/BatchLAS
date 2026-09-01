@@ -1,0 +1,640 @@
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_float_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=108436
+  route: vendor:auto transA=0 transB=0 calls=129852
+  route: vendor:auto transA=0 transB=0 calls=13948
+  route: vendor:auto transA=0 transB=0 calls=59084
+  route: vendor:auto transA=0 transB=0 calls=72292
+  route: vendor:auto transA=0 transB=0 calls=91348
+  route: vendor:auto transA=0 transB=0 calls=9156
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_float_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=11275
+  route: vendor:auto transA=0 transB=0 calls=2439
+  route: vendor:auto transA=0 transB=0 calls=346
+  route: vendor:auto transA=0 transB=0 calls=36459
+  route: vendor:auto transA=0 transB=0 calls=3717
+  route: vendor:auto transA=0 transB=0 calls=40651
+  route: vendor:auto transA=0 transB=0 calls=4581
+  route: vendor:auto transA=0 transB=0 calls=698
+  route: vendor:auto transA=0 transB=0 calls=70247
+  route: vendor:auto transA=0 transB=0 calls=7579
+  route: vendor:auto transA=0 transB=0 calls=9179
+  route: vendor:auto transA=0 transB=0 calls=955
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=14036
+  route: vendor:auto transA=0 transB=1 calls=14020
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=7924
+  route: vendor:auto transA=0 transB=1 calls=8292
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=8124
+  route: vendor:auto transA=0 transB=1 calls=8644
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_float_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=109716
+  route: vendor:auto transA=1 transB=0 calls=128868
+  route: vendor:auto transA=1 transB=0 calls=13900
+  route: vendor:auto transA=1 transB=0 calls=58908
+  route: vendor:auto transA=1 transB=0 calls=68364
+  route: vendor:auto transA=1 transB=0 calls=9124
+  route: vendor:auto transA=1 transB=0 calls=93028
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_float_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=2007
+  route: vendor:auto transA=1 transB=0 calls=22479
+  route: vendor:auto transA=1 transB=0 calls=239
+  route: vendor:auto transA=1 transB=0 calls=2639
+  route: vendor:auto transA=1 transB=0 calls=3765
+  route: vendor:auto transA=1 transB=0 calls=37779
+  route: vendor:auto transA=1 transB=0 calls=403
+  route: vendor:auto transA=1 transB=0 calls=6003
+  route: vendor:auto transA=1 transB=0 calls=639
+  route: vendor:auto transA=1 transB=0 calls=704
+  route: vendor:auto transA=1 transB=0 calls=8267
+  route: vendor:auto transA=1 transB=0 calls=9051
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=13988
+  route: vendor:auto transA=1 transB=1 calls=13996
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=4904
+  route: vendor:auto transA=1 transB=1 calls=4952
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_float_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=5360
+  route: vendor:auto transA=1 transB=1 calls=5416
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_float_native_direct.csv
+route rows: 9
+  route: native:direct transA=0 transB=0 calls=158748
+  route: native:direct transA=0 transB=0 calls=514044
+  route: native:direct transA=0 transB=0 calls=703636
+  route: native:direct transA=0 transB=0 calls=811756
+  route: native:direct transA=0 transB=0 calls=825564
+  route: native:direct transA=0 transB=0 calls=842772
+  route: native:direct transA=0 transB=0 calls=844692
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_float_native_direct.csv
+route rows: 14
+  route: native:direct transA=0 transB=0 calls=2231
+  route: native:direct transA=0 transB=0 calls=2271
+  route: native:direct transA=0 transB=0 calls=23775
+  route: native:direct transA=0 transB=0 calls=33795
+  route: native:direct transA=0 transB=0 calls=38331
+  route: native:direct transA=0 transB=0 calls=487
+  route: native:direct transA=0 transB=0 calls=58311
+  route: native:direct transA=0 transB=0 calls=6163
+  route: native:direct transA=0 transB=0 calls=63383
+  route: native:direct transA=0 transB=0 calls=7291
+  route: native:direct transA=0 transB=0 calls=7451
+  route: native:direct transA=0 transB=0 calls=82623
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=399788
+  route: native:direct transA=0 transB=1 calls=400620
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=12444
+  route: native:direct transA=0 transB=1 calls=12364
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=13268
+  route: native:direct transA=0 transB=1 calls=12764
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_float_native_direct.csv
+route rows: 9
+  route: native:direct transA=1 transB=0 calls=122660
+  route: native:direct transA=1 transB=0 calls=351572
+  route: native:direct transA=1 transB=0 calls=500020
+  route: native:direct transA=1 transB=0 calls=617444
+  route: native:direct transA=1 transB=0 calls=631860
+  route: native:direct transA=1 transB=0 calls=681092
+  route: native:direct transA=1 transB=0 calls=79848
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_float_native_direct.csv
+route rows: 14
+  route: native:direct transA=1 transB=0 calls=1001
+  route: native:direct transA=1 transB=0 calls=22159
+  route: native:direct transA=1 transB=0 calls=226
+  route: native:direct transA=1 transB=0 calls=3541
+  route: native:direct transA=1 transB=0 calls=3589
+  route: native:direct transA=1 transB=0 calls=38795
+  route: native:direct transA=1 transB=0 calls=391
+  route: native:direct transA=1 transB=0 calls=5859
+  route: native:direct transA=1 transB=0 calls=641
+  route: native:direct transA=1 transB=0 calls=648
+  route: native:direct transA=1 transB=0 calls=8483
+  route: native:direct transA=1 transB=0 calls=8835
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=104692
+  route: native:direct transA=1 transB=1 calls=105204
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=4240
+  route: native:direct transA=1 transB=1 calls=4176
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_float_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=4128
+  route: native:direct transA=1 transB=1 calls=4000
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_double_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=108636
+  route: vendor:auto transA=0 transB=0 calls=132548
+  route: vendor:auto transA=0 transB=0 calls=13724
+  route: vendor:auto transA=0 transB=0 calls=58484
+  route: vendor:auto transA=0 transB=0 calls=71924
+  route: vendor:auto transA=0 transB=0 calls=87724
+  route: vendor:auto transA=0 transB=0 calls=9044
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_double_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=2199
+  route: vendor:auto transA=0 transB=0 calls=24319
+  route: vendor:auto transA=0 transB=0 calls=278
+  route: vendor:auto transA=0 transB=0 calls=4013
+  route: vendor:auto transA=0 transB=0 calls=4037
+  route: vendor:auto transA=0 transB=0 calls=41675
+  route: vendor:auto transA=0 transB=0 calls=472
+  route: vendor:auto transA=0 transB=0 calls=6699
+  route: vendor:auto transA=0 transB=0 calls=770
+  route: vendor:auto transA=0 transB=0 calls=771
+  route: vendor:auto transA=0 transB=0 calls=9707
+  route: vendor:auto transA=0 transB=0 calls=9963
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=13796
+  route: vendor:auto transA=0 transB=1 calls=13780
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=1612
+  route: vendor:auto transA=0 transB=1 calls=1620
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=1604
+  route: vendor:auto transA=0 transB=1 calls=1636
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_double_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=104228
+  route: vendor:auto transA=1 transB=0 calls=128252
+  route: vendor:auto transA=1 transB=0 calls=13700
+  route: vendor:auto transA=1 transB=0 calls=58452
+  route: vendor:auto transA=1 transB=0 calls=72116
+  route: vendor:auto transA=1 transB=0 calls=87732
+  route: vendor:auto transA=1 transB=0 calls=9044
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_double_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=2055
+  route: vendor:auto transA=1 transB=0 calls=22959
+  route: vendor:auto transA=1 transB=0 calls=239
+  route: vendor:auto transA=1 transB=0 calls=3597
+  route: vendor:auto transA=1 transB=0 calls=37355
+  route: vendor:auto transA=1 transB=0 calls=3869
+  route: vendor:auto transA=1 transB=0 calls=414
+  route: vendor:auto transA=1 transB=0 calls=6211
+  route: vendor:auto transA=1 transB=0 calls=649
+  route: vendor:auto transA=1 transB=0 calls=695
+  route: vendor:auto transA=1 transB=0 calls=8259
+  route: vendor:auto transA=1 transB=0 calls=9315
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=13804
+  route: vendor:auto transA=1 transB=1 calls=13804
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=1540
+  route: vendor:auto transA=1 transB=1 calls=1540
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_double_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=1572
+  route: vendor:auto transA=1 transB=1 calls=1564
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_double_native_direct.csv
+route rows: 9
+  route: native:direct transA=0 transB=0 calls=253356
+  route: native:direct transA=0 transB=0 calls=413260
+  route: native:direct transA=0 transB=0 calls=678852
+  route: native:direct transA=0 transB=0 calls=764236
+  route: native:direct transA=0 transB=0 calls=818940
+  route: native:direct transA=0 transB=0 calls=841372
+  route: native:direct transA=0 transB=0 calls=99676
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_double_native_direct.csv
+route rows: 14
+  route: native:direct transA=0 transB=0 calls=20463
+  route: native:direct transA=0 transB=0 calls=2567
+  route: native:direct transA=0 transB=0 calls=343
+  route: native:direct transA=0 transB=0 calls=36899
+  route: native:direct transA=0 transB=0 calls=3941
+  route: native:direct transA=0 transB=0 calls=40131
+  route: native:direct transA=0 transB=0 calls=4605
+  route: native:direct transA=0 transB=0 calls=740
+  route: native:direct transA=0 transB=0 calls=77511
+  route: native:direct transA=0 transB=0 calls=8283
+  route: native:direct transA=0 transB=0 calls=931
+  route: native:direct transA=0 transB=0 calls=9803
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=144724
+  route: native:direct transA=0 transB=1 calls=241444
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=7796
+  route: native:direct transA=0 transB=1 calls=7468
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=7484
+  route: native:direct transA=0 transB=1 calls=6356
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_double_native_direct.csv
+route rows: 9
+  route: native:direct transA=1 transB=0 calls=118436
+  route: native:direct transA=1 transB=0 calls=259660
+  route: native:direct transA=1 transB=0 calls=488636
+  route: native:direct transA=1 transB=0 calls=55248
+  route: native:direct transA=1 transB=0 calls=646228
+  route: native:direct transA=1 transB=0 calls=680956
+  route: native:direct transA=1 transB=0 calls=84956
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_double_native_direct.csv
+route rows: 14
+  route: native:direct transA=1 transB=0 calls=200
+  route: native:direct transA=1 transB=0 calls=22519
+  route: native:direct transA=1 transB=0 calls=2575
+  route: native:direct transA=1 transB=0 calls=351
+  route: native:direct transA=1 transB=0 calls=3597
+  route: native:direct transA=1 transB=0 calls=38267
+  route: native:direct transA=1 transB=0 calls=561
+  route: native:direct transA=1 transB=0 calls=569
+  route: native:direct transA=1 transB=0 calls=5819
+  route: native:direct transA=1 transB=0 calls=8275
+  route: native:direct transA=1 transB=0 calls=920
+  route: native:direct transA=1 transB=0 calls=9355
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=71348
+  route: native:direct transA=1 transB=1 calls=71676
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=1308
+  route: native:direct transA=1 transB=1 calls=1324
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_double_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=1364
+  route: native:direct transA=1 transB=1 calls=1340
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_cfloat_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=107820
+  route: vendor:auto transA=0 transB=0 calls=133804
+  route: vendor:auto transA=0 transB=0 calls=13836
+  route: vendor:auto transA=0 transB=0 calls=58836
+  route: vendor:auto transA=0 transB=0 calls=73092
+  route: vendor:auto transA=0 transB=0 calls=90372
+  route: vendor:auto transA=0 transB=0 calls=9092
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_cfloat_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=19783
+  route: vendor:auto transA=0 transB=0 calls=22415
+  route: vendor:auto transA=0 transB=0 calls=2367
+  route: vendor:auto transA=0 transB=0 calls=298
+  route: vendor:auto transA=0 transB=0 calls=36211
+  route: vendor:auto transA=0 transB=0 calls=4221
+  route: vendor:auto transA=0 transB=0 calls=4861
+  route: vendor:auto transA=0 transB=0 calls=530
+  route: vendor:auto transA=0 transB=0 calls=59015
+  route: vendor:auto transA=0 transB=0 calls=7419
+  route: vendor:auto transA=0 transB=0 calls=834
+  route: vendor:auto transA=0 transB=0 calls=999
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=13972
+  route: vendor:auto transA=0 transB=1 calls=13972
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=4696
+  route: vendor:auto transA=0 transB=1 calls=5734
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=4776
+  route: vendor:auto transA=0 transB=1 calls=5902
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_cfloat_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=104956
+  route: vendor:auto transA=1 transB=0 calls=129156
+  route: vendor:auto transA=1 transB=0 calls=13748
+  route: vendor:auto transA=1 transB=0 calls=58588
+  route: vendor:auto transA=1 transB=0 calls=72420
+  route: vendor:auto transA=1 transB=0 calls=90268
+  route: vendor:auto transA=1 transB=0 calls=9052
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_cfloat_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=149
+  route: vendor:auto transA=1 transB=0 calls=2015
+  route: vendor:auto transA=1 transB=0 calls=2159
+  route: vendor:auto transA=1 transB=0 calls=22143
+  route: vendor:auto transA=1 transB=0 calls=245
+  route: vendor:auto transA=1 transB=0 calls=3853
+  route: vendor:auto transA=1 transB=0 calls=411
+  route: vendor:auto transA=1 transB=0 calls=448
+  route: vendor:auto transA=1 transB=0 calls=6019
+  route: vendor:auto transA=1 transB=0 calls=6547
+  route: vendor:auto transA=1 transB=0 calls=730
+  route: vendor:auto transA=1 transB=0 calls=9299
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=13868
+  route: vendor:auto transA=1 transB=1 calls=13876
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=3536
+  route: vendor:auto transA=1 transB=1 calls=3544
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_cfloat_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=3592
+  route: vendor:auto transA=1 transB=1 calls=3600
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_cfloat_native_direct.csv
+route rows: 9
+  route: native:direct transA=0 transB=0 calls=113036
+  route: native:direct transA=0 transB=0 calls=364580
+  route: native:direct transA=0 transB=0 calls=538324
+  route: native:direct transA=0 transB=0 calls=729004
+  route: native:direct transA=0 transB=0 calls=803228
+  route: native:direct transA=0 transB=0 calls=831772
+  route: native:direct transA=0 transB=0 calls=838108
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_cfloat_native_direct.csv
+route rows: 14
+  route: native:direct transA=0 transB=0 calls=20071
+  route: native:direct transA=0 transB=0 calls=2415
+  route: native:direct transA=0 transB=0 calls=314
+  route: native:direct transA=0 transB=0 calls=3685
+  route: native:direct transA=0 transB=0 calls=36883
+  route: native:direct transA=0 transB=0 calls=39307
+  route: native:direct transA=0 transB=0 calls=4421
+  route: native:direct transA=0 transB=0 calls=666
+  route: native:direct transA=0 transB=0 calls=73119
+  route: native:direct transA=0 transB=0 calls=7971
+  route: native:direct transA=0 transB=0 calls=868
+  route: native:direct transA=0 transB=0 calls=9179
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=249516
+  route: native:direct transA=0 transB=1 calls=250996
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=7924
+  route: native:direct transA=0 transB=1 calls=7452
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=7444
+  route: native:direct transA=0 transB=1 calls=6116
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_cfloat_native_direct.csv
+route rows: 9
+  route: native:direct transA=1 transB=0 calls=111428
+  route: native:direct transA=1 transB=0 calls=249020
+  route: native:direct transA=1 transB=0 calls=395844
+  route: native:direct transA=1 transB=0 calls=44084
+  route: native:direct transA=1 transB=0 calls=534220
+  route: native:direct transA=1 transB=0 calls=671148
+  route: native:direct transA=1 transB=0 calls=71496
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_cfloat_native_direct.csv
+route rows: 14
+  route: native:direct transA=1 transB=0 calls=146
+  route: native:direct transA=1 transB=0 calls=1975
+  route: native:direct transA=1 transB=0 calls=2079
+  route: native:direct transA=1 transB=0 calls=22127
+  route: native:direct transA=1 transB=0 calls=227
+  route: native:direct transA=1 transB=0 calls=3613
+  route: native:direct transA=1 transB=0 calls=391
+  route: native:direct transA=1 transB=0 calls=398
+  route: native:direct transA=1 transB=0 calls=5867
+  route: native:direct transA=1 transB=0 calls=6355
+  route: native:direct transA=1 transB=0 calls=644
+  route: native:direct transA=1 transB=0 calls=8755
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=51348
+  route: native:direct transA=1 transB=1 calls=51492
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=1217
+  route: native:direct transA=1 transB=1 calls=1201
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_cfloat_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=1236
+  route: native:direct transA=1 transB=1 calls=1220
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_cdouble_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=130596
+  route: vendor:auto transA=0 transB=0 calls=13068
+  route: vendor:auto transA=0 transB=0 calls=57188
+  route: vendor:auto transA=0 transB=0 calls=68580
+  route: vendor:auto transA=0 transB=0 calls=79468
+  route: vendor:auto transA=0 transB=0 calls=8732
+  route: vendor:auto transA=0 transB=0 calls=99940
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_cdouble_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=147
+  route: vendor:auto transA=0 transB=0 calls=2055
+  route: vendor:auto transA=0 transB=0 calls=2063
+  route: vendor:auto transA=0 transB=0 calls=23079
+  route: vendor:auto transA=0 transB=0 calls=241
+  route: vendor:auto transA=0 transB=0 calls=3765
+  route: vendor:auto transA=0 transB=0 calls=425
+  route: vendor:auto transA=0 transB=0 calls=6195
+  route: vendor:auto transA=0 transB=0 calls=6211
+  route: vendor:auto transA=0 transB=0 calls=704
+  route: vendor:auto transA=0 transB=0 calls=9083
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=12764
+  route: vendor:auto transA=0 transB=1 calls=12788
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=924
+  route: vendor:auto transA=0 transB=1 calls=924
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=0 transB=0 calls=924
+  route: vendor:auto transA=0 transB=1 calls=924
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_cdouble_vendor.csv
+route rows: 9
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=128652
+  route: vendor:auto transA=1 transB=0 calls=13308
+  route: vendor:auto transA=1 transB=0 calls=57604
+  route: vendor:auto transA=1 transB=0 calls=69276
+  route: vendor:auto transA=1 transB=0 calls=84324
+  route: vendor:auto transA=1 transB=0 calls=8852
+  route: vendor:auto transA=1 transB=0 calls=97628
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_cdouble_vendor.csv
+route rows: 14
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=147
+  route: vendor:auto transA=1 transB=0 calls=2071
+  route: vendor:auto transA=1 transB=0 calls=2103
+  route: vendor:auto transA=1 transB=0 calls=22487
+  route: vendor:auto transA=1 transB=0 calls=241
+  route: vendor:auto transA=1 transB=0 calls=3901
+  route: vendor:auto transA=1 transB=0 calls=414
+  route: vendor:auto transA=1 transB=0 calls=424
+  route: vendor:auto transA=1 transB=0 calls=6219
+  route: vendor:auto transA=1 transB=0 calls=6427
+  route: vendor:auto transA=1 transB=0 calls=711
+  route: vendor:auto transA=1 transB=0 calls=9283
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=13468
+  route: vendor:auto transA=1 transB=1 calls=13428
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=980
+  route: vendor:auto transA=1 transB=1 calls=940
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_cdouble_vendor.csv
+route rows: 4
+  route: native:vendor transA= transB= calls=
+  route: vendor:auto transA=1 transB=0 calls=980
+  route: vendor:auto transA=1 transB=1 calls=932
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta0_cdouble_native_direct.csv
+route rows: 9
+  route: native:direct transA=0 transB=0 calls=141804
+  route: native:direct transA=0 transB=0 calls=15148
+  route: native:direct transA=0 transB=0 calls=392356
+  route: native:direct transA=0 transB=0 calls=659916
+  route: native:direct transA=0 transB=0 calls=70980
+  route: native:direct transA=0 transB=0 calls=754548
+  route: native:direct transA=0 transB=0 calls=96196
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta0_cdouble_native_direct.csv
+route rows: 14
+  route: native:direct transA=0 transB=0 calls=1025
+  route: native:direct transA=0 transB=0 calls=196
+  route: native:direct transA=0 transB=0 calls=21543
+  route: native:direct transA=0 transB=0 calls=2431
+  route: native:direct transA=0 transB=0 calls=3805
+  route: native:direct transA=0 transB=0 calls=397
+  route: native:direct transA=0 transB=0 calls=43083
+  route: native:direct transA=0 transB=0 calls=4749
+  route: native:direct transA=0 transB=0 calls=569
+  route: native:direct transA=0 transB=0 calls=7219
+  route: native:direct transA=0 transB=0 calls=731
+  route: native:direct transA=0 transB=0 calls=8851
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA0_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=68996
+  route: native:direct transA=0 transB=1 calls=68940
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB0_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=3656
+  route: native:direct transA=0 transB=1 calls=1404
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC0_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=0 transB=0 calls=1612
+  route: native:direct transA=0 transB=1 calls=1228
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lanczos_ta1_cdouble_native_direct.csv
+route rows: 9
+  route: native:direct transA=1 transB=0 calls=110148
+  route: native:direct transA=1 transB=0 calls=12852
+  route: native:direct transA=1 transB=0 calls=151660
+  route: native:direct transA=1 transB=0 calls=481212
+  route: native:direct transA=1 transB=0 calls=53584
+  route: native:direct transA=1 transB=0 calls=631804
+  route: native:direct transA=1 transB=0 calls=80308
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/lobpcg_ta1_cdouble_native_direct.csv
+route rows: 14
+  route: native:direct transA=1 transB=0 calls=133
+  route: native:direct transA=1 transB=0 calls=1819
+  route: native:direct transA=1 transB=0 calls=1829
+  route: native:direct transA=1 transB=0 calls=200
+  route: native:direct transA=1 transB=0 calls=21687
+  route: native:direct transA=1 transB=0 calls=327
+  route: native:direct transA=1 transB=0 calls=340
+  route: native:direct transA=1 transB=0 calls=3645
+  route: native:direct transA=1 transB=0 calls=537
+  route: native:direct transA=1 transB=0 calls=5875
+  route: native:direct transA=1 transB=0 calls=6227
+  route: native:direct transA=1 transB=0 calls=8699
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsA1_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=37676
+  route: native:direct transA=1 transB=1 calls=37652
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsB1_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=915
+  route: native:direct transA=1 transB=1 calls=905
+  route: native:vendor transA= transB= calls=
+wrote /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2/cellsC1_cdouble_native_direct.csv
+route rows: 4
+  route: native:direct transA=1 transB=0 calls=844
+  route: native:direct transA=1 transB=1 calls=834
+  route: native:vendor transA= transB= calls=
+PASS pass2 complete -> /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/sparse_spmm/pass2

@@ -1,0 +1,11 @@
+2775 MHz, 60
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       0       0       0       100         0.32767     0.00091448  49005.      640.02      476.82      2.5599      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       0       1       0       100         0.80977     0.0022236   2.2318e+05  258.98      192.94      6.3263      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       1       0       0       100         0.33502     0.0020482   1.0859e+08  625.97      622.84      2.6174      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       1       1       0       100         0.81259     0.0014153   3.3744e+08  258.08      256.79      6.3484      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       0       0       0       100         0.74713     0.0012473   48901.      280.69      209.12      5.8369      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       0       1       0       100         0.66554     0.00071798  2.2285e+05  315.11      234.76      5.1995      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       1       0       0       100         0.72581     0.0010294   7.6677e+07  288.94      287.50      5.6704      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       1       1       0       100         0.66945     0.0021519   3.6012e+08  313.26      311.70      5.2301      32768       16          
+2760 MHz, 69

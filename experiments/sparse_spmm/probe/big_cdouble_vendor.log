@@ -1,0 +1,4 @@
+210 MHz, 31
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)[0m4096    16      50      512     0       0       1       0       20          54.410      0.10620     2.5318e+06  246.68      74.157      106.27      65536       16          
+2790 MHz, 49

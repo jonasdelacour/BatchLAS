@@ -1,0 +1,11 @@
+2775 MHz, 55
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     0       0       0       1       100         0.53960     0.0019464   48919.      388.65      161.29      4.2156      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     0       0       1       1       100         2.0163      0.014380    2.2318e+05  104.01      43.164      15.753      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     0       1       0       1       100         0.54488     0.0017018   8.5705e+07  384.88      207.84      4.2569      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     0       1       1       1       100         2.0249      0.0086412   6.8292e+07  103.57      55.928      15.819      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     1       0       0       1       100         0.59187     0.0031062   49053.      354.33      147.05      4.6240      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     1       0       1       1       100         2.0628      0.015137    2.2285e+05  101.66      42.191      16.116      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     1       1       0       1       100         0.59965     0.0010548   8.2802e+07  349.73      188.86      4.6847      32768       16          
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m2048    16      25      128     1       1       1       1       100         2.0484      0.014908    6.8191e+07  102.38      55.285      16.003      32768       16          
+2775 MHz, 58

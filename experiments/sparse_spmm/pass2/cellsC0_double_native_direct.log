@@ -1,0 +1,11 @@
+2760 MHz, 69
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       0       0       0       100         0.32778     0.00096045  49005.      639.80      476.65      2.5608      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       0       1       0       100         0.81189     0.0018783   2.2318e+05  258.30      192.44      6.3429      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       1       0       0       100         0.33530     0.0025649   1.0859e+08  625.46      622.34      2.6195      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     0       1       1       0       100         0.81583     0.0012869   3.3744e+08  257.06      255.77      6.3737      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       0       0       0       100         0.74902     0.0011572   48901.      279.99      208.59      5.8517      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       0       1       0       100         0.66698     0.00070355  2.2285e+05  314.42      234.25      5.2108      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       1       0       0       100         0.72750     0.0010424   7.6677e+07  288.27      286.83      5.6836      32768       16          
+[1m(BM_SPMM_Grid<double, batchlas::Backend::CUDA>)   [0m2048    16      25      128     1       1       1       0       100         0.67077     0.00067553  3.6012e+08  312.65      311.09      5.2404      32768       16          
+2760 MHz, 69

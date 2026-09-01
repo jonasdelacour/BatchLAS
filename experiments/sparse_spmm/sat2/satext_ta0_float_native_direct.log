@@ -1,0 +1,19 @@
+2775 MHz, 53
+[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       1024    0       0       0       0       100         0.010185    0.00013160  440.70      617.69      3706.6      0.0099467   3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       1024    0       0       1       0       100         0.014928    0.00012258  1134.1      421.44      2528.9      0.014578    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       2048    0       0       0       0       100         0.040258    1.4148e-05  440.70      312.56      1875.5      0.019657    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       2048    0       0       1       0       100         0.036943    0.00040220  1134.1      340.61      2043.9      0.018038    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       4096    0       0       0       0       100         0.16495     4.2589e-05  440.70      152.57      915.49      0.040271    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       4096    0       0       1       0       100         0.16564     5.0653e-05  1134.1      151.93      911.70      0.040439    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       8192    0       0       0       0       100         0.32698     5.8082e-05  440.70      153.93      923.67      0.039915    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       1       8192    0       0       1       0       100         0.32824     9.6818e-05  1134.1      153.34      920.11      0.040069    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       1024    0       0       0       0       100         0.010937    7.0130e-05  874.68      1150.5      4219.0      0.010680    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       1024    0       0       1       0       100         0.021086    6.3031e-05  2210.6      596.73      2188.2      0.020592    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       2048    0       0       0       0       100         0.099564    1.2690e-05  874.68      252.76      926.87      0.048615    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       2048    0       0       1       0       100         0.10218     3.5042e-05  2210.6      246.30      903.16      0.049891    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       4096    0       0       0       0       100         0.20033     5.4754e-05  874.68      251.24      921.30      0.048909    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       4096    0       0       1       0       100         0.20164     5.0933e-05  2210.6      249.62      915.34      0.049228    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       8192    0       0       0       0       100         0.39783     6.6360e-05  874.68      253.03      927.86      0.048563    3072        3           
+[1m(BM_SPMM_Grid<float, batchlas::Backend::CUDA>)    [0m1024    3       2       8192    0       0       1       0       100         0.39970     7.2810e-05  2210.6      251.85      923.53      0.048791    3072        3           
+2760 MHz, 56

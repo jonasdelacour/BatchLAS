@@ -254,6 +254,136 @@ produce no row of their own — they collapse into the m=70, n=48, batch=6 row. 
 specific shape ran, use a break that is red only for that shape. The `linked` vs `reachable`
 lesson, one level further down.
 
+## After WP8 — 35 / 57, and the suite count is the WRONG METRIC here
+
+    ctest --test-dir build-novendor -LE slow
+    61% tests passed, 22 tests failed out of 57          <- i.e. 35 PASSED
+
+**Neither half of that line records what WP8 did.** The 22 failing names are byte-identical to
+the post-WP7 set — nothing left it, nothing joined it — and the one suite that joined the *run*
+is `spmm_tests` itself, which passes **368 / 368** vendor-free. So `34/56 → 35/57` is the new
+suite counting itself, and read alone it says WP8 did nothing.
+
+The plan predicted exactly this, and the metric that actually moved is the per-op
+`NoRouteError` census over `ctest -LE slow --rerun-failed --output-on-failure`:
+
+| op | after WP7 | after WP8 | op | after WP7 | after WP8 |
+|---|---|---|---|---|---|
+| `syev` | 87 | 87 | `syrk` | 12 | 12 |
+| `geqrf` | 44 | 44 | `her2k` | 12 | 12 |
+| `trsm` | 32 | 32 | `hemm` | 12 | 12 |
+| `ormqr` | 24 | 24 | `syr2k` | 10 | 10 |
+| `trmm` | 16 | 16 | `symm` | 8 | 8 |
+| `herk` | 16 | 16 | **`spmm`** | **2** | **0** |
+| `getri` | 16 | 16 | | | |
+
+`grep -c 'no route for spmm'` is **0**. Every other count matches the recorded baseline digit
+for digit, which is both the deliverable and the evidence that nothing else moved.
+
+**Why the suite count cannot show it** — the same lesson as WP3's, one op further on. The
+suites that still fail vendor-free fail on *other* ops, and the two suites that consume `spmm`
+are the clearest cases:
+
+* `iluk_tests` is **17/17 vendor-present**; its four vendor-free failures are all named
+  `Syevx*`, i.e. downstream of `syev`'s 87 `NoRouteError`s. It is a `syev` row, not an `spmm`
+  row.
+* `lanczos_tests` fails in **both** builds and is not WP8's. Re-checked rather than assumed:
+  `lanczos` does consume the moved `spmm` gather, so it was re-run with
+  `BATCHLAS_SPMM_ROUTE=vendor` and produced the **same two failing cases**
+  (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`).
+
+Vendor-present, for the record: `ctest -LE slow` **56/57**, and `spmm_tests` unpinned goes
+**276 passed / 92 skipped / 0 failed → 282 / 86 / 0** with the clause. Those six recovered cases
+are the type-conditional showing up as a test-count delta: `transA = NoTrans` with
+`transB = Trans`/`ConjTrans` on `Backend::NETLIB` now takes the native gather instead of
+netlib's blanket transpose refusal — for `float`, `double` and `complex<double>` only.
+`complex<float>` keeps all 23 of its skips, because the clause refuses exactly that family.
+
+### `BATCHLAS_SPMM_ROUTE=vendor` turns 92 skips into 92 FAILURES, and never did anything else
+
+Worth writing down before someone runs it as a control and reports a regression. Pinning the
+vendor gives **276 passed / 92 FAILED**, and:
+
+* all 92 are `Backend::NETLIB`; the same pinned run on `Backend::CUDA` is **184/184 passed**;
+* the cause is two pre-existing lines — `netlib_lapack.cc:259` hard-throws on any transpose,
+  and `tests/spmm_tests.cc:499` disables its refusal-skip whenever `BATCHLAS_SPMM_ROUTE` is
+  set (`transposed && !route_pinned`). That gate reads the environment, never `preferred()`;
+* 92 is **precisely the old unpinned skip count**, i.e. the pin converts pre-existing skips
+  into failures and nothing else;
+* the clause provably does not participate: `BATCHLAS_COVERAGE_OUT` on that exact run shows
+  **144 `spmm` `reached` rows, all `vendor:auto`** — a forced vendor route returns before
+  `preferred()` is ever consulted.
+
+"Pin the vendor to prove the vendor arm still works" does not do what it sounds like in this
+suite.
+
+### The eleventh blind guard: a bound that nothing in a 352-case suite could see
+
+`tests/spmm_tests.cc` shipped a `PaddingAboveNnzIsNotReadTrans` case built to prove the
+scatter body bounds its nonzero loop by **each item's own row offsets** rather than by
+`A.nnz()`, which is the per-item *capacity* (the batch maximum). Breaking that bound left the
+**entire 352-case suite green**. A kernel reading uninitialised NaN padding on every transposed
+call would have shipped.
+
+**The reason is that the poison was unreachable, not that the axis was uninteresting.** The
+case poisoned the padding with a `NaN` value at an **out-of-range column index** (2^30). The
+scatter's own defensive range guard (`spmm_native.cc:541-542`) discards an out-of-range column
+*before* the value is ever multiplied — so both halves of the poison went in the bin together,
+and the over-read left no trace in `C`.
+
+The guard is **correct and it stays**: in the gather a bad column index is an out-of-range
+read; in the scatter it is an out-of-range **atomic write**, i.e. heap corruption. The *test*
+is what had to change. The padding now carries an **in-range** column — an output row the
+scatter will happily accumulate into — and a **large finite sentinel** rather than a NaN
+(`8192` against live data of magnitude ≤ 1), so an over-read lands in `C` where the
+backward-error comparison names it, instead of turning into a NaN that any of several unrelated
+bugs could also produce. With that poison the break is red, and its named controls stay green.
+
+Two meta-findings from the same exercise, both worth more than the fix:
+
+* **A test can be defeated by the kernel's own defensive code.** The poison must be a value the
+  kernel will *accept and use*, not one it is entitled to discard. Nothing about the case's
+  wording revealed that; only running the break did.
+* **`git diff` cannot verify the revert of an UNTRACKED file.** `src/sycl/spmm_native.cc` is
+  new in this package, so after a deliberate break `git diff` reports **nothing** — an
+  assertion that cannot fail, which is the same defect class as the blind guard it was being
+  used to police. The recipe recorded in the file is an `md5sum` of the pristine source taken
+  **before** the first break and compared after the last.
+
+That is the eleventh blind guard recorded in this campaign. (This document last numbered the
+ninth, at WP7; the counters in `tests/gemv_tests.cc` and `src/sycl/gemv_native.cc` ran ahead of
+it during the WP7 repair pass. The count is approximate; the pattern is not.)
+
+### The instrument caveat this pass added: `route_diff.sh compare` needs a `backend != AUTO` filter
+
+The raw before/after capture diff shows **65 removed and 175 added `reached` lines**, which
+looks like far more churn than the 65 decisions that actually moved. **110 of those additions
+are fabricated pure-layer shapes** resolved by this pass's seven new `route_vocabulary_tests`
+cases, recorded with `backend = AUTO`. `route_vocabulary_tests.cc` carries its own standing note
+to filter those out before concluding anything about what the *library* routes — but
+`route_diff.sh`'s `compare` does not apply the filter, so `compare` alone makes a clean
+65-decision move look like 240 lines of churn.
+
+`experiments/sparse_spmm/route_census.py` keys on the decision tuple
+(op + scalar + backend + shape_class + uplo/side/diag/transA/transB) and splits `AUTO` from real
+backends. After that filter: **65 moved decisions, all `spmm`, all `vendor:auto` →
+`native:direct`, all `transA = 0`; zero non-`spmm` decisions moved, zero disappeared, and the
+added-key set is empty.** This is arguably a fifth defect of the coverage instrument, in the
+same family as the four already recorded.
+
+### One comment that was false, and the break that caught it
+
+Recorded because it is the campaign's own lesson in a new costume. This pass first wrote — in
+both `route_spmm.hh` and `route_vocabulary_tests.cc` — that now the clause has landed, a
+reversed `kSpmmOrder` would silently send every admitted shape back to cuSPARSE. **It does
+not.** `automatic()`'s first walk skips any route whose `preferred()` is false, and
+`preferred()`'s first line refuses the vendor (`if (!is_native(r) ...)`), so the vendor entry is
+skipped wherever it sits; the vendor-free walk filters on `is_native()` and has one candidate.
+The reversal was applied, rebuilt and run: **exactly one case goes red, `OrderIsExactlyTwoEntries`,
+and structurally rather than through any routing decision.** Both comments now record the
+correction and the break result. A plausible mechanism asserted instead of measured — caught
+only by running the break.
+
 ## The same gap, per op
 
 `cmake --build build-novendor --target batchlas_coverage` writes `coverage.csv`, whose
@@ -265,8 +395,9 @@ lesson, one level further down.
 | **no** | `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `herk`, `her2k`, `geqrf`, `orgqr`, `getrf`, `getrs`, `getri`, `potrf`, `spmm` |
 
 > **This table is the WP0 reading and it is NOT maintained — do not use it as a status
-> board.** WP3–WP7 have since landed native `trsm`, `potrf`, `geqrf`/`orgqr`, `getrf`/`getrs`
-> and `gemv`, none of which is reflected above. It is left as recorded so the WP0 → today diff
+> board.** WP3–WP8 have since landed native `trsm`, `potrf`, `geqrf`/`orgqr`, `getrf`/`getrs`,
+> `gemv` and `spmm`, none of which is reflected above — the `no` column is now empty in fact,
+> and `spmm` was the last entry to leave it. It is left as recorded so the WP0 → today diff
 > stays legible.
 >
 > It is also **not trustworthy op by op**, which is worth knowing before anyone regenerates
