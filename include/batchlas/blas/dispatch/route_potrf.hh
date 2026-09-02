@@ -12,7 +12,7 @@
 //     the env read == lives in the alias table (route_env.hh), not here.
 //
 // For POTRF that rule is the whole work package, and the WP4 spec breaks it in
-// both directions at once. WP4_POTRF_SPEC.md:559/:567 put
+// both directions at once. docs/perf/potrf.md#what-the-spec-got-wrong:559/:567 put
 // `batch >= kPotrfCtaMinBatch` and `batch >= kPotrfBlockedMinBatch` inside
 // supports(), under the heading "Hard gate (correctness/fit)", and :574 sets
 // both to INT_MAX at merge "i.e. both native providers are reachable only by
@@ -118,7 +118,7 @@ struct PotrfShape : OpShape {
     // table advertises and the allocation the kernel makes cannot disagree.
     //
     // What the measurement says, recorded here so the small numbers cannot be
-    // shipped by accident: WP4_POTRF_SPEC.md:273's {float 105, double 74,
+    // shipped by accident: docs/perf/potrf.md#what-the-spec-got-wrong:273's {float 105, double 74,
     // cfloat 74, cdouble 52} are derived from `slm_budget = 45056`, and that
     // budget is refuted. build/include/batchlas/device_limits.hh's 49152 is
     // HARDCODED by cmake/BatchLASDetectSYCL.cmake:44-45 for any nvidia_gpu_sm_*
@@ -126,7 +126,7 @@ struct PotrfShape : OpShape {
     // never queries local_mem_size. WP4 step 0.2 queried it: this box reports
     // sycl::info::device::local_mem_size == 101,376 B, and a kernel with 0 B
     // static shared launches at exactly that
-    // (experiments/wp4_potrf/slm/README.md, slm_probe_gpu0.log; cudaDeviceProp
+    // (docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings, slm_probe_gpu0.log; cudaDeviceProp
     // agrees, sharedMemPerBlockOptin == 101,376). Re-derived at a 97,280 B
     // budget (runtime - 4096 B reserve) the ceilings are {float 155, double
     // 109, cfloat 109, cdouble 77}, and all four were launched cold and

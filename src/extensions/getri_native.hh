@@ -30,7 +30,7 @@
 //
 // ===========================================================================
 // THE MEASUREMENT, and its crossover. Composed against cublas<t>getriBatched at
-// saturating batch, in process, host oracle (experiments/wp6_lu/baseline/):
+// saturating batch, in process, host oracle (docs/perf/lu.md#the-vendor-baseline-and-saturation):
 //
 //     n(batch)    float   double  cfloat  cdouble
 //      32(8192)    0.54    0.23    0.23    0.23

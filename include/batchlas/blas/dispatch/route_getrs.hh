@@ -11,7 +11,7 @@
 //                     and :165 says a forced route bypasses preferred() but never
 //                     supports().
 //     preferred()  == the measured window. NO LONGER ALL-FALSE: it carries the
-//                     nrhs window measured in experiments/wp6_perf/bench/, so
+//                     nrhs window measured in docs/perf/lu.md#getrs-fused-window-evidence, so
 //                     this table now moves the DEFAULT in a vendor-present build
 //                     as well as in a vendor-free one. See preferred() below.
 //     the env read == src/backends/getrs_route.hh, not here. PURE header.
@@ -91,7 +91,7 @@
 // origin (route_resolve.hh:146-163), which is now the fused tier wherever the
 // right-hand side is resident; it used to be the composition, because that was
 // the only native route. Any baseline recorded with a bare `native` pin --
-// experiments/wp6_lu/bench/run_cells.sh:37 and kernels/run_grid.sh:39 export one
+// docs/perf/lu.md#negative-results:37 and kernels/run_grid.sh:39 export one
 // value into all three LU variables at once -- is measuring a different getrs
 // today than when it was recorded. Pin `native:blocked` to mean what `native`
 // used to mean. This is a measurement-comparability trap, not a correctness one,
@@ -101,7 +101,7 @@
 // THE TWO MEASUREMENTS, both against cublas?getrsBatched at saturating batch, in
 // process, against a host oracle:
 //
-//   THE COMPOSITION (experiments/wp6_lu/baseline/):
+//   THE COMPOSITION (docs/perf/lu.md#the-vendor-baseline-and-saturation):
 //     nrhs = 1  : GEOMEAN 0.36x over 28 cells, 25 LOSSES, worst 0.09x (cdouble
 //                 n=32). Only n=2048 wins (1.07-1.15x) and that is against an
 //                 UNSATURATED vendor.
@@ -112,7 +112,7 @@
 //     amortise; the permutation is a rounding error there (the gather strategy
 //     changes the geomean by 0.00x).
 //
-//   THE FUSED TIER (experiments/wp6_getrs/proto/grid_nv.csv, grid_big.csv):
+//   THE FUSED TIER (docs/perf/lu.md#the-fused-narrow-rhs-getrs, grid_big.csv):
 //     nrhs = 1  : GEOMEAN 2.10x over cuBLAS across 15 cells (4 types x n in
 //                 {64,128,512,2048}), NO LOSSES, worst 1.24x, best 3.62x; and
 //                 7.86x over the composition. It runs at 82% of this device's
@@ -388,7 +388,7 @@ struct RouteTable<Op::getrs, T> {
     //
     // ---- THE EVIDENCE, cell by cell ---------------------------------------
     //
-    // experiments/wp6_perf/bench/ -- WP6's own harness (wp6_lu/bench/lubench6.cpp),
+    // docs/perf/lu.md#getrs-fused-window-evidence -- WP6's own harness (wp6_lu/bench/lubench6.cpp),
     // its own build scripts, its own cell format, both arms verified from the
     // printed route column on every row, medians of 5-7 reps, in-process host
     // oracle on every timed row, nothing under a kernel trace. Both arms reproduce
@@ -478,7 +478,7 @@ struct RouteTable<Op::getrs, T> {
     //     28" came from grid_*.csv, which carries exactly one saturating batch
     //     per order and NO ladder on the batch axis at any width >= 16. A full
     //     ladder -- 4 types x 5 orders x 4 widths x 7 batches (32 .. 8192),
-    //     464 paired cells, experiments/wp8_getrs/lad_*.csv + hi_*.csv -- shows
+    //     464 paired cells, docs/perf/lu.md#getrs-collapsed-permutationlad_*.csv + hi_*.csv -- shows
     //     the composition's advantage FALLING MONOTONICALLY WITH BATCH at every
     //     type and every order, because below saturation neither arm is measuring
     //     its own speed. At float n=128 nrhs=128 the composition costs
@@ -495,7 +495,7 @@ struct RouteTable<Op::getrs, T> {
     //     and TWO vendor passes, medians of 11 reps, warm JIT,
     //     CUDA_VISIBLE_DEVICES pinned, zero foreign compute processes on every
     //     row, quoted at the WORSE pass, cross-pass median spread 1.0022 and
-    //     worst 1.1208 over 270 arm-medians (experiments/wp8_getrs/cl_*.csv +
+    //     worst 1.1208 over 270 arm-medians (docs/perf/lu.md#getrs-collapsed-permutationcl_*.csv +
     //     gap_*.csv, scored by clause.py into clause_summary.txt):
     //
     //       CANDIDATE                       cells  geomean    min  loss  <1.15  GATE-C
@@ -548,7 +548,7 @@ struct RouteTable<Op::getrs, T> {
     //     -- on the directly measured rungs. The coverage bound then named FIVE
     //     admitted cfloat cells it could not cover, because the WALK ladder was
     //     itself below 1.15 there. Measuring those five
-    //     (experiments/wp8_getrs/gap_*.csv) produced
+    //     (docs/perf/lu.md#getrs-collapsed-permutationgap_*.csv) produced
     //         cfloat n=64 nrhs=128 batch=1024 = 0.9944  (0.9969 / 0.9944, two passes)
     //     with 1.2901 at batch 512 and 1.4824 at batch 2048 ON EITHER SIDE OF IT.
     //     A dip in the MIDDLE of a ladder cannot be closed by any boundary in
@@ -577,8 +577,8 @@ struct RouteTable<Op::getrs, T> {
     // =====================================================================
     // =====================================================================
     // WP8 ROUTING PASS: CLAUSE C LANDS. The recommendation above is applied
-    // VERBATIM and its CSV is experiments/wp8_getrs/clause_summary.txt, scored
-    // in this pass by experiments/wp8_getri/analyse.py's sibling reader.
+    // VERBATIM and its CSV is docs/perf/lu.md#getrs-composition-window-evidence, scored
+    // in this pass by docs/perf/lu.md#getrs-composition-window-evidence's sibling reader.
     //
     // WHAT CHANGED HERE STRUCTURALLY. `if (r.algo != Algorithm::CTA) return
     // false` was RELAXED, not deleted -- clauses A and B depend on it to keep
@@ -627,7 +627,7 @@ struct RouteTable<Op::getrs, T> {
     // ---- CORRECTION THAT NEARLY COST HALF THE CLAUSE
     //
     // THE RE-MEASURE FIRST. Everything above was re-run on device 1 with nothing
-    // else on the box (experiments/wp8_getri/lu_c{1,2}.csv, pair_cells.sh: the
+    // else on the box (docs/perf/lu.md#getrs-composition-window-evidence, pair_cells.sh: the
     // two arms are two BUILDS run back to back on each cell, 11 reps, median,
     // host oracle per row, resolved route checked per arm, foreign count 0). It
     // reproduces I2's figures cell for cell -- float n=512 nrhs=64 b=512 reads
@@ -661,7 +661,7 @@ struct RouteTable<Op::getrs, T> {
     //     half of the clause -- the low end is not measured at all. A floor that
     //     is only conservative cannot admit a loss, which is the property
     //     GATE-C actually needs. Moving it down is one cheap sweep
-    //     (experiments/wp8_getri/gen_floor.py) and is named as open work.
+    //     (docs/perf/lu.md#open-debts) and is named as open work.
     //
     // (b) A CORRECTION THAT NEARLY COST THE float nrhs >= 64 HALF OF THIS
     //     CLAUSE, recorded because the same trap will be there for the next
@@ -720,7 +720,7 @@ struct RouteTable<Op::getrs, T> {
     //
     // THE MEASUREMENT. Prototype, vendor-free build, saturating batch, the fused
     // kernel and the composition INTERLEAVED IN ONE PROCESS against a host oracle
-    // (experiments/wp6_getrs/proto/grid_nv.csv and grid_big.csv). Ratio is
+    // (docs/perf/lu.md#the-fused-narrow-rhs-getrs and grid_big.csv). Ratio is
     // composed_ms / fused_ms, so > 1 means the FUSED tier is ahead:
     //
     //   nrhs      1      2      4      8       16

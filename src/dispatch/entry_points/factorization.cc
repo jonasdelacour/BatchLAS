@@ -506,7 +506,7 @@ size_t orgqr_buffer_size(Queue& ctx,
 // Origin::Auto keeps returning {Vendor, Auto} wherever a vendor exists
 // (route_resolve.hh:110-112, :129). Measured at 96 of 96 route cells. The
 // benchmark that would replace those all-false windows with a measured one is
-// experiments/wp6_lu/bench/; read its README before writing one, because the
+// docs/perf/lu.md#the-blocked-arm-grid; read it before writing one, because the
 // crossover moves with BATCH and not only with order.
 // ---------------------------------------------------------------------------
 
@@ -764,9 +764,9 @@ Event getrs(Queue& ctx,
     //
     // MEASURED, and it matters if a preferred() window is ever written here: the
     // COMPOSITION is a crossover on nrhs (geomean 0.32x of cuBLAS at nrhs=1 rising
-    // to 1.36x at nrhs=128, experiments/wp6_lu/bench/README.md), while the FUSED
+    // to 1.36x at nrhs=128, docs/perf/lu.md#the-vendor-baseline-and-saturation), while the FUSED
     // tier is 2.10x of cuBLAS at nrhs=1 with no losses over 15 cells and crosses
-    // the other way as nrhs grows (experiments/wp6_getrs/proto/).
+    // the other way as nrhs grows (docs/perf/lu.md#the-fused-narrow-rhs-getrs).
     if (dispatch::is_native(route)) {
         if (route.algo == dispatch::Algorithm::CTA) {
             // THE FUSED NARROW-RHS TIER. It injects NOTHING -- no trsm, no gemm,

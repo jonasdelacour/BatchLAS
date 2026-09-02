@@ -63,7 +63,7 @@
 // THE MEASURED CASE FOR THE COMPOSITION, and its crossover -- this is the one LU
 // op where the native side has a clear win to go and get. Composed
 // "P into C, then two routed trsm" against cublas<t>getriBatched, saturating
-// batch, in process, host oracle (experiments/wp6_lu/baseline/):
+// batch, in process, host oracle (docs/perf/lu.md#the-vendor-baseline-and-saturation):
 //
 //     n(batch)    float   double  cfloat  cdouble
 //      32(8192)    0.54    0.23    0.23    0.23
@@ -231,7 +231,7 @@ struct RouteTable<Op::getri, T> {
     // PREDICTED. Two of its four types are wrong and the saturation caveat is
     // wrong in both directions.
     //
-    // THE MEASUREMENT. experiments/wp8_getri/lu_c1.csv and lu_p1.csv, produced by
+    // THE MEASUREMENT. docs/perf/lu.md#measured-boundaries and lu_p1.csv, produced by
     // pair_cells.sh: the two arms are two BUILDS (lubench6_nv has no cuBLAS
     // linked, so the BINARY selects the arm and no pin can silently fall
     // through), run BACK TO BACK ON EACH CELL so clock and thermal state drift

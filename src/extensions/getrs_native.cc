@@ -16,7 +16,7 @@
 //
 // Composed "row permutation + two routed trsm" against cublas?getrsBatched, at
 // saturating batch, in process, against a host oracle
-// (experiments/wp6_lu/baseline/grid_norm.csv, summary.txt):
+// (docs/perf/lu.md#the-vendor-baseline-and-saturation, summary.txt):
 //
 //   nrhs = 1  : GEOMEAN 0.36x over 28 cells (4 types x 7 orders). 25 LOSSES.
 //               n(batch)   float double cfloat cdouble
@@ -48,7 +48,7 @@
 // a workspace bought for it would be charged to every narrow call by the
 // facade's tier-max. It was wrong about ONE thing, and that one thing was the
 // whole objection: the collapse does not need a workspace. The prototype it was
-// costed from (experiments/wp6_lu/baseline/lubench.cpp:163-180) built the row
+// costed from (docs/perf/lu.md#getrs-collapsed-permutation:163-180) built the row
 // map in a GLOBAL int32[n] per item and gathered into a SEPARATE global buffer S
 // -- and then never copied the answer back, so its 1.55x also omitted a full
 // extra pass. Doing the permutation in LOCAL memory, one work-group per matrix
@@ -63,7 +63,7 @@
 // on every row, TWO independent passes with the WORSE quoted, the two arms'
 // solutions asserted BIT-IDENTICAL on every row, and the resolved spelling read
 // back per arm so a silent fallback cannot report a flat 1.00x
-// (experiments/wp8_getrs/ab_p{1,2}.csv, ab_summary.txt). One saturating batch per
+// (docs/perf/lu.md#getrs-collapsed-permutation, ab_summary.txt). One saturating batch per
 // order; 4 types x 5 orders x 6 widths:
 //
 //   nrhs      cells  geomean     min      max
@@ -197,7 +197,7 @@ template <typename T> class GetrsPermGatherKernel;
 // WHY THIS ONE IS IN PLACE AND THE PROTOTYPE'S WAS NOT, which is the whole
 // difference between this and the "out-of-place RHS plus an int32[n] per item"
 // the file header (and the WP6 plan) budget for. The prototype
-// (experiments/wp6_lu/baseline/lubench.cpp:163-180) built the map in a GLOBAL
+// (docs/perf/lu.md#getrs-collapsed-permutation:163-180) built the map in a GLOBAL
 // int32[n] per item with a batch-only-parallel kernel, then gathered B into a
 // separate global buffer S and solved there -- 2 buffers, and it never copied
 // the answer back (it probed the residual on S, :512-548), so a real driver

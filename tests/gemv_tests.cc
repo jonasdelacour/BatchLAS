@@ -1190,7 +1190,7 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
 // ===========================================================================
 
 // MEASURED, EACH BREAK APPLIED TO src/sycl/gemv_native.cc, REBUILT IN
-// build-novendor, RUN, AND REVERTED (experiments/wp8_gemv/breaks_body5.py; 376
+// build-novendor, RUN, AND REVERTED (docs/perf/gemv.md#breaks-that-stayed-green; 376
 // cases total; every red case is Backend 1 = CUDA, because the native_cpu queue
 // does not enumerate a sub-group size of 32 and therefore never reaches body 5 --
 // which is itself the proof that the sub-group gate works). NOT ONE break turned
@@ -1517,7 +1517,7 @@ TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStrideWideBand) {
 // (out_len*batch)/W sub-groups against body 3's out_len*batch, so below
 // 8*MAX_COMPUTE_UNITS outputs it gives away parallelism the shape cannot spare.
 // Measured: at out_len*batch <= 512 body 5 is 0.891x-0.989x of body 3
-// (experiments/wp8_gemv/skinny_p{1,2}.csv, sixteen losing cells found only
+// (docs/perf/gemv.md#the-body-5-gates, sixteen losing cells found only
 // because the WP7 parity grid reaches out_len = 1 and this pass's own
 // (out_len, red_len) plane started at 64).
 //

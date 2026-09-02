@@ -19,7 +19,7 @@
 //   float           : 0.85-0.93x cuBLAS SGEMM -- WORSE than the in-tree
 //                     128x128 kernel, which is why float never routes here.
 //
-// See WP2_WIDE_SCALAR_GEMM_VERDICT.md and experiments/wide_scalar_gemm/.
+// See docs/perf/gemm.md#the-wide-scalar-kernel and docs/perf/gemm.md#the-wide-scalar-kernel.
 //
 // Read the `double` row as small on purpose. FP64 on a 4090 is 1/64 of FP32,
 // so the ceiling at the observed clocks is ~1.44 TFLOP/s; this kernel reaches

@@ -68,7 +68,7 @@ namespace batchlas::dispatch {
 // (route_gesvd.hh:64-71), which is the obvious precedent. gesvd's four numbers
 // are derived from a measured local-memory limit; TRSM's are not measured yet.
 // The spec's {float 64, double 32, cfloat 32, cdouble 16} come from a
-// "256 B/thread register cliff" that WP3_TRSM_SPEC_CORRECTIONS.md reports as
+// "256 B/thread register cliff" that docs/perf/trsm.md#what-the-spec-got-wrong reports as
 // contradicted at gemm_kernels.cc:725-735 (an 8x8 double tile compiles to 208
 // registers and complex<float> to 247, both spill-free). Transcribing them into
 // a header would launder four hypotheses into a compile-time constant.
@@ -187,7 +187,7 @@ struct RouteTable<Op::trsm, T> {
 
     // ---- MEASURED WINDOW --------------------------------------------------
     // WP3 step 9 measured it. Every clause below cites the cells it comes from;
-    // the raw CSVs are in experiments/wp3_s9/ and the grid that produced them
+    // the raw CSVs are in docs/perf/trsm.md#the-step-9-grid and the grid that produced them
     // is benchmarks/trsm_benchmark.cc's TrsmOrthoSizes.
     //
     // THE GRID. Not the square-RHS one the old trsm_benchmark swept -- the
@@ -236,7 +236,7 @@ struct RouteTable<Op::trsm, T> {
         // work-item solves one system and there is nothing else on the device.
         // At batch = 8 it already wins (double 1.08-2.93x, float n<=32
         // 1.09-2.44x), so the boundary sits at the first measured win rather
-        // than at a rounder number. See experiments/wp3_s9/starved-*.csv.
+        // than at a rounder number. See docs/perf/trsm.md#the-step-9-gridstarved-*.csv.
         //
         // NOTE WHAT THIS IS NOT. Spec S10 proposed a starvation guard
         // `batch*q < 8*CU*32 -> vendor`, and the measurement REFUTES it: at

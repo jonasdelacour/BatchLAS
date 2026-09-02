@@ -375,7 +375,7 @@ TEST(RouteVocabulary, ShapeClassCollapsesIterationsButNotRegimes) {
 // vendor-off fallback by re-walking the candidate order testing supports()
 // ALONE, so if a speed threshold ever migrates into supports(), trsm stops
 // having any route at all without a vendor and level3.cc throws. That is the
-// exact regression WP3_TRSM_SPEC_CORRECTIONS.md finding 3 is about, and it
+// exact regression docs/perf/trsm.md#what-the-spec-got-wrong finding 3 is about, and it
 // would otherwise only show up as a vendor-free suite going red much later.
 // ---------------------------------------------------------------------------
 namespace {
@@ -408,7 +408,7 @@ TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
     // The supports/preferred split must stay visible even now that float wins
     // everywhere measured, so this names a cell that is structurally supported
     // and un-preferred for a NON-speed reason: batch below the measured floor.
-    // At batch=1 the native kernel measured 0.40-0.86x (experiments/wp3_s9),
+    // At batch=1 the native kernel measured 0.40-0.86x (docs/perf/trsm.md#the-step-9-grid),
     // and that floor lives in preferred(), so a vendor-free build still routes
     // it natively rather than throwing.
     const auto s = trsm_shape(/*tri_order=*/32, /*q=*/1024, /*batch=*/1, /*cta_max=*/32,
@@ -573,7 +573,7 @@ TEST(RouteTrsm, RhsCountFollowsSide) {
 
 // ---------------------------------------------------------------------------
 // POTRF's table (WP4 step 0.4). Same discipline as the RouteTrsm block above,
-// and for the same reason: WP4_POTRF_SPEC.md:559/:567 put two BATCH thresholds
+// and for the same reason: docs/perf/potrf.md#what-the-spec-got-wrong:559/:567 put two BATCH thresholds
 // inside supports() and then claimed at :574 that the native routes would be
 // "reachable only by force". Both halves are wrong, and both are load-bearing:
 //
@@ -630,7 +630,7 @@ constexpr Route kPotrfAuto{Origin::Auto, Algorithm::Auto};
 
 TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
     // The one case the whole split exists for. 155 is the CTA fit ceiling WP4
-    // step 0.2 MEASURED for float (experiments/wp4_potrf/slm/maxn_fitcheck.csv;
+    // step 0.2 MEASURED for float (docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings;
     // the spec's 105 came from a 45,056 B budget that the runtime query --
     // sycl::info::device::local_mem_size == 101,376 B -- refutes), and batch=1
     // is exactly the shape a spec-faithful supports() would have made
@@ -946,7 +946,7 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
 // NONE of the cases below changed: each builds its own GeqrfShape/OrgqrShape by
 // hand and never asks the build what its capabilities are -- which is exactly
 // what B8 records. The kernels' own correctness is verified in
-// experiments/wp5_qr/kernels/ (a residual + orthogonality + ELEMENTWISE-vs-vendor
+// docs/perf/qr.md#break-sweeps (a residual + orthogonality + ELEMENTWISE-vs-vendor
 // harness, five reference breaks and seven kernel breaks). preferred() is still
 // false for both ops, so PreferredIsFalseEverywhere is still the merge state and
 // still the thing to delete when a measured grid says otherwise.
@@ -1703,7 +1703,7 @@ TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
         << "getrf's preferred() is all-false BY DECISION, not by absence: both "
            "native arms exist and are measured, and the window is withheld "
            "because the crossover moves with batch as much as with order "
-           "(experiments/wp6_lu/bench/README.md). Flip this only together with "
+           "(docs/perf/lu.md#the-vendor-baseline-and-saturation). Flip this only together with "
            "a measured grid";
 
     EXPECT_TRUE(is_native(resolve_getrf_route<float>(kGetrfAuto, s,
@@ -2065,7 +2065,7 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
     // The scaffolding pinned this hook's DELIBERATE ABSENCE and said in as many
     // words: "Delete this case when the tier sweep lands and the predicate is
     // declared; replace it with one that pins the measured crossover." The sweep
-    // has landed (experiments/wp6_lu/kernels/tier.txt, run_tier.sh: both arms
+    // has landed (docs/perf/lu.md#native-tier-preferred, run_tier.sh: both arms
     // pinned, every pin verified to have taken, double re-run across four
     // batches), so this is that replacement.
     //
@@ -2321,7 +2321,7 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
 // appear without the grid that justifies it" -- still needs a guard, and the way
 // to guard a window is to pin BOTH of its sides.
 //
-// THE WINDOW (experiments/wp6_perf/bench/README.md, 354 + 134 measured cells):
+// THE WINDOW (docs/perf/lu.md#getrs-fused-window-evidenceREADME.md, 354 + 134 measured cells):
 //     nrhs <= 2  for every type and order   -- clause A
 //   + nrhs <= 4  for float only             -- clause B
 // and NOTHING else. Everything wider is a measured loss somewhere on its batch
@@ -2392,7 +2392,7 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
     // -- and that error was caught twice in WP7. The order loop below exists to
     // prove the clause does NOT read order: every order gives the same answer.
     //
-    // THE BOUNDARY IS PER TYPE and comes from experiments/wp8_getrs/
+    // THE BOUNDARY IS PER TYPE and comes from docs/perf/lu.md#getrs-collapsed-permutation
     // clause_summary.txt, two native passes and two vendor passes, quoted at the
     // worse pass: float >= 64 (30 cells, geomean 2.837, min 1.765) and double
     // >= 128 (15 cells, geomean 1.865, min 1.279). cfloat and cdouble earn
@@ -2555,7 +2555,7 @@ TEST(RouteGetrs, BareOriginResolvesToASpecificAlgorithm) {
     // used to mean the composition, because it was the only native route in
     // kGetrsOrder; CTA is now listed first, so the bare origin means the FUSED
     // KERNEL wherever the right-hand side is resident. Any baseline recorded with
-    // a bare `native` pin -- experiments/wp6_lu/bench/run_cells.sh:37 and
+    // a bare `native` pin -- docs/perf/lu.md#negative-results:37 and
     // kernels/run_grid.sh:39 export it into all three LU variables at once -- is
     // measuring a different getrs today than when it was recorded. That is a
     // measurement-comparability trap, not a correctness one, and this test is
@@ -3377,7 +3377,7 @@ TEST(RouteGemv, OrderIsCtaThenDirectThenVendor) {
 // binary in the tree, for the same two reasons the gemv section above records:
 //   * VENDOR-PRESENT: preferred() SHIPPED ALL-FALSE and no longer is. The WP8
 //     clause (route_spmm.hh's preferred(), evidence in
-//     experiments/sparse_spmm/) moves the transA == NoTrans gather -- minus
+//     docs/perf/spmm.md#raw-evidence) moves the transA == NoTrans gather -- minus
 //     complex<float> with a transposed dense operand -- onto native:direct in
 //     EVERY build. The transposed scatter and every refused corner still
 //     resolve to vendor:auto. tests/spmm_tests.cc now exercises the native arm
@@ -3750,7 +3750,7 @@ TEST(RouteSpmm, BareNativeAutoIsNotSupported) {
 //
 // and NOTHING else -- no batch term, no extent term, no is_gpu term, no nnz
 // term. Evidence and the refuted alternatives are in route_spmm.hh's comment and
-// in experiments/sparse_spmm/{verdict.txt,cfedge1,cfedge2,sb1,sb2,smallbatch.txt}.
+// in docs/perf/spmm.md#the-evidence-for-each-boundary.
 //
 // WHY THIS IS ASSERTED AT BOTH LEVELS. Every case below checks the PREDICATE and
 // then the RESOLVED ROUTE with vendor_available = true, because the two can come
@@ -3838,7 +3838,7 @@ TEST(RouteSpmm, PreferredAcceptsTheGatherForEveryType) {
 //
 // preferred() is consulted on EVERY call while the acceptance gate is stated at
 // batch >= 128, so the batch 1..64 corner was swept separately
-// (experiments/sparse_spmm/run_smallbatch.sh, sb1/, sb2/, smallbatch.txt): 0 of
+// (docs/perf/spmm.md#the-batch-axis-has-no-floor, sb1/, sb2/, smallbatch.txt): 0 of
 // 174 admitted rows at batch <= 64 exceed the 1.10 gate in both passes, and the
 // worst cell anywhere in that region is 1.078, INSIDE the gate. A floor needs a
 // measured non-winner outside the gate to bracket it and there is none.
@@ -3852,7 +3852,7 @@ TEST(RouteSpmm, PreferredHasNoBatchFloor) {
         EXPECT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
             << "batch " << batch << ": the clause carries NO batch term. If a "
                "floor was just added, it needs a measured non-winner outside "
-               "the 1.10 gate to bracket it -- experiments/sparse_spmm/"
+               "the 1.10 gate to bracket it -- docs/perf/spmm.md#raw-evidence"
                "smallbatch.txt has none at any rung, worst 1.078 at batch 4";
         EXPECT_TRUE(SpmmTableCD::preferred(kSpmmDirect, s)) << "batch " << batch;
         EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, s, true)))
@@ -3863,7 +3863,7 @@ TEST(RouteSpmm, PreferredHasNoBatchFloor) {
 // THE TRANSPOSED REFUSAL, WHICH IS MEASURED AND NOT AN OMISSION.
 //
 // 169 of 458 saturated batch >= 128 scatter cells are above the 1.10 gate,
-// median 1.030, worst 3.011 (experiments/sparse_spmm/verdict.txt). Every
+// median 1.030, worst 3.011 (docs/perf/spmm.md#the-gather-window). Every
 // narrower candidate was tried and refuted there too: nrhs <= 4 fails 11 of 204,
 // nrhs <= 2 fails 5 of 151, nrhs <= 1 fails 2 of 60, and the one that passes
 // (nrhs <= 2 AND type != complex<double>) is rejected because its true axis is
@@ -3915,7 +3915,7 @@ TEST(RouteSpmm, PreferredRefusesEveryTransposedA) {
 //
 // complex<float> with a transposed dense operand runs 1.71-1.73x slower than
 // cuSPARSE on a banded column pattern at nrhs >= 17
-// (experiments/sparse_spmm/cfedge{1,2}), and it is what refutes the
+// (docs/perf/spmm.md#the-cfloat-transb-exclusion), and it is what refutes the
 // unconditional gather clause: cfloat tA=0 m=2048 nnz/row=16 nrhs=25 b=128 tB=1
 // beta=0 banded measures 1.934 / 1.872 (verdict.txt).
 //

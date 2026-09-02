@@ -114,7 +114,7 @@ struct GetrfShape : OpShape {
     // here -- WP4's finding W1, measured).
     //
     // AND IT MUST COUNT THE PIVOT-SEARCH SCRATCH, which is a WP6-only hazard with
-    // no potrf or geqrf analogue. Measured (experiments/wp6_lu/baseline/,
+    // no potrf or geqrf analogue. Measured (docs/perf/lu.md#the-vendor-baseline-and-saturation,
     // pivotcost.cpp): an explicit SLM tree argmax needs
     // wg*(sizeof(real)+sizeof(int)) ON TOP OF the tile -- 2040 B at wg 256 for
     // float, 3060 B for cdouble -- and that scratch alone
@@ -346,14 +346,14 @@ struct RouteTable<Op::getrf, T> {
     // workspace-sizing input.
     //
     // FALSE EVERYWHERE IS NOW A DELIBERATE HOLD, NOT AN ABSENCE OF KERNEL. Both
-    // arms exist and both are measured (experiments/wp6_lu/bench/README.md, 982
+    // arms exist and both are measured (docs/perf/lu.md#the-vendor-baseline-and-saturation, 982
     // timed rows); the window is withheld because the measurement says the
     // crossover moves with BATCH as much as with order -- the same order sweep is
     // geomean 1.44x/3.57x at batch 32 and 0.67x/0.91x at batch 1024 -- so a window
     // fitted to an order sweep alone would be wrong at both ends.
     //
     // FOUR MEASURED FACTS THAT WILL SHAPE THIS FUNCTION, recorded so they are not
-    // re-derived (experiments/wp6_lu/baseline/README.md and bench/README.md):
+    // re-derived (docs/perf/lu.md#the-vendor-baseline-and-saturation and bench/README.md):
     //
     //   * THE VENDOR HERE IS GENUINELY BATCHED and is strong at small n.
     //     cublas{S,D,C,Z}getrfBatched (cublas.cc:1509) is a real batched routine,
@@ -420,7 +420,7 @@ struct RouteTable<Op::getrf, T> {
     //
     // ---- THE WINDOW THIS FUNCTION SHOULD CARRY, RECOMMENDED NOT APPLIED ------
     // The routing pass owns preferred(); WP8-I1 owned the kernel. Transcribed
-    // from experiments/wp8_getrf/after_nv_p{1,2}.csv against base_v_p{1,2}.csv,
+    // from docs/perf/lu.md#getrf-window-evidence against base_v_p{1,2}.csv,
     // ratio = vendor_med / native_med, every cell reproduced in two passes:
     //
     //   float, order >= 256, batch >= 128   -- 12 cells, min 1.254, no loss
@@ -460,7 +460,7 @@ struct RouteTable<Op::getrf, T> {
     // regions are long and device-resident -- and getrf, whose timed region is
     // 1-8 ms of launch-bound work, was affected by up to 5x.
     //
-    // So the numbers below come from experiments/wp8_getri/lu_c1.csv, taken on
+    // So the numbers below come from docs/perf/lu.md#measured-boundaries, taken on
     // device 1 with NOTHING ELSE ON THE BOX. The clause is I1's recommendation,
     // tested rather than inherited.
     //
@@ -514,7 +514,7 @@ struct RouteTable<Op::getrf, T> {
     // ---- native_tier_preferred IS DECLARED, AND IT IS MEASURED ------------
     // The scaffolding left this hook deliberately ABSENT, on the ground that
     // "declaring an unmeasured window publishes a claim nothing measured".
-    // The tier sweep has now run (experiments/wp6_lu/kernels/tier.txt), so the
+    // The tier sweep has now run (docs/perf/lu.md#native-tier-preferred), so the
     // debt is paid rather than carried; the predicate and its numbers are at the
     // bottom of this table. The standard route_geqrf.hh:385-425 sets for
     // "measured" is met: both arms PINNED, EVERY PIN VERIFIED TO HAVE TAKEN by
@@ -542,7 +542,7 @@ struct RouteTable<Op::getrf, T> {
     // resolved route read off every row -- which matters, because the CTA pin is
     // refused above the per-type ceiling and then falls through to automatic(),
     // and four of the sweep's rows did exactly that and are excluded.
-    // experiments/wp6_lu/kernels/tier.txt and run_tier.sh. Ratio is
+    // docs/perf/lu.md#native-tier-preferred and run_tier.sh. Ratio is
     // blocked_ms / cta_ms, so > 1 means CTA is ahead:
     //
     //   float    n=64(8192) 1.74  n=76(8192) 1.48  n=96(8192) 1.49

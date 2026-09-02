@@ -114,7 +114,7 @@ constexpr std::size_t getrf_slm_bytes(int m, int n) {
 //
 // WP6 RE-MEASURED THE HOLE FROM SCRATCH with a PAD= knob that holds kernel,
 // shape and work-group fixed and moves ONLY the declared byte count, one process
-// per point (experiments/wp6_lu/baseline/hole2.csv):
+// per point (docs/perf/lu.md#the-48-kb-launch-hole):
 //     49,024 B PASS   49,152 B FAIL   49,280 B PASS
 // 5/5 deterministic across five separate processes and independent of work-group
 // width (32/64/128/256/512 all fail). For double and cdouble the collective also
@@ -144,7 +144,7 @@ constexpr std::size_t getrf_hole_padded(std::size_t bytes) {
 // THE WORK-GROUP WIDTH. Not inherited from potrf or geqrf, and measured to
 // matter more here than in either: float n=128 batch 4096, the unpivoted
 // reference arm is 39.72 ms at wg=32 and 4.77 ms at wg=512 -- an 8.3x spread
-// (experiments/wp6_lu/baseline/wg.csv). Best measured wg is 256 at n=64 and 512
+// (docs/perf/lu.md#open-debts). Best measured wg is 256 at n=64 and 512
 // at n=128.
 //
 // The rule below reproduces both of those and extends them to the blocked
@@ -559,7 +559,7 @@ Event getrf_cta_dispatch(Queue& ctx,
     // and falls back to pool scratch. THE SPAN THAT IS ZEROED IS THIS ONE, never
     // info_out -- zeroing the caller's would leave the span the kernel actually
     // reads full of whatever the pool last held
-    // (WP4_POTRF_SPEC_CORRECTIONS.md:938-943).
+    // (docs/perf/potrf.md#what-the-spec-got-wrong:938-943).
     Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
                              ? info_out
                              : getrf_cta_layout(ctx, pool, batch);

@@ -79,7 +79,7 @@ template <typename T> class OrgqrCopyBackKernel;
 
 // The WY block width handed to the apply.
 //
-// MEASURED (experiments/wp5_qr/baseline/summary_nb.txt), and deliberately NOT
+// MEASURED (docs/perf/qr.md#block-width-evidence), and deliberately NOT
 // tuning::ormqr_block_size_for_n, which is what resolve_ormqr_block_size returns
 // when no hint is given (ormqr.hh:220-228). That ladder's 16/16/24/48/56 by
 // A.rows() was tuned on CUDA/float ONLY -- evaluation/tuning/tune.py:494 takes a

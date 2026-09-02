@@ -12,7 +12,7 @@
 // WITH IT: orgqr ships as ORMQR APPLIED TO AN IDENTITY, which is what
 // VENDOR_INDEPENDENCE_PLAN.md's WP5 section suggests and what WP5's baseline
 // experiment MEASURED rather than assumed
-// (experiments/wp5_qr/baseline/README.md):
+// (docs/perf/qr.md#the-vendor-baseline):
 //
 //   * CORRECT. Q from ormqr(F, I, Side::Left, Transpose::NoTrans) is elementwise
 //     identical to cuSOLVER orgqr's Q to 6.9e-07..3.2e-06 (float/cfloat) and

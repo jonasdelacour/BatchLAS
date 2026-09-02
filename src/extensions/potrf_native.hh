@@ -2,7 +2,7 @@
 
 // Native batched POTRF -- declarations.
 //
-// Read WP4_POTRF_SPEC_CORRECTIONS.md first, then WP4_POTRF_SPEC.md. The spec
+// Read docs/perf/potrf.md#what-the-spec-got-wrong first, then docs/perf/potrf.md#what-the-spec-got-wrong. The spec
 // predates WP0-WP3 and is stale in several places the corrections list; where
 // they disagree the corrections win.
 //
@@ -53,17 +53,17 @@ namespace batchlas::sycl_potrf {
 // claim an unlaunchable route on a smaller device.
 //
 // It is a function and not a constexpr literal for route_trsm.hh:62-72's reason
-// and one more of its own: WP4_POTRF_SPEC.md:273's {105, 74, 74, 52} follow from
+// and one more of its own: docs/perf/potrf.md#what-the-spec-got-wrong:273's {105, 74, 74, 52} follow from
 // `slm_budget = 45056`, and that budget is refuted (W1). The 49152 in
 // build/include/batchlas/device_limits.hh is HARDCODED by
 // cmake/BatchLASDetectSYCL.cmake:44-45 for any nvidia_gpu_sm_* pattern and is
 // not a detected property at all -- the detection routine never queries
 // local_mem_size. Measured, this box reports 101,376 B and launches a kernel
-// with 0 B static shared at exactly that (experiments/wp4_potrf/slm/README.md).
+// with 0 B static shared at exactly that (docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings).
 // At the 97,280 B budget (runtime - 4096 reserve) the ceilings are
 // {float 155, double 109, complex<float> 109, complex<double> 77}, and all four
 // were launched cold and computed the right answer before this kernel existed
-// (experiments/wp4_potrf/slm/maxn_fitcheck.csv). Shipping 105 would leave float
+// (docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings). Shipping 105 would leave float
 // n in 106..155 with NO ROUTE AT ALL in a vendor-free build
 // (route_resolve.hh:60-63).
 template <typename T>

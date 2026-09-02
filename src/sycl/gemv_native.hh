@@ -5,7 +5,7 @@
 // WP7. The point of this kernel is NOT speed. The recon phase measured
 // cuBLAS `gemvStridedBatched` at 94-105% of the ~950 GB/s achievable DRAM roof
 // on 90 of 92 reproducing cells, across all four scalar types and both transA
-// values (experiments/wp7_gemv/baseline/README.md). A batched gemv is pure
+// values (docs/perf/gemv.md#the-vendor-baseline). A batched gemv is pure
 // streaming: it reads A once and does two flops per element, so on this device
 // there is no bandwidth left to take. WP7 is a PARITY + VENDOR-FREEDOM
 // exercise, and anyone reporting a large speedup over cuBLAS on a DRAM-resident
@@ -112,7 +112,7 @@
 // FMAs. Body 5 cuts that to L*log2(L) -- 8 at L = 4.
 //
 // ---- WHAT BODY 5 IS WORTH, MEASURED --------------------------------------
-// experiments/wp8_gemv/plane_p{1,2}.csv: body 5 (the shipped `auto` decision)
+// docs/perf/gemv.md#the-body-5-gates: body 5 (the shipped `auto` decision)
 // against body 3, interleaved REP BY REP inside one process, 11 reps, median,
 // warm JIT, two independent passes, foreign compute-process count 0 on every
 // row, both arms checked against the same in-process host oracle. The worse of
@@ -125,8 +125,8 @@
 //   ConjTrans, separately: 36 admitted cells, geomean 2.734x, MIN 1.072x
 //
 // AND THE SKINNY REGIME, which the plane above could not reach and which is
-// where this pass found its own trap-8 defect (experiments/wp8_gemv/
-// skinny3_p{1,2}.csv, out_len walked from 1 to 64):
+// where this pass found its own trap-8 defect
+// (docs/perf/gemv.md#the-body-5-gates, out_len walked from 1 to 64):
 //
 //   30 ADMITTED cells: geomean 1.566x, MIN 1.037x, MAX 3.043x, ZERO below 1.00x
 //   74 DECLINED cells: 0.977x .. 1.009x
@@ -148,7 +148,7 @@
 // AN ODD ld COSTS BODY 5 SOMETHING AND NEVER INVERTS THE SIGN. A run starts at
 // (b*stride + j*ld + s), so an ld that is not a multiple of the run length
 // straddles an extra 32-byte sector. Measured at out_len = 2048, batch = 512
-// (experiments/wp8_gemv/oddld_p1.csv), packed ld vs odd ld:
+// (docs/perf/gemv.md#the-body-5-gates), packed ld vs odd ld:
 // cdouble red_len 8: 7.32x -> 6.65x; double red_len 8: 9.92x -> 5.59x;
 // cfloat red_len 8: 4.06x -> 2.13x; float red_len 32: 1.076x -> 1.062x.
 // Every admitted odd-ld cell stays at or above 1.06x. tests/gemv_tests.cc
@@ -159,7 +159,7 @@
 // out_len = 256, batch = 512 -- where A is 33-67 MB against this device's 72 MB
 // L2 -- body 5 at W = 4 measures 1.40x-2.09x for cfloat at red_len 24..64,
 // 2.62x for double at red_len 64 and 1.22x-1.71x for float at red_len 48..128,
-// all ABOVE their gates (experiments/wp8_gemv/above_p{1,2}.csv). The same
+// all ABOVE their gates (docs/perf/gemv.md#open-debts). The same
 // red_len at out_len = 2048 measures 0.986x-0.996x. Separating them needs a
 // FOOTPRINT term, which is the L2-residency reasoning route_gemv.hh:279-284
 // forbids in preferred() and which would be no better founded in a launcher.

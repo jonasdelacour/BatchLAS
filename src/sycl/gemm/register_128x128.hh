@@ -32,7 +32,7 @@
 //
 // Measured on RTX 4090 / sm_89 at 512^3 batch 512: 43.6 TFLOP/s, against
 // cuBLAS SGEMM's 43.9 under the same timing, where the 128x64x32 kernel that
-// this supersedes reaches 21. See experiments/sycl_vs_cuda/FINDINGS.md.
+// this supersedes reaches 21. See docs/perf/gemm.md#the-128x128-float-kernel.
 
 #include "accessors.hh"
 #include "epilogue_linear.hh"

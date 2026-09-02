@@ -266,7 +266,7 @@ struct RouteTable<Op::spmm, T> {
     // (route_resolve.hh:109-112), which runs REGARDLESS of vendor_available. So
     // the clause below is not a vendor-free tier choice: it takes spmm away from
     // cuSPARSE in the vendor-present build, for the shapes it admits. That is
-    // the intent, and the evidence for it is experiments/sparse_spmm/ -- 7,536
+    // the intent, and the evidence for it is docs/perf/spmm.md#raw-evidence -- 7,536
     // timed rows over 9 sweeps, every sweep run as two fully independent passes,
     // one route per process, route proved from BATCHLAS_COVERAGE_OUT rather than
     // from the environment variable.
@@ -280,15 +280,15 @@ struct RouteTable<Op::spmm, T> {
     //
     // WHAT THE CLAUSE MOVES: 176 saturated batch >= 128 cells, worst-of-two
     // 0.968, median 0.445, best 0.032
-    // (experiments/sparse_spmm/verdict.txt, built from
-    //  experiments/sparse_spmm/pass{1,2}/joined.csv and scl{1,2}/joined.csv).
+    // (docs/perf/spmm.md#the-gather-window, built from
+    //  docs/perf/spmm.md#the-gather-window and scl{1,2}/joined.csv).
     // At unambiguous DRAM residency the gather reads 906-931 GB/s -- 90-92% of
     // this part's 1008 GB/s roof -- for all four scalar types, against
-    // cuSPARSE's 120-366 GB/s (experiments/sparse_spmm/roof.txt). nsys says both
+    // cuSPARSE's 120-366 GB/s (docs/perf/spmm.md#the-dram-roof). nsys says both
     // arms are > 93% GPU-kernel time, so this is a kernel result and not a
     // host-overhead one: cuSPARSE launches THREE kernels per spmm call and
     // re-runs csr_partition_kernel, 36% of its GPU time, on every call
-    // (experiments/sparse_spmm/nsys_split.txt).
+    // (docs/perf/spmm.md#the-nsys-split).
     static bool preferred(Route r, const SpmmShape& s) {
         // ROUTE AND FORMAT: the clause speaks only for the route that has the
         // measured bodies. {Vendor, Auto} and any other native algorithm fall
@@ -303,7 +303,7 @@ struct RouteTable<Op::spmm, T> {
         // not a formality, so the batch 1..64 corner was swept separately --
         // 5 shape families x 4 scalar types x 2 column patterns x 2 betas x both
         // transB x batch {1,2,4,8,16,32,64,128}, twice, one route per process
-        // (experiments/sparse_spmm/run_smallbatch.sh, sb1/joined.csv,
+        // (docs/perf/spmm.md#the-batch-axis-has-no-floor, sb1/joined.csv,
         //  sb2/joined.csv, smallbatch.csv, smallbatch.txt).
         //
         // Under THIS clause, 0 of 174 admitted rows at batch <= 64 exceed the
@@ -370,7 +370,7 @@ struct RouteTable<Op::spmm, T> {
         //
         // complex<float> with a transposed dense operand runs 1.71-1.73x SLOWER
         // than cuSPARSE on a strongly banded column pattern at nrhs >= 17
-        // (experiments/sparse_spmm/cfedge{1,2}, both passes, m=2048,
+        // (docs/perf/spmm.md#the-cfloat-transb-exclusion, both passes, m=2048,
         // nnz/row=16, batch=512):
         //     nrhs        8     9    12    16    17    20    25    32    50
         //     banded p1 0.630 0.713 0.689 1.087 1.315 1.218 1.731 1.159 1.695
@@ -395,7 +395,7 @@ struct RouteTable<Op::spmm, T> {
         // BRACKETED ON THREE AXES: nrhs 12 (0.69-0.76) vs 17 (1.27-1.32);
         // type -- float, double and complex<double> on the identical cells run
         // 0.22-0.69 and never lose, so the type conditional is exactly as narrow
-        // as the data; and BATCH (experiments/sparse_spmm/sb{1,2}) -- the same
+        // as the data; and BATCH (docs/perf/spmm.md#the-batch-axis-has-no-floor) -- the same
         // cell runs 0.581 at batch 4, 1.447 at batch 8, peaks at 2.18 at batch
         // 32, 1.94 at 128 and 1.71-1.73 at 512, so the loss is NOT a saturation
         // artefact and no batch-conditional narrows it usefully.

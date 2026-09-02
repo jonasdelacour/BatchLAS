@@ -61,7 +61,7 @@ struct RouteTable;
 //
 // WITHOUT this, the vendor-free choice is decided entirely by the ORDER array,
 // which is static and therefore cannot follow a crossover. Measured cost of
-// that for geqrf (experiments/wp5_qr/bench/tier_summary.txt): the order lists
+// that for geqrf (docs/perf/qr.md#cta-vs-blocked-crossover): the order lists
 // CTA first, and CTA is 1.37x SLOWER than the blocked driver in the same build
 // at double n=96, 1.43x at float n=128 -- a pure loss, in the one build this
 // work package exists for, with the better route already linked in.

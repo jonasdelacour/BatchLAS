@@ -76,7 +76,7 @@
 //     red_len()   NoTrans -> n    Trans/ConjTrans -> m     (length of x)
 //
 // THIS IS NOT PEDANTRY. The one measured cuBLAS slow region in the whole gemv
-// baseline (experiments/wp7_gemv/baseline/README.md) is
+// baseline (docs/perf/gemv.md#the-vendor-baseline) is
 // complex<double> + Trans, 64 <= m <= 320, n >= 128 -- a band on **m**, which
 // under Trans is red_len(), NOT out_len(). A predicate written on out_len()
 // would test n, never touch m, and INVERT the window. Any preferred() clause
@@ -233,7 +233,7 @@ struct RouteTable<Op::gemv, T> {
     // ~950 GB/s achievable DRAM roof on 90 of 92 reproducing cells, over all
     // four scalar types, both transA values, square and non-square, n from 32
     // to 2048 and batch from 64 to 65536
-    // (experiments/wp7_gemv/baseline/README.md, two independent passes agreeing
+    // (docs/perf/gemv.md#the-vendor-baseline, two independent passes agreeing
     // to spread <= 1.01 on 98 of 104 cells). A batched gemv reads A once and
     // does two flops per element: there is no arithmetic to hide behind and no
     // reuse to exploit, so on a DRAM-resident cell the vendor is AT THE ROOF
@@ -264,7 +264,7 @@ struct RouteTable<Op::gemv, T> {
     // and measures 0.97x/0.97x, with cuBLAS at 925 GB/s, i.e. at the roof.
     // Every clause that passes the >= 1.15x gate strictly (n >= 768, or
     // A >= 1024 MB) sits on the edge of the sampled range and captures at most
-    // 22 of the 68 measured wins. See experiments/wp7_gemv/audit/clause_report.txt.
+    // 22 of the 68 measured wins. See docs/perf/gemv.md#routing-hypotheses-refuted.
     //
     // SO THE 3x IS ONE ENVIRONMENT VARIABLE AWAY, NOT ZERO AWAY:
     // BATCHLAS_GEMV_ROUTE=native:cta, on a transposed GPU shape. On any other
@@ -334,11 +334,11 @@ struct RouteTable<Op::gemv, T> {
     // TWO THINGS HAD TO HAPPEN FIRST, AND BOTH ARE MEASUREMENTS, NOT OPINIONS.
     //
     // (1) THE CLAUSE FAMILY THAT WAS SEARCHED DID NOT CONTAIN `batch`.
-    //     experiments/wp7_gemv/audit/clause_search.py enumerates
+    //     docs/perf/gemv.md#routing-hypotheses-refuted enumerates
     //     (m band) x (n threshold) x (A threshold) and nothing else, so every
     //     REFUTED verdict in clause_report.txt is a verdict about clauses that
     //     cannot express the boundary. Re-searched with batch as a first-class
-    //     term (experiments/wp8_gemv/g6_clauses.py), a clause survives.
+    //     term (docs/perf/gemv.md#the-cdouble-window-boundaries), a clause survives.
     //
     // (2) THE BAND'S LOWER EDGE WAS OUR KERNEL'S LIMIT, NOT cuBLAS'S. Before
     //     WP8-I3's body 5, red_len 48 measured 0.67-0.79x -- the vendor was
@@ -354,11 +354,11 @@ struct RouteTable<Op::gemv, T> {
     // That is a kernel-selection threshold in the vendor, which is why no
     // function of n*batch and no power law n^a*batch can describe it (both
     // a > 1 and a < 1 are required simultaneously -- see the two refuting pairs
-    // in experiments/wp7_gemv/audit/README.md section 5), and why the honest
+    // in docs/perf/gemv.md#routing-hypotheses-refuted section 5), and why the honest
     // predicate names batch outright.
     //
     // THE BAND IN red_len IS SHARP AT BOTH ENDS. At out_len 256/512, batch 512
-    // (experiments/wp8_gemv/g6_fit_p{1,2}.csv, grid B, red_len walked 8..512):
+    // (docs/perf/gemv.md#the-cdouble-window-boundaries, grid B, red_len walked 8..512):
     //     red_len   32     40     48     56     64    ...   320    352    384
     //     ratio   0.95   1.10   1.31   1.16   2.41    ...  3.01   2.84   1.03
     //     vendor   909    793    677    771    373    ...   310    329    906
@@ -463,7 +463,7 @@ struct RouteTable<Op::gemv, T> {
     // bracketed boundary -- which is precisely the objection WP7's own audit
     // raised against its `A >= 1024 MB` candidate, and this pass is not going to
     // commit the error it is here to avoid. The bracketing sweep is one cell
-    // list (experiments/wp8_gemv/g6_cells3.py, grids H and I) and is named as
+    // list (docs/perf/gemv.md#open-debts, grids H and I) and is named as
     // open work.
     // =====================================================================
     static bool preferred(Route r, const GemvShape& s) {

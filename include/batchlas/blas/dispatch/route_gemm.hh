@@ -34,7 +34,7 @@
 // STATUS: live. gemm_use_sycl_custom (src/backends/gemm_variant.hh) is now a
 // two-line adapter over resolve_gemm_route, so cublas.cc, mkl.cc and rocblas.cc
 // all route through this. tests/route_gemm_equivalence_tests.cc pins it against
-// the behaviour it replaced. See WP0_DISPATCH_SPEC.md S4.
+// the behaviour it replaced. See docs/perf/dispatch.md#what-ships S4.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -106,10 +106,10 @@ struct RouteTable<Op::gemm, T> {
         // entire register ladder is inside `if constexpr (is_same_v<T,float>)`,
         // so complex falls to `max_dim <= 64 ? Direct : Tiled16` (:514) --
         // measured at 3.2-7.1x SLOWER than cuBLAS in
-        // WP2_WIDE_SCALAR_GEMM_VERDICT.md. Widening here without first porting
+        // docs/perf/gemm.md#the-wide-scalar-kernel. Widening here without first porting
         // the 64x64x16 t4x4 tile into src/ and wiring the selector routes
         // complex to Tiled16, not to a register kernel. Order: port ->
-        // selector -> predicate. See WP2_GEMM_SPEC.md.
+        // selector -> predicate. See docs/perf/gemm.md#evidence-for-each-boundary.
         if constexpr (is_std_complex_v<T>) {
             return false;
         } else {
@@ -127,7 +127,7 @@ struct RouteTable<Op::gemm, T> {
                 // part: this predicate is what the flip (E6) would act on, and
                 // measured against cuBLAS it was claiming windows the native
                 // kernels lose. Every cell below is RTX 4090, square, median of
-                // 3, both betas, at saturation; see experiments/wp2_e4/.
+                // 3, both betas, at saturation; see docs/perf/gemm.md#float-nn-at-max_dim-32.
                 //
                 // TRANSPOSED: the whole window is gone. It claimed
                 // batch >= 128 && 128 <= max_dim <= 512, and native loses every

@@ -200,7 +200,7 @@ inline int gemv_seg_width(int out_len) {
 //
 // double and cfloat are 1.68x apart at red_len = 32 at IDENTICAL bytes,
 // IDENTICAL shape and IDENTICAL shuffle count. ncu on the same launches
-// (experiments/wp8_gemv/ncu_precheck.csv) names the discriminator:
+// (docs/perf/gemv.md#kernel-hypotheses-refuted) names the discriminator:
 //
 //     sm__pipe_fp64_cycles_active, % of peak     dram__throughput, % of peak
 //     red_len      32      64     128              32      64     128
@@ -273,7 +273,7 @@ inline constexpr int kGemvSegTransMaxW = 8;
 // route_gemv.hh:273-277 records that exact error being caught TWICE in WP7.
 //
 // BOTH TABLES ARE TRANSCRIBED FROM A CSV, CELL BY CELL, NOT INFERRED FROM AN
-// INEQUALITY: experiments/wp8_gemv/wfine_p{1,2}.csv, body 5 against body 3
+// INEQUALITY: docs/perf/gemv.md#the-sub-route-gates, body 5 against body 3
 // interleaved rep by rep inside one process, 11 reps, median, two passes,
 // red_len walked down to 1 at out_len 256 and 2048. The full table is in
 // gemv_native.hh.
@@ -336,11 +336,11 @@ template <> inline constexpr int kGemvSegTransW8MaxRedLen<std::complex<double>> 
 //
 // THIS GATE EXISTS BECAUSE MY OWN GRID COULD NOT SEE THE REGIME IT GUARDS, and
 // that is campaign trap 8 committed and then caught. The (out_len, red_len)
-// plane in experiments/wp8_gemv/plane_cells.txt starts at out_len = 64 and
+// plane in docs/perf/gemv.md#the-body-5-gates starts at out_len = 64 and
 // reported 83 admitted cells with ZERO below 1.00x. Re-running the WP7 audit's
 // parity grid -- which reaches out_len = 1 -- then showed the native arm 3-6%
 // SLOWER at out_len = 1 than it had been before the change. Walking the output
-// axis down (experiments/wp8_gemv/skinny_p{1,2}.csv, out_len 1..64) found 16
+// axis down (docs/perf/gemv.md#the-body-5-gates, out_len 1..64) found 16
 // losing cells, worst 0.891x, every one of them at out_len*batch <= 4096:
 //
 //     out_len*batch   128    512   1024   2048   4096   >= 8192
@@ -502,7 +502,7 @@ inline bool gemv_quick_return(int m, int n, T alpha, T beta) {
 // *** THAT COALESCING PREMISE HOLDS ONLY FOR out_len >= 32, AND THE ORIGINAL
 // *** VERSION OF THIS COMMENT STATED IT UNCONDITIONALLY. It is wrong below the
 // warp width, in two ways that both stop exactly at 32 lanes, both measured
-// with ncu (experiments/wp7_gemv/audit/mechanism.csv):
+// with ncu (docs/perf/gemv.md#the-body-4-gate):
 //
 //   * COALESCING. With the flattening b = gid/out_len, i = gid%out_len a warp
 //     of 32 work-items straddles 32/out_len BATCH ITEMS, whose rows are

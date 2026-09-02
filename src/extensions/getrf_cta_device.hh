@@ -18,7 +18,7 @@
 // ===========================================================================
 // THE PIVOT SEARCH IS AN EXPLICIT SUB-GROUP BUTTERFLY PLUS A 32-SLOT SLM SCAN,
 // AND NOT sycl::reduce_over_group. THREE INDEPENDENT REASONS, ALL MEASURED
-// (experiments/wp6_lu/baseline/, summary_pivot.txt / hole2.csv):
+// (docs/perf/lu.md#the-vendor-baseline-and-saturation, summary_pivot.txt / hole2.csv):
 //
 //   1. THE 48 KB LAUNCH HOLE IS ATTRIBUTABLE TO reduce_over_group ALONE. With a
 //      PAD= knob holding kernel, shape and work-group fixed and moving only the
@@ -65,7 +65,7 @@
 // factorisation, so NO RESIDUAL CAN TELL THEM APART; only the elementwise pivot
 // sequence can. Measured with a matrix built to separate them -- column 0 holding
 // (3 + 0i) in row 0 and (2 + 2i) in row 1, so cabs1 reads 3 vs 4 and the modulus
-// reads 3 vs 2.828 (experiments/wp6_lu/kernels/luverify.cpp's `pivmetric` mode,
+// reads 3 vs 2.828 (docs/perf/lu.md#correctness-findings's `pivmetric` mode,
 // run_pivmetric.sh):
 //
 //     native:cta      ipiv[0] = 2   ==  host LAPACKE_?getrf
@@ -127,7 +127,7 @@
 // work-group -- the search strides rows, the row exchange strides columns, the
 // column scale strides rows, and the rank-1 update strides the whole trailing
 // block. Work-group width DOMINATES this kernel and is NOT inheritable from
-// potrf or geqrf: measured (experiments/wp6_lu/baseline/wg.csv), float n=128
+// potrf or geqrf: measured (docs/perf/lu.md#open-debts), float n=128
 // batch 4096 is 39.72 ms at wg=32 and 4.77 ms at wg=512, an 8.3x spread.
 //
 // BARRIER AUDIT -- every site is at the top level of the k loop, whose trip

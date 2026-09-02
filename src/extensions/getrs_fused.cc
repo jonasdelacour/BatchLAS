@@ -38,7 +38,7 @@
 // AN EARLIER VERSION OF THIS PARAGRAPH ENDED "there is no second factor of two
 // available here", AND THAT IS TRUE ONLY IN THE n = 256..512 BAND. Achieved
 // fraction of 1008 GB/s at nrhs = 1, recomputed per cell from
-// experiments/wp6_perf/bench/grid_cta.csv as
+// docs/perf/lu.md#the-fused-narrow-rhs-getrs as
 // (sizeof(T)*n*n*batch + 2*sizeof(T)*n*nrhs*batch + 4*n*batch) / med_ms:
 //
 //              float   double   cfloat  cdouble
@@ -60,7 +60,7 @@
 //     worst for cdouble, whose block solve is the most expensive per step.
 //
 // AND THE FOLDED PERMUTATION IS THE LARGEST NAMED RESIDUAL AT LARGE n. Priced by
-// rebuilding with the interchange walk removed (experiments/wp6_getrs/proto/
+// rebuilding with the interchange walk removed (docs/perf/lu.md#the-fused-narrow-rhs-getrs
 // noperm.csv, residual column confirms the break took rather than being optimised
 // away): float n=2048 b=32 1.2802 -> 1.1776 ms, i.e. 8.0% of the call; float n=512
 // b=512 3.5%; cdouble n=2048 2.4%. It is the one fully SERIAL part of the kernel --
@@ -88,7 +88,7 @@
 //     contiguous access there.
 //
 // (2) A RESIDENT DIAGONAL BLOCK, NOT PURE STREAMING, AND THE MARGIN IS LARGE.
-//     Both were built and measured (experiments/wp6_getrs/proto/grid_nv.csv).
+//     Both were built and measured (docs/perf/lu.md#the-fused-narrow-rhs-getrs).
 //     Pure streaming pays a WORK-GROUP BARRIER PER COLUMN; the blocked form pays
 //     one per BLOCK and runs the nb-step recurrence inside ONE SUB-GROUP with
 //     shuffles. float n=512 nrhs=1 batch=512: streaming 1.0102 ms, blocked
@@ -153,7 +153,7 @@ using namespace batchlas::sycl_device;
 // the block solve is a sub-group shuffle recurrence with lane i owning row i.
 //
 // Measured at float nrhs=1 (ms, lower is better), tuning sweep in
-// experiments/wp6_getrs/proto/tune.sh:
+// docs/perf/lu.md#the-fused-narrow-rhs-getrs:
 //     n=64  b=8192 : nb 8 0.1825  nb 16 0.1786  nb 32 0.1947
 //     n=128 b=4096 : nb 8 0.3491  nb 16 0.3404  nb 32 0.3431
 //     n=512 b=512  : nb 8 0.6605  nb 16 0.6485  nb 32 0.6508
@@ -177,7 +177,7 @@ inline int getrs_fused_nb(int n) {
 // left as an unmeasured claim. Both spellings were timed ON THE TRANSPOSED PATH
 // -- the only one whose recurrence can care; timing NoTrans would have reported
 // 1.00x and proved nothing -- through the public API, vendor-free, pinned
-// native:cta, at saturating batch (experiments/wp6_getrs/pad_ab.sh; ms, pad vs no
+// native:cta, at saturating batch (docs/perf/lu.md#the-fused-narrow-rhs-getrs; ms, pad vs no
 // pad):
 //     float   n=512 nrhs=1  0.7245 / 0.7091     n=512 nrhs=8  1.6135 / 1.6200
 //     float   n=2048 nrhs=1 1.2946 / 1.2904     n=2048 nrhs=8 3.5526 / 3.5636
@@ -224,7 +224,7 @@ inline int getrs_fused_blk_ld(int nb) { return nb + 1; }
 // parameter, `trans` is computed there from transA), so charging a kernel for a
 // different kernel's registers was never necessary. It cost real time in exactly
 // the regime the wg rule exists for -- see the A/B in
-// experiments/wp6_perf/regcap/README.md.
+// docs/perf/lu.md#the-fused-narrow-rhs-getrs.
 //
 // MEASURED with scripts/register_probe.sh on batchlas_extensions_factorization,
 // ZERO SPILL on all 528 entry functions of that library (32 of them are these
@@ -288,7 +288,7 @@ constexpr int getrs_fused_regs_for(int nrhs, bool trans) {
 
 // The work-group width, ~ n/2 clamped to [64, 1024], then capped by the register
 // gate above. Measured (float, nrhs=1, ms at the best nb of each row,
-// experiments/wp6_getrs/proto/tune.sh):
+// docs/perf/lu.md#the-fused-narrow-rhs-getrs):
 //     n=64   b=8192 : wg 32 0.1916  wg 64 0.1786  wg 128 0.2032
 //     n=128  b=4096 : wg 64 0.3457  wg 128 0.3404  wg 256 0.4012
 //     n=512  b=512  : wg 128 0.6955 wg 256 0.6485  wg 512 0.7504

@@ -44,7 +44,7 @@
 //           (SetPrepare below) and minibench's own two warmup batches.
 //
 // Event timing is deliberately NOT installed. bench::make_event_timed_kernel_ms
-// costs a recorded ~0.36 ms per call (VENDOR_INDEPENDENCE_PLAN.md:1702); cell L's
+// costs a recorded ~0.36 ms per call (docs/perf/spmm.md#measurement-harness-and-hygiene); cell L's
 // ideal-traffic roof is 22.9 us, so event timing would be 15x the thing measured.
 // With no timed-kernel hook installed, minibench's structured path escalates K
 // until one batch exceeds 1 ms (include/batchlas/util/minibench.hh:353-368) and
@@ -316,7 +316,7 @@ void run_spmm(minibench::State& state) {
         // in CALLS and the thing being warmed is measured in MILLISECONDS.
         //
         // The SM clock on this box idles at 210 MHz against a measured 2805 MHz
-        // ceiling. experiments/sparse_spmm/probe/order_probe.sh shows what that
+        // ceiling. docs/perf/spmm.md#measurement-harness-and-hygiene shows what that
         // costs: with minibench's default 2 warm-up calls the FIRST row of a
         // process reads 0.1654 ms with rel_sd 0.0495, while the SECOND row of the
         // same process reads 0.1620 ms with rel_sd 0.0019 -- and 250 warm-up

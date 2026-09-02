@@ -18,7 +18,7 @@
 //
 // A LAPACK-faithful interchange walk is HALF of a composed solve. Measured by a
 // deliberate break (BREAK=laswp, float n=128 nrhs=128 batch=256,
-// experiments/wp6_lu/baseline/): getrs_trsm 0.4456 -> 0.2252 ms without the row
+// docs/perf/lu.md#the-vendor-baseline-and-saturation): getrs_trsm 0.4456 -> 0.2252 ms without the row
 // exchange (49%), getri_trsm 0.4580 -> 0.2251 ms (51%).
 //
 // The cause is structural, not a bad kernel. ipiv is a SEQUENCE of transpositions
@@ -38,7 +38,7 @@
 // WHAT IT COSTS THE SHIPPED getrf, MEASURED, AND IT IS THE SINGLE BIGGEST
 // REMAINING LEVER IN WP6. Priced by disabling both of the blocked driver's
 // interchange passes (a TIMING-ONLY break -- the answers are wrong by
-// construction; experiments/wp6_lu/kernels/break.py's getrf_nolaswp_left /
+// construction; docs/perf/lu.md#the-laswp-gather's getrf_nolaswp_left /
 // _right, laswp_cost.txt), vendor-free build, saturating batch:
 //
 //     type     n(batch)   with laswp   without   laswp share
@@ -102,7 +102,7 @@
 //
 // THE 32 B SECTOR IS THE UNIT, MEASURED, NOT THE 128 B LINE -- and that fixes
 // every crossover below. ncu on the FIRST (S-right) launch at float n=512,
-// ncols=480, ib=32, batch=8 (experiments/wp8_getrf/ncu_float512.txt, profiled
+// ncols=480, ib=32, batch=8 (docs/perf/lu.md#the-laswp-gather, profiled
 // through getrfab_v because ncu refuses the vendor-free binaries on this box):
 //     element touches   480*8*32*2 = 245,760
 //     ld sectors        249,600    = 1.016 per touch

@@ -18,7 +18,7 @@
 // vendor-PRESENT build is unchanged because preferred() is all-false. NOTE that
 // the native arm is a CROSSOVER ON nrhs rather than a flat loss: geomean 0.32x at
 // nrhs=1 rising monotonically to 1.36x at nrhs=128
-// (experiments/wp6_lu/bench/README.md).
+// (docs/perf/lu.md#the-vendor-baseline-and-saturation).
 //
 // THE SHAPE OF THE OP. getrs against a factored A = P L U is:
 //     NoTrans            : apply P to B, solve L y = Pb (unit lower), solve U x = y
@@ -47,7 +47,7 @@
 //
 // Composed "row permutation + two routed trsm" against cublas?getrsBatched, at
 // saturating batch, in process, against a host oracle
-// (experiments/wp6_lu/baseline/grid_norm.csv, summary.txt):
+// (docs/perf/lu.md#the-vendor-baseline-and-saturation, summary.txt):
 //
 //   nrhs = 1  : GEOMEAN 0.36x over 28 cells (4 types x 7 orders). 25 LOSSES.
 //               n(batch)   float double cfloat cdouble
@@ -234,7 +234,7 @@ Event getrs_blocked_dispatch(Queue& ctx,
 // and never a correctness one, which is what makes
 // LuTest.GetrsPermutationSpellingsAgreeBitForBit a meaningful assertion.
 //
-// SET FROM THE A/B IN experiments/wp8_getrs/, per cell, not from an inequality;
+// SET FROM THE A/B IN docs/perf/lu.md#getrs-collapsed-permutation, per cell, not from an inequality;
 // the table is in src/extensions/getrs_native.cc's header note. It is a
 // PER-CALL boundary on B.cols() and buys no workspace at either side of itself:
 // the gather is in place.
@@ -298,7 +298,7 @@ int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs);
 //
 // MEASURED, prototype, vendor-free build, saturating batch, interleaved in one
 // process against BOTH the composed tier and cublas?getrsBatched
-// (experiments/wp6_getrs/proto/grid_nv.csv, grid_big.csv):
+// (docs/perf/lu.md#the-fused-narrow-rhs-getrs, grid_big.csv):
 //
 //   nrhs = 1 : GEOMEAN 2.10x over cuBLAS across 15 cells (4 types x n in
 //              {64,128,512,2048}), NO LOSSES, worst 1.24x, best 3.62x; and

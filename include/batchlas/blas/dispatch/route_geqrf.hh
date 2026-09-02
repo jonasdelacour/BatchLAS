@@ -349,7 +349,7 @@ struct RouteTable<Op::geqrf, T> {
     //
     // TWO MEASURED FACTS THAT WILL SHAPE THIS FUNCTION, recorded so they are not
     // re-derived, and NOT encoded as predicates because there is no kernel to
-    // predicate on yet (experiments/wp5_qr/baseline/README.md):
+    // predicate on yet (docs/perf/qr.md#the-vendor-baseline):
     //   * The absolute target is the ms column of the baseline table, not its
     //     GFLOP/s column: cuBLAS geqrfBatched is latency-bound and nowhere near
     //     saturated at n >= 512 (float n=2048: 21361 ms at b=32, 23151 ms at
@@ -385,7 +385,7 @@ struct RouteTable<Op::geqrf, T> {
     // THE MEASUREMENT. Two independent sweeps agree, and the second is the one
     // that matters because it is an A/B of the SHIPPED DEFAULT.
     //
-    // (a) experiments/wp5_qr/bench/tier_summary.txt -- square m == n, batch
+    // (a) docs/perf/qr.md#cta-vs-blocked-crossover -- square m == n, batch
     //     4096-8192, BOTH arms pinned and every pin verified to have taken (20 of
     //     44 cells in that sweep had a `cta` pin silently resolve to blocked and
     //     are excluded). Column is blocked_ms/cta_ms, so > 1 means CTA ahead:
@@ -433,7 +433,7 @@ struct RouteTable<Op::geqrf, T> {
     // ONLY; a tall skinny panel (m=512, n=32, float) is CTA-eligible and is NOT
     // covered by a measured cell. It is left on CTA deliberately -- fewer
     // reflectors, one kernel, no trailing GEMM -- and that is the open question
-    // recorded in experiments/wp5_qr/README.md rather than a claim.
+    // recorded in docs/perf/qr.md#open-debts rather than a claim.
     //
     // NOT A CORRECTNESS GATE. Everything here is "the other native route is
     // faster". Both arms remain fully supported() at every shape below, which is

@@ -486,7 +486,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         // operands the unpredicated path can use goes to the 64-accumulator
         // kernel. It beats the whole 128x32/128x64 family by 69-97% on every
         // shape in this bucket and lands at 88-102% of cuBLAS; see
-        // experiments/sycl_vs_cuda/FINDINGS.md.
+        // docs/perf/gemm.md#the-128x128-float-kernel.
         //
         // This used to be gated on the fast path rather than on shape alone,
         // with the note: "the kernel's predicated path is correct for ragged
@@ -515,7 +515,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         //
         // Scope, deliberately narrow: only the GENERIC leg changes. The
         // aligned leg below is a different tuned route and was never in the
-        // measurement, so it stays. See experiments/wp2_e4/.
+        // measurement, so it stays. See docs/perf/gemm.md#float-nn-at-max_dim-32.
         if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
             return KernelVariant::Tiled128x128RegisterK8;
         }
@@ -551,7 +551,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         //   128x128x8     b512         0.074 -> 0.030 ms  2.43x
         // This also subsumes the ld%4 != 0 cliff (pad 1: 1.874 -> 1.003 ms),
         // because this branch does not consult the alignment predicate at all.
-        // See experiments/wp4_gemm_ld/routing/.
+        // See docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix.
         //
         // EVERY BOUND BELOW HAS A MEASURED COUNTEREXAMPLE. Do not round them.
         //  * mn_min >= 64 : m=32 is a wash-to-loss (32x1024x32 0.97x).
@@ -611,7 +611,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     // double is small on purpose: FP64 on a 4090 is 1/64 of FP32, the ceiling
     // is ~1.44 TFLOP/s, and Tiled16 already reaches 92% of it. Do not read the
     // double row as a win for the tile design; it is not, on this part.
-    // See experiments/wide_scalar_gemm/measure/.
+    // See docs/perf/gemm.md#the-wide-scalar-kernel.
     //
     // Two gates, both deliberate and both conservative:
     //   * The unpredicated path only, exactly like the 128x128 float kernel
@@ -661,7 +661,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     // It is measured in a regime these call sites never enter: every shape this
     // relaxation newly captures runs at batch 1-8, and there the wide kernel
     // LOSES in 12 of 12 measured cells -- cfloat 0.60-0.80x, cdouble as bad as
-    // 0.17x, a 5.7x regression. See experiments/wp4_complex/README.md.
+    // 0.17x, a 5.7x regression. See docs/perf/gemm.md#the-cta-count-gate-for-complex.
     //
     // THE GATE IS A CTA COUNT, BECAUSE THAT IS WHAT THE CROSSOVER TRACKS.
     // A 180-cell ladder over batch 1..256 x 5 shapes x 2 types shows the
@@ -718,7 +718,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         // the entire window preferred() accepts for double where the native
         // route lost to cuBLAS (0.92-0.96x at batch 4096). Picking Tiled16
         // there turns it into a 1.15-1.23x win, so the whole double window is
-        // now a native win from n=4 to n=512. See WP2_GEMM_SPEC.md E3.
+        // now a native win from n=4 to n=512. See docs/perf/gemm.md#evidence-for-each-boundary E3.
         //
         // 24 rather than 25 because 25 is inside the run-to-run spread and a
         // boundary should sit where the evidence is unambiguous.
@@ -874,7 +874,7 @@ Event gemm_custom(Queue& ctx,
         // hard limit of 65,536 registers per block: 208 x 512 threads
         // overruns it and complex<double> throws at launch. Non-float goes to
         // Tiled64x64RegisterK16Wide above, whose 4x4 tile fits every scalar.
-        // See WP2_WIDE_SCALAR_GEMM_VERDICT.md section 2.
+        // See docs/perf/gemm.md#the-wide-scalar-kernel section 2.
         if constexpr (std::is_same_v<T, float>) {
             if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
                 if (can_use_128x128_fast_path<T>(A, B, C)) {

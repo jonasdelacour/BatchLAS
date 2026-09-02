@@ -139,7 +139,7 @@ bool geqrf_blocked_available();
 // (src/extensions/ortho.cc:78 is such a caller).
 //
 // It is also what makes the facade's max(native, vendor) safe: every term must
-// be such a rounded figure. WP4_POTRF_SPEC_CORRECTIONS.md states it -- "max(a,b)
+// be such a rounded figure. docs/perf/potrf.md#what-the-spec-got-wrong states it -- "max(a,b)
 // is safe only because both terms come from required_bytes()/allocation_size; do
 // not 'optimise' the layout functions into a hand-summed arithmetic expression".
 //
@@ -218,7 +218,7 @@ std::size_t geqrf_blocked_buffer_size(Queue& ctx,
 // on a call the table had promised.
 //
 // MEASURED STARTING POINT FOR nb, recorded so it is not re-derived and NOT
-// hardcoded anywhere (experiments/wp5_qr/baseline/README.md, summary_nb.txt):
+// hardcoded anywhere (docs/perf/qr.md#the-vendor-baseline, summary_nb.txt):
 // nb = 32 for float/cfloat/cdouble and nb = 16 for double. Do NOT inherit
 // tuning::ormqr_block_size_for_n -- its 16/16/24/48/56 ladder was tuned on
 // CUDA/float only (evaluation/tuning/tune.py:494 takes a single --type per run

@@ -184,7 +184,7 @@ namespace batchlas::sycl_getrf {
 // unhandled throw on a call the table had promised.
 //
 // AND IT MUST COUNT THE PIVOT-SEARCH SCRATCH. Measured
-// (experiments/wp6_lu/baseline/pivotcost.cpp): an explicit SLM tree argmax needs
+// (docs/perf/lu.md#negative-results): an explicit SLM tree argmax needs
 // wg*(sizeof(real) + sizeof(int)) ON TOP OF the tile -- 2040 B at wg 256 for
 // float, 3060 B for cdouble -- and at cdouble n=78 that took the request from
 // 98,608 B to 101,668 B, past this device's 101,376 B hard cap: LAUNCH FAILURE,
@@ -238,7 +238,7 @@ bool getrf_blocked_available();
 // one quantum.
 //
 // It is also what makes the facade's max(native, vendor) safe: every term must be
-// such a rounded figure. WP4_POTRF_SPEC_CORRECTIONS.md states it -- "max(a,b) is
+// such a rounded figure. docs/perf/potrf.md#what-the-spec-got-wrong states it -- "max(a,b) is
 // safe only because both terms come from required_bytes()/allocation_size; do not
 // 'optimise' the layout functions into a hand-summed arithmetic expression". The
 // vendor terms already satisfy it (cublas.cc:1518, :1490; netlib_lapack.cc:1331-1336
@@ -295,7 +295,7 @@ std::size_t getrf_blocked_buffer_size(Queue& ctx,
 // potrf_cta_launch_params discipline again.
 //
 // AND THE WORK-GROUP WIDTH IS NOT INHERITABLE FROM potrf OR geqrf. Measured
-// (experiments/wp6_lu/baseline/wg.csv): float n=128 batch 4096, the unpivoted
+// (docs/perf/lu.md#open-debts): float n=128 batch 4096, the unpivoted
 // reference arm is 39.72 ms at wg=32 and 4.77 ms at wg=512 -- an 8.3x spread. Best
 // wg is 256 at n=64 and 512 at n=128, and the pivoted and unpivoted arms do not
 // always prefer the same width. WP6 must tune wg per (type, n), and whatever it
@@ -496,7 +496,7 @@ Event getrf_panel_factorize(Queue& ctx,
 // WHAT THE PIVOTING WILL COST, measured before any kernel exists so that a
 // disappointing first number can be recognised as expected rather than as a bug.
 //
-// A standalone CTA-resident LU probe (experiments/wp6_lu/baseline/pivotcost.cpp),
+// A standalone CTA-resident LU probe (docs/perf/lu.md#negative-results),
 // whole matrix in local memory at ld = n|1, wg = 256, batch 4096, four arms:
 // nopiv (Doolittle, no search, no swap -- the LOWER BOUND), swaponly, an explicit
 // SLM tree argmax, and reduce_over_group. Ratios against the unpivoted bound:

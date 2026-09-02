@@ -77,7 +77,7 @@ bool orgqr_blocked_available();
 // The measured best is 32 for float/cfloat/cdouble and 16 for double, and the
 // width must stay a multiple of 16 and at least 32 for complex
 // (gemm_kernels.cc:700's min_dim >= 32 wide-scalar gate). Full tables in
-// experiments/wp5_qr/baseline/summary_nb.txt.
+// docs/perf/qr.md#block-width-evidence.
 template <typename T>
 int orgqr_blocked_debug_block_size(Queue& ctx, int m, int n);
 

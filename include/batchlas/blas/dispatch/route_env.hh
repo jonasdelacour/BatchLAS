@@ -134,7 +134,7 @@ inline std::string_view legacy_variable_for(Op op) {
 //
 // and nothing else -- complex is refused outright, and E4 removed float's
 // 128..512 NN window and its entire transposed window because both measured as
-// losses. See WP2_GEMM_SPEC.md and experiments/wp2_e3, wp2_e4, wp2_e6.
+// losses. See docs/perf/gemm.md#evidence-for-each-boundary and docs/perf/gemm.md#the-auto-flip.
 //
 // Two things this flip is NOT. It does not change the vendor-free build at all:
 // there, resolve_route already fell back to any supported native route

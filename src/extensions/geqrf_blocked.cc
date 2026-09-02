@@ -79,7 +79,7 @@
 // strided-batched vendor kernels; WP3 and WP4 both worked around it instead.
 //
 // ---------------------------------------------------------------------------
-// PERFORMANCE, INHERITED AND NOT RE-DERIVED (experiments/wp5_qr/baseline)
+// PERFORMANCE, INHERITED AND NOT RE-DERIVED (docs/perf/qr.md#the-vendor-baseline)
 // ---------------------------------------------------------------------------
 //  * EFFORT GOES TO THE PANEL. Both WY trailing GEMMs summed over all 18 panels
 //    of a real N=1024, nb=56, batch=128 factorisation cost 33.40 ms vendor-free
@@ -142,7 +142,7 @@ inline constexpr Transpose kConjT =
 // throw on a call the route table had promised).
 //
 // MEASURED, and deliberately NOT tuning::ormqr_block_size_for_n
-// (experiments/wp5_qr/baseline/summary_nb.txt). That ladder's 16/16/24/48/56 by
+// (docs/perf/qr.md#block-width-evidence). That ladder's 16/16/24/48/56 by
 // A.rows() was tuned on CUDA/float ONLY -- evaluation/tuning/tune.py:494 takes a
 // single --type for a whole run and the ormqr_blocked space has no type axis --
 // and even in a VENDOR-PRESENT build the shipped width costs double 1.32-1.41x
@@ -453,7 +453,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         // nb * n2. W1 and W2 are private scratch, so any stride the three GEMMs
         // AGREE on is arithmetically fine -- which is why a kernel break that
         // changed it to nb*n2 turned nothing red (recorded in
-        // experiments/wp5_qr/kernels/README.md as a break that did not
+        // docs/perf/qr.md#break-sweeps as a break that did not
         // discriminate, and why). It must nonetheless match what
         // geqrf_blocked_layout reserved, or a later panel walks off the end of
         // the allocation: n2 SHRINKS as j0 advances, so a per-panel stride would

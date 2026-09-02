@@ -209,7 +209,7 @@ enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, Default
 // preferred() no longer claims either. This costs a vendor-free build nothing --
 // resolve_route still falls back to any supported native route when there is no
 // vendor -- so the divergence is a pure vendor-present improvement.
-// Numbers and conditions in experiments/wp2_e4/.
+// Numbers and conditions in docs/perf/gemm.md#float-nn-at-max_dim-32.
 template <typename T>
 Divergence classify_divergence(const char* env, const OpShape& s,
                                bool old_native, bool new_native) {
@@ -311,7 +311,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         EXPECT_EQ(default_flipped, 0u)
             << "complex must not route native by default: preferred() refuses it, "
                "and the register ladder for complex needs min_dim >= 256 and an "
-               "aligned NN shape (see WP2_GEMM_SPEC.md)";
+               "aligned NN shape (see docs/perf/gemm.md#evidence-for-each-boundary)";
     } else {
         EXPECT_GT(default_flipped, 0u)
             << "grid no longer reaches the WP2 E6 default flip for " << type_name

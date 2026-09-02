@@ -21,7 +21,7 @@
 //   * THE VENDOR IS NOT A VALID PIVOT ORACLE EVEN WHERE IT EXISTS.
 //     cublas{C,Z}getrfBatched selects its pivot on the MODULUS; LAPACK, netlib
 //     and this kernel select on cabs1 = |Re| + |Im| (WP6's measured finding,
-//     experiments/wp6_lu/kernels/README.md section 3). On a matrix built to
+//     docs/perf/lu.md#correctness-findings section 3). On a matrix built to
 //     separate the two rules the vendor and the host DISAGREE, for both complex
 //     types. An elementwise native-vs-vendor pivot comparison is therefore a
 //     WRONG test, and PivotSelectionUsesCabs1AndNotTheModulus below is what pins
@@ -71,8 +71,8 @@
 // (L0b plus the F-series, fourteen breaks) and then the original WP6 one (L0
 // through L15, fourteen breaks). They are separate because they corrupt separate
 // files -- src/extensions/getrs_fused.cc against src/extensions/getrf_*.cc -- and
-// because their tooling is separate: experiments/wp6_getrs/tests/ against
-// experiments/wp6_lu/tests/.
+// because their tooling is separate: docs/perf/lu.md#correctness-findings against
+// docs/perf/lu.md#blind-guards-and-what-made-them-blind.
 //
 // THE FUSED NARROW-RHS GETRS TIER (src/extensions/getrs_fused.cc) IS THE SECOND
 // NATIVE getrs ARM and it is what a vendor-free build now takes at every width
@@ -3366,7 +3366,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
         // IT REPLACES. It used to read is_vendor at nrhs = 1, and it was right to:
         // preferred() was all-false, WP6 shipped route-neutral, and the assertion
         // existed to catch a window landing without a grid. The grid landed
-        // (experiments/wp6_perf/bench/, 488 cells over six sweeps), so the window
+        // (docs/perf/lu.md#getrs-fused-window-evidence, 488 cells over six sweeps), so the window
         // did, and the guard is rewritten around the window rather than deleted --
         // BOTH sides of it, because an assertion that only pins the inside cannot
         // fail when someone widens the clause.
@@ -3516,7 +3516,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 // SIXTEEN guarded properties, each corrupted at its source, the .so REBUILT,
 // and the whole binary re-run. FIFTEEN of the sixteen went RED; the one that did
 // not is a finding rather than a gap. Tooling:
-// experiments/wp6_getrs/tests/ (break.py, break2.py, runbreak.sh).
+// docs/perf/lu.md#correctness-findings (break.py, break2.py, runbreak.sh).
 //
 // COUNT THE ROWS, NOT THIS SENTENCE. An earlier version of this paragraph said
 // "fourteen ... thirteen of the fourteen" over a table that already had sixteen
@@ -3688,7 +3688,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 // because a corrupted kernel can take the process down and a single run then
 // reports nothing about the three types that never executed (`short_final` and
 // `piv_stride_nb` both abort). Tooling and raw output:
-// experiments/wp6_lu/tests/break.py, run_break.sh, breaks.txt, break_*.txt.
+// docs/perf/lu.md#blind-guards-and-what-made-them-blind, run_break.sh, breaks.txt, break_*.txt.
 //
 // | break              | property corrupted                          | outcome
 // |--------------------|---------------------------------------------|--------

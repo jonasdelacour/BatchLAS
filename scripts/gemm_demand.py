@@ -59,7 +59,7 @@ def preferred(t, m, n, k, batch, tA, tB):
     if t == "float":
         # WP2 E4 narrowed float to NN and max_dim <= 32. The transposed window
         # (0.34-0.55x of cuBLAS) and the 128..512 NN window (0.40-0.98x) were
-        # both measured losses; see experiments/wp2_e4/.
+        # both measured losses; see docs/perf/gemm.md#float-nn-at-max_dim-32.
         if tA != NOTRANS or tB != NOTRANS:
             return False
         return mx <= 32

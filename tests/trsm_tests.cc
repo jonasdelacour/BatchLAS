@@ -407,7 +407,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
 }  // namespace
 
 // The full canonical cross product: BOTH sides x uplo x transA x diag = 16
-// cells per scalar type. This is the table WP3_TRSM_SPEC.md section 2.1 folds
+// cells per scalar type. This is the table docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold section 2.1 folds
 // into one recurrence, and folding it wrongly is the failure mode the whole
 // design is exposed to.
 TEST(TrsmNativeCta, CanonicalCrossProductFloat) {
@@ -869,7 +869,7 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
 // WORKED and was REJECTED: it passes the register gate at N=128 in 106
 // registers -- fewer than V1 needs for N=32 -- and then measures 0.39x at order
 // 64 and 0.80x at order 128 against the V1-plus-blocking schedule it replaced,
-// with no gain at all at 256 and 512. See experiments/wp3_s14/README.md.
+// with no gain at all at 256 and 512. See docs/perf/trsm.md#rejected-the-cooperative-cta-solve-v3.
 //
 // The tests outgrew the kernel. They are kept because nothing else covered
 // float / Side::Left at this density of orders, and every one of them exercises

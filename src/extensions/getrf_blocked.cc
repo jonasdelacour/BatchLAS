@@ -44,7 +44,7 @@
 // SUB-VIEWS ARE BUILT EXPLICITLY, 6-ARG, WITH THE PARENT ld AND stride AND
 // batch, and NEVER with operator()(Slice, Slice) -- which propagates the PARENT
 // pointer array (matrix.hh:1140, a known open bug, deliberately untouched:
-// WP4_POTRF_SPEC_CORRECTIONS.md:1126). The constructor also DEFAULTS stride to
+// docs/perf/potrf.md#what-the-spec-got-wrong:1126). The constructor also DEFAULTS stride to
 // ld*cols when 0 is passed (matrix.cc:1839-1842), so passing (ptr, ld, stride)
 // explicitly is what removes both traps.
 //
@@ -55,7 +55,7 @@
 //
 // ===========================================================================
 // WHAT THE TRAILING GEMM WILL GET, measured at the REAL batch and stride
-// (experiments/wp6_lu/baseline/routeq_lu_*.csv), because a probe that shrinks
+// (docs/perf/lu.md#the-vendor-baseline-and-saturationrouteq_lu_*.csv), because a probe that shrinks
 // the batch to save memory cannot ask this question -- gemm_kernels.cc:695-707's
 // CTA-count gate multiplies by A.batch_size() and
 // can_use_64x64_k16_wide_fast_path reads data_ptr(), ld() AND stride(). For this

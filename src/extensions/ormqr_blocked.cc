@@ -103,7 +103,7 @@ inline WyPin wy_pin() {
 // predicate is where to re-measure.
 //
 // ib <= 64 predates all of the above and stays: past it the tile kernel
-// measured 0.83x-0.97x in float (see experiments/TRMM_SYRK_BATCHED_KERNELS.md),
+// measured 0.83x-0.97x in float (see docs/perf/qr.md#ormqr-wy-trmm-gate),
 // and every block size syev uses is inside that anyway.
 template <Backend B, typename T>
 inline bool wy_trmm_applicable(int ib) {

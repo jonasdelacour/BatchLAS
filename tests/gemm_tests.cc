@@ -338,7 +338,7 @@ TEST(GemmDispatchPolicyTest, Selects128x128K8ForPaddedLeadingDimensionFloatNN) {
 //
 // This is the shape class that matters most for it, too: a panel is a sub-view
 // carrying its parent's leading dimension, so unaligned ld is what BatchLAS's
-// own factorisations hand to gemm. See experiments/wp2_e4/.
+// own factorisations hand to gemm. See docs/perf/gemm.md#float-nn-at-max_dim-32.
 TEST(GemmDispatchPolicyTest, SelectsPredicated128x128ForUnalignedLeadingDimensionFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 258),
               batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
@@ -2229,7 +2229,7 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
         // reachable only through Tiled64x64RegisterK16Wide, which requires
         // min_dim >= 256 and an aligned NN shape; widening preferred() without
         // that gate firing routes complex to Tiled16, measured 3.2-7.1x slower
-        // than cuBLAS. See WP2_GEMM_SPEC.md.
+        // than cuBLAS. See docs/perf/gemm.md#evidence-for-each-boundary.
         EXPECT_TRUE(batchlas::dispatch::is_vendor(
             route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
     } else if constexpr (std::is_same_v<ScalarType, float>) {
@@ -2241,7 +2241,7 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
         // window. Both are asserted here in their NEW direction, so the change
         // is pinned rather than merely absent -- a removed assertion cannot
         // detect a silent revert. Measured 0.40-0.98x (NN) and 0.34-0.55x
-        // (transposed) of cuBLAS; see experiments/wp2_e4/.
+        // (transposed) of cuBLAS; see docs/perf/gemm.md#float-nn-at-max_dim-32.
         EXPECT_TRUE(batchlas::dispatch::is_vendor(
             route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
         EXPECT_TRUE(batchlas::dispatch::is_vendor(

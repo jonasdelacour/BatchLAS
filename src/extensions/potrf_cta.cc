@@ -13,13 +13,13 @@
 // ---------------------------------------------------------------------------
 // W10 RESOLVED -- Scope is DERIVED, never asserted
 // ---------------------------------------------------------------------------
-// WP4_POTRF_SPEC.md:225 says the blocked leaf runs "at Scope::SubGroup with G
+// docs/perf/potrf.md#what-the-spec-got-wrong:225 says the blocked leaf runs "at Scope::SubGroup with G
 // matrices per work-group". Its own L ladder at :189-195 contradicts that for
 // float: at the spec's outer width NB_o = 64 the first trailing update has
 // Ntiles_0 = 78 > 64, so the ladder returns L = 64, hence G = 1, hence
 // Scope::WorkGroup. Obeying :225 there would make the four phase barriers
 // sub-group barriers across a 64-work-item matrix -- two sub-groups on one tile
-// with nothing between them, i.e. exactly the race WP4_POTRF_SPEC.md:210 exists
+// with nothing between them, i.e. exactly the race docs/perf/potrf.md#what-the-spec-got-wrong:210 exists
 // to close, producing a plausible wrong factor with no crash.
 //
 // The resolution is structural: potrf_cta_launch_params below COMPUTES the
@@ -30,14 +30,14 @@
 // ---------------------------------------------------------------------------
 // WHAT IS DELIBERATELY NOT HERE
 // ---------------------------------------------------------------------------
-// * No runtime `nb` ladder. WP4_POTRF_SPEC.md:238 has one; NB is a compile-time
+// * No runtime `nb` ladder. docs/perf/potrf.md#what-the-spec-got-wrong:238 has one; NB is a compile-time
 //   constant per scalar type here, so nb == NB always and `ib = min(NB, n-j)`
 //   carries the ragged last panel. A runtime nb is a TUNING knob and nothing
 //   about potrf has been measured; adding a knob whose settings are unmeasured
 //   multiplies the instantiation count of a device-link-bound build for a
 //   hypothesis. The falsification set for step 1.7 is (float NB = 32) and
 //   (complex<double> TS = 4), both one-line changes here.
-// * No `BATCHLAS_POTRF_UPDATE=herk` oracle swap (WP4_POTRF_SPEC.md:2.5). The
+// * No `BATCHLAS_POTRF_UPDATE=herk` oracle swap (docs/perf/potrf.md#what-the-spec-got-wrong:2.5). The
 //   tests' oracle is a host multiply-back residual, which is independent of
 //   every other implementation in this tree; a device::herk A/B would compare
 //   the kernel against another BatchLAS path.
@@ -82,7 +82,7 @@ using potrf_native::PotrfScope;
 // and not a sum, because (P2)'s x[] and (P3)'s acc[]/va[]/vb[] live ranges are
 // disjoint. That prediction did not set this table; the register probe did
 // (scripts/register_probe.sh's mechanism replayed on THIS library by
-// experiments/wp4_potrf/regbaseline/regprobe_any.sh -- the stock script
+// docs/perf/potrf.md#register-gate -- the stock script
 // hardcodes batchlas_sycl.dir/link.txt, which does not contain this TU and would
 // have reported a clean result for code it never compiled).
 //
@@ -112,7 +112,7 @@ using potrf_native::PotrfScope;
 //     spill, which is exactly why the gate for this kernel is the
 //     three-condition one (frame == 0 AND 0 spill AND regs*WG <= 65536) and not
 //     register_probe.sh's stale two-condition header
-//     (WP3_TRSM_SPEC_CORRECTIONS.md:136-160). Two other explanations were tested
+//     (docs/perf/trsm.md#what-the-spec-got-wrong:136-160). Two other explanations were tested
 //     and REFUTED first: routing fma_acc's by-reference accumulator through a
 //     scalar temporary (this tree's recorded 43% out-parameter spill) gave a
 //     byte-identical report, and dropping double to TS = 2 (acc[2][2] = 32 B)
@@ -258,7 +258,7 @@ constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
 // ---------------------------------------------------------------------------
 // THE 48 KB LAUNCH HOLE, and the pad that steps over it.
 //
-// Measured cold on this box (experiments/wp4_potrf/slm/scan_hole_boundary.csv):
+// Measured cold on this box (docs/perf/potrf.md#the-48-kb-launch-hole):
 // a dynamic local-memory request in (49152 - static_shared, 49152] fails with
 // CUDA_ERROR_INVALID_VALUE at enqueueKernelLaunch -- too big for CUDA's
 // non-opt-in 48 KB limit once the kernel's static shared is added, not big
@@ -354,7 +354,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     // that by construction rather than by a per-type exception.
     //
     // MEASURED, batch = 4096, gpu_guard, JIT-warmed, native microseconds
-    // (experiments/wp4_potrf/README.md carries the full grid; * marks the pick):
+    // (docs/perf/potrf.md#cta-kernel-measured-against-cusolver carries the full grid; * marks the pick):
     //
     //   float    n= 48  L32 131.9  L64 117.2*  L128 120.8   L256 240.7
     //   float    n= 64  L32 318.2  L64 274.5   L128 242.6*  L256 355.5
@@ -378,7 +378,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     // (route_potrf.hh), so in a vendor-present build nothing routes here at all.
     // It is the vendor-free build -- the build this work package exists for --
     // that gets the 1.2-1.3x, and that build is still LOSING to cuSOLVER above
-    // n ~ 64 by 2-3x. See the honest table in experiments/wp4_potrf/README.md:
+    // n ~ 64 by 2-3x. See the honest table in docs/perf/potrf.md#cta-kernel-measured-against-cusolver:
     // this is a real improvement to a kernel that is still far from good.
     {
         const long long work_elems = Ntiles_0 * static_cast<long long>(TS) * TS;

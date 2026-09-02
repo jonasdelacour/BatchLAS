@@ -33,7 +33,7 @@
 // ---------------------------------------------------------------------------
 // WHAT A RESIDUAL TEST CANNOT SEE, AND WHY THIS FILE HAS THREE MORE ORACLES
 // ---------------------------------------------------------------------------
-// WP5's kernel break K3 (experiments/wp5_qr/kernels/breaks_kernel.txt) replaced
+// WP5's kernel break K3 (docs/perf/qr.md#break-sweeps) replaced
 // LAPACK's real-beta larfg convention with internal::larfg's phase-preserving
 // one. THE QR, ORTHOGONALITY AND EXPLICIT-Q RESIDUALS ALL STAYED GREEN for every
 // type: a phase-preserving factorisation is a perfectly good QR, it is just not
@@ -887,7 +887,7 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
 // half had nothing.
 //
 // AND A RESIDUAL TEST CANNOT COVER IT. This is measured, not asserted: kernel
-// break K3 (experiments/wp5_qr/kernels/README.md 4b) flipped LAPACK's sign
+// break K3 (docs/perf/qr.md#break-sweeps 4b) flipped LAPACK's sign
 // choice in geqrf_larfg_scalars to `beta_s = (alphr >= 0) ? nrm : -nrm` and
 // left qr, orth and qrQ GREEN FOR EVERY TYPE. The factorisation stays
 // mathematically exact -- it is a different, equally valid QR -- so every
@@ -1096,7 +1096,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
 // |alpha - beta| > 2e323, i.e. alpha - beta must itself have overflowed to inf,
 // which needs input at ~1e308. There vfactor becomes inf and v becomes exactly
 // zero -- finite, but not a correct reflector. That is an open question recorded
-// in experiments/wp5_qr/README.md, not a property this test claims to hold.
+// in docs/perf/qr.md#open-debts, not a property this test claims to hold.
 // ===========================================================================
 TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
     using T = typename TestFixture::T;
@@ -1383,7 +1383,7 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
 // vendor-free walk used to return the FIRST supported native route, full stop.
 // supports() admits CTA anywhere the tile fits SLM -- square n <= 155 for float,
 // n <= 110 for double on this box -- while the tier sweep
-// (experiments/wp5_qr/bench/tier_summary.txt) measures the blocked driver AHEAD
+// (docs/perf/qr.md#cta-vs-blocked-crossover) measures the blocked driver AHEAD
 // of CTA from n ~= 104 (float) and n ~= 48 (double). So a vendor-free build,
 // with nothing pinned, took a route 1.37x-1.43x slower than the other native
 // tier in the same build. RouteTable::native_tier_preferred is the fix and this
