@@ -358,7 +358,7 @@ bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes) {
 // layout rather than written as a literal, because the facade's
 // max(native, vendor) is safe only when every term is an allocation_size /
 // required_bytes figure (mempool.hh:52-58, and
-// WP4_POTRF_SPEC_CORRECTIONS.md's note on it). An empty sequence's required
+// docs/perf/potrf.md's note on it). An empty sequence's required
 // figure happens to be 0; a later term added here must arrive through the same
 // replay.
 //

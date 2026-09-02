@@ -160,7 +160,7 @@ inline bool gemm_use_cublasdx_custom(const Queue& ctx,
 // Everything below turns the views + the environment into the two pure inputs
 // dispatch::resolve_gemm_route() wants, and nothing else. The decision itself
 // now lives in include/batchlas/blas/dispatch/route_gemm.hh, split three ways
-// (env read / correctness / measured window) per WP0_DISPATCH_SPEC.md S4, and
+// (env read / correctness / measured window) per docs/design/vendor-independence.md S4, and
 // is proven route-identical to the code this replaces by
 // tests/route_gemm_equivalence_tests.cc.
 //

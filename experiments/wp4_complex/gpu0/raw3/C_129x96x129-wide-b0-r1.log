@@ -1,4 +1,0 @@
-[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Iter        Avg(ms)     Std(ms)     GFLOPS      Time (µs) / matrix[0m
-[1m(BM_GEMM_FIXED128<std::complex<float>, batchlas::Backend::CUDA>)[0m129     96      129     1024    200         0.65501     0.015977    4995.0      0.63966     
-[1m(BM_GEMM_FIXED128<std::complex<double>, batchlas::Backend::CUDA>)[0m129     96      129     1024    15          21.334      0.21673     153.36      20.834      
-gpu_guard_ctx: GPU 0 had only idle foreign contexts [1697188 ] for the whole run (SM clock 210 MHz at start, util now 100%)

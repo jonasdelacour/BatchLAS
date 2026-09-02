@@ -514,7 +514,7 @@ struct RouteTable<Op::getrf, T> {
     // ---- native_tier_preferred IS DECLARED, AND IT IS MEASURED ------------
     // The scaffolding left this hook deliberately ABSENT, on the ground that
     // "declaring an unmeasured window publishes a claim nothing measured".
-    // The tier sweep has now run (docs/perf/lu.md#native-tier-preferred), so the
+    // The tier sweep has now run (docs/perf/lu.md#native_tier_preferred), so the
     // debt is paid rather than carried; the predicate and its numbers are at the
     // bottom of this table. The standard route_geqrf.hh:385-425 sets for
     // "measured" is met: both arms PINNED, EVERY PIN VERIFIED TO HAVE TAKEN by
@@ -542,7 +542,7 @@ struct RouteTable<Op::getrf, T> {
     // resolved route read off every row -- which matters, because the CTA pin is
     // refused above the per-type ceiling and then falls through to automatic(),
     // and four of the sweep's rows did exactly that and are excluded.
-    // docs/perf/lu.md#native-tier-preferred and run_tier.sh. Ratio is
+    // docs/perf/lu.md#native_tier_preferred and run_tier.sh. Ratio is
     // blocked_ms / cta_ms, so > 1 means CTA is ahead:
     //
     //   float    n=64(8192) 1.74  n=76(8192) 1.48  n=96(8192) 1.49

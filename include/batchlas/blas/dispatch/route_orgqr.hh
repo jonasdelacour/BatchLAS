@@ -10,7 +10,7 @@
 //
 // THE DESIGN DECISION, RECORDED EXPLICITLY BECAUSE THE TABLE ONLY MAKES SENSE
 // WITH IT: orgqr ships as ORMQR APPLIED TO AN IDENTITY, which is what
-// VENDOR_INDEPENDENCE_PLAN.md's WP5 section suggests and what WP5's baseline
+// docs/design/vendor-independence.md's WP5 section suggests and what WP5's baseline
 // experiment MEASURED rather than assumed
 // (docs/perf/qr.md#the-vendor-baseline):
 //

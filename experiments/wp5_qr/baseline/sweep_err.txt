@@ -1,4 +1,0 @@
-gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)
-gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)
-gpu_guard: GPU 1 exclusive for the whole run (SM clock was 2790 MHz at start)
-gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)

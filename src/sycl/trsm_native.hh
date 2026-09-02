@@ -2,7 +2,7 @@
 
 // Native batched TRSM — declarations.
 //
-// See WP3_TRSM_SPEC_CORRECTIONS.md first, then WP3_TRSM_SPEC.md. The spec
+// See docs/perf/trsm.md. The original spec
 // predates WP1 and WP2 and is stale in several places the corrections list;
 // where they disagree the corrections win.
 //

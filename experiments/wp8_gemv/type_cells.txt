@@ -1,9 +1,0 @@
-# The PART D control: identical shape, identical shuffle-instruction count,
-# walked across all four scalar types. red_len 32/64/128/2048 at a
-# DRAM-RESIDENT out_len, plus the two L2-resident cells the record names.
-2048 32 512
-2048 64 512
-2048 128 512
-2048 2048 128
-64 64 512
-128 128 512

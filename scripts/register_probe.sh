@@ -3,7 +3,7 @@
 #
 # WHY THIS SHAPE. Device code here is AOT-compiled to an sm_89 cubin by ptxas at the
 # SHARED-LIBRARY DEVICE LINK, not per translation unit, so `-Xcuda-ptxas -v` on a compile
-# is reported "argument unused" and produces nothing. WP3_TRSM_SPEC.md section 8 step 2
+# is reported "argument unused" and produces nothing. docs/perf/trsm.md section 8 step 2
 # makes register residency a hard gate before any other code is written; this is the
 # recipe that actually satisfies it.
 #
@@ -39,7 +39,7 @@
 # by a couple of registers. Take the max. Grep by mangled name.
 #
 # Verified against WP2's wide-scalar tile, which reproduces
-# WP2_WIDE_SCALAR_GEMM_VERDICT.md's standalone measurements exactly:
+# docs/perf/gemm.md's standalone measurements exactly:
 #   float 56, double 76, complex<float> 80, complex<double> 132, all zero spill.
 #
 # Baseline on this branch with no TRSM code: 43.4 s link, 376 entry functions,

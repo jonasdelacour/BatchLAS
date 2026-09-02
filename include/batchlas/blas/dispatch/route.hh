@@ -27,12 +27,12 @@
 //
 // Deliberately NOT added: a `Backend::SYCL` or an `Origin::SYCL`. Every route in
 // this library is SYCL; naming one of them "SYCL" would carry no information and
-// would collide with the device-family axis. See VENDOR_INDEPENDENCE_PLAN.md §3.1.
+// would collide with the device-family axis. See docs/design/vendor-independence.md §3.1.
 //
 // STATUS: live. This is the only routing vocabulary in the tree. `Provider`,
 // DispatchPolicy and the three dispatch/{provider,env,context}.hh headers are
 // gone; every op that has a routing decision now makes it through a
-// RouteTable<Op, T> and dispatch::resolve_route. See WP0_DISPATCH_SPEC.md S4.
+// RouteTable<Op, T> and dispatch::resolve_route. See docs/design/vendor-independence.md S4.
 
 #include <cstdint>
 #include <string>

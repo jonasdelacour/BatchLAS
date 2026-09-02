@@ -55,7 +55,7 @@
 //
 // ===========================================================================
 // WHAT THE TRAILING GEMM WILL GET, measured at the REAL batch and stride
-// (docs/perf/lu.md#the-vendor-baseline-and-saturationrouteq_lu_*.csv), because a probe that shrinks
+// (docs/perf/lu.md#the-vendor-baseline-and-saturation), because a probe that shrinks
 // the batch to save memory cannot ask this question -- gemm_kernels.cc:695-707's
 // CTA-count gate multiplies by A.batch_size() and
 // can_use_64x64_k16_wide_fast_path reads data_ptr(), ld() AND stride(). For this

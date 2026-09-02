@@ -6,9 +6,9 @@ Measurement context, unless stated otherwise: 2x RTX 4090 (sm_89, 128 SMs, 97,28
 
 **Naming.** `experiments/wp8_getrf/`, `wp8_getri/` and `wp8_getrs/` are a misnomer: they are the **WP6/WP7 performance-closure pass**, not WP8 (WP8 is sparse `spmm`, in `experiments/sparse_spmm/`). This page calls that work "the closure pass" throughout.
 
-## what-ships
+## What ships
 
-### route-arms
+### Route arms
 
 | op | route order (`kGet??Order`) | native arms |
 |---|---|---|
@@ -20,7 +20,7 @@ The blocked `getrf`'s trailing GEMM and panel TRSM, and both solves of `getrs`/`
 
 Capacities are asked of the **runtime** local-memory budget, never of `device_limits.hh` (whose hardcoded 49,152 is 2.06x wrong here). On this box `GetrfShape::cta_max_n` measures **155 / 109 / 109 / 77** for float/double/cfloat/cdouble; `kGetrsFusedMaxRhs = 8` (a build fact, not a device one); `getrf` block width `nb = 32` for every type.
 
-### the-shipped-preferred-windows
+### The shipped `preferred()` windows
 
 Four windows ship. Each is native-vs-**vendor**. `supports()` carries no speed term anywhere: a forced route bypasses `preferred()` but never `supports()`, so a speed gate there would make a pinned route fall through to cuBLAS and pass green over a kernel nothing executed.
 
@@ -69,7 +69,7 @@ The stale sentence survives in more shipped sources than the exploration notes, 
 
 **What clauses A and B actually moved, captured rather than reasoned about** (`route_diff.sh`, before/after with `preferred()` the only difference, `ctest -LE slow` both sides, `wp6_perf/README.md`): in the cuBLAS-present build, **27 decisions** moved `vendor:auto -> native:cta` -- float x18, double x3, cfloat x3, cdouble x3 -- and **`getrs` was the only op touched**, over 3600 decisions in 4012 rows. The vendor-free build moved 14, all at `Backend::AUTO`. A window that changes nothing is the failure mode this instrument exists to catch. [The `getrf`, `getri` and clause-C flips landed in the later closure pass; no equivalent `route_diff.sh` capture for them was found under `experiments/` -- unverified.]
 
-### native-tier-preferred
+### `native_tier_preferred()`
 
 The native-vs-native tie-break, consulted **only** in the vendor-free walk, so declaring it moves nothing in a vendor-present build. That is exactly why it is the right instrument and `preferred()` is not: `preferred()` runs above that walk regardless of `vendor_available`, so a window written to fix the tier choice would also drag vendor-present traffic onto that tier.
 
@@ -86,7 +86,7 @@ The native-vs-native tie-break, consulted **only** in the vendor-free walk, so d
 
 `route_getrs.hh:746` -- CTA (fused) always preferred over Blocked. No crossover to encode: the fused tier is ahead of the composition at **every** cell inside its own capability (51 cells, worst 1.11x at float n=2048 nrhs=8). The column where it would turn is nrhs=16 (double 0.55x, cfloat 0.58x at n=512), and that is outside `supports()` by `kGetrsFusedMaxRhs`. **If that constant is raised, this predicate must gain a window in the same change.** `getri` declares none -- one native arm, no native-vs-native question.
 
-## the-vendor-baseline-and-saturation
+## The vendor baseline and saturation
 
 Every ratio here is against `cublas{S,D,C,Z}getr{f,s,i}Batched`, which -- unlike WP5's `orgqr` -- is genuinely batched and genuinely strong at small `n`. Vendor build, saturating batch (`experiments/wp6_lu/baseline/grid_norm.csv`, 280 cells, none discarded, none flagged BAD):
 
@@ -115,11 +115,11 @@ Individual collapses: `getrf` float n=2048 7.31 -> **2.33x**; `getri` float n=20
 
 **The roofline says which half is closed.** With each arm at its own best batch, cuBLAS runs cdouble `getrf` at 90% and 91% of this card's FP64 peak at n=512-1024 -- there is no 2x to find. For FP32 *both* arms sit at 1-10% of peak, and the cause is a decomposition, not a slow kernel (see [negative-results](#negative-results) item 1).
 
-## measured-boundaries
+## Measured boundaries
 
 Ratio is always `vendor_med / native_med`; > 1 means native wins. The closure pass's acceptance rule (GATE-C) is zero losses **and** zero cells below 1.15 across the admitted set.
 
-### getrf-window-evidence
+### `getrf` window evidence
 
 **Two sources, and they are not the same grid -- an earlier draft of this page ran them together.** The clause is *scored* on `experiments/wp8_getri/lu_c1.csv` (device 1, nothing else on the box, the two arms are two BUILDS run back to back on each cell, 11 reps, median, host oracle per row, foreign compute-process count 0 before and after every cell). Shipped set there: **15 cells, geomean 1.997, min 1.2626, zero losses, zero cells below 1.15** (`summary_c1.txt`: float `order>=256` 9 cells geo 2.009; cfloat `order>=512` 6 cells geo 1.978):
 
@@ -149,7 +149,7 @@ The wider 20-cell grid that the route header transcribes -- the one with a `b256
 
 Reproduction across sources rather than across repeats: 26 cells are common to this clean run and the kernel pass's own device-0 record (a different device, session and binary); median spread 1.0053, worst 1.0311, none above 1.10.
 
-### getri-window-evidence
+### `getri` window evidence
 
 `experiments/wp8_getri/lu_c1.csv` and `lu_p1.csv`, every ratio quoted at the **worse** of the two passes. Shipped set: **30 cells, geomean 4.181, min 1.2028, zero losses, zero cells below 1.15** (`summary_p1c1.txt`), batch spanning 1 to 16,384.
 
@@ -174,7 +174,7 @@ Bracketing non-winners for every wider clause:
 
 **No batch floor, and that is measured rather than assumed.** At batch 1-32 the native driver beats cuBLAS by 1.7x-28x for *every* type at every order measured, because cuBLAS's batched `getri` is a per-item loop there. A floor at 128 -- predicted as necessary -- would have given those away for nothing.
 
-### getrs-fused-window-evidence
+### `getrs` fused window evidence
 
 Clauses A and B, the fused tier, from `experiments/wp6_perf/bench/` (`analyse_window.py`): **461 pooled cells** from seven sweeps, deduplicated on `(type, n, nrhs, batch)`, both arms' routes read from the printed route column on every row, `relsd <= 10%`. Re-running the analyser reproduces every figure below. Note that the *checked-in* `bench/window_summary.txt` is a stale 354-cell run from before the last two sweeps landed and scores C2/C3 at 187/215 cells; the README's table and this one are the current pool.
 
@@ -194,7 +194,7 @@ On WP6's own saturating grid the reversal is complete: nrhs=1 goes from 0.256x (
 
 The **thinnest margin in the window** is cdouble n=32 nrhs=2, whose ladder runs 1.257 / 1.162 / 1.132 / 1.120 / **1.116** at batch 1024 -> 16384. It declines and then flattens rather than falling, so it is a flat win by the rule; it is the only cell of 322 under 1.12x and the first place a re-measurement on another box should look.
 
-### getrs-composition-window-evidence
+### `getrs` composition window evidence
 
 Clause C, the composition, from `experiments/wp8_getrs/cl_*.csv` + `gap_*.csv` scored into `clause_summary.txt`, re-measured on an idle box in `experiments/wp8_getri/lu_c1.csv`. Union: **37 cells, geomean 2.60, min 1.2858, zero losses, zero cells below 1.15** (float `nrhs >= 64`: 22 cells, geomean 3.138, min 1.7695; double `nrhs >= 128`: 15 cells, geomean 1.979, min 1.2858). The earlier 45-cell reading of the same clause is geomean 2.467, min 1.2791.
 
@@ -216,7 +216,7 @@ Refuting cell for every wider clause, so none is rediscovered:
 
 Coverage of the admitted set, stated exactly: 45 cells measured directly on three saturated rungs of each of five orders, two passes each side. A further 58 admitted cells at other rungs are covered by a **bound**, not a measurement: the vendor arm did not move in this pass, and the gather's own A/B has minimum 1.0004 over 80 cells with zero cells below 1.00, so `post_ratio >= walk_ratio` at every admitted cell -- and all 58 already clear 1.15 on the walk ladder (min 1.1933, geomean 2.1616). Zero admitted cells are uncovered by measurement or bound.
 
-## the-laswp-gather
+## The `laswp` gather
 
 The row interchange is the single largest lever in the family, and the closure pass took it twice with the same mechanism.
 
@@ -233,7 +233,7 @@ Confirmed independently by nsys: `LuLaswpKernel` is 44.2% of the best `getrf` ce
 
 **The mechanism.** `ipiv` is a *sequence* of transpositions applied in order, so the only parallelism is over the columns it is applied to, and column-major puts consecutive columns `ld` apart. The k side is free (rows `j0..j0+ib-1` are consecutive, so one line per column serves all `ib` steps); the **p side is the whole cost** -- the `ib` selected rows are scattered over `[j0, n)`. `ncu` settled the unit: **one 32 B sector per 4 B element**, load and store (245,760 element touches -> 249,600 load sectors, 1.016 per touch), not one 128 B line. The line model would have implied 1,130 GB/s, above this device's DRAM peak, i.e. impossible on its face.
 
-### getrf-deferred-left-gather
+### `getrf` deferred left gather
 
 `lu_laswp.hh`'s `lu_laswp_deferred_left_launch`, unconditional and shipped.
 
@@ -245,7 +245,7 @@ Measured against the arm it replaces, interleaved inside one process, 11 reps, m
 
 Against cuBLAS on the same 62-cell grid (batch 128-1024, order 128-2048, all four types) the `getrf` geomean moves **0.839x -> 1.002x**, 20 wins -> 28: float 1.273 -> 1.594, cfloat 0.974 -> 1.271, double 0.629 -> 0.716, cdouble 0.610 -> 0.659. double and cdouble are **not** closed by this and will not be closed by anything short of a register-resident fused panel.
 
-### getrs-collapsed-permutation
+### `getrs` collapsed permutation
 
 `getrs_native.cc`'s `GetrsPermGatherKernel`, default at `nrhs >= kGetrsPermGatherMinNrhs = 16` (`getrs_native.hh:242`). The same collapse, in **local** memory: one work-group per item stages a column tile plus the index array in SLM, reads B coalesced, and writes `B[i] = tile[idxs[i]]` back to B's own addresses. A/B against the walk, interleaved rep by rep inside one process via `BATCHLAS_GETRS_LASWP`, two passes with the worse quoted, both arms' solutions asserted bit-identical on every row:
 
@@ -263,7 +263,7 @@ Admitted set (nrhs >= 16): 80 cells, geomean **1.3191**, min 1.0004, zero cells 
 
 `getri` needs no permutation kernel at all: it writes `F` straight into `C`, each work-item tracing its own row backwards through the interchange list in registers, instead of writing `I` and permuting. Same store count, one kernel, zero workspace -- and that one choice is what moves the `getri` composition's geomean from 0.97x to 1.60x in the baseline survey.
 
-### the-fused-narrow-rhs-getrs
+### The fused narrow-RHS `getrs`
 
 `getrs_fused.cc` -- one work-group per matrix, one launch: permutation + forward substitution against unit-lower L + back substitution against U, no GEMM and no separate laswp. It exists because the composed tier is 0.32x of cuBLAS at nrhs=1 and the loss is structural: `trsm`'s blocked driver amortises a panel over many columns, and one column gives it nothing to amortise. nsys on the composed arm (float n=512 nrhs=1 batch=512, one public call) shows 39.7% of the time in `GemmTiledGeneralKernel<float,16>` -- matrix-*vector* products run through a tile-16 GEMM kernel -- plus 26.4% in the separate `LuLaswpKernel`. The matrix is not resident and cannot be (n=512 float is 1 MB per item); what is resident is the RHS block and one `nb x nb` diagonal block.
 
@@ -286,7 +286,7 @@ DRAM fraction of 1008 GB/s at nrhs=1, per cell:
 
 The original claim "82% of DRAM peak, the ceiling is reached" holds only in the n=256..512 band. Two named mechanisms, both open work rather than a ceiling: at large n the CTA count **is** the batch (32 work-groups on 128 SMs at n=2048); at small n `nb=16` leaves the block solve to 16 lanes of one sub-group.
 
-## negative-results
+## Negative results
 
 Everything here was built or measured and then rejected. Re-deriving any of it is wasted work.
 
@@ -308,7 +308,7 @@ Everything here was built or measured and then rejected. Re-deriving any of it i
 12. **A pin that is refused is not a pin, and it silently becomes the other arm.** The `wp6_perf` sweeps drop rows on exactly this: 21 of `flat`'s 180 cells are `cta PIN-FELL-THROUGH to native:blocked` (every `n=2048` cell at `nrhs=8` for double/cfloat, and `nrhs=4` and `8` for cdouble -- the fused capacity cannot hold them), and the `getrf` tier sweep excludes four rows for the same reason. Any A/B that does not read the resolved route back per arm reports the *same* arm twice and calls it 1.00x. It is the same instrument failure as item 11, one layer down.
 13. **`BATCHLAS_GETRS_ROUTE=native` changed meaning** when CTA joined `kGetrsOrder` ahead of Blocked: a bare origin resolves to the first supported route of that origin, which is now the fused tier. Any baseline recorded with a bare `native` pin -- `experiments/wp6_lu/bench/run_cells.sh:37` and `kernels/run_grid.sh:39` export one value into all three LU variables at once -- is measuring a different `getrs` today than when it was recorded. Pin `native:blocked` to mean what `native` used to mean.
 
-## correctness-findings
+## Correctness findings
 
 * **The `info` zero-fill raced the panel that reads it, in BOTH native `getrf` tiers.** `getf2_panel_device` *reads* `info[b]` to keep first-failure-wins across panels, so the fill is a read-after-write dependence, not a pure output. On an out-of-order queue (the public API) the panel read the caller's pre-call garbage and wrote it back: **6,979 of 1,638,400 items on the CTA tier and 3,743 of 983,040 on the blocked tier returned the caller's own `-12345`**. Fixed with the `if (!ctx.in_order()) ctx.wait();` guard every other dependent boundary in the family already carried; re-measured 0 wrong of 1,638,400 and 0 of 983,040. Guarded by `LuTest.InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue`; deleting the guard from both tiers turns it RED (4,682 of 1,638,400 CTA items, 4,370 of 491,520 blocked items). **The first version of that test stayed green with both guards deleted**, because a 300 MB host copy serialised the queue and closed the window it was testing -- [unverified: the ordinal is this page's own, not the sources'. `tests/potrf_tests.cc:895-908` is recorded as the repository's *fifth*, and `getrs_forward` below as the "sixth-plus"; no source numbers this one] the seventh blind guard in this repository, and the second written in the same change as the fix it guards.
 * **`supports()` never gated on `s.backend`, so `Backend::NETLIB` on a GPU queue could select the native arm.** The native kernels write and read **packed 1-based int32** in the caller's `int64` pivot span (matching cuBLAS and rocSOLVER); netlib writes and reads **genuine int64**. Measured before the gate: `||A*C - I||_F / n = 5.32e-01` with `info == 0`, against 5.15e-07 when both arms agree -- silent, no throw, no flag, and invisible to the suite because its NETLIB rows run on a CPU queue. Now one predicate in each of the three tables, enumerated by the disagreeing backend rather than by an allow-list (so a new GPU backend that packs int32 needs no edit), plus a `RouteLuPivotFormat` test with a **backend axis** -- the axis the route tests did not have. Deleting the predicate from all three tables fires 5 assertions.
@@ -322,7 +322,7 @@ The full break records are at the bottom of `tests/getrf_tests.cc`: fourteen WP6
 
 **Count the rows, not the prose** -- the fused-`getrs` record says so in as many words, because an earlier version of its own summary sentence said "fourteen ... thirteen of the fourteen" over a sixteen-row table. The two properties no break can reach are named rather than averaged away: `cap_band` (the hole band dropped from the capacity query) and `B5` (the `+1` bank-conflict pad, recorded in `getrs_fused.cc` and not in the test file). Two of the five window breaks are findings in the same way: **W3** (the composition also made preferred) turns *nothing* red in `getrf_tests` and RED x2 in `route_vocabulary_tests`, because CTA is first in `kGetrsOrder` and `automatic()` returns the first supported-and-preferred route, so only a direct assertion on `preferred()` can see it; and **W1** (clause A switched off) correctly leaves *float* green, because float `nrhs = 1` is still inside clause B.
 
-### blind-guards-and-what-made-them-blind
+### Blind guards and what made them blind
 
 This repository has a recurring class of guards that cannot fail. LU produced six more.
 
@@ -335,7 +335,7 @@ This repository has a recurring class of guards that cannot fail. LU produced si
 
 Two more results are findings rather than confirmations. `pivot_metric` (cabs1 -> modulus) **turned nothing red on the ordinary sweep** against a `|L| <= 1` oracle: on a random matrix the two selection rules agree at every step, so the elementwise pivot comparison -- the strongest oracle in that harness -- was blind to the metric, and a purpose-built probe matrix was needed. Under the metric-aware oracle it now turns the ordinary complex sweeps red, and it correctly turns nothing red for float and double, where the two functions coincide. And `short_final` (drop the short final panel) is red at n=33 and n=100 and correctly **green at n=64 and n=96** -- it discriminates exactly the short final panel, which is why the order sweep straddles `nb`.
 
-### the-48-kb-launch-hole
+### The 48 KB launch hole
 
 Re-measured from scratch with a `PAD=` knob holding kernel, shape and work-group fixed and moving only the declared byte count, one process per point: **49,024 B PASS / 49,152 B FAIL / 49,280 B PASS**, 5/5 deterministic across five separate processes, at every work-group width (32/64/128/256/512). The control -- the identical shape with an explicit SLM tree at the identical byte count -- launches. The band is wider for wide scalars: the collective also fails at 48,896 B for double and cdouble. Both failure points lie inside the inherited band `(47104, 49664]`, checked rather than assumed. An `n` ladder finds nothing, because the hole is specific byte counts and an `n` ladder steps over them.
 
@@ -343,7 +343,7 @@ Re-measured from scratch with a `PAD=` knob holding kernel, shape and work-group
 
 The shipped `getrf` CTA kernel uses no group collective (only `permute_group_by_xor`, a register shuffle) and **the hole does not reproduce for it**: removing the pad turns the *arithmetic* layer of the test red for every in-band row and every type, and leaves the *launch* layer green -- the 49,152 B resident launch succeeds without the pad. Both layers are `EXPECT`, not `ASSERT`, precisely so the first cannot mask the second. The pad is defensive, kept for the day a group algorithm enters the body (the condition WP4 wrote down and WP5 walked into anyway); the arithmetic assertion is the guard with teeth. The same band and pad target are repeated verbatim in `getrf_cta.cc`, `lu_laswp.hh` and `getrs_native.cc`, so the three cannot drift.
 
-## open-debts
+## Open debts
 
 * **`getrf`'s window has no batch term and was measured only at batch 128-1024.** Below 128 nothing was measured after the gather landed. `getrf_tests`' `RouteTableAndTheVendorFreeFallback` nonetheless asserts `native:blocked` at n=512 **batch=2** for float and cfloat -- a batch the perf grids never measured. The window is applied there on the strength of an order clause alone.
 * **`getri` at `batch <= 32` beats cuBLAS by 1.7x-28x for *every* type**, double and cdouble included, because the vendor's batched `getri` is a per-item loop there. **Unrouted.** A batch clause has to be bracketed at every `(type, order)` it admits, and low batch was measured only at orders 128 and 512. Missing cells, named rather than fitted away: double and cdouble at orders 32, 64, 256, 1024 and 2048, batch 1-64.
@@ -366,7 +366,7 @@ The shipped `getrf` CTA kernel uses no group collective (only `permute_group_by_
 * **A latent vendor gate defect**, recorded not fixed: `cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`, so a cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in `vendor_available.hh`.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`** -- pre-existing, not fixed.
 
-## raw-evidence
+## Raw evidence
 
 Raw data is preserved at the tag `perf-evidence/vendor-independence`. Retrieve any path with `git show perf-evidence/vendor-independence:<path>`. (At the time this page was verified the `experiments/` directories below were still present and tracked in the working tree; the tag is what survives their removal.)
 

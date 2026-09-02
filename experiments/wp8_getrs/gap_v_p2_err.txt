@@ -1,5 +1,0 @@
-    getrs cfloat N n=64 nrhs=128 batch=512 : resid 3.334e-07
-    getrs cfloat N n=64 nrhs=128 batch=1024 : resid 2.767e-07
-    getrs cfloat N n=128 nrhs=128 batch=512 : resid 4.382e-07
-    getrs cfloat N n=256 nrhs=128 batch=512 : resid 4.148e-07
-    getrs cfloat N n=512 nrhs=128 batch=256 : resid 5.656e-07

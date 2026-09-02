@@ -4,9 +4,9 @@ Native batched `trsm`: two SYCL kernels, a routing window measured on an RTX 409
 
 ---
 
-## what-ships
+## What ships
 
-### route-arms
+### Route arms
 
 `kTrsmOrder`, `include/batchlas/blas/dispatch/route_trsm.hh:121-125`, in walk order:
 
@@ -20,7 +20,7 @@ A capability ladder, not a preference: CTA cannot serve order > 32, so the vendo
 
 `supports()` (`route_trsm.hh:134-186`) holds correctness gates only — `is_gpu`, `!heterogeneous_batch` (which trsm's shape builder never populates, so it cannot fire — debt 12), `order >= 1 && q >= 1 && batch >= 1`, per-arm capacity. Nothing type-dependent, no speed number: a threshold in `supports()` makes a vendor-free `trsm` **throw**, not run slower. `Algorithm::Auto` is deliberately unsupported for native, since two native arms mean a bare "native" names neither. Capacities, all four types (`src/sycl/trsm_native.cc:939-942`, `:964-967`): `trsm_cta_max_n<T>() == 32` and `trsm_blocked_available<T>() == true`.
 
-### the-preferred-window-as-implemented
+### The `preferred()` window as implemented
 
 Quoted from `include/batchlas/blas/dispatch/route_trsm.hh:224-325`:
 
@@ -45,18 +45,18 @@ Two windows in the exploration notes are **not** what ships:
 * the notes record `float && Side::Left -> order <= 16` (step 9), then `order <= 128` (step 12), then `order <= 128 || q*batch < 524288` (step 13). The shipped predicate is unconditional `return true`; step 16 deleted the work threshold.
 * spec §10 proposed one `trsm_use_native()` predicate carrying `batch*q < 8*CU*32 -> vendor`. Nothing like it ships — see `### rejected-the-starvation-guard`.
 
-### the-shape-builder-and-the-field-mapping
+### The shape builder and the field mapping
 
 `src/backends/trsm_route.hh` builds `TrsmShape` and is the only place touching the device or the environment (the table must stay pure). The mapping is trmm's, not the spec's, and getting it wrong is silent: `s.m = B.rows()`, `s.n = B.cols()`, `s.k = A.rows() == A.cols() ==` **the triangular order**; `tri_order() == s.k`, `rhs_count() == (side == Left ? s.n : s.m)`. `trsm_op_shape` returns `nullopt` when `A.batch_size() != B.batch_size()` or A is not square — the only place batch disagreement is caught, since `trsm_validate_params` (`functions/trsm.hh:39`) does not compare the two batch counts.
 
-### tuning-knobs-and-environment
+### Tuning knobs and environment
 
 * `BATCHLAS_TRSM_ROUTE` — route override (`cta` / `blocked` / `native` / `vendor`). **`BATCHLAS_TRSM_VARIANT` is read by nothing**; `legacy_variable_for` has no `Op::trsm` case. The spec instructs pinning the native path with that variable, which would pin nothing.
 * `BATCHLAS_TRSM_OUTER_NB` — V2's outer block width; a **tuning** knob, never a routing one (`trsm_native.cc:692-703`). Default 128 for `Side::Left`, `cta_max_n` (32) for `Side::Right`, rounded down to a whole number of CTA blocks. The parse is cached in a function-local static, so the first blocked call in a process fixes it.
 
 ---
 
-## design-v1-v2-and-the-canonical-fold
+## Design: V1, V2 and the canonical fold
 
 **V1** (`Algorithm::CTA`): one work-group per matrix, one work-item per independent solve, the solution vector resident in that thread's registers as `T x[N]`, the canonical triangle staged once into SLM and broadcast (every thread reads the same `Lc(s,t)` at each step, so bank layout is irrelevant). The 24 canonical `(side, uplo, transA, diag)` cases fold into one recurrence via `canonicalise()` (`trsm_native.cc:83`); the index map is `rho(s) = fwd ? s : order-1-s`.
 
@@ -66,7 +66,7 @@ The grid is `batch * ceil(q/WG)`, never batch alone — the guard against this r
 
 **Diagonal-block inversion is rejected at every tier** (spec §2.4, survived the verification pass). The "free for ortho" licence compares a trsm *residual* bound against a CholQR *orthogonality* bound; restated in orthogonality currency the inverted variant contributes at the same order as the existing term with an unbounded constant, and any constant above ~2 flips Chol2 from recovering to not. This retires the plan's Risk 4 for `trsm` rather than measuring it.
 
-### the-register-gate-and-the-cta-capacity
+### The register gate and the CTA capacity
 
 The gate is `stack frame == 0` **AND** `0 spill bytes` **AND** `registers * WG <= 65536`, measured with `scripts/register_probe.sh`, which replays the shared library's `link.txt`. A per-TU `-Xcuda-ptxas -v` is reported "argument unused" — device code is AOT-compiled to a cubin at the *shared-library device link* — so grepping such a log for "spill" finds nothing and reads as "no spill". That is a phantom measurement whichever gate you use.
 
@@ -79,7 +79,7 @@ The gate is `stack frame == 0` **AND** `0 spill bytes` **AND** `registers * WG <
 
 Zero frame and zero spill in all 24 kernels (4 types x 3 buckets x 2 sides). N=64 fails: float 119 regs / **256 B frame**, double 145 regs / **512 B frame**, both with **zero spill**. 256 B is 64 floats and 512 B is 64 doubles — `x[]` itself in local memory, which voids V1's entire thesis. **Read the frame column, not the spill column**: a spill-only check passes N=64 while the design is void. The spec's "256 B/thread register cliff" is falsified (`gemm_kernels.cc:869-876`: an 8x8 double tile at 208 registers, `complex<float>` at 247, both spill-free; only `complex<double>` spills there, and only 3.4 KB), and the corrections document's "gate on spill, not frame" is wrong *for this kernel*, where the only thing that can be on the stack is the accumulator. The spec predicted `n_cta(float) = 64` and reached the right answer (32) only through a fallback instruction whose stated mechanism does not occur.
 
-### the-side-left-staging-tile
+### The `Side::Left` staging tile
 
 For `Side::Left` thread `u` owns column `u`, so at step `s` the lanes of a warp read `B(rho(s), u0+lane)` — addresses `ldb` apart. ncu, float, n=32, q=1024, batch=512:
 
@@ -95,7 +95,7 @@ The spec named the right factor at the wrong level. It predicted "8x over-fetch 
 
 Tile height is 16 for `sizeof(T) <= 4` and 8 otherwise; row stride is `NB_STAGE + 1`, and that padding is what makes the read-out conflict-free. The spec's §4.1 size formula allocated `NB_STAGE * WG`, which at `WG=128, NB_STAGE=16` indexes `15 + 127*17 = 2174` into a 2048-element allocation: **127 elements past the end**.
 
-### the-two-level-blocked-driver
+### The two-level blocked driver
 
 V2's outer block used to be `nb = trsm_cta_max_n<T>() = 32`. At n=512 that is 16 blocks, so every trailing GEMM had one dimension pinned at 32. GEMM arithmetic intensity with a dimension pinned at `w` tends to `2w/sizeof(T)` flop/byte = 16 for float, against an RTX 4090 machine balance of ~42 — **93.75% of the solve's flops ran bandwidth-bound by construction** on a problem that at n=512 is intrinsically compute-bound (51 flop/byte). The left-looking re-read factor `(p-1)/2` compounds it: 7.5x at n=512. Traffic model, B elements per batch item in units of q at n=512, ideal 1024: NB=32 -> 5824 (5.7x); **NB=128, nb=32 -> 4096 (4.0x, ships)**; NB=128, nb=64 -> 3328; NB=128, nb=128 -> 2560.
 
@@ -113,11 +113,11 @@ The notes present this sweep as "on float", but `nb_sweep.csv` also carries `com
 
 ---
 
-## the-measured-grid
+## The measured grid
 
 All ratios are `vendor_ms / native_ms`; **>1 means native is faster**. RTX 4090, one card held exclusive by `experiments/gpu_guard.sh`, warmup ahead of every timed iteration (no cold-JIT number), `bench::pristine(B)` restored between iterations because trsm is in place, and the two legs of every pair differ **only** in `BATCHLAS_TRSM_ROUTE`.
 
-### the-step-9-grid
+### The step-9 grid
 
 The grid is `benchmarks/trsm_benchmark.cc`'s `TrsmOrthoSizes`: n in {8,16,32,64,128,256} x q in {256,1024,4096} x batch in {128,512,2048}, all four types, both sides. **Not** a square RHS — the library never issues one. The two real call sites (`ortho.cc:202`, `:289`) pass a k x k Cholesky factor as A and an m x k basis as B, so the triangular order is small and the other extent large. Coverage capture confirms it against what the suite issues: `n=10 q=256 batch=1` (4880 calls), `n=10 q=20` (4800), `n=12 q=36 batch=3` (2392), `n=5 q=64 batch=3` (3258) — every one `Side::Right, Lower, Trans, NonUnit`, every one inside V1's capacity of 32.
 
@@ -138,7 +138,7 @@ Saturation is enforced per `(type, side, n, q)`: a ratio is quoted only if the t
 
 Saturated subsets as ranked in the notes: double 32/32 cells won (1.39x-9.62x), `complex<double>` 30/30 (1.20x-4.66x), `complex<float>` 30/30 (1.01x-21.91x), float/Right 18/18 (1.54x-4.59x), float/Left **6 of 16**. The one losing region is exactly where §3.4 predicted, and `double` at the same shapes wins 1.39-6.37x — same kernel, same access pattern, opposite verdict, because cuBLAS's double triangular path is weak enough that the over-fetch never decides the race. That is why this is a per-type predicate and not one number.
 
-### the-batch-floor
+### The batch floor
 
 `if (s.batch < 8) return false;` — from `starved.sh`, batch in {1,8,32} x q in {32,128}, n in {8,32,128}, run on GPU 1 while the saturated sweep owned GPU 0:
 
@@ -159,7 +159,7 @@ The boundary sits at the **first measured win**, not at a round number: batch=1 
 
 Two caveats. (1) `starved.sh` says in its own header: *"PROFILE ONLY, NOT FOR RANKING… every number this produces is dominated by launch overhead; a ratio read off it is an overhead ratio and must not be quoted as an algorithm result."* The shipped batch floor is nevertheless derived from exactly these numbers. (2) The floor is **type-blind and demonstrably over-broad**: recomputed over both q legs, `double` at order 8 wins **1.09-1.15x** at batch=1, `complex<float>` wins 1.29-12.8x at batch=1 at every order measured, and `complex<double>` wins **2.1-11.1x** at batch=1 (2.1-2.9x at order 8, rising to 7.0-11.1x at order 128) — and `preferred()` hands all of them to the vendor.
 
-### float-side-right-the-only-order-clause
+### `float`, `Side::Right`: the only order clause
 
 `return s.batch >= 128 || order <= 32;`
 
@@ -167,7 +167,7 @@ Two caveats. (1) `starved.sh` says in its own header: *"PROFILE ONLY, NOT FOR RA
 * **Unbracketed:** **order 64 was never measured at any batch below 128.** The 32/64 cut point interpolates between a measured win at 32 and a measured loss at 128 — treat it as unverified.
 * Inside the window the code knowingly accepts one small loss (below).
 
-### the-final-grid-after-the-routed-trailing-gemm
+### The final grid after the routed trailing GEMM
 
 Step 16's grid (`experiments/wp3_s16/baseline.csv`) covers orders 8..512, both sides, **float and `complex<float>` only**. Worst clean cell per order (relative sd <= 10%):
 
@@ -207,7 +207,7 @@ The step-13 residue is **exactly** `q*batch >= 524288`: all 8 losing cells satis
 
 cuBLAS barely moves. **Strided is the only case trsm ever issues, so a square-matrix GEMM benchmark structurally could not have found this.** Caveat: padded operands were allocated uninitialized while unpadded ones used `::Random`; after that was fixed the reference cell moved 0.34%, so the effect is not a data artefact.
 
-### end-to-end-through-ortho
+### End-to-end through `ortho`
 
 A kernel win is not a library win: a 2.16x kernel win in this repo once turned into an 11% gesvd loss. Both A/Bs run with the route **unset**, so `preferred()` is what selects.
 
@@ -218,9 +218,9 @@ Neither A/B has been re-run since step 12, and steps 13 and 16 changed V2 for ev
 
 ---
 
-## negative-results
+## Negative results
 
-### rejected-the-cooperative-cta-solve-v3
+### Rejected: the cooperative CTA solve (V3)
 
 Built, measured, **rejected**; kept as `experiments/wp3_s14/v3_cooperative_kernel.patch`, not in the tree, because the device link is this project's long pole. W=8 work-items cooperate on one solve, thread `w` owning canonical rows `{w, w+W, …}` and holding `NL = N/W` accumulators, each `x_s` exchanged by a sub-group shuffle. **The register premise was right**: N=128, W=8, zero frame and zero spill — float **106 registers**, fewer than V1 needs at N=32 (114); double 136, `complex<float>` 139, `complex<double>` 174. The loop order is the whole trick: a runtime `acc[t/W]` forces local memory, a scan costs 2x, and block distribution is 7x load-imbalanced at W=8; cyclic distribution with the local index outermost makes the owner index compile-time and executes only needed FMAs. Coalescing came from the lane map (`w = lane % W`, so eight lanes read eight consecutive rows of one column — one 32 B sector), so V3 needed no staging tile. That same map is **wrong for `Side::Right`**, which wants consecutive columns: V3 was deliberately `Side::Left`-only, which is also the only side with a measured gap. Re-applying the patch also needs `dev_select` and `fma_acc_neg` in `src/sycl/device_scalar.hh`.
 
@@ -233,23 +233,23 @@ Built, measured, **rejected**; kept as `experiments/wp3_s14/v3_cooperative_kerne
 
 The comparison is restricted to the **81 cells clean (relative sd <= 10%) in both runs**, so it is like-for-like. The per-cell CSVs for this run **did not survive** (deleted after analysis, before aggregation; the summary was never written because a rebuild interrupted the run). The table above is the record, not a derivation from committed data.
 
-### rejected-n-64-cta-bucket
+### Rejected: the N=64 CTA bucket
 
 Re-tested rather than assumed, because the staging tile had cut float `Side::Left` from 114 registers to 53 and the arithmetic that killed N=64 no longer described the kernel. **It still fails, and by more**: float N=64 Left 72 registers / **456 B frame**, N=64 Right 119 registers / **256 B frame**, zero spill in both. Left is worse than Right because the tile's own live state competes with the accumulator rather than paying for it. There is deliberately no N=64 bucket, and `smallest_bucket_ge` returns **0** above 32 rather than the next power of two.
 
-### rejected-outer_nb-128-for-side-right
+### Rejected: `OUTER_NB` of 128 for `Side::Right`
 
 See the sweep in `### the-two-level-blocked-driver`: `OUTER_NB = 128` on `Side::Right` regresses orders 256 and 512 from 1.01 and 1.07 to 0.83 and 0.82. Right keeps the single-level schedule.
 
-### rejected-the-starvation-guard
+### Rejected: the starvation guard
 
 Spec §10's `batch*q < 8*CU*32 -> vendor` is **refuted by measurement, not merely unimplementable**. At batch=8, q=32 the product is 256 against its own threshold of 32,768, and native wins those cells 2.2-2.4x — the guard would have handed back every one. It is *also* unimplementable as written: `OpShape::compute_units` (`route.hh:240`) has zero writers and zero readers and reads 0. It dies on the measurement first. The kill criterion stated in advance — *"if native real trsm exceeds 1.10x vendor at the saturated ortho shape, real stays vendor-first and only complex flips"* — **did not fire**: double won every cell on both sides and float won every `Side::Right` cell.
 
-### rejected-diagonal-block-inversion
+### Rejected: diagonal-block inversion
 
 See `## design-v1-v2-and-the-canonical-fold`. Rejected on the accuracy argument before anything was built.
 
-### refuted-mechanisms
+### Refuted mechanisms
 
 Two mechanisms this work package published were later **measured wrong**.
 
@@ -261,9 +261,9 @@ Two mechanisms this work package published were later **measured wrong**.
 
 ---
 
-## correctness-findings
+## Correctness findings
 
-### the-missing-group-barrier
+### The missing group barrier
 
 **WP3's trsm returned wrong answers**, found during WP4 Phase 2 while looking for something else. V1 stages the canonical triangle into SLM with a loop strided by `lane`, so element `idx` is written by lane `idx % wg`; the loop immediately after has lane `s` read `sLc[tri_idx(s,s)]` — a *different lane's write* for nearly every `s` — with nothing in between. `sDiv[0]` had the same problem: lane 0 zeroes it before the staging loop and any lane may store 1 into it after. **One `sycl::group_barrier` is the entire fix** (`src/sycl/trsm_native.cc:412`).
 
@@ -278,11 +278,11 @@ Vendor-free potrf, n=1024 batch=256, float and double: before the barrier, 61-75
 
 **How it hid.** The ladder picks the first `cand` in `{256,128,64,32}` with `bs*ceil(q/cand) >= 4*CU` (512 on this box). Every trsm test uses `bs <= 3, q <= 257`, so every one lands on **wg = 32** — a single sub-group, executing the two loops in lock step, the one width where the race cannot express itself. An unsynchronised cross-sub-group read-after-write in SLM is UB that NVIDIA hardware hides at exactly the width every small-batch test picks. The blocked potrf panel solve does not sit there: n=1024, batch=256 gives q=896 and wg=256, eight sub-groups, and the race fires.
 
-### the-bucket-ladder-that-truncated
+### The bucket ladder that truncated
 
 `smallest_bucket_ge` used to return 64 for any `n > 32`, and the dispatch switch's `default:` label collapsed 64 onto the N=32 instantiation — so a **33-order solve silently solved the leading 32x32 system and left the last row of B untouched**. Nothing caught it: the staging pad test (`s >= n`) cannot fire when `N < n`, the recurrence simply stops early, and the store loop writes only the rows it computed. It was unreachable through the facade because `supports(CTA)` caps the order, but the direct entry is exactly what V2 calls on its diagonal blocks. It now returns 0 and V1 **throws** rather than truncating (`TrsmNativeCta.OverCapacityThrowsRatherThanTruncating`).
 
-### blind-and-vacuous-guards
+### Blind and vacuous guards
 
 * **The regression test shipped with the barrier fix was itself vacuous.** It called V1 directly at n=16, q=1024, bs=128, cleared the work-group ladder, *asserted* that it had — and still passed **green, twice**, with the barrier deleted and the library rebuilt. Clearing the ladder is necessary and **not sufficient**. The reproducing configuration goes through V2: order **48** (so the final V1 block is order 16), **q=976, batch=128**. Orders whose final V1 block lands in the N=16 bucket (48, 77, 80, 109) failed 90-128 of 128 items deterministically while 32, 33, 64, 65, 96 and 155 were clean, so an order dividing evenly would have been another silent pass. That is `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly` (`tests/trsm_tests.cc:630`), which asserts the rung *and* drives the reproducing shape, and was verified red with the barrier deleted. Fifth recorded blind guard in this repository, and the first written in the same change as the fix it guards.
 * **Every blocked test stopped at order 100.** With `OUTER_NB = 128` that is a *single* panel, so all of them took `LO == 0` and the outer level never ran — they passed unchanged against the two-level driver while proving nothing about it. `TwoLevelPanelStructure` now uses 129 (two panels, second one element wide), 256 (two full), 300 (two plus a ragged 44) and 384 (three full).
@@ -296,7 +296,7 @@ Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59
 
 ---
 
-## what-the-spec-got-wrong
+## What the spec got wrong
 
 `WP3_TRSM_SPEC.md` was written against a pre-WP1/WP2 tree; `WP3_TRSM_SPEC_CORRECTIONS.md` records 27 findings that survived adversarial refutation. Beyond the items already covered (the SLM size overrun, the `n_cta` derivation, the starvation guard, the ctest command):
 
@@ -308,7 +308,7 @@ Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59
 
 ---
 
-## open-debts
+## Open debts
 
 1. **The entire WP3 performance grid was measured on a kernel that could return wrong answers.** The barrier landed in WP4 Phase 2, after step 16. The recorded caveat is that *"`preferred()` windows above `q*batch ~ 65k` were measured on a racing kernel and have not been re-run"*. It is likely worse: the smallest cell in `TrsmOrthoSizes` is q=256, batch=128, i.e. `q*batch = 32768`, and the ladder rule (`bs*ceil(q/cand) >= 4*CU`, `4*CU = 512`) selects **wg = 64** there — two sub-groups. By that rule **no cell in the shipped grid ran at the single-sub-group width where the race provably cannot fire.** That is an inference from the ladder arithmetic, not a re-run. Nothing on this page except `### the-batch-floor` has been re-measured post-fix.
 2. **`double` and `complex<double>` were last measured at step 9** — orders 8..256 only, before the `Side::Left` staging tile, before two-level blocking, and before the routed trailing GEMM, all three of which change V2 for every type. `preferred()` returns unconditional `true` for both, at every order, on that evidence. Steps 13, 14 and 16 measured **float and `complex<float>` only**.
@@ -329,7 +329,7 @@ Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59
 
 ---
 
-## raw-evidence
+## Raw evidence
 
 Raw data is preserved at the git tag `perf-evidence/vendor-independence`, retrievable with `git show perf-evidence/vendor-independence:<path>`.
 

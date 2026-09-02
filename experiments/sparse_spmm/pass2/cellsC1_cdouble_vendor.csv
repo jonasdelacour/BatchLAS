@@ -1,9 +1,0 @@
-name,arg0,arg1,arg2,arg3,arg4,arg5,arg6,arg7,iterations,avg_ms,stddev_ms,chk,GFLOPS,GB/s,Time (µs) / matrix,nnz/item,nnz/row
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,0,0,0,1,100,2.73235,0.0173801,108647,307.011,107.838,21.3465,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,0,0,1,1,100,3.52595,0.00908129,637282,237.911,83.5662,27.5465,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,0,1,0,1,100,2.61155,0.025376,2.89e+07,321.212,152.977,20.4028,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,0,1,1,1,100,3.39491,0.00458073,1.44026e+08,247.093,117.678,26.5228,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,1,0,0,1,100,3.18325,0.00182989,109537,263.524,92.5629,24.8691,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,1,0,1,1,100,3.54021,0.00594737,636555,236.953,83.2297,27.6579,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,1,1,0,1,100,3.09365,0.0139437,2.6508e+07,271.155,129.138,24.1692,32768,16
-"(BM_SPMM_Grid<std::complex<double>, batchlas::Backend::CUDA>)",2048,16,25,128,1,1,1,1,100,3.43606,0.0204716,1.43861e+08,244.135,116.269,26.8442,32768,16

@@ -92,7 +92,7 @@ Event gemm(Queue& ctx,
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         // WP1 S5. Without this arm the whole work package delivers nothing
         // vendor-free: S2 pointed the level-3 expansions at this entry point,
-        // and this entry point threw. VENDOR_FREE_BASELINE.md claimed gemm
+        // and this entry point threw. docs/design/vendor-free-status.md claimed gemm
         // "fails only on the shapes outside gemm_custom_problem_supported";
         // it threw on EVERY call, measured at 48 passed / 136 failed where all
         // 48 passes are pure route-resolution tests that never run a kernel.

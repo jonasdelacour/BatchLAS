@@ -506,7 +506,7 @@ size_t orgqr_buffer_size(Queue& ctx,
 // Origin::Auto keeps returning {Vendor, Auto} wherever a vendor exists
 // (route_resolve.hh:110-112, :129). Measured at 96 of 96 route cells. The
 // benchmark that would replace those all-false windows with a measured one is
-// docs/perf/lu.md#the-blocked-arm-grid; read it before writing one, because the
+// docs/perf/lu.md#getrf-window-evidence; read it before writing one, because the
 // crossover moves with BATCH and not only with order.
 // ---------------------------------------------------------------------------
 

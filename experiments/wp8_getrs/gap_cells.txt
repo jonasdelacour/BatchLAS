@@ -1,5 +1,0 @@
-getrs:cfloat:64:128:512
-getrs:cfloat:64:128:1024
-getrs:cfloat:128:128:512
-getrs:cfloat:256:128:512
-getrs:cfloat:512:128:256

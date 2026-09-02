@@ -300,7 +300,7 @@ endif()
 # scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
 # change is held to "no dispatch decision moved".
 #
-# Run it against a vendor-free build to turn VENDOR_FREE_BASELINE.md's list of
+# Run it against a vendor-free build to turn docs/design/vendor-free-status.md's list of
 # failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
 # suites, and the suite list cannot tell you that.
 add_custom_target(batchlas_coverage

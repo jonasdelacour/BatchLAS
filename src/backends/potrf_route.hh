@@ -8,7 +8,7 @@
 // environment happens here, and the table sees a plain struct. Modelled on
 // src/backends/trsm_route.hh, whose header says the same at :5-8.
 //
-// WP4_POTRF_SPEC.md STEP 1.4 IS DELETED BY THIS FILE. spec:474 asks for
+// docs/perf/potrf.md STEP 1.4 IS DELETED BY THIS FILE. spec:474 asks for
 // "potrf_supports_cta returns true only under policy.forced == BatchLAS_CTA or
 // BATCHLAS_POTRF_PROVIDER=cta". An env-gated supports() violates the purity
 // contract AND breaks forcing: resolve_route never bypasses supports()

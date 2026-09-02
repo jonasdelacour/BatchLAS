@@ -1,4 +1,0 @@
-[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Iter        Avg(ms)     Std(ms)     GFLOPS      Time (µs) / matrix[0m
-[1m(BM_GEMM_FIXED128<std::complex<float>, batchlas::Backend::CUDA>)[0m128     128     128     512     200         1.2782      0.056693    1680.1      2.4965      
-[1m(BM_GEMM_FIXED128<std::complex<double>, batchlas::Backend::CUDA>)[0m128     128     128     512     14          22.135      0.25137     97.017      43.233      
-gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)

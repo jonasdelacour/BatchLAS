@@ -1,3 +1,0 @@
-# Python bytecode from break.py being imported by the runner scripts.
-__pycache__/
-*.pyc

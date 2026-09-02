@@ -1,7 +1,0 @@
-# The orchestrator's packed sub-group getrf prototype binary. Source, cell lists
-# and CSVs are committed; the compiled harness is not. Flagged as untracked AND
-# unignored by the implementer's report; closing it here so it cannot ride into a
-# diff the way 13 trace files once did.
-pivsg
-*.nsys-rep
-*.sqlite

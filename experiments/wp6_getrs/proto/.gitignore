@@ -1,6 +1,0 @@
-# The compiled probes. experiments/wp6_lu/bench/.gitignore does the same for
-# lubench6_nv / lubench6_v: they are rebuilt by build.sh in seconds and nothing in
-# the tree references them, and this branch has twice been caught committing
-# blobs -- once 13 trace files that were 83% of the PR diff.
-fusedrs_nv
-fusedrs_v

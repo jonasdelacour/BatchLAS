@@ -3,7 +3,7 @@
 // What this build can actually do, and what a test run actually reached.
 //
 // After S6 the vendor-free build runs and throws NoRouteError where it has no
-// implementation. VENDOR_FREE_BASELINE.md records which test SUITES fail, which
+// implementation. docs/design/vendor-free-status.md records which test SUITES fail, which
 // is the right unit for spotting regressions and the wrong unit for planning:
 // "ortho_tests fails" does not say whether the gap is potrf, trsm, geqrf, orgqr
 // or gemv, and one missing kernel fails a dozen suites.

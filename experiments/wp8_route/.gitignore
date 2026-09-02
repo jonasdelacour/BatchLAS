@@ -1,6 +1,0 @@
-lubench6_v
-lubench6_nv
-*.nsys-rep
-*.sqlite
-__pycache__/
-clause_probe

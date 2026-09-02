@@ -1,5 +1,0 @@
-# The patched harness binary. experiments/wp6_lu/bench/.gitignore does the same
-# for lubench6_nv / lubench6_v: rebuilt by build_nv.sh in seconds, and this branch
-# has twice been caught committing blobs.
-lubench6_tr_nv
-lubench6_tr_v

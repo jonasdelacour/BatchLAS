@@ -1,2 +1,0 @@
-cfloat,300,32,300,2,N,N,1,0,0,0,9,0.039099,0.039041,0.0024,1178.55
-gpu_guard: GPU 0 exclusive for the whole run (SM clock was 210 MHz at start)

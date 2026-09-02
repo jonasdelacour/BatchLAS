@@ -1,3 +1,0 @@
-name,arg0,arg1,arg2,arg3,iterations,avg_ms,stddev_ms,GFLOPS,Time (µs) / matrix
-"(BM_GEMM_FIXED128<float, batchlas::Backend::CUDA>)",1024,64,64,512,300,0.841411,0.154488,5104.48,1.64338
-"(BM_GEMM_FIXED128<float, batchlas::Backend::CUDA>)",1024,64,64,512,300,0.851508,0.0999906,5043.95,1.6631

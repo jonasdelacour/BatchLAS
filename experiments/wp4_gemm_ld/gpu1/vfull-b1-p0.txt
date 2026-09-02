@@ -1,8 +1,0 @@
-==PROF== Connected to process 1356484 (/home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/build/benchmarks/gemm_benchmark)
-==PROF== Profiling "ampere_sgemm_128x128_nn": 0%....50%....100% - 45 passes
-[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Iter        Avg(ms)     Std(ms)     GFLOPS      Time (µs) / matrix[0m
-[1m(BM_GEMM<float, batchlas::Backend::CUDA>)         [0m128     1024    128     512     8           304.18      802.10      56.480      594.09      
-[1m(BM_GEMM_FIXED128<float, batchlas::Backend::CUDA>)[0m128     1024    128     512     8           0.96382     0.0010489   17825.      1.8825      
-==PROF== Disconnected from process 1356484
-==PROF== Report: /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/experiments/wp4_gemm_ld/gpu1/vfull-b1-p0.ncu-rep
-gpu_guard: GPU 1 exclusive for the whole run (SM clock was 210 MHz at start)

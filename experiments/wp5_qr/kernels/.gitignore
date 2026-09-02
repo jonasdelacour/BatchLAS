@@ -1,8 +1,0 @@
-# Compiled harnesses. Rebuild with build_v.sh / build_nv.sh.
-qrcheck_v
-qrcheck_nv
-# Profiler and kernel-trace blobs, if any ever land here by accident. 13 of these
-# were once 83% of a PR diff on this branch.
-*.json
-*.nsys-rep
-*.sqlite

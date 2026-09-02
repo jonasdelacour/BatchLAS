@@ -478,7 +478,7 @@ struct RouteTable<Op::getrs, T> {
     //     28" came from grid_*.csv, which carries exactly one saturating batch
     //     per order and NO ladder on the batch axis at any width >= 16. A full
     //     ladder -- 4 types x 5 orders x 4 widths x 7 batches (32 .. 8192),
-    //     464 paired cells, docs/perf/lu.md#getrs-collapsed-permutationlad_*.csv + hi_*.csv -- shows
+    //     464 paired cells, docs/perf/lu.md#getrs-collapsed-permutation -- shows
     //     the composition's advantage FALLING MONOTONICALLY WITH BATCH at every
     //     type and every order, because below saturation neither arm is measuring
     //     its own speed. At float n=128 nrhs=128 the composition costs
@@ -495,7 +495,7 @@ struct RouteTable<Op::getrs, T> {
     //     and TWO vendor passes, medians of 11 reps, warm JIT,
     //     CUDA_VISIBLE_DEVICES pinned, zero foreign compute processes on every
     //     row, quoted at the WORSE pass, cross-pass median spread 1.0022 and
-    //     worst 1.1208 over 270 arm-medians (docs/perf/lu.md#getrs-collapsed-permutationcl_*.csv +
+    //     worst 1.1208 over 270 arm-medians (docs/perf/lu.md#getrs-collapsed-permutation
     //     gap_*.csv, scored by clause.py into clause_summary.txt):
     //
     //       CANDIDATE                       cells  geomean    min  loss  <1.15  GATE-C
@@ -548,7 +548,7 @@ struct RouteTable<Op::getrs, T> {
     //     -- on the directly measured rungs. The coverage bound then named FIVE
     //     admitted cfloat cells it could not cover, because the WALK ladder was
     //     itself below 1.15 there. Measuring those five
-    //     (docs/perf/lu.md#getrs-collapsed-permutationgap_*.csv) produced
+    //     (docs/perf/lu.md#getrs-collapsed-permutation) produced
     //         cfloat n=64 nrhs=128 batch=1024 = 0.9944  (0.9969 / 0.9944, two passes)
     //     with 1.2901 at batch 512 and 1.4824 at batch 2048 ON EITHER SIDE OF IT.
     //     A dip in the MIDDLE of a ladder cannot be closed by any boundary in

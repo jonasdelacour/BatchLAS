@@ -200,7 +200,7 @@ Event syr2k_cuda_custom(Queue& ctx,
     // op that does NOT fall back on NoKernel -- it throws, and the throw is not
     // guarded by `forced`, so a non-fused named route reaching here gets a
     // cuBLASDx message it did not ask for. Pre-existing; preserved exactly
-    // rather than quietly improved, and recorded in WP1_LEVEL3_SPEC.md.
+    // rather than quietly improved, and recorded in docs/perf/level3.md.
     auto fused = detail::syr2k_fused_try(ctx, A, B, C, alpha, beta, uplo, transA);
     if (fused.outcome == detail::FusedResult::Outcome::Ran) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);

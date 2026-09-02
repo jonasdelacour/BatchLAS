@@ -6,7 +6,7 @@
 // right-looking blocked recurrence; global memory is touched exactly twice, once
 // to load the triangle and once to store the factor.
 //
-// READ WP4_POTRF_SPEC_CORRECTIONS.md BEFORE WP4_POTRF_SPEC.md. The spec predates
+// READ docs/perf/potrf.md. The original spec predates
 // WP0-WP3 and where they disagree the corrections win. The places that matter to
 // this file are called out where they bite.
 //
@@ -32,7 +32,7 @@
 //    in the second case makes (P1)->(P2)->(P3) straight races on the tile, with
 //    no crash and a plausible wrong factor. Scope is DERIVED by
 //    potrf_cta_launch_params (potrf_cta.cc) and asserted there, never chosen by
-//    hand -- WP4_POTRF_SPEC.md:225 asserts a scope for the blocked leaf that
+//    hand -- perf-evidence/vendor-independence:WP4_POTRF_SPEC.md:225 asserts a scope for the blocked leaf that
 //    contradicts its own L ladder at :189-195 for float, which is W10.
 //
 //    The one place the two barriers are NOT interchangeable and the difference

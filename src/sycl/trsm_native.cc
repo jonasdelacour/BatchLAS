@@ -1,7 +1,6 @@
 // Native batched TRSM — the kernel translation unit.
 //
-// WP3 steps 3-4: V1, both sides, real types. See WP3_TRSM_SPEC_CORRECTIONS.md
-// first, then WP3_TRSM_SPEC.md §2-§3.
+// WP3 steps 3-4: V1, both sides, real types. See docs/perf/trsm.md.
 //
 // NOT ROUTED. trsm_cta_max_n<T>() still returns 0 for every type, so
 // RouteTable<Op::trsm,T>::supports() reports both native routes unsupported and
@@ -39,7 +38,7 @@
 // THAT TILE IS DELIBERATELY NOT IN THIS STEP. It is a performance mitigation
 // for a cost the spec PREDICTS ("8x over-fetch") and has never measured, and
 // its own sizing formula in §4.1 is off by a factor that writes 127 elements
-// out of bounds (WP3_TRSM_SPEC_CORRECTIONS.md finding 4). Correctness first,
+// out of bounds (docs/perf/trsm.md finding 4). Correctness first,
 // then measure the over-fetch, then add the tile if the measurement asks for
 // it. Landing an unmeasured optimisation alongside a new kernel would make both
 // unattributable.
@@ -64,7 +63,7 @@ namespace batchlas::sycl_trsm {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Canonicalisation — WP3_TRSM_SPEC.md §2.1, transcribed once.
+// Canonicalisation — docs/perf/trsm.md §2.1, transcribed once.
 //
 // The 24 (side, uplo, transA, diag) combinations fold into ONE recurrence over a
 // canonical unit-lower factor Lc and a canonical RHS accessor. Both in-tree
@@ -889,7 +888,7 @@ template Event trsm_native_v1_dispatch<std::complex<double>>(
 // READ THE STACK-FRAME COLUMN, NOT THE SPILL COLUMN. Nothing spills anywhere,
 // including double N=64 -- so the spec's "256 B/thread register cliff", which
 // predicts exactly that configuration must spill, is FALSIFIED, as
-// WP3_TRSM_SPEC_CORRECTIONS.md expected.
+// docs/perf/trsm.md expected.
 //
 // But the design still fails at N=64, and it fails in the column the
 // corrections document told the implementer to ignore. 256 B is 64 floats; 512 B

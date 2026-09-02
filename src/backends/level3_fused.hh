@@ -32,7 +32,7 @@ namespace batchlas::backend::detail {
 //                         symm and syrk fall back to their GEMM shim, trmm to
 //                         the vendor, and syr2k THROWS (syr2k_custom_dispatch's
 //                         throw is not guarded by `forced` -- pre-existing, and
-//                         recorded in WP1_LEVEL3_SPEC.md as out of scope).
+//                         recorded in docs/perf/level3.md as out of scope).
 //   DeviceUnsupported  -- the kernel exists but the device refused it at launch
 //                         (cudaErrorNotSupported). Every op falls back.
 //

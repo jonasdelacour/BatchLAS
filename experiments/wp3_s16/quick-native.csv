@@ -1,9 +1,0 @@
-name,arg0,arg1,arg2,iterations,avg_ms,stddev_ms,GFLOPS,Time (us) / matrix
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",256,1024,128,200,0.94808,0.00649997,9060.34,7.40688
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",256,1024,512,44,4.58044,0.00601268,7501.4,8.94618
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",256,4096,128,45,4.52233,0.00569966,7597.8,35.3307
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",256,4096,512,11,18.4057,0.0140118,7467.2,35.9486
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",512,1024,128,83,2.43478,0.0066571,14112.1,19.0217
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",512,1024,512,18,11.1936,0.00809951,12278.4,21.8625
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",512,4096,128,19,11.0513,0.0129341,12436.5,86.3382
-"(BM_TRSM_OrthoLeft<float, batchlas::Backend::CUDA>)",512,4096,512,10,45.1162,0.0275691,12185.3,88.1177

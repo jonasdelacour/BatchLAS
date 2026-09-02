@@ -1375,7 +1375,7 @@ int main(int argc, char** argv) {
 //
 // A coverage row cannot substitute for any of this: rows are keyed on a
 // power-of-two shape_class and are first-writer-wins
-// (VENDOR_FREE_BASELINE.md:255-260), so a row proves that SOME shape resolved
+// (docs/design/vendor-free-status.md), so a row proves that SOME shape resolved
 // to a route, never that THIS shape ran THAT body.
 //
 //   B1 `gatherBase`

@@ -1,2 +1,0 @@
-name,arg0,arg1,arg2,arg3,arg4,arg5,arg6,arg7,iterations,avg_ms,stddev_ms,chk,GFLOPS,GB/s,Time (µs) / matrix,nnz/item,nnz/row
-"(BM_SPMM_Cells<float, batchlas::Backend::CUDA>)",1024,3,2,512,0,0,1,0,100,0.162654,0.000170824,2210.61,38.6799,141.839,0.317684,3072,3

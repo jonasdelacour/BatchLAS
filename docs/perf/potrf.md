@@ -6,7 +6,7 @@ every `potrf` to cuSOLVER. They exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` b
 All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experiments/gpu_guard.sh`. Ratios are
 `vendor / native` — **> 1 means native wins** — unless the table says otherwise.
 
-## what-ships
+## What ships
 
 | tier | file | orders | Uplo |
 |---|---|---|---|
@@ -33,7 +33,7 @@ exists (float n=128 b=512: CTA 0.293 ms against blocked 0.301 ms). Env var `BATC
 No `nb` equals the fit ceiling. Sizing `nb` from the fit ceiling — what the spec does — is measurably wrong for
 every type.
 
-### route-arms-and-the-supports-gates
+### Route arms and the `supports()` gates
 
 `supports()` (`route_potrf.hh:191-302`) is correctness-only; every gate means "wrong answer or cannot launch":
 
@@ -54,7 +54,7 @@ would make a forced `blocked` at small `n` fall through `automatic()` to cuSOLVE
 adds `cta_max_n` (asked of the *device*), `blocked_available` (does the driver exist in this *build*) and
 `has_sg32`; the builder is `src/backends/potrf_route.hh:47-118`, so the table stays pure.
 
-### preferred-is-false-everywhere
+### `preferred()` is false everywhere
 
 `preferred()` returns `false` unconditionally (`route_potrf.hh:338-342`). Un-preferred is not unroutable:
 `route_resolve.hh:113-127` still hands a **vendor-free** caller any supported native route, while `Origin::Auto` in a
@@ -68,7 +68,7 @@ The grids below are the *input* to flipping a cell, not the decision. The gate i
 `t_native <= 0.90 * t_vendor` at saturation, **and** no accuracy regression, **and** an end-to-end
 `ortho_benchmark` win. None has been run. (This repo once turned a 2.16x kernel win into an 11% gesvd loss.)
 
-## the-slm-budget-and-the-fit-ceilings
+## The SLM budget and the fit ceilings
 
 `local_mem_size` reports **101,376 B**, and a kernel with 0 B static shared launches at exactly that (`cudaDeviceProp
 sharedMemPerBlockOptin` agrees). `device_limits.hh`'s 49,152 is **hardcoded** by
@@ -116,7 +116,7 @@ Two formula corrections, both measured:
   49,700 stays 49,700), and `supports()` spells the capacity as a contiguous `order <= cta_max_n`, so the ceiling
   must be the largest `n` for which *every* order up to `n` launches.
 
-## the-48-kb-launch-hole
+## The 48 KB launch hole
 
 Measured cold: a dynamic local-memory request in `(49152 - static_shared, 49152]` fails with
 `CUDA_ERROR_INVALID_VALUE` at `enqueueKernelLaunch`; boundary located to 8 B, identical at wg = 32/64/128/256/1024.
@@ -148,7 +148,7 @@ reachable `CUDA_ERROR_INVALID_VALUE` found on `geqrf_tests`' first vendor-free r
 [qr.md](qr.md). So this section is not a hypothetical: the condition potrf wrote down is the condition that later
 bit, and the pad is the reason potrf itself did not.
 
-## register-gate
+## Register gate
 
 Probed on `batchlas_extensions_cta` with `regprobe_any.sh` — the stock `scripts/register_probe.sh` hardcodes
 `batchlas_sycl.dir/link.txt` and **would have reported clean for code it never compiled**.
@@ -173,7 +173,7 @@ baseline, all potrf, **zero non-potrf rows changed** — the unit's 16 pre-exist
 * **Unrolling is not free.** Unrolled `NB = 16` clears the gate but costs 156-206 registers against 64-128 at
   `NB = 8` — 3 resident blocks against 8 for float at the 128-item work-group ceiling.
 
-## cta-kernel-measured-against-cusolver
+## CTA kernel measured against cuSOLVER
 
 `batch = 4096` (saturation), JIT-warmed, two passes agreeing within a few percent.
 
@@ -197,7 +197,7 @@ Efficiency at float `n = 155`, `batch = 4096`: 5.08 GFLOP in 4,046 µs = **1.26 
 against `registers` 9-18, so shared memory binds by 9-18x. Vendor-free, a caller at float `n = 128` pays ~2.9x the
 cuSOLVER runtime they replaced.
 
-### the-l-ladder
+### The `L` ladder
 
 `L` (work-items per matrix) derives from the **elements** the first trailing update touches, `Ntiles_0 * TS^2`, at
 24 elements per work-item, capped at 256 (`potrf_cta.cc:198-199, :383-392`). It was a *tile*-count ladder justified
@@ -222,7 +222,7 @@ cdouble n=32, a genuine ~5% regression, 642.4 → 680.0 µs, accepted for a rule
 The old ladder cost up to 1.27x (float n=96). **24 is a fitted constant**, the only number on that line not derived,
 pinned by this grid alone; re-measure if `NB`, `TS` or the (P3) inner loop changes.
 
-## the-blocked-driver
+## The blocked driver
 
 Right-looking, `Uplo::Lower`, `j = 0, nb, 2nb, ...`, `ib = min(nb, n-j)`, `m2 = n - j - ib`: **leaf**
 `A(j:j+ib, j:j+ib)` by the CTA kernel on a sub-view (ld-insensitive — consecutive lanes hold consecutive rows at a
@@ -240,7 +240,7 @@ An empty function means "use the native entry point", keeping the kernel layer f
 `throw_no_vendor_route`) and `syrk`'s "cublasdx" route is silently a fallback that **writes both triangles**. A
 square gemm over `A22` would also write the upper triangle, which LAPACK `potrf(Lower)` must not touch.
 
-### nb-and-w
+### `nb` and `W`
 
 `nb`, whole driver, `batch = 128`, `n in {512, 1024}`, worst rel sd 1.3%, ms:
 
@@ -284,7 +284,7 @@ transposed short-circuit sends every `ConjTrans` to `Tiled16`. Kernel level 1.77
 16.629 → 9.180 ms = **1.81x** (1.00x at `nb <= 96`). It must **not** be done for complex — `A22 -= L21 L21^H` is
 Hermitian — the substitution takes the residual from 4.0e-07 to 1.9e-02 for cfloat and cdouble.
 
-## blocked-driver-measured-against-cusolver
+## Blocked driver measured against cuSOLVER
 
 Whole-`potrf` wall time, `Uplo::Lower`, JIT and clocks warmed and discarded, host-device page migration excluded
 from the timer, 3 interleaved passes x 2 reps, medians, worst rel sd 5.3%, `bad = 0` in every arm. **nn** = both
@@ -332,7 +332,7 @@ win, on the shapes the driver issues. That contradicts the 0.13-0.18x recorded a
 measured different shapes: one square `m2 x m2 x nb` gemm against the 217 `32 x 32 x 128` and `mr x 32 x 128` gemms
 the W-decomposition issues. **A figure for "the trailing update" from a single square gemm does not transfer here.**
 
-### the-panel-solve-verdict
+### The panel-solve verdict
 
 Injected **routed trsm**, not a bespoke panel kernel. Gemm seam held at the vendor so the panel solve is the only
 variable (whole-potrf ms, `vendor trsm / native trsm`, `bad = 0` everywhere):
@@ -352,7 +352,7 @@ Native wins in every cell tried. The *original* evidence ("46 of 48 panel cells"
 kernel would also aim at the wrong stage — the panel solve is 5-22% of a vendor-free blocked potrf against 65-95%
 for the trailing update, so a hypothetical 2x there is worth 3-11% end to end.
 
-## negative-results
+## Negative results
 
 * **`NB = 16` for the CTA kernel is slower in 18 of 20 cells.** The hypothesis was sound and the prediction wrong:
   `ncu` does show the register cost is free above `n ~ 32` (`shared_mem` 2 vs `registers` 18 blocks/SM at float
@@ -379,7 +379,7 @@ for the trailing update, so a hypothetical 2x there is worth 3-11% end to end.
   launch-overhead rejection, and the route-typo trap (an unrecognised `BATCHLAS_POTRF_ROUTE`, and `cta` above the
   ceiling, both silently resolve to vendor).
 
-## correctness-findings
+## Correctness findings
 
 **1. The panel trsm returned wrong answers on the default vendor-free path.** `build-novendor`, no env, float and
 double, `n = 1024`, `batch = 256`, condition number < 1.05, an input cuSOLVER factors to 1e-8/1e-16 in the same
@@ -483,7 +483,7 @@ global columns 100 and 200 report 101 and 201, both-column items report 101, a N
 finite. Shipped residuals: float 4.4e-07..5.5e-07, double 5.4e-16..1.0e-15, cfloat 2.7e-07..4.1e-07, cdouble
 5.3e-16..7.7e-16; `max |imag(diag L)|` is exactly 0.0 up to n=1000.
 
-### workspace-sizing
+### Workspace sizing
 
 `potrf_cta_buffer_size` and `potrf_blocked_buffer_size` replay the layout through `BumpAllocator::measuring()`,
 **never** hand-summing: `mempool.hh` checks capacity from the *unaligned* cursor while advancing only by the data
@@ -492,7 +492,7 @@ the coarsest quantum the sequence asked for. `nb` and `W` come from one pure fun
 query cannot size a layout the call does not build — the Phase 1 failure was exactly that: a raw SLM figure in the
 query against a padded one in the launcher, throwing on a call the table had promised.
 
-## what-the-spec-got-wrong
+## What the spec got wrong
 
 `WP4_POTRF_SPEC.md` predates WP0-WP3; `WP4_POTRF_SPEC_CORRECTIONS.md` carries 108 findings against it. Corrections
 beat the spec; shipped code beats both.
@@ -518,7 +518,7 @@ allocation — inert for `potrf_cta_dispatch`, `trsm` and `gemm`, none of which 
 builds every sub-view with the explicit 6-arg constructor and its own stride; the child's default `ld*cols` stride
 is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
 
-## open-debts
+## Open debts
 
 1. **`preferred()` is all-false.** No cell flipped; the three-part gate has not been run.
 2. **Complex is 0.311-0.509x vendor-free and the cause is outside this driver.** A register-tiled complex GEMM is
@@ -557,7 +557,7 @@ is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
     `EmptyInfoSpanStillFactorises`, `ComplexDiagonalIsExactlyReal` and `FacadeReachesTheCtaKernel`; residual and
     `info` sweep both. 112 of 216 cases skip (host backends of a GPU kernel).
 
-## raw-evidence
+## Raw evidence
 
 Raw data is at tag `perf-evidence/vendor-independence`, retrievable with
 `git show perf-evidence/vendor-independence:<path>`.

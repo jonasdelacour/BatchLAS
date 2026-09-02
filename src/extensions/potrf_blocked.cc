@@ -1,6 +1,6 @@
 // Native batched POTRF, WP4 Phase 2: the BLOCKED DRIVER.
 //
-// Read WP4_POTRF_SPEC_CORRECTIONS.md first, then WP4_POTRF_SPEC.md; where they
+// Read docs/perf/potrf.md; where the original spec and its corrections
 // disagree the corrections win. This file is the "revised implementation order"
 // rows 2.1 and 2.2.
 //
@@ -446,7 +446,7 @@ template <typename T> class PotrfBlockedFixupKernel;
 //     it was.
 //
 //     ZEROING THE PANEL ALONE IS NOT ENOUGH, which is where the spec's naive
-//     form (WP4_POTRF_SPEC.md:387) is wrong: with a zero diagonal in L11 the
+//     form (perf-evidence/vendor-independence:WP4_POTRF_SPEC.md:387) is wrong: with a zero diagonal in L11 the
 //     solve computes 0/0 = NaN. The unit diagonal is the load-bearing half.
 //
 //     The UPPER triangle of the diagonal block is NOT written. LAPACK potrf

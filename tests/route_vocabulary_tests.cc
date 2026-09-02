@@ -2065,7 +2065,7 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
     // The scaffolding pinned this hook's DELIBERATE ABSENCE and said in as many
     // words: "Delete this case when the tier sweep lands and the predicate is
     // declared; replace it with one that pins the measured crossover." The sweep
-    // has landed (docs/perf/lu.md#native-tier-preferred, run_tier.sh: both arms
+    // has landed (docs/perf/lu.md#native_tier_preferred, run_tier.sh: both arms
     // pinned, every pin verified to have taken, double re-run across four
     // batches), so this is that replacement.
     //
@@ -2321,7 +2321,7 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
 // appear without the grid that justifies it" -- still needs a guard, and the way
 // to guard a window is to pin BOTH of its sides.
 //
-// THE WINDOW (docs/perf/lu.md#getrs-fused-window-evidenceREADME.md, 354 + 134 measured cells):
+// THE WINDOW (docs/perf/lu.md#getrs-fused-window-evidence, 354 + 134 measured cells):
 //     nrhs <= 2  for every type and order   -- clause A
 //   + nrhs <= 4  for float only             -- clause B
 // and NOTHING else. Everything wider is a measured loss somewhere on its batch

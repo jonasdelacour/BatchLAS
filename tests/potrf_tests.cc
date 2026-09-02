@@ -1112,7 +1112,7 @@ TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
 //
 // These four numbers are what step 0.2 measured on this box at a 97,280 B budget
 // (runtime local_mem_size 101,376 minus the standard 4,096 B reserve), and they
-// are NOT WP4_POTRF_SPEC.md:273's {105, 74, 74, 52}: that set follows from a
+// are NOT perf-evidence/vendor-independence:WP4_POTRF_SPEC.md:273's {105, 74, 74, 52}: that set follows from a
 // 45,056 B budget which is refuted -- device_limits.hh's 49152 is hardcoded by
 // cmake/BatchLASDetectSYCL.cmake:44-45 for any nvidia_gpu_sm_* pattern and is
 // wrong here by 2.06x. Shipping the small numbers leaves float n in 106..155

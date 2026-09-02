@@ -1,4 +1,0 @@
-210 MHz, 31
-[1;36mName                                              Arg0    Arg1    Arg2    Arg3    Arg4    Arg5    Arg6    Arg7    Iter        Avg(ms)     Std(ms)     chk         GFLOPS      GB/s        Time (µs) / matrixnnz/item    nnz/row     [0m
-[1m(BM_SPMM_Cells<float, batchlas::Backend::CUDA>)   [0m1024    3       2       512     0       0       1       0       100         0.16265     0.00017082  2210.6      38.680      141.84      0.31768     3072        3           
-2565 MHz, 34

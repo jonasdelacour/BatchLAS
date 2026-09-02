@@ -10,7 +10,7 @@ windows), plus the dispatch machinery every op uses. The same four ops' kernel d
 [`level3.md`](level3.md); this page is the routing half. Measured windows for `gemm`, `trsm`, `potrf`,
 `geqrf`/`orgqr`, `getrf`/`getrs`/`getri`, `gemv` and `spmm` live with their own packages.
 
-## the-three-axes
+## The three axes
 
 Three questions were previously answered by one enum. They are now separate:
 
@@ -37,9 +37,9 @@ spelled `Backend::CUDA` + `BATCHLAS_HAS_CUBLAS == 0`, which costs zero new insta
 are `Origin::Vendor` even though their kernels compile into our `.so`: the source is NVIDIA's and ships only for
 NVIDIA, so vendor independence must be measurable without them (`route.hh:52-57`).
 
-## what-ships
+## What ships
 
-### the-resolver
+### The resolver
 
 `dispatch::resolve_route<Op, T>` (`route_resolve.hh:196-217`) wraps a pure `resolve_route_uninstrumented` (`:89-176`).
 Rules, as implemented:
@@ -62,7 +62,7 @@ Rules, as implemented:
 none. (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
 sentence it supports is not.)
 
-### the-vendor-availability-gate
+### The vendor-availability gate
 
 `dispatch/vendor_available.hh` asks per **library**, not per device family, because the map is not uniform: on NVIDIA
 `geqrf`/`getrf`/`ormqr` come from cuBLAS while `potrf`/`syev` come from cuSOLVER, on AMD all from rocSOLVER.
@@ -90,7 +90,7 @@ in the facade, so the vendor call is not compiled at all when the library is abs
 (`route_compiled.hh:62-64`). The four sites are `ormqr_blocked.cc:121`, `ortho.cc:179` and `:182`, and
 `sytrd_blocked.cc:819`; `coverage.cc:226` is a fifth consumer outside `src/extensions/`.
 
-### level-3-route-arms
+### Level-3 route arms
 
 The four level-3 dispatchers have **no `RouteTable` and never call `resolve_route`**; their thresholds are hand-rolled
 `if`-chains, expressed as neither `supports()` nor `preferred()` (`src/backends/level3_coverage.hh:18-37`). The gates
@@ -122,7 +122,7 @@ save can be measured — it stores both triangles, and the half the caller did n
 spelling) parse to `{Vendor, DiagFullGemm}` (`route_env.hh:190-198`), which is what the sweep scripts and
 `tests/route_vocabulary_tests.cc:241-251` use.
 
-### the-environment-vocabulary
+### The environment vocabulary
 
 Canonical spelling is `BATCHLAS_<OP>_ROUTE`, taking an origin (`vendor`, `native`), an algorithm (`cta`,
 `expand_gemm`, …), or both joined by a colon (`native:register_tiled`) (`route_env.hh:17-19`; parser at `:76-99`,
@@ -147,12 +147,12 @@ is now one parse and one value, pinned by `tests/route_vocabulary_tests.cc:253-2
 `{Auto, Auto}` for every op (`route_env.hh:145-148`, with the WP2 E6 rationale at `:123-144`);
 GEMM used to be the odd one out at `{Vendor, Auto}`, and WP2 E6 removed the asymmetry.
 
-## measured-boundaries
+## Measured boundaries
 
 All figures RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU via `experiments/gpu_guard.sh`. Batch is
 always large enough to saturate; batch = 1 is not a design target.
 
-### expansion-crossover
+### Expansion crossover
 
 `expansion_preferred(max_dim, batch)` is `batch >= 4 || max_dim >= 256` (`kExpandMinBatch`/`kExpandMinDim`,
 `triangular_expand.hh:43-44`; the predicate at `:49-60`, which consults `BATCHLAS_EXPAND_ROUTE=expand|loop` **first**,
@@ -169,7 +169,7 @@ bracketing region **batch ≤ 2 with n ≤ 128**, where it loses by **up to 2.5x
 `trmm` does not consult this: `cublas?trmm` has a flat ~110 µs floor whatever the shape, so the expansion beat it in
 every cell measured, batch 1 included (`triangular_expand.hh:41-43`).
 
-### syrk-tile-boundaries
+### `syrk` tile boundaries
 
 `syrk_prefer_triangular_tiles` (`syrk_custom_dispatch.cc:109-118`), with `kTriangularTile = 128` and `kTriangularTileK
 = 8` (`triangular_tiles.hh:118-119`):
@@ -216,7 +216,7 @@ carries the batch factor, at any batch ≥ 8 that term is satisfied by every sha
 tunes for the disjunct reduces to `n >= 16 && min_dim * 2 >= max_dim`**. With MathDx absent its only effect is to
 admit shapes to the tile kernels, and **its own crossover has no bracketing grid here** — unverified.
 
-### syr2k-batch-boundary
+### `syr2k` batch boundary
 
 `syr2k_prefer_triangular_tiles(A)` is `A.batch_size() >= 2` (`syr2k_custom_dispatch.cc:95-97`). Measured float over n
 8..3072 × k 4..2048 × batch 1..1024 (`:78-94`):
@@ -230,7 +230,7 @@ admit shapes to the tile kernels, and **its own crossover has no bracketing grid
 Neither n nor k nor the tile count enters the predicate, because none of them changes which side of the per-launch
 difference a shape falls on.
 
-### trmm-no-threshold
+### `trmm`: no threshold
 
 There is deliberately no size threshold. The first router gated the tile kernel to `m <= 64 || m >= 512`, read off a
 trmm-vs-**gemm** column — the wrong comparison, because the router chooses between the tile kernel and the **vendor**.
@@ -252,7 +252,7 @@ re-tuned every time either route changes. Against the GEMM spelling, by type, `t
 `complex<float>`** (0.69x–0.93x) — a register-file ceiling, not a tuning miss: cuBLAS's cgemm runs at ~100% of FP32
 FMA peak on these shapes while a complex accumulator costs twice the registers.
 
-### herk-her2k-crossovers
+### `herk` and `her2k` crossovers
 
 Not moved by WP1 — both still live inside the cuBLAS-gated TU — but they are the same expansion decision and the
 constants are easy to confuse with the ones above.
@@ -276,7 +276,7 @@ deliberately excluded from that route for the same reason: it would reach the sa
 bytes per element and none of it has been measured (`:811-814`). Guessing is how the 7.8x double inversion below got
 written down in the first place.
 
-## negative-results
+## Negative results
 
 Built, measured, rejected. These cost as much to establish as the wins.
 
@@ -334,7 +334,7 @@ contract that is invisible until an op that respects the triangle replaces one t
    a correct header and **zero `reached` rows** (`coverage.hh:27-49`). The gate is now a runtime bool in exactly one
    TU, and `cmake/BatchLASOptions.cmake:109` records that the option was deliberately never added.
 
-## correctness-findings
+## Correctness findings
 
 Wrong answers found, how they hid, and what guards them now.
 
@@ -385,7 +385,7 @@ Wrong answers found, how they hid, and what guards them now.
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
   every panel with n2 > 128. Both halves now live together in `expansion_budget.hh:85-101`.
 
-## the-coverage-instrument
+## The coverage instrument
 
 Two tables, answering different questions (`coverage.hh:11-25`). **static** (`linked`) iterates the route predicates
 with no kernel run — exact, instant, no GPU needed — and answers *"is the kernel in the build"*, the planning
@@ -407,7 +407,7 @@ to cuBLAS may well be faster). It treats a capture with **zero `reached` rows as
 "nothing changed" — the instrument has produced a correct header with no rows twice, for unrelated reasons, and both
 times it looked clean. `scripts/coverage_merge.sh` collapses the per-PID shards a 53-binary `ctest` run produces.
 
-### instrument-defects
+### Instrument defects
 
 Five, each of which looked healthy while reporting almost nothing: (1) the gate-declined half was unrecorded, so a
 shape moving *off* a native kernel was invisible; (2) `uplo`/`side`/`diag` were not in the key, so two calls differing
@@ -416,7 +416,7 @@ truncated the last; (4) the compile-time gate and weak-symbol interposition (see
 9); (5) `route_diff.sh compare` applies no `backend != AUTO` filter, so pure-layer test shapes recorded with `backend
 = AUTO` make a clean 65-decision move look like 240 lines of churn.
 
-## vendor-free-baseline
+## Vendor-free baseline
 
 `cmake -B build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON` yields
 `BATCHLAS_HAS_CUDA_BACKEND 1` with every CUDA math library at 0 — a CUDA device with no CUDA math libraries, a state
@@ -444,7 +444,7 @@ S4's non-obvious detail: the CMake gate could not be relaxed by deleting `if(BAT
 `BACKEND_CUDA_SOURCES` feeds an object library that is not *created* when no CUDA math library is present; the four
 names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
 
-## open-debts
+## Open debts
 
 1. **`BATCHLAS_SYRK_ROUTE=native` reaches a route that writes both triangles.** With `{Native, Auto}`,
    `syrk_use_cuda_custom` returns true (`:176-178`); in `syrk_cuda_custom` the gram test needs `origin == Auto`
@@ -489,7 +489,7 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
     batch-3 and `128 < n < 256` bands refused by `expansion_preferred`; and `syrk_prefer_cuda_custom_heuristic`'s
     `tiled_work >= 8` and 2:1 aspect ratio, none of which has a bracketing grid in these sources.
 
-## raw-evidence
+## Raw evidence
 
 Raw data is preserved at the git tag `perf-evidence/vendor-independence` and is retrievable with `git show
 perf-evidence/vendor-independence:<path>`.

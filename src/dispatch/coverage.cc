@@ -215,7 +215,7 @@ void append_static_rows(std::ostringstream& out) {
     // So this table answers "is the kernel in the build", which is the right
     // PLANNING question, and the `reached` rows answer "did a call actually get
     // there", which is the right BURN-DOWN question. Reading either as the
-    // other is how VENDOR_FREE_BASELINE.md came to claim a working vendor-free
+    // other is how docs/design/vendor-free-status.md came to claim a working vendor-free
     // gemm.
     // WP1 S7: the tile routes' availability is per (backend, SCALAR), not per
     // backend, so this column is reported FOR FLOAT and the scalar column now
@@ -269,7 +269,7 @@ void append_static_rows(std::ostringstream& out) {
         //
         // This column answers "is the kernel IN THE BUILD" and NOT "does traffic
         // reach it" -- the distinction at :207-219, which is how
-        // VENDOR_FREE_BASELINE.md came to claim a working vendor-free gemm.
+        // docs/design/vendor-free-status.md came to claim a working vendor-free gemm.
         // preferred() is still false for both ops, so a vendor-present build
         // sends them nothing; a vendor-free build now reaches them through
         // route_resolve.hh:60-63 instead of throwing. Reading `true` here as

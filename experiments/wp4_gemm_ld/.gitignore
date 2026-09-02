@@ -1,8 +1,0 @@
-# ncu binary reports: ~170 MB across five files, regenerable from the drivers
-# in gpu1/ (ncu_full.sh, ncu_bonly.sh, ncu_vendor.sh). The EVIDENCE they were
-# collected for is the exported metric dumps -- raw-*.csv, vraw-*.csv, det-*.csv
-# -- which are tracked, human-readable, and what the analysis actually cites.
-#
-# See the branch's earlier cleanup commit: 25 MB of SASS dumps and compiled
-# binaries had to be untracked after they made a PR read 292k additions.
-*.ncu-rep

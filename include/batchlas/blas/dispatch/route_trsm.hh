@@ -236,7 +236,7 @@ struct RouteTable<Op::trsm, T> {
         // work-item solves one system and there is nothing else on the device.
         // At batch = 8 it already wins (double 1.08-2.93x, float n<=32
         // 1.09-2.44x), so the boundary sits at the first measured win rather
-        // than at a rounder number. See docs/perf/trsm.md#the-step-9-gridstarved-*.csv.
+        // than at a rounder number. See docs/perf/trsm.md#the-step-9-grid.
         //
         // NOTE WHAT THIS IS NOT. Spec S10 proposed a starvation guard
         // `batch*q < 8*CU*32 -> vendor`, and the measurement REFUTES it: at

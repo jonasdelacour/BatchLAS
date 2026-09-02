@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 #
-# WP0_DISPATCH_SPEC.md ranks as its number-one risk that S5 (moving the public
+# docs/design/vendor-independence.md ranks as its number-one risk that S5 (moving the public
 # op definitions out of the vendor TUs) edits rocblas.cc / rocsolver.cc /
 # rocsparse.cc, and that "neither compiles here". Each op's move has to be
 # atomic across every vendor TU or the build gets duplicate or undefined
