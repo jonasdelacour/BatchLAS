@@ -1,74 +1,11 @@
-// Native batched POTRF -- the CTA kernel's tests.
+// Native batched POTRF: the CTA leaf kernel and the blocked driver above it.
 //
-// ---------------------------------------------------------------------------
-// THE ORACLE IS NEVER THE VENDOR, AND THE ROUTE IS NEVER TRUSTED
-// ---------------------------------------------------------------------------
-// Two independent reasons, both of which have burned this repository:
-//
-//   * A VENDOR REFERENCE IS INERT IN A VENDOR-FREE BUILD. resolve_route falls
-//     back to a supported NATIVE route when no vendor exists -- which is the
-//     code under test -- so a "compare against cuSOLVER" test compares the
-//     kernel with itself in exactly the build this work package exists for.
-//
-//   * A FORCED ROUTE THAT supports() REJECTS SILENTLY BECOMES THE VENDOR.
-//     route_resolve.hh:101 tests `if (Table::supports(forced, s)) return forced;`
-//     and falls through to automatic() at :111, so a test that sets
-//     BATCHLAS_POTRF_ROUTE=cta and gets one gate wrong runs cuSOLVER and passes
-//     GREEN over a kernel nothing executed.
-//
-// So: every numerical test below calls sycl_potrf::potrf_cta_dispatch<T>
-// DIRECTLY -- a call a vendor cannot serve -- and checks a HOST MULTIPLY-BACK
-// residual, ||L L^H - A||_F / ||A||_F, computed here from the returned factor
-// and the input this file generated. That oracle depends on no other
-// implementation in the tree. Exactly one test (FacadeReachesTheCtaKernel) is
-// about routing, and it asserts the resolved route is native BEFORE it believes
-// the numbers.
-//
-// ---------------------------------------------------------------------------
-// EVERY CLAIM BELOW WAS EXECUTED, AND ONE OF THEM WAS WRONG THE FIRST TIME
-// ---------------------------------------------------------------------------
-// This project has three recorded incidents of a guard test that could not fail
-// by construction (trmm uplo/diag; a conjugation test blind by construction; a
-// ConjTrans test too small to reach the tile it guarded). Five deliberate breaks
-// were run against this file. What each turned red, MEASURED:
-//
-//  1. THE STALE PIVOT reintroduced in (P1) (read the pivot from the tile instead
-//     of shuffling lane k's register): 18 of 42 red -- every residual test.
-//     InfoIndexIsExact and InfoReportsTheFirstFailure STAYED GREEN. That was not
-//     the prediction, and it is the fourth instance of this repository's blind
-//     guard: with a plain planted L0 D L0^H the ORIGINAL diagonal at the failure
-//     column is still negative, so a stale-pivot reader names the same column.
-//     make_planted_ldl now normalises row c's prefix so that the original
-//     diagonal there is POSITIVE (+1) and only the updated Schur diagonal is
-//     negative; the test asserts that property of its own input. Re-run with the
-//     same break: 26 of 42 red, InfoIndexIsExact among them, reporting
-//     info == 33 where 17 was planted.
-//
-//  2. THE (P1) PUBLISH GUARD `lane < ib` removed: 30 of 42 red, including
-//     PackedBatchMatchesSolo, which is the only test that can see the half of
-//     that defect that writes into a NEIGHBOURING MATRIX
-//     ("packed vs solo differ at n=9 b=1 (0,0): 0 vs 1.53606").
-//
-//  3. THE (P3) FORCED-REAL HERMITIAN DIAGONAL removed: NOTHING went red, and
-//     that is correct rather than a gap. Every diagonal entry of the OUTPUT is
-//     written by (P1)'s publish, which stores dev_from_real(sqrt(akk)); the only
-//     consumer of a tile diagonal is (P1)'s pivot, which takes dev_real(). The
-//     residue that line discards is never read. It is defence in depth and the
-//     kernel says so where it lives.
-//
-//  4. THE LOAD-SIDE diagonal real-forcing removed: also nothing red, for the
-//     same reason.
-//
-//  5. BREAK 4 PLUS scaling (P1)'s diagonal publish instead of rebuilding it from
-//     the real square root: ComplexDiagonalIsExactlyReal RED for both complex
-//     types ("imag(L(1,1)) != 0", -2.08e-11 for complex<float>). So that test
-//     CAN fail -- the diagonal-real property is enforced redundantly at three
-//     points and any single removal is masked by the other two.
-//
-// All five were restored and the suite re-run green (42 passed, 46 skipped --
-// the skips are the four NETLIB/CPU instantiations, which have no native route,
-// plus the complex-only test on the two real types).
-//
+// Every numerical test calls sycl_potrf::potrf_{cta,blocked}_dispatch DIRECTLY and
+// checks a host multiply-back residual computed in this file, because a vendor
+// reference is inert in a vendor-free build (resolve_route falls back to the very
+// native route under test) and a forced route that supports() rejects silently becomes
+// the vendor (route_resolve.hh:101, :111).
+// evidence: docs/perf/potrf.md#correctness-findings
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/linalg.hh>
@@ -132,13 +69,10 @@ inline T host_rand(std::mt19937& gen) {
     else return d(gen);
 }
 
-// A dense, host-side, column-major Hermitian positive-definite matrix.
-//
-// A = (M M^H)/n + shift*I with M's entries uniform in [-1,1]. The shift keeps
-// the condition number O(1) so a residual failure is a BUG and not the kappa^2 u
-// cliff Cholesky legitimately falls off; the M M^H term is what puts a
-// non-trivial imaginary part in every off-diagonal for complex T, which is the
-// only way a residual test can see a missing conjugate at all.
+// A dense host-side column-major Hermitian PD matrix: A = (M M^H)/n + shift*I, M
+// uniform in [-1,1]. The shift pins the condition number at O(1) so a residual failure
+// is a bug and not the kappa^2 u cliff; M M^H is what puts a non-trivial imaginary part
+// in every off-diagonal for complex T.
 template <typename T>
 std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
     using R = RealOf<T>;
@@ -171,39 +105,16 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
     return A;
 }
 
-// A = L0 D L0^H with L0 UNIT lower triangular and D real diagonal.
+// A = L0 D L0^H with L0 UNIT lower triangular and D real diagonal: Cholesky's k-th
+// updated Schur diagonal equals D_kk exactly, so a planted negative D_kk pins the
+// failure column with no reference implementation involved.
 //
-// The point of this generator is that Cholesky's k-th updated Schur diagonal
-// equals D_kk EXACTLY (the LDL^H factorisation of a Hermitian matrix is unique),
-// so planting a negative D_kk pins the failure column with no reference
-// implementation involved. That is what makes InfoIndexIsExact an exact,
-// self-referential oracle rather than a cross-implementation comparison -- and
-// exactness matters, because the API's own position (options_api_tests.cc:463)
-// is that vendors do not agree on WHICH index they name first.
-//
-// THE ROW NORMALISATION IS THE WHOLE TEST, AND IT WAS ADDED AFTER A MEASUREMENT
-// PROVED THE TEST BLIND WITHOUT IT.
-//
-// With plain small random L0 entries, the ORIGINAL diagonal at the failure
-// column is A_cc = D_c + sum_{p<c} |L0(c,p)|^2 = -1 + (something small), i.e.
-// still negative -- so a kernel reading the STALE pivot straight out of the tile
-// flags the same column and InfoIndexIsExact passes. That was executed, not
-// reasoned about: with the stale-pivot defect reintroduced, InfoIndexIsExact and
-// InfoReportsTheFirstFailure were among the 24 tests that stayed GREEN. That is
-// precisely this repository's recorded failure mode of a guard test that cannot
-// fail by construction.
-//
-// The fix is to scale row c's prefix so that sum_{p<c} |L0(c,p)|^2 == 2, making
-// A_cc = -1 + 2 = +1: the ORIGINAL diagonal at the failure column is POSITIVE
-// and only the UPDATED Schur diagonal is negative. A stale-pivot reader now sees
-// nothing wrong at column c and reports the wrong index (or none), while the
-// correct kernel still reports exactly c+1. `negative_cols` must be sorted for
-// the reasoning to hold -- every p < c then has D_p == +1.
-//
-// c == 0 has no prefix to scale and is inherently non-discriminating for this
-// defect; it is kept in the sweep because it is a boundary of the panel loop,
-// and the caller asserts the positive-diagonal property for c >= 1 so the
-// distinction is visible rather than assumed.
+// The row-prefix normalisation below looks gratuitous and is the whole test. Without it
+// A_cc at the failure column is still negative, so a kernel reading the STALE pivot
+// names the same column and every info test passes over the defect; scaling
+// sum_{p<c}|L0(c,p)|^2 to 2 makes the ORIGINAL diagonal there +1 and only the UPDATED
+// Schur diagonal negative. `negative_cols` must be sorted, and c == 0 cannot
+// discriminate at all, so callers assert the property only for c >= 1.
 template <typename T>
 std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, unsigned seed) {
     using R = RealOf<T>;
@@ -284,23 +195,9 @@ RealOf<T> multiply_back_residual(const std::vector<T>& A, const std::vector<T>& 
     return std::sqrt(num) / std::sqrt(den);
 }
 
-// The residual bound. Cholesky's backward error is O(n) * eps * ||A||; the
-// constant is slack for the reduction order, which the kernel does not share
-// with the host loop above.
-//
-// IT WAS 40, AND 40 COULD NOT FAIL. The bound was measured by sweeping the
-// multiplier over the whole size ladder and both triangles for all four types:
-// 40, 8, 4 and 1 all pass; 0.2 turns ResidualBothTriangles red for every type.
-// So the kernel's true worst-case relative Frobenius residual is in
-// (0.2, 1] * n * eps and the shipped bound carried 40-200x of slack -- enough
-// that an accuracy defect would have to be catastrophic to be seen. Concretely,
-// swapping sycl::sqrt + R(1)/dkk for rsqrt.approx, which
-// potrf_cta_device.hh:205 explicitly forbids, is invisible at 40 and no other
-// test in this file looks at accuracy at all.
-//
-// 4 is the measured worst case rounded up by one binary order, i.e. 4-20x of
-// margin. A future BLOCKED driver has a different error constant and should get
-// its own bound rather than slackening this one.
+// The leaf's residual bound; the constant is slack for a reduction order the kernel
+// does not share with the host loop above. 4 brackets the measured worst case (0.2
+// turns ResidualBothTriangles red). The blocked driver gets its own bound below.
 template <typename T>
 RealOf<T> residual_tol(int n) {
     using R = RealOf<T>;
@@ -336,22 +233,10 @@ protected:
         }
     }
 
-    // THE DEVICE'S ceiling, not the reference budget's.
-    //
-    // This was sycl_potrf::potrf_cta_max_n<T>(), which is hardcoded to
-    // kPotrfReferenceSlmBudget = 97,280 (potrf_cta.cc). But supports()
-    // (potrf_route.hh) and potrf_cta_dispatch (potrf_cta.cc) both use the
-    // RUNTIME budget, LOCAL_MEM_SIZE - 4096. The two coincide only on a box
-    // reporting local_mem_size == 101,376, i.e. this one.
-    //
-    // On any other GPU the binary broke in two ways that look like kernel bugs
-    // and are not: with a LARGER local memory, JustPastTheCeilingHasNoCtaRoute's
-    // anti-vacuity guard fails because it asks supports() about a frozen cap
-    // while supports() answers for the device; with a SMALLER one,
-    // ResidualBothTriangles pushes `cap` into its size list and
-    // potrf_cta_dispatch throws for an order the device genuinely cannot hold.
-    // MeasuredFitCeilings keeps the pin on the fixed 97,280 formula, which is
-    // where a budget-independent assertion belongs.
+    // THE DEVICE'S ceiling, not the reference budget's: potrf_cta_max_n<T>() is pinned to
+    // the 97,280 B reference budget while supports() and potrf_cta_dispatch both use the
+    // RUNTIME budget LOCAL_MEM_SIZE - 4096. The two coincide only on this box.
+    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
     int ceiling() const {
         const std::size_t local_mem =
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
@@ -359,11 +244,9 @@ protected:
         return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
     }
 
-    // Load the `uplo` triangle of `src` (dense column-major, n x n) into batch
-    // item `b`, and POISON the other triangle. The poison is load-bearing: the
-    // contract says the other triangle is neither read nor written, and
-    // ortho.cc:156-161 depends on the stronger "not read" because it forms only
-    // half of its Gram matrix and leaves the rest uninitialised workspace.
+    // Load the `uplo` triangle of `src` into item `b` and POISON the other. The poison is
+    // load-bearing: the contract says the other triangle is neither read nor written, and
+    // ortho.cc:156-161 depends on "not read" -- it leaves its other half uninitialised.
     void load_triangle(Matrix<T, MatrixFormat::Dense>& A, int b, int n,
                        const std::vector<T>& src, Uplo uplo, T poison) {
         for (int i = 0; i < n; ++i) {
@@ -374,9 +257,8 @@ protected:
         }
     }
 
-    // Extract the lower-triangular L for batch item b, whichever triangle the
-    // factor was written into. For Upper the stored object is U with A = U^H U,
-    // and L = U^H -- so the multiply-back oracle is the same one function.
+    // Extract the lower-triangular L for item b from whichever triangle was written: for
+    // Upper the stored object is U with A = U^H U, so L = U^H and the oracle is unchanged.
     std::vector<T> extract_L(const Matrix<T, MatrixFormat::Dense>& A, int b, int n, Uplo uplo) {
         std::vector<T> L(static_cast<size_t>(n) * n, T{});
         for (int i = 0; i < n; ++i) {
@@ -388,7 +270,6 @@ protected:
         return L;
     }
 
-    // Run the CTA kernel directly. Returns info.
     std::vector<int32_t> run_cta(Matrix<T, MatrixFormat::Dense>& A, Uplo uplo,
                                  bool pass_info_span = true) {
         const int batch = A.batch_size();
@@ -408,12 +289,8 @@ protected:
 
 TYPED_TEST_SUITE(PotrfCtaTest, PotrfTestTypes);
 
-// ---------------------------------------------------------------------------
-// T1. Residual, both Uplo, across the whole order range including the ceiling.
-//
-// n = 2 and n = 3 are MANDATORY and not padding: the stale-pivot defect first
-// shows at n = 2, because at n = 1 there is no second column to be wrong.
-// ---------------------------------------------------------------------------
+// Residual, both Uplo, over the whole order range including the ceiling. n = 2 and 3
+// are mandatory: the stale-pivot defect first shows at n = 2.
 TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -422,19 +299,10 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     ASSERT_GT(cap, 0) << "no CTA capacity for this type -- the kernel is not linked";
 
     std::vector<int> sizes = {1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 63, 64, 65};
-    // 108..111 straddle THE 48 KB LAUNCH HOLE. Measured cold on this box: a
-    // dynamic local-memory request in (49152 - static_shared, 49152] fails with
-    // CUDA_ERROR_INVALID_VALUE -- too big for CUDA's non-opt-in 48 KB limit once
-    // the kernel's static shared is added, not big enough for the UR adapter to
-    // raise MaxDynamicSharedMemorySize. Unpadded, float n = 110 asks for 49,044 B
-    // and lands squarely in it. potrf_cta.cc pads such a request up to 49,920.
-    //
-    // The order matters and is why these sit AFTER the small sizes and not at
-    // the front: the attribute is sticky per CUfunction and one CUfunction serves
-    // every n, so any earlier launch above 48 KB masks the hole for the rest of
-    // the process. Every size before this point is under 48 KB, so within THIS
-    // test the pad is genuinely on trial. Across a whole binary it is not, and no
-    // automated test in this suite can make it so.
+    // 108..111 straddle the 48 KB launch hole: a dynamic local-memory request in
+    // (49152 - static_shared, 49152] fails with CUDA_ERROR_INVALID_VALUE. These MUST stay
+    // after the smaller sizes -- the attribute is sticky per CUfunction, so any earlier
+    // launch above 48 KB masks the hole. evidence: docs/perf/potrf.md#the-48-kb-launch-hole
     for (int n : {108, 109, 110, 111}) sizes.push_back(n);
     sizes.push_back(cap - 1);
     sizes.push_back(cap);                       // exactly at the fit ceiling
@@ -466,10 +334,8 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T1b. The ceiling is a HARD capacity: one past it must not launch, and
-// supports() must already have said so.
-// ---------------------------------------------------------------------------
+// The ceiling is a HARD capacity: one past it must not launch, and supports() must
+// already have said so.
 TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -484,9 +350,8 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
 
     const auto shape = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
     ASSERT_TRUE(shape.has_value());
-    // The guard that keeps the next assertion from passing vacuously: at the
-    // ceiling itself the CTA arm MUST be supported, or "unsupported one past it"
-    // proves nothing.
+    // Anti-vacuity: at the ceiling itself the CTA arm MUST be supported, or "unsupported
+    // one past it" proves nothing.
     auto at_cap = *shape;
     at_cap.m = at_cap.n = at_cap.k = cap;
     EXPECT_TRUE((dispatch::RouteTable<dispatch::Op::potrf, T>::supports(
@@ -494,8 +359,6 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
     EXPECT_FALSE((dispatch::RouteTable<dispatch::Op::potrf, T>::supports(
         dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)));
 
-    // And the direct entry point refuses rather than launching something that
-    // cannot fit.
     UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
     UnifiedVector<int32_t> info(1, int32_t(0));
     EXPECT_THROW(sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
@@ -503,25 +366,17 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
                  std::invalid_argument);
 }
 
-// ---------------------------------------------------------------------------
-// T2. The other triangle is neither read nor written.
-//
-// Two passes. The first poisons with a finite sentinel and memcmp's it back
-// bit for bit -- that proves NOT WRITTEN. The second poisons with a quiet NaN
-// and asserts the produced factor is NaN-free -- that proves NOT READ, which is
-// the stronger claim and the one ortho.cc depends on.
-// ---------------------------------------------------------------------------
+// The other triangle is neither read nor written. A finite sentinel memcmp'd back
+// proves NOT WRITTEN; a quiet NaN with the factor asserted NaN-free proves NOT READ.
 TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
 
     const int batch = 3;
 
-    // BOTH PARITIES. n = 37 alone was not enough: lda = n | 1, so an ODD order
-    // has no pad row in the SLM tile and an even one does. A store-back that ran
-    // to `i < lda` instead of `i < n` would write A(n, c), which in a packed
-    // Matrix(n, n, batch) is linear index (c+1)*n -- element (0, c+1), inside
-    // the untouched upper triangle. Only an even n can see that.
+    // BOTH PARITIES. lda = n | 1, so an odd order has no pad row in the SLM tile and an
+    // even one does; a store-back running to `i < lda` would write A(n, c) == element
+    // (0, c+1) of a packed Matrix, inside the untouched triangle. Only even n sees that.
     for (int n : {36, 37}) {
       if (n > this->ceiling()) continue;
       for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -578,32 +433,12 @@ TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
       }
 }
 
-// ---------------------------------------------------------------------------
-// T3. A packed launch (G > 1 matrices per work-group) agrees BIT FOR BIT with
-// the same matrices launched one per work-group.
-//
-// This is the test for the (P1) publish guard `lane < ib`. Without it, lanes
-// ib..31 write S(j+ib .. j+31, j+k): into the A21 panel (P2) is about to read on
-// every panel where ib < 32, and past the end of the tile on the ragged last
-// panel -- which under G > 1 lands in the NEIGHBOURING MATRIX. A batch-1
-// residual test cannot see the second half at all, and the comparison is
-// bit-exact rather than tolerant because both sides run the same arithmetic in
-// the same order; only the SLM neighbourhood differs.
-//
-// n is chosen small enough that the launch parameters actually pick G > 1, AND
-// THE TEST NOW ASKS. It used to say this in a comment and assert it nowhere:
-// which n pack is a consequence of kPotrfSlmSoftTarget, the clamp on G and
-// sizeof(T), none of which the test can see, so any change to those three would
-// have collapsed it to one matrix per work-group and left the neighbouring-
-// matrix half of the defect invisible while the test stayed green. That is this
-// repository's recorded blind-guard shape. potrf_cta_debug_launch exists for
-// this one assertion.
-//
-// The n values that pack are TYPE-DEPENDENT, so a value that does not pack for
-// some type is SKIPPED rather than silently tested at G == 1 -- and the test
-// fails outright if no n packed for this type at all, which is the case a bare
-// `continue` would hide.
-// ---------------------------------------------------------------------------
+// A packed launch (G > 1 matrices per work-group) must agree BIT FOR BIT with the same
+// matrices launched one per work-group -- the test for the (P1) publish guard
+// `lane < ib`. Without it lanes ib..31 write into the A21 panel (P2) is about to read,
+// and on the ragged last panel past the end of the tile, which under G > 1 lands in the
+// NEIGHBOURING MATRIX. Which n packs is type-dependent and invisible to the test, so
+// G > 1 is ASKED of potrf_cta_debug_launch rather than assumed.
 TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -646,24 +481,14 @@ TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
             }
         }
     }
-    // The whole point of this test is the G > 1 launch. If no n reached one,
-    // every assertion above was vacuous and the test must say so rather than
-    // report a green it did not earn.
+    // Anti-vacuity: without a G > 1 launch every assertion above was vacuous.
     ASSERT_GT(packed_ns, 0)
         << "no n in the sweep packed more than one matrix per work-group for this type; "
            "this test proved nothing";
 }
 
-// ---------------------------------------------------------------------------
-// T5. `info` names the EXACT 1-based global column at which the updated Schur
-// diagonal was not > 0.
-//
-// The oracle is the planted L0 D L0^H of make_planted_ldl: Cholesky's k-th pivot
-// IS D_kk, so the failure column is known exactly with no reference solve. The
-// sweep straddles panel boundaries for both NB ladders in the tree (8 for
-// complex<double>, 16 for the rest), which is where the stale-pivot defect and
-// any off-by-one in the panel loop live.
-// ---------------------------------------------------------------------------
+// `info` names the EXACT 1-based global column whose updated Schur diagonal was not
+// > 0. The sweep straddles panel boundaries for both NB ladders (8 for complex<double>).
 TYPED_TEST(PotrfCtaTest, InfoIndexIsExact) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -671,20 +496,15 @@ TYPED_TEST(PotrfCtaTest, InfoIndexIsExact) {
     const int n = std::min(69, this->ceiling());
     ASSERT_GE(n, 34) << "the sweep needs room for several panels";
 
-    // BOTH TRIANGLES. The kernel's own comment calls Upper "a LOAD/STORE
-    // TRANSFORM and not a second algorithm", and the route table declines to add
-    // an uplo gate to the CTA arm on the strength of that claim -- but every
-    // failure-path test was Lower-only, so nothing falsified it for `info`.
+    // BOTH TRIANGLES: the route table declines an uplo gate on the CTA arm, and every
+    // failure-path test used to be Lower-only.
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
     for (int c : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, n - 1}) {
         if (c < 0 || c >= n) continue;
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         const auto ref = make_planted_ldl<T>(n, {c}, 4242u + static_cast<unsigned>(c));
-        // THE TEST ASSERTS ITS OWN SENSITIVITY. For c >= 1 the ORIGINAL diagonal
-        // at the failure column is positive by construction, so only a kernel
-        // that tests the UPDATED Schur diagonal can name this column. Without
-        // this line the case would still pass against the stale-pivot defect,
-        // which is measured, not hypothetical.
+        // THE TEST ASSERTS ITS OWN SENSITIVITY: for c >= 1 the ORIGINAL diagonal at the
+        // failure column is positive, so only a kernel testing the UPDATED pivot names it.
         if (c >= 1) {
             ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
@@ -716,19 +536,9 @@ TYPED_TEST(PotrfCtaTest, InfoReportsTheFirstFailure) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T4/T9. `info` at batch scale, and what a FAILED item's A looks like.
-//
-// The failed items are at different columns so a single shared flag would be
-// visible; the surviving items must both report 0 AND agree bit for bit with the
-// same matrix factored alone, which is what catches a failure flag leaking
-// across the G matrices packed into one work-group.
-//
-// The finiteness assertion is not a contract claim -- a failed item's A is
-// undefined, exactly as in LAPACK -- but it IS a property of this kernel worth
-// pinning: the `!(akk > 0)` test precedes both the sqrt and the reciprocal, so a
-// non-PD item executes neither and its tile stays bounded by its input.
-// ---------------------------------------------------------------------------
+// `info` at batch scale, with failures at different columns so a shared flag is visible.
+// A failed item's A is undefined in LAPACK, but this kernel keeps it finite: `!(akk>0)`
+// precedes both the sqrt and the reciprocal, so a non-PD item executes neither.
 TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -773,17 +583,10 @@ TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T7. The complex tests, which a real symmetric matrix cannot perform.
-//
-//  (a) the input has a genuinely non-trivial imaginary part -- asserted, so the
-//      test cannot be blind by construction the way a previous conjugation test
-//      in this tree was;
-//  (b) imag(diag(L)) is EXACTLY zero, which is the (P3) forced-real-diagonal
-//      line; and
-//  (c) conjugating the input changes the factor, which is what proves the
-//      residual check above is actually sensitive to the conjugation at all.
-// ---------------------------------------------------------------------------
+// The complex-only checks: (a) the input has a genuinely non-trivial imaginary part,
+// asserted so the test cannot be blind by construction the way an earlier conjugation
+// test in this tree was; (b) imag(diag(L)) is EXACTLY zero; (c) conjugating the input
+// changes the factor, which is what makes the residual sensitive to conjugation at all.
 TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -812,9 +615,8 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         const auto L = this->extract_L(A, 0, n, Uplo::Lower);
         EXPECT_LE((multiply_back_residual<T>(ref, L, n)), residual_tol<T>(n));
 
-        // (c) conj(A) is a different Hermitian matrix, so it must give a
-        //     different factor. If the kernel dropped a conjugate somewhere,
-        //     these two could agree.
+        // (c) conj(A) is a different Hermitian matrix, so it must give a different factor.
+        //     A dropped conjugate somewhere lets these two agree.
         std::vector<T> refc(ref);
         for (auto& v : refc) v = host_conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
@@ -830,17 +632,8 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         const auto Lc = this->extract_L(Ac, 0, n, Uplo::Lower);
         EXPECT_LE((multiply_back_residual<T>(refc, Lc, n)), residual_tol<T>(n));
 
-        // (d) imag(diag(A)) IS IGNORED -- LAPACK's and cuSOLVER's documented
-        //     contract ("imaginary parts of the diagonal need not be set and are
-        //     assumed zero"), and the test for the load transform's
-        //     `if (i == c) v = from_real(real(v))`.
-        //
-        //     This part exists because of a measurement: removing the SAME
-        //     forcing from (P3)'s trailing update turned no test red at all, and
-        //     that is structurally correct -- (P1) publishes an exactly real
-        //     diagonal, so the output cannot carry a residue. The LOAD is
-        //     different: garbage in imag(diag(A)) is caller-supplied and
-        //     unbounded, and it enters the very first pivot.
+        // (d) imag(diag(A)) IS IGNORED, per LAPACK's and cuSOLVER's contract. The LOAD is
+        //     where it matters: caller garbage there is unbounded and enters the first pivot.
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
         this->load_triangle(Ap, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i) {
@@ -857,17 +650,10 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T8. An empty `info` span means "not requested" and must not change the answer.
-//
-// The failure this guards against is the pool-scratch one: info_target's
-// fallback returns UNINITIALISED memory, and a driver that reads its own info
-// without zeroing it first takes the "already failed" path for every item and
-// returns A UNMODIFIED with no error at all. The Phase-1 kernel writes the flag
-// from local memory and never reads global info, so this passes by construction
-// today -- it is here because Phase 2's blocked driver is where the trap is, and
-// the test must exist before the code it guards.
-// ---------------------------------------------------------------------------
+// An empty `info` span means "not requested" and must not change the answer. The trap is
+// pool scratch: info_target's fallback returns UNINITIALISED memory, and a driver that
+// reads its own info without zeroing takes the "already failed" path for every item and
+// returns A unmodified with no error. The leaf never reads global info; the driver does.
 TYPED_TEST(PotrfCtaTest, EmptyInfoSpanStillFactorises) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -887,25 +673,10 @@ TYPED_TEST(PotrfCtaTest, EmptyInfoSpanStillFactorises) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T6. The facade actually reaches the CTA kernel.
-//
-// The ONLY routing test in this file, and the only one whose subject is routing.
-//
-// IT USED TO ASSERT ON A RE-RESOLUTION OF THE ROUTE TABLE, AND THAT WAS NOT A
-// GUARD -- MEASURED, not argued. The table answering {Native, CTA} says what the
-// table would decide; it says nothing about what potrf<B,T> executed. The
-// adversarial review removed the facade's CTA arm outright, so that
-// `if (is_native(route))` fell straight through to backend::potrf_vendor -- the
-// exact linked-but-never-reached defect route_compiled.hh:1-24 names -- rebuilt,
-// and this test stayed GREEN across all four scalar types while every number in
-// it came from cuSOLVER. That is this repository's FIFTH recorded blind guard,
-// and it was found by executing the break rather than by reading the test.
-//
-// The guard is now a BIT-EXACT comparison against the direct entry point, which
-// no vendor can satisfy. Re-running the same break with the comparison in place
-// turns it red for all four types ("the facade did not run the CTA kernel").
-// ---------------------------------------------------------------------------
+// The facade actually reaches the CTA kernel -- the only routing test above. Asserting
+// the table answers {Native, CTA} says nothing about what potrf<B,T> executed: with the
+// facade's CTA arm removed that test stayed green while every number came from cuSOLVER.
+// The guard is therefore a BIT-EXACT comparison against the direct entry point.
 TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -934,9 +705,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
         this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
     }
 
-    // The route assertion LOCALISES a failure -- it says which of the two links
-    // in the chain broke -- but it is NOT the guard. See the header comment on
-    // this test for why.
+    // The route assertion LOCALISES a failure -- which link broke -- but is NOT the guard.
     const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                   /*vendor_available=*/true);
     ASSERT_TRUE(dispatch::is_native(route))
@@ -948,14 +717,8 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
     this->ctx->wait();
 
-    // THE GUARD: the same input, through the DIRECT entry point, must agree with
-    // what the facade produced BIT FOR BIT.
-    //
-    // Bit-exactness is what makes this an observation of EXECUTION rather than
-    // of the route table. cuSOLVER does not reproduce this kernel's reduction
-    // order, so if the facade ran the vendor these two disagree in the low bits
-    // even though both are correct factorisations and both pass any residual
-    // bound. A residual check here would be satisfied by either.
+    // THE GUARD: the same input through the DIRECT entry point, bit for bit. Bit-exactness
+    // is what makes this an observation of EXECUTION; a residual check would accept either.
     Matrix<T, MatrixFormat::Dense> direct(n, n, batch);
     for (int b = 0; b < batch; ++b) {
         this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
@@ -978,29 +741,10 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T10. A PADDED LEADING DIMENSION AND A STRIDE THAT IS NOT ld * cols.
-//
-// Every other test in this file builds Matrix<T>(n, n, batch), for which
-// ld == rows == n and stride == ld * cols exactly. The kernel reads A.ld() and
-// A.stride() (potrf_cta.cc), and no test could tell either apart from its
-// default -- so the two most consequential lines in the launcher were
-// structurally unfalsifiable.
-//
-// This is not a hypothetical failure class in this tree. trsm_native.cc:590-599
-// records it happening: the 6-arg MatrixView constructor DEFAULTS stride to
-// ld*cols when 0 is passed, after which every batch item but the first reads the
-// wrong matrix. There is a standing memory entry for its GEMM twin ("Native GEMM
-// collapses on strided ld"), and panel updates in this library routinely pass
-// strided sub-views.
-//
-// MEASURED: with `stride_a = ldg * n` substituted in the launcher, and again
-// with `ldg = A.rows()`, the entire shipped suite stayed GREEN. This test goes
-// red for all four scalar types under either.
-//
-// The surrounding buffer is filled with a NON-PD poison, so reading outside the
-// intended window is a wrong answer rather than merely a different one.
-// ---------------------------------------------------------------------------
+// A PADDED LEADING DIMENSION AND A STRIDE THAT IS NOT ld * cols. Every other test builds
+// Matrix<T>(n, n, batch), where ld == rows == n and stride == ld * cols, so the
+// launcher's A.ld() and A.stride() reads were unfalsifiable. MatrixView's 6-arg
+// constructor defaults stride to ld*cols when 0 is passed (trsm_native.cc:590-599).
 TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1052,26 +796,10 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// T11. The direct entry point's correctness gates throw rather than launch.
-//
-// potrf_cta_dispatch re-applies every gate RouteTable<Op::potrf,T>::supports()
-// applies, because it is reachable WITHOUT the table -- every numerical test in
-// this file calls it that way. Only the sixth of those gates (does not fit) had
-// a test; the other five were unfalsifiable.
-//
-// The heterogeneous one is the one that matters. Deleting it does not produce an
-// error: it produces a SILENT WRONG ANSWER, because one launch covers the batch
-// with a single (order, ld, stride) tuple and reads with the CAPACITY extents,
-// so every item after the first is factorised at the wrong order IN PLACE. And
-// netlib's batched path honours the per-item extents
-// (netlib_lapack.cc:1029), so routing such a view natively disagrees with a path
-// in this tree that gets it right -- not with a hypothesis.
-//
-// The route-table twins of these gates ARE tested, in
-// RoutePotrf.CorrectnessGatesAreNotSpeedGates -- but that is the pure table, and
-// these tests deliberately bypass it.
-// ---------------------------------------------------------------------------
+// The direct entry point re-applies every gate supports() applies, because it is
+// reachable WITHOUT the table. The heterogeneous gate is the one that matters: deleting
+// it is a SILENT WRONG ANSWER, since one launch covers the batch with a single
+// (order, ld, stride) tuple, so every item after the first runs at the wrong order.
 TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1107,20 +835,9 @@ TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The measured fit ceilings, pinned.
-//
-// These four numbers are what step 0.2 measured on this box at a 97,280 B budget
-// (runtime local_mem_size 101,376 minus the standard 4,096 B reserve), and they
-// are NOT perf-evidence/vendor-independence:WP4_POTRF_SPEC.md:273's {105, 74, 74, 52}: that set follows from a
-// 45,056 B budget which is refuted -- device_limits.hh's 49152 is hardcoded by
-// cmake/BatchLASDetectSYCL.cmake:44-45 for any nvidia_gpu_sm_* pattern and is
-// wrong here by 2.06x. Shipping the small numbers leaves float n in 106..155
-// with no route at all in a vendor-free build.
-//
-// The assertion is against the BUDGET-parameterised query, not the device, so it
-// is a pin on the SLM formula and holds on any machine.
-// ---------------------------------------------------------------------------
+// The measured fit ceilings, pinned against the BUDGET-parameterised query rather than
+// the device, so this holds on any machine.
+// evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
     using T = typename TestFixture::T;
     const int expect = std::is_same_v<T, float>                ? 155
@@ -1134,69 +851,21 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
 }
 
 // ===========================================================================
-// WP4 PHASE 2 -- THE BLOCKED DRIVER
+// THE BLOCKED DRIVER -- the right-looking driver above potrf_cta_max_n<T>().
 // ===========================================================================
 //
-// Everything above this line is the CTA leaf. Everything below is the
-// right-looking blocked driver that serves orders above potrf_cta_max_n<T>().
-//
-// THE SAME TWO RULES APPLY, AND FOR SHARPER REASONS.
-//
-//   * THE ORACLE IS NEVER THE VENDOR. Every numerical test below calls
-//     sycl_potrf::potrf_blocked_dispatch<T> DIRECTLY and checks a host
-//     multiply-back residual. Exactly one test (FacadeReachesTheBlockedDriver)
-//     is about routing.
-//
-//   * THE ROUTE IS NEVER TRUSTED. BATCHLAS_POTRF_ROUTE=blocked at a shape the
-//     Blocked arm rejects -- Uplo::Upper, say -- falls through to automatic()
-//     (route_resolve.hh:101, :111) and runs cuSOLVER, which factors Upper
-//     perfectly well. Such a test passes GREEN over a driver that threw the
-//     request away. The routing test therefore pins AND bit-compares.
-//
-// A THIRD RULE THIS TIER ADDS: THE RESIDUAL CANNOT SEE THE FOLD. The driver's
-// trailing update is gemm-into-scratch plus an explicit triangular fold,
-// because a plain square gemm over A22 would write the UPPER triangle that
-// LAPACK potrf(Lower) must leave alone. Delete the fold, aim that gemm straight
-// at A, and the lower triangle comes out BIT-IDENTICAL -- a correct
-// factorisation that also scribbles on the caller's other half. Measured inside
-// this work package, not argued, and it is also 11% FASTER, which is exactly
-// the shape of change that ships. See B2, which is the only test that can see it.
-//
-// THE BLOCKING IS ASKED FOR, NEVER HARDCODED. nb and W are measured per-type
-// constants, clamped by the DEVICE's SLM ceiling and then rounded down to a
-// whole number of trsm_cta_max_n<T>() blocks. A test that hardcoded
-// {128, 96, 96, 64} would keep passing after any of those three moved while
-// silently no longer straddling a block boundary -- this repository's recorded
-// blind-guard shape. sycl_potrf::potrf_blocked_debug_params exists for that, and
-// every structural claim below ("this n has a short final block") is ASSERTED of
-// the n the test actually uses.
+// A third rule this tier adds to the file header's two: THE RESIDUAL CANNOT SEE THE
+// FOLD. The trailing update is gemm-into-scratch plus an explicit triangular fold,
+// because a plain square gemm over A22 would write the upper triangle potrf(Lower) must
+// leave alone -- delete the fold and the lower triangle comes out BIT-IDENTICAL while
+// the caller's other half is scribbled on. B2 is the only test that can see it. nb and
+// W are ASKED of potrf_blocked_debug_params, never hardcoded: both are clamped by the
+// device SLM ceiling and rounded to a trsm_cta_max_n<T>() multiple.
+// evidence: docs/perf/potrf.md#the-blocked-driver
 
-// The blocked driver's residual bound, which is NOT the leaf's.
-//
-// residual_tol above is 4 * n * eps and its own comment says that "a future
-// BLOCKED driver has a different error constant and should get its own bound
-// rather than slackening this one". It does: the blocked factor composes n/nb
-// leaf factorisations, one triangular solve and one trailing GEMM per panel, so
-// the backward error accumulates across panels in a way a single resident tile's
-// does not.
-//
-// MEASURED THE SAME WAY THE LEAF'S 4 WAS, by printing residual/(n*eps) for every
-// cell of ResidualAboveTheCtaCeiling with the bound set to zero. The per-type
-// WORST over that whole sweep, on this box:
-//
-//     float            0.0070  (n=156)      double           0.0091  (n=110)
-//     complex<float>   0.0077  (n=110)      complex<double>  0.0104  (n=78)
-//
-// and the ratio falls monotonically with n (float 0.0070 at n=156 down to
-// 0.0027 at n=391), because the true growth is closer to sqrt(n) than to n.
-// The smallest order in the sweep is therefore the binding one, which is the
-// opposite of what a bound written as C*n*eps suggests -- worth knowing before
-// anyone "relaxes it for large n".
-//
-// 0.05 is the measured worst rounded up by two binary orders: ~4.8x of margin,
-// deliberately far tighter than the leaf's shipped 4 (which carries 4-20x), and
-// the reason it can be tighter is that this tier has no n < 64 cell to widen it.
-// EXECUTED, not asserted: at 0.005 the sweep turns red for all four types.
+// The blocked driver's residual bound, which is NOT the leaf's: this factor composes
+// n/nb leaf factorisations, a triangular solve and a trailing GEMM per panel. The
+// measured ratio falls monotonically with n, so the SMALLEST order in a sweep binds.
 #ifndef BLKTOL
 #define BLKTOL 0.05
 #endif
@@ -1224,16 +893,10 @@ protected:
 
     // Run the blocked driver DIRECTLY -- a call no vendor can serve.
     //
-    // info is seeded with -12345, which is options_api_tests.cc:498's seed and
-    // is load-bearing rather than decorative: the driver READS info to decide
-    // whether an earlier panel already failed, so caller garbage that is not
-    // zeroed makes every item look already-failed, quenches every one of them to
-    // the identity and returns a silent wrong answer with no error raised.
-    // Seeding zero here would hide that.
-    //
-    // info_len < 0 means "a full-length span"; 0 means the EMPTY span (the "not
-    // requested" contract); anything else is a SHORT span, which the driver must
-    // also treat as not-requested rather than writing past its end.
+    // The -12345 info seed is load-bearing: the driver READS info to decide whether an
+    // earlier panel already failed, so caller garbage that is not zeroed makes every item
+    // look already-failed and returns a silent wrong answer. info_len < 0 means a full
+    // span; 0 the EMPTY span ("not requested"); anything else a SHORT span, likewise.
     std::vector<int32_t> run_blocked(const MatrixView<T, MatrixFormat::Dense>& V,
                                      Uplo uplo, int info_len = -1) {
         const int batch = static_cast<int>(V.batch_size());
@@ -1256,29 +919,16 @@ protected:
 
 TYPED_TEST_SUITE(PotrfBlockedTest, PotrfTestTypes);
 
-// ---------------------------------------------------------------------------
-// B1. Residual above the CTA ceiling, at every structurally distinct blocking.
+// Residual above the CTA ceiling at every structurally distinct blocking; each
+// structure is ASSERTED of the n the test uses rather than stated here.
 //
-// FIVE SIZES, FOUR STRUCTURES, EACH ASSERTED OF THE n THE TEST ACTUALLY USES
-// rather than stated in a comment:
-//
-//   cap + 1        the first order the CTA tier cannot serve -- the tier
-//                  boundary, and the one order at which "the blocked driver
-//                  exists" is the difference between an answer and a
-//                  NoRouteError in a vendor-free build.
-//   2 * nb         an EXACT multiple of nb: every block is full.
-//   2 * nb + nb/2  a SHORT FINAL BLOCK (ib < nb). The driver relies on
-//                  `ib < nb implies m2 == 0` -- a short block issues neither a
-//                  panel solve nor a trailing update -- and that implication is
-//                  load-bearing twice over, since it is also why nb may be
-//                  rounded to a trsm-safe multiple at all.
-//   nb + 2W + 6    a SHORT FINAL TRAILING COLUMN PANEL (m2 % W != 0), where the
-//                  W x W scratch is addressed with ld == W but extent w < W.
-//   3 * nb + 7     several panels AND a short final block together.
-//
-// batch > 1 everywhere and every item DIFFERENT, so a stride bug is a wrong
-// answer rather than the right answer computed from the wrong matrix.
-// ---------------------------------------------------------------------------
+//   cap+1        the tier boundary -- an answer or a NoRouteError in a vendor-free build
+//   2*nb         an exact multiple of nb: every block is full
+//   2*nb+nb/2    a SHORT FINAL BLOCK; the driver relies on `ib < nb implies m2 == 0`,
+//                which is also why nb may be rounded to a trsm-safe multiple at all
+//   nb+2W+6      a SHORT FINAL TRAILING COLUMN PANEL (m2 % W != 0): the W x W scratch
+//                is addressed with ld == W but extent w < W
+//   3*nb+7       several panels AND a short final block together
 TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1330,32 +980,13 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
     ASSERT_GT(saw_short_panel, 0)    << "no n in the sweep had a short trailing column panel";
 }
 
-// ---------------------------------------------------------------------------
-// B2. The other triangle is neither read nor written -- THE FOLD'S ONLY GUARD.
-//
-// The single most important test in the Phase 2 set, because it is the ONLY one
-// that can fail when the trailing update's triangular fold is removed. The
-// driver computes A22 -= L21 L21^H by cutting A22 into column panels and sending
-// each W x W DIAGONAL block to scratch, then folding only the named triangle
-// back. Remove the fold, aim that gemm at A with alpha=-1, beta=1, and the lower
-// triangle comes out bit-identical while the caller's upper triangle fills with
-// the symmetric product.
-//
-// EXECUTED, not predicted: with that substitution the whole of potrf_tests goes
-// 100 passed -> 96 passed, and the four failures are the four scalar types of
-// THIS test, reporting 3021 changed words each. Every residual test, the info
-// tests, the padded-ld test and the facade test all stayed green.
-//
-// Two passes, as in the leaf's T2: a finite sentinel compared bit for bit proves
-// NOT WRITTEN; a quiet NaN proves NOT READ. The second is the stronger claim and
-// the one src/extensions/ortho.cc:156-161 depends on -- it forms only half of
-// its Gram matrix and hands potrf the other half uninitialised, so a blocked
-// route that READ the upper triangle would turn ortho into NaN for every k above
-// the CTA ceiling in exactly the vendor-free build this work package exists for.
-//
-// n has a full-width AND a short trailing column panel, so the diagonal-block
-// fold runs at both w == W and w < W.
-// ---------------------------------------------------------------------------
+// The other triangle is neither read nor written -- THE FOLD'S ONLY GUARD, and the only
+// test here that fails when the trailing update's triangular fold is removed: with the
+// gemm aimed straight at A the lower triangle comes out bit-identical while the caller's
+// upper triangle fills with the symmetric product, and every other test stays green.
+// NOT READ is what ortho.cc:156-161 depends on -- it hands potrf half a Gram matrix
+// uninitialised. n has a full-width AND a short trailing column panel, so the fold runs
+// at both w == W and w < W.
 TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1367,22 +998,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
     ASSERT_GT(n - bp.nb, bp.W) << "no full-width trailing panel at this n";
     ASSERT_NE((n - bp.nb) % bp.W, 0) << "no short trailing panel at this n";
 
-    // A SECOND n, AND IT IS NOT DECORATION. The gemm the trailing RECTANGLE
-    // reaches depends on its m: gemm_kernels.cc:472-480 gives float's transposed
-    // register kernels only when m >= 128 && n >= 32 && k >= 128, and at the n
-    // above the rectangle has m = 38 and 6, so BOTH fall through to Tiled16.
-    // Every size this driver actually exists for (n >= 512) puts the same gemm
-    // on Tiled128x32RegisterK32NT instead -- a different epilogue and a
-    // different index map. With only the small n, the sole upper-triangle guard
-    // in this file never exercises the store path production uses, and a
-    // store-side regression there (an alignment fast path enabled for a non-NN
-    // case, a dropped `row >= m` predicate) would clobber the caller's upper
-    // triangle at every real size with the suite still green -- B1's residual is
-    // computed over the LOWER triangle only and cannot see it.
-    //
-    // n_big is built so the FIRST rectangle has m = m2 - W >= 128 while the
-    // trailing panel is still short, and both properties are asserted rather
-    // than trusted.
+    // A SECOND n, AND IT IS NOT DECORATION. Which gemm the trailing rectangle reaches
+    // depends on its m: at the n above both rectangles fall through to Tiled16, while every
+    // size this driver exists for (n >= 512) reaches a register kernel with a different
+    // epilogue and index map, whose store path no other guard in this file exercises.
     const int n_big = bp.nb + 3 * bp.W + 134;
     ASSERT_GE(n_big - bp.nb - bp.W, 128)
         << "n_big does not give a rectangle gemm with m >= 128, so it does not "
@@ -1442,20 +1061,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B3. `info` names the 1-based GLOBAL column, not the leaf's local one.
-//
-// The leaf reports an index LOCAL to the ib x ib sub-view it was handed
-// (potrf_cta_device.hh:195-199), so the driver adds j. Nothing in the CTA suite
-// can see that addition, because there j is always 0 -- which is exactly why an
-// omitted offset survives a full green run of everything above this line.
-//
-// The oracle is make_planted_ldl's A = L0 D L0^H, whose k-th Cholesky pivot IS
-// D_kk exactly. Its row-prefix normalisation additionally makes the ORIGINAL
-// diagonal at the failure column POSITIVE, so a driver reporting a stale or
-// un-updated pivot names a different column; the test asserts that property of
-// its own input, for the same reason the leaf's InfoIndexIsExact does.
-// ---------------------------------------------------------------------------
+// `info` names the 1-based GLOBAL column, not the leaf's local one: the leaf reports an
+// index LOCAL to the sub-view it was handed, so the driver adds j. Nothing in the CTA
+// suite can see that addition, because there j is always 0.
 TYPED_TEST(PotrfBlockedTest, BlockedInfoIsTheGlobalColumn) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1488,18 +1096,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoIsTheGlobalColumn) {
            "cannot see a missing info offset";
 }
 
-// ---------------------------------------------------------------------------
-// B4. FIRST FAILURE WINS across panels -- the info MERGE.
-//
-// The leaf writes info UNCONDITIONALLY and re-zeroes its own flag on every
-// launch (potrf_cta.cc:614-615, potrf_cta_device.hh:488). Point every panel's
-// leaf at the caller's info and you get LAST-PANEL-WINS: a healthy later panel
-// overwrites a real earlier failure with 0 and the call reports SUCCESS on a
-// matrix that is not positive definite. That is worse than a wrong index.
-//
-// Case (a) is the one that catches it, and it is NOT the two-failure case: it is
-// ONE failure in block 0 followed by healthy blocks.
-// ---------------------------------------------------------------------------
+// FIRST FAILURE WINS across panels -- the info MERGE. The leaf writes info
+// UNCONDITIONALLY and re-zeroes its own flag on every launch, so pointing every panel's
+// leaf at the caller's info gives LAST-PANEL-WINS: a healthy later panel overwrites a
+// real earlier failure with 0 and the call reports SUCCESS on a non-PD matrix.
 TYPED_TEST(PotrfBlockedTest, BlockedInfoFirstFailureWinsAcrossPanels) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1528,26 +1128,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoFirstFailureWinsAcrossPanels) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B5. `info` at batch scale, and the QUENCH.
-//
-// Some items fail and some do not, at DIFFERENT global columns, so a single
-// shared flag or a shared quench is visible. The healthy items must report 0 and
-// still factorise correctly next to failed neighbours.
-//
-// THE QUENCH IS TESTED WITH A NaN PIVOT, AND THAT IS A MEASUREMENT RATHER THAN A
-// PREFERENCE. A merely NEGATIVE planted pivot divides to a finite number, so the
-// rest of the schedule stays finite whether or not the failed item is quenched;
-// the implementation's own A/B found that deleting the quench entirely left a
-// negative-pivot check GREEN. Only a NaN or an exactly-zero pivot propagates. So
-// one bad item here carries a planted NaN on the diagonal, in the SECOND block,
-// which also re-exercises the global offset.
-//
-// Finiteness of a failed item is not a contract claim -- LAPACK leaves a failed
-// A undefined, and this file says so at T4/T9 -- but it IS a property the CTA
-// tier has, and losing it silently at the tier boundary would be a surprise for
-// anyone who inspects A before testing info.
-// ---------------------------------------------------------------------------
+// `info` at batch scale, and the QUENCH. Items fail at DIFFERENT global columns so a
+// shared flag or shared quench is visible. The quench is tested with a NaN pivot rather
+// than a negative one because a negative pivot divides to a finite number: deleting the
+// quench entirely leaves a negative-pivot check green. Only NaN or exact zero spreads.
 TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1557,18 +1141,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
     const int batch = 32;
     ASSERT_GT(n, this->ceiling());
 
-    // THE NaN GOES IN THE MIDDLE BLOCK, AND THAT PLACEMENT IS A MEASUREMENT.
-    // It was first written into the FINAL block, where m2 == 0 and no panel
-    // solve or trailing update follows -- so with the quench deleted exactly ONE
-    // word came back non-finite (the planted NaN itself) and nothing propagated.
-    // The test was red, but for a reason far weaker than its own claim. In block
-    // 1 of three there is a panel solve to divide by the failed pivot and a
-    // trailing update to smear the result across the rest of the matrix, which
-    // is the failure the quench actually prevents. Re-measured there, with the
-    // quench deleted: 1045 non-finite words for float, 789 for double and
-    // complex<float>, 533 for complex<double>. The three NEGATIVE-pivot items
-    // stayed finite in both placements, which is the whole point of planting a
-    // NaN at all.
+    // THE NaN GOES IN THE MIDDLE BLOCK, AND THE PLACEMENT IS LOAD-BEARING: in the FINAL
+    // block m2 == 0, so nothing follows to propagate it and a deleted quench leaves exactly
+    // one non-finite word -- red, but for a far weaker reason than the test's own claim.
     const int nan_item = 11;
     const int nan_col = nb + 2;              // second of three blocks: local != global
     const std::vector<int> neg_items = {0, 19, batch - 1};
@@ -1623,22 +1198,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B6. T7 AT A BLOCKED SIZE -- corrections Open question 9.
-//
-// The open question is whether the trailing update's fold needs a real-part
-// projection on the diagonal: the fold computes C = product + beta*C with no
-// such projection (symmetric_product_fold.hh:68), so imag(diag(A22)) is whatever
-// L21 L21^H's rounding leaves there and it is carried into the NEXT panel's
-// leaf. Absorbed, or accumulated across panels?
-//
-// The end-state answer is the shippable claim and it is what this test pins:
-// imag(diag(L)) is EXACTLY zero after a multi-panel factorisation, because the
-// leaf reloads the diagonal as T(real(A(c,c)), 0) before any sqrt. That is
-// necessary and not sufficient -- a residue would have to get past a forcing
-// point that runs once per panel to be visible -- so (c) supplies the
-// sensitivity that makes the residual able to see a dropped conjugate at all.
-// ---------------------------------------------------------------------------
+// T7 at a blocked size. The fold computes C = product + beta*C with no real-part
+// projection on the diagonal (symmetric_product_fold.hh:68), so imag(diag(A22)) carries
+// L21 L21^H's rounding into the next panel's leaf; imag(diag(L)) is EXACTLY zero anyway,
+// because the leaf reloads the diagonal as T(real(A(c,c)), 0) before any sqrt.
 TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1670,11 +1233,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         const auto L = this->extract_L(A, 0, n, Uplo::Lower);
         EXPECT_LE((multiply_back_residual<T>(ref, L, n)), blocked_residual_tol<T>(n));
 
-        // (c) THE SENSITIVITY. conj(A) is a different Hermitian matrix, so it
-        //     must give a different factor. In this tier the conjugate that
-        //     matters is the trailing update's transB: substituting
-        //     Transpose::Trans for ConjTrans is free and worth 1.81x for float,
-        //     and for a complex type it computes L21 L21^T -- a different matrix.
+        // (c) THE SENSITIVITY. conj(A) must give a different factor. In this tier the
+        //     conjugate that matters is the trailing update's transB: for a complex type
+        //     Transpose::Trans computes L21 L21^T instead -- a different matrix.
         std::vector<T> refc(ref);
         for (auto& v : refc) v = host_conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
@@ -1688,11 +1249,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         const auto Lc = this->extract_L(Ac, 0, n, Uplo::Lower);
         EXPECT_LE((multiply_back_residual<T>(refc, Lc, n)), blocked_residual_tol<T>(n));
 
-        // (d) imag(diag(A)) IS IGNORED end to end, bit for bit. Across panels
-        //     this is a stronger statement than in the leaf: the trailing update
-        //     ADDS to A22's diagonal, so a caller's imaginary garbage there
-        //     survives the fold and reaches the NEXT panel's leaf, where the
-        //     load transform is the only thing that discards it.
+        // (d) imag(diag(A)) IS IGNORED end to end. Stronger than in the leaf: the trailing
+        //     update ADDS to A22's diagonal, so caller garbage survives the fold and reaches
+        //     the NEXT panel's leaf, where the load transform is all that discards it.
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
         this->load_triangle(Ap, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i)
@@ -1708,27 +1267,11 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B7. THE PARENT LEADING DIMENSION AND A STRIDE THAT IS NOT ld * cols.
-//
-// The most consequential test in this set after B2, because EVERY operand the
+// THE PARENT LEADING DIMENSION AND A STRIDE THAT IS NOT ld * cols. Every operand the
 // driver hands the leaf, the trsm and the gemm is a SUB-VIEW that must carry the
-// PARENT's ld, stride and batch. Two independent traps, both recorded in the
-// tree rather than hypothetical:
-//
-//   * MatrixView's 6-arg constructor DEFAULTS stride to ld * cols when 0 is
-//     passed (matrix.cc:1839-1842). A sub-view of ib columns built without an
-//     explicit stride therefore gets stride = ld * ib, and every batch item
-//     after the first reads the wrong matrix -- trsm_native.cc:590-599 records
-//     exactly that happening.
-//   * Passing the sub-view's own row count as its ld reads an interleaved,
-//     shifted window of the parent.
-//
-// Neither is visible in a Matrix<T>(n, n, batch), where ld == rows == n and
-// stride == ld * cols, which is what every test above builds. The padding here
-// is filled with a NON-PD poison so that reading outside the intended window is
-// a wrong answer and not merely a different one.
-// ---------------------------------------------------------------------------
+// PARENT's ld, stride and batch. MatrixView's 6-arg constructor DEFAULTS stride to
+// ld*cols when 0 is passed (matrix.cc:1839-1842), so a sub-view of ib columns gets
+// stride = ld*ib and every batch item after the first reads the wrong matrix.
 TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1766,27 +1309,15 @@ TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B8. THE INFO SPAN, in all three of its states -- and the ZERO PRE-PASS.
+// THE INFO SPAN in all three of its states, and the ZERO PRE-PASS. The driver READS info
+// to decide whether an earlier panel already failed, so:
 //
-// The leaf's T8 says in as many words that it "passes by construction today" and
-// exists because "Phase 2's blocked driver is where the trap is". This is that
-// test. The driver READS info to decide whether an earlier panel already failed,
-// so:
-//
-//  (a) a FULL span arrives with caller garbage (-12345, options_api_tests.cc's
-//      own seed). Without the zero pre-pass every item looks already-failed,
-//      every item is quenched to the identity, and the call returns a SILENT
+//  (a) a FULL span arrives with caller garbage: without the zero pre-pass every item
+//      looks already-failed, is quenched to the identity, and the call returns a SILENT
 //      WRONG ANSWER with info unchanged and no error raised.
-//  (b) an EMPTY span means "not requested" and falls back to pool scratch, which
-//      is UNINITIALISED -- the same trap one level down.
-//  (c) a SHORT span (size < batch) ALSO means not-requested. The recorded trap
-//      (corrections :938-943) is to zero info_out rather than the span the
-//      driver actually reads: a short caller span silently becomes pool scratch
-//      and the zeroing lands on the wrong buffer.
-//
-// All three must produce the same correct factor.
-// ---------------------------------------------------------------------------
+//  (b) an EMPTY span means "not requested" and falls back to UNINITIALISED pool scratch.
+//  (c) a SHORT span (size < batch) ALSO means not-requested; the recorded trap is to
+//      zero info_out rather than the span the driver actually reads.
 TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1825,24 +1356,14 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B9. THE TIER OVERLAP, and the single-block path.
+// THE TIER OVERLAP, and the single-block path. supports()'s Blocked arm deliberately
+// carries NO LOWER BOUND on order: a lower bound would be a fit judgement wearing a
+// correctness gate, and a forced `blocked` below it would resolve to the VENDOR. So:
 //
-// supports()'s Blocked arm deliberately carries NO LOWER BOUND on order -- a
-// lower bound would be a FIT judgement between two native routes wearing a
-// correctness gate, and a forced `blocked` below it would resolve to the VENDOR
-// instead (route_resolve.hh:101-111). So the driver must be correct at orders
-// the CTA tier also serves, including:
-//
-//   n == nb   ONE block, m2 == 0, no panel solve, no trailing update -- and the
-//             W x W x batch scratch is NOT DRAWN at all. That branch exists for
-//             src/extensions/ortho.cc:78, a real caller of the public query at
-//             k = 5..256, where it is the whole difference between a 2.5 KB and
-//             a 68 KB lease. It is asserted directly, because no residual can
-//             see whether a buffer was allocated.
-//   n == cap  the CTA ceiling itself, where both tiers are supported and the
-//             blocked driver runs more than one block.
-// ---------------------------------------------------------------------------
+//   n == nb   ONE block, m2 == 0, and the W x W x batch scratch is NOT DRAWN -- the
+//             branch ortho.cc:78 relies on, and asserted directly because no residual
+//             can see whether a buffer was allocated.
+//   n == cap  the CTA ceiling itself, where both tiers are supported.
 TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAtOneBlock) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1884,16 +1405,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     }
 }
 
-// ---------------------------------------------------------------------------
-// B10. The direct entry point's correctness gates throw rather than launch.
-//
-// Uplo::Upper is the one that matters, and it is the reason this cannot be
-// tested through the facade: BATCHLAS_POTRF_ROUTE=blocked with an Upper view is
-// REJECTED by supports() (route_potrf.hh:278), so resolve_route falls through to
-// automatic() and cuSOLVER factors it correctly. A facade-level "Upper works"
-// test would be green today and green again after the driver grew a broken Upper
-// path.
-// ---------------------------------------------------------------------------
+// The direct entry point's correctness gates throw rather than launch. Uplo::Upper is
+// why this cannot be tested through the facade: supports() REJECTS an Upper view on the
+// Blocked arm, so a forced `blocked` falls through to automatic() and cuSOLVER factors
+// it correctly -- green today, green again after the driver grew a broken Upper path.
 TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1945,13 +1460,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) 
     }
 }
 
-// ---------------------------------------------------------------------------
-// B11. The route table above the CTA ceiling -- INCLUDING THE VENDOR-FREE
-// FALLBACK, which is the entire point of WP4.
-//
-// A pure-table test: no kernel runs. It asserts the facts the vendor-free build
-// depends on, and the one that keeps a vendor-present build unchanged.
-// ---------------------------------------------------------------------------
+// The route table above the CTA ceiling, including the VENDOR-FREE FALLBACK. A pure-
+// table test: no kernel runs.
+// evidence: docs/perf/potrf.md#route-arms-and-the-supports-gates
 TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1975,21 +1486,18 @@ TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
     EXPECT_FALSE(Tbl::supports(cta, *lower));
     EXPECT_TRUE(Tbl::supports(blk, *lower));
 
-    // (2) Uplo::Upper is a CORRECTNESS gate on the Blocked arm and must stay one
-    //     until the driver mirrors. This assertion is what keeps a forced
-    //     `blocked` on an Upper view from silently becoming cuSOLVER.
+    // (2) Uplo::Upper is a CORRECTNESS gate on the Blocked arm and must stay one until
+    //     the driver mirrors, or a forced `blocked` there silently becomes cuSOLVER.
     EXPECT_FALSE(Tbl::supports(blk, *upper));
 
-    // (3) preferred() is still ALL FALSE, so a vendor-present build takes the
-    //     vendor for this shape and Phase 2 moves ZERO traffic. When step 3.x
-    //     measures the grid, this is the line it deliberately changes.
+    // (3) preferred() is still ALL FALSE, so a vendor-present build takes the vendor for
+    //     this shape. evidence: docs/perf/potrf.md#preferred-is-false-everywhere
     EXPECT_FALSE(Tbl::preferred(blk, *lower));
     EXPECT_FALSE(Tbl::preferred(cta, *lower));
 
-    // (4) THE POINT OF THE WORK PACKAGE. With no vendor in the build,
-    //     route_resolve.hh:60-63 hands over any SUPPORTED native route -- and
-    //     before Phase 2 there was none at this order, so this resolution threw
-    //     NoRouteError.
+    // (4) With no vendor in the build resolve_route hands over any SUPPORTED native
+    //     route -- and before the blocked driver there was none at this order, so this
+    //     resolution threw NoRouteError. That is the point of the work package.
     const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                        /*vendor_available=*/false);
     EXPECT_TRUE(dispatch::is_native(free_route));
@@ -1997,29 +1505,11 @@ TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
         << "a vendor-free build does not reach the blocked driver above the CTA ceiling";
 }
 
-// ---------------------------------------------------------------------------
-// B12. potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL.
-//
-// options.hh:546-552 resolves the route TWICE -- once for the size at :550 and
-// once for the call at :551 -- and both reads hit getenv afresh. With two native
-// tiers whose workspaces differ by orders of magnitude (the CTA tier draws one
-// int32 per item; the blocked tier adds a W x W x batch product buffer), a query
-// that sizes only the route IT resolved is the recorded ormqr under-allocation
-// one level down: 2560 bytes reported, 276480 demanded.
-//
-// This test IS that disagreement, executed rather than described: pin `cta`,
-// take the size, pin `blocked`, make the call. It must not throw.
-//
-// Run at an order INSIDE the CTA tier and above nb, so both arms are supported
-// AND the two sizes genuinely differ -- asserted, because if they did not the
-// max would be doing nothing and this test would be vacuous.
-//
-// EXECUTED: restricting the max to the resolved route turns this red for all
-// four types at 512 bytes reported against 68,096 demanded (float,
-// complex<double>) and 133,632 (double, complex<float>) -- and the vendor term
-// does NOT mask it, because cuSOLVER's own potrf workspace for this shape is
-// the 512 bytes.
-// ---------------------------------------------------------------------------
+// potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL: options.hh:546-552
+// resolves the route TWICE, once for the size and once for the call, and both reads hit
+// getenv afresh, so a query that sizes only the route IT resolved under-allocates. Run
+// inside the CTA tier but above nb, so both arms are supported and the sizes differ.
+// evidence: docs/perf/potrf.md#workspace-sizing
 TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -2081,30 +1571,11 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B13. The facade actually reaches the BLOCKED driver.
-//
-// The only routing test in this set, and it is built the way the leaf's T6 had
-// to be rebuilt after the adversarial review found its predecessor GREEN over
-// cuSOLVER: asserting that the TABLE answers {Native, Blocked} says what the
-// table would decide and nothing about what potrf<B,T> executed. The guard is a
-// BIT-EXACT comparison against the direct entry point, which no vendor can
-// satisfy.
-//
-// THE DIRECT SIDE INJECTS THE ROUTED gemm AND trsm -- the same two lambdas the
-// facade passes (entry_points/factorization.cc). That is deliberate, and it
-// makes this test guard the INJECTION SEAM as well as the arm: if the facade
-// passed empty seams the driver would fall back to sycl_gemm::gemm_custom and
-// sycl_trsm::trsm_native_blocked, which in a VENDOR-PRESENT build are not the
-// routed choices for these shapes, so the two answers separate. Calling
-// gemm_custom straight from a driver is a recorded defect (WP3 step 16), and
-// this is what catches its recurrence here.
-//
-// HONEST LIMIT, stated because this file's history is a list of guards that
-// could not fail: in a VENDOR-FREE build the routed gemm IS the native gemm, so
-// the SEAM half of this guard is vacuous there. The ARM half is not -- a facade
-// that never reached the driver would throw NoRouteError at this order.
-// ---------------------------------------------------------------------------
+// The facade actually reaches the BLOCKED driver -- the only routing test here, guarded
+// again by a BIT-EXACT comparison against the direct entry point. The direct side
+// INJECTS THE ROUTED gemm and trsm, the same two lambdas the facade passes, so this
+// guards the INJECTION SEAM as well as the arm. HONEST LIMIT: in a vendor-free build the
+// routed gemm IS the native gemm, so the seam half is vacuous there; the arm half is not.
 TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -2187,30 +1658,13 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// B14. A POISONED WORKSPACE. The driver must not read scratch it has not
-// written.
-//
-// WHY EVERY OTHER TEST IN THIS FILE IS BLIND TO IT, which is the whole point.
-// They all hand the driver a fresh UnifiedVector<std::byte>, and
-// src/util/sycl-util-impl.cc:37-46 is a bare malloc_shared whose pages the CUDA
-// driver hands back ZEROED on first touch. Real callers do not: options.hh:550
-// leases the SAME arena bytes a previous, unrelated lease just used, so in
-// production this scratch arrives holding whatever the last op left in it.
-//
-// The defect this catches, found in WP4 Phase 2 triage and reproduced through
-// the ordinary public API: the W x W diagonal-block gemm is issued with
-// beta = T(0), and a comment claimed that meant the scratch was never read.
-// beta == 0 means "C is not read" in the FOLD (symmetric_product_fold.hh:49)
-// and in cuBLAS; it does NOT mean that in any native gemm here, where
-// LinearEpilogue::apply is alpha*accum + beta*prior with prior read
-// unconditionally. 0 * NaN = NaN. Before the fix this returned info != 0 for
-// 8/8 items with relative residual 9.9e-01 on a well-conditioned SPD input,
-// under BATCHLAS_GEMM_ROUTE=native -- i.e. exactly the vendor-free build.
-//
-// 0xFF over the whole workspace is a NaN/Inf bit pattern for all four scalar
-// types, which is what makes one memset a valid poison for the whole suite.
-// ---------------------------------------------------------------------------
+// A POISONED WORKSPACE: the driver must not read scratch it has not written. Every other
+// test here is blind to this, because they hand the driver a fresh UnifiedVector whose
+// malloc_shared pages come back ZEROED; real callers lease arena bytes a previous,
+// unrelated lease just used. The defect: the W x W diagonal-block gemm is issued with
+// beta = T(0), which means "C is not read" in the fold and in cuBLAS but NOT in any
+// native gemm here, where LinearEpilogue::apply reads `prior` unconditionally and
+// 0 * NaN = NaN. 0xFF is a NaN/Inf bit pattern for all four scalar types.
 TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;

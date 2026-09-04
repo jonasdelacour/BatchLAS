@@ -105,16 +105,10 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_64x64";
     case KernelVariant::Tiled64x64RegisterK16:
         return "gemm_sycl_register_64x64_k16";
-    // GUARD: these launchers hard-wire OpA/OpB (register_launchers.hh), so an
-    // unguarded case computes the WRONG ANSWER for any transpose combination
-    // other than the one it was instantiated for -- ConjTrans most of all, which
-    // silently drops the conjugation. Transpose::ConjTrans is a distinct enum
-    // value (enums.hh: NoTrans=0, Trans=1, ConjTrans=2), so `Trans` does not
-    // cover it. The Tiled128x32RegisterK16 family below already had this guard;
-    // nine other variants did not. Not reachable from select_kernel_variant
-    // today, but all of them are FORCEABLE by name via
-    // BATCHLAS_GEMM_SYCL_KERNEL, which is exactly how a benchmark would compare
-    // them -- producing a valid-looking timing for an incorrect result.
+    // GUARD: these launchers hard-wire OpA/OpB (register_launchers.hh), so the
+    // dispatcher must guard each with its own transpose combination or it
+    // silently computes the wrong answer -- and ConjTrans is a distinct enum
+    // value, so a `Trans` guard does not cover it. All are forceable by name.
     case KernelVariant::Tiled64x64RegisterK16TN:
         return "gemm_sycl_register_64x64_k16_tn";
     case KernelVariant::Tiled64x64RegisterK16NT:
@@ -482,40 +476,8 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
     if constexpr (std::is_same_v<T, float>) {
-        // Anything with a full 128x128 output tile, a deep enough k, and
-        // operands the unpredicated path can use goes to the 64-accumulator
-        // kernel. It beats the whole 128x32/128x64 family by 69-97% on every
-        // shape in this bucket and lands at 88-102% of cuBLAS; see
-        // docs/perf/gemm.md#the-128x128-float-kernel.
-        //
-        // This used to be gated on the fast path rather than on shape alone,
-        // with the note: "the kernel's predicated path is correct for ragged
-        // shapes but has not been benchmarked against the generic route below,
-        // so misaligned work keeps its existing kernel until that measurement
-        // exists." THAT MEASUREMENT NOW EXISTS (WP2 E4), and the predicated
-        // path wins by a wide margin on every shape tried. Square NN float,
-        // batch 512 (96 for n >= 544), both betas, RTX 4090:
-        //
-        //   n     generic 128x32x32   predicated 128x128   gain
-        //   160          7 892              13 170        1.67x
-        //   192          9 781              18 000        1.84x
-        //   224         11 611              22 467        1.93x
-        //   320         12 188              25 288        2.07x
-        //   544         13 372              27 101        2.03x
-        //   672         14 107              29 715        2.11x
-        //   800         14 654              31 354        2.14x
-        //  1056         15 065              33 314        2.21x
-        //
-        // The gain GROWS with n, which is what a predication cost that is
-        // constant per tile looks like against a route whose throughput has
-        // plateaued. Against cuBLAS this moves the bucket from 0.36-0.51x to
-        // 0.72-0.84x -- still a loss, which is why preferred() no longer
-        // claims this window for float, but it halves the damage for anyone on
-        // a vendor-free build, who has no cuBLAS to fall back to.
-        //
-        // Scope, deliberately narrow: only the GENERIC leg changes. The
-        // aligned leg below is a different tuned route and was never in the
-        // measurement, so it stays. See docs/perf/gemm.md#float-nn-at-max_dim-32.
+        // Full 128x128 output tiles with deep k go to the 64-accumulator
+        // kernel. evidence: docs/perf/gemm.md#the-128x128-float-kernel
         if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
             return KernelVariant::Tiled128x128RegisterK8;
         }
@@ -530,50 +492,11 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
             }
             return KernelVariant::Tiled128x128RegisterK8;
         }
-        // can_use_128x128_fast_path is a LEG predicate, not a KERNEL predicate.
-        // The dispatcher at :737-741 evaluates the identical predicate again and
-        // picks <true>/<false> itself, so a call that fails it still runs this
-        // kernel -- on its predicated leg. Used as a ROUTING gate above (:509),
-        // failing it did not demote the call to that leg; it handed the call to
-        // an entirely different, much slower kernel:
-        //
-        //   1000x1024x128  auto -> register_128x32_k16   forced -> register_128x128_k8
-        //   1024x1024x64   auto -> register_64x64        forced -> register_128x128_k8
-        //   1024x1024x128  auto -> register_128x128_k8   forced -> same  (null control)
-        //
-        // Measured native-vs-native (forced 128x128 vs the route it replaces),
-        // float NN beta=1, RTX 4090, 12 shapes, at pad 0 and pad 384:
-        // geomean 1.74x / 1.75x. Native goes 0.58x -> 0.99x of cuBLAS at
-        // ld==rows and 0.54x -> 0.93x strided.
-        //   1024x1024x64  b128 ld1408  3.187 -> 1.337 ms  2.38x
-        //   1000x1024x128 b128 ld1384  2.954 -> 1.569 ms  1.88x
-        //   1024x1024x16  b128         2.622 -> 1.232 ms  2.13x
-        //   128x128x8     b512         0.074 -> 0.030 ms  2.43x
-        // This also subsumes the ld%4 != 0 cliff (pad 1: 1.874 -> 1.003 ms),
-        // because this branch does not consult the alignment predicate at all.
-        // See docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix.
-        //
-        // EVERY BOUND BELOW HAS A MEASURED COUNTEREXAMPLE. Do not round them.
-        //  * mn_min >= 64 : m=32 is a wash-to-loss (32x1024x32 0.97x).
-        //  * mn_min >= 128 when k >= 128 : the grid at register_128x128.hh:124-130
-        //    fixes a 128x128 output tile, so a 64-wide output wastes 2-4x of
-        //    every CTA. At k >= 128 the routes this would displace
-        //    (Tiled64x64RegisterK16 :529, Tiled32x128RegisterK16 :526) are tuned
-        //    and WIN -- forced/auto at pad0 and pad384:
-        //        64x64x512   b512  0.77 / 0.69   (forced 1.3-1.45x SLOWER)
-        //        64x64x1024  b256  0.58 / 0.62   (1.6-1.7x SLOWER)
-        //        64x1024x512 b256  0.64 / 0.62   (1.6x SLOWER)
-        //    At k < 128 those routes are not tuned and 128x128 wins even at
-        //    mn_min = 64: 1024x64x64 1.80x, 64x1024x64 1.59-1.81x.
-        //  * max_dim >= 128 : 64x64x64 is a wash (1.02x).
-        //  * k >= 8 : it is the kernel's TileK; 1024x1024x8 wins 2.00x.
-        //
-        // NOTE ON REACH: with cuBLAS present this changes no runtime at all --
-        // route_gemm.hh's float NN window requires m==n==k, so every shape this
-        // gate captures resolves to the vendor (coverage: 79 native float gemm
-        // calls against 102 791 vendor). The deliverable is the vendor-free and
-        // ROCm builds, and making a future preferred() flip arguable. At 0.93x
-        // it is not yet arguable.
+        // can_use_128x128_fast_path is a LEG predicate, not a KERNEL predicate:
+        // the dispatcher re-evaluates it and picks the predicated leg itself, so
+        // using it as a routing gate hands a failing call to a different, much
+        // slower kernel instead. Each bound below has a measured counterexample.
+        // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
         const int mn_min = std::min(m, n);
         if (max_dim >= 128 && k >= 8 && mn_min >= 64 && (mn_min >= 128 || k < 128)) {
             return KernelVariant::Tiled128x128RegisterK8;
@@ -596,101 +519,23 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         return max_dim <= 48 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
 
-    // Wide scalars (double, complex<float>, complex<double>) have no register
-    // kernel at all below this point: they fall off the float ladder above
-    // straight to Tiled16 -- one accumulator per thread, std::complex
-    // operator* (and its isnan branch plus __mulsc3 call) in the inner loop,
-    // and a scattered epilogue. Measured on RTX 4090 / sm_89 at 256^3 b512,
-    // 512^3 b128 and 1024^3 b32, at beta 0 and beta 1, against a standalone
-    // replica of Tiled16 and against cuBLAS:
-    //
-    //   complex<float>  : 7.0-7.7x Tiled16, 0.98-1.08x cuBLAS CGEMM
-    //   complex<double> : 3.56-3.60x Tiled16, 1.12x cuBLAS ZGEMM
-    //   double          : 1.01-1.08x Tiled16, 1.07-1.15x cuBLAS DGEMM
-    //
-    // double is small on purpose: FP64 on a 4090 is 1/64 of FP32, the ceiling
-    // is ~1.44 TFLOP/s, and Tiled16 already reaches 92% of it. Do not read the
-    // double row as a win for the tile design; it is not, on this part.
-    // See docs/perf/gemm.md#the-wide-scalar-kernel.
-    //
-    // Two gates, both deliberate and both conservative:
-    //   * The unpredicated path only, exactly like the 128x128 float kernel
-    //     above. The predicated path is correct (round-off on 70x53x37) but
-    //     has never been timed against Tiled16.
-    //   * min_dim >= 256, the smallest dimension in the measured grid.
-    //
-    // HOW OFTEN THIS FIRES, MEASURED RATHER THAN ASSUMED. On the whole test
-    // suite's coverage capture, after removing the 2312 synthetic probe rows
-    // that route_gemm_equivalence_tests.cc feeds straight to the resolver:
-    // 46 of 7223 real non-float gemm calls, 0.64%. Restricted to calls where
-    // the problem is not small (max(m,n) >= 128), 91.6% are blocked by
-    // k < 256 and 69% by a transpose.
-    //
-    // That is structural, not an artefact of test sizing. The dominant
-    // internal GEMM here is a PANEL UPDATE -- large m, large n, small k --
-    // and k is the blocking factor, a tuning constant clustered at 1/8/32/48/
-    // 96/136 that does not grow with the problem. min_dim takes the min over
-    // k, so for that population this gate cannot fire at any problem size.
-    //
-    // Do not "fix" that by dropping the floor alone: zero calls are blocked
-    // by the k floor by itself. Every large-m,n small-k call is ALSO
-    // transposed or ragged, so serving them needs a transposed and predicated
-    // variant, not a wider predicate. What this kernel does serve is the
-    // direct public-API call -- large, square, aligned, NN -- where it is
-    // worth 3.6-7.7x over the fallback in a vendor-free build.
+    // Wide scalars (double, complex) have no register kernel below this point
+    // and otherwise fall straight to Tiled16. Deliberately conservative: the
+    // unpredicated path only (the predicated one has never been timed against
+    // Tiled16) and min_dim >= 256, the smallest measured dimension.
+    // evidence: docs/perf/gemm.md#the-wide-scalar-kernel
     if constexpr (!std::is_same_v<T, float>) {
         if (min_dim >= 256 && can_use_64x64_k16_wide_fast_path<T>(A, B, C)) {
             return KernelVariant::Tiled64x64RegisterK16Wide;
         }
     }
 
-    // ROUTE BY WHAT THE KERNEL CAN RUN, NOT BY WHAT ITS FAST LEG NEEDS --
-    // but only where it can actually FILL THE MACHINE.
-    //
-    // can_use_64x64_k16_wide_fast_path (used just above) is the aligned LEG's
-    // predicate. The dispatcher at :801-807 re-evaluates it and picks
-    // <true>/<false> itself, so a call that fails it still runs THIS kernel on
-    // its predicated leg; the only hard predicate is NN, at :802. Consulting it
-    // as a ROUTING gate did not demote such a call to that leg -- it handed the
-    // call to Tiled16 (:638). Identical defect to the float 128x128 case fixed
-    // in 3f0afbd. Reaching this line already implies NN, since :460 returns for
-    // every transposed form.
-    //
-    // Forced-wide vs the route it replaces, at SATURATION, geomean over 116
-    // refused cells: cfloat 3.98x, cdouble 2.90x. THAT NUMBER IS NOT THE GATE.
-    // It is measured in a regime these call sites never enter: every shape this
-    // relaxation newly captures runs at batch 1-8, and there the wide kernel
-    // LOSES in 12 of 12 measured cells -- cfloat 0.60-0.80x, cdouble as bad as
-    // 0.17x, a 5.7x regression. See docs/perf/gemm.md#the-cta-count-gate-for-complex.
-    //
-    // THE GATE IS A CTA COUNT, BECAUSE THAT IS WHAT THE CROSSOVER TRACKS.
-    // A 180-cell ladder over batch 1..256 x 5 shapes x 2 types shows the
-    // crossover is NOT a constant batch (it moves 8 -> 128 by shape) but is very
-    // nearly a constant number of work-groups. This kernel launches
-    // ceil(m/64)*ceil(n/64) CTAs of 256 threads per batch item, against Tiled16's
-    // ceil(m/16)*ceil(n/16) -- up to 16x fewer -- so on a 128-SM part it cannot
-    // fill the machine at small batch while Tiled16 can. cdouble needs twice the
-    // CTAs of cfloat because its 32 KB of shared memory caps it at 3 blocks/SM
-    // (register_64x64_k16_wide.hh:271-272 allocates 2*1024*sizeof(D)).
-    //
-    // Over every clean cell of the ladder (relative sd <= 10%):
-    //   cfloat  ctas >= 64 : 26 cells admitted, WORST 1.08x, zero losses
-    //   cdouble ctas >= 128: 24 cells admitted, WORST 1.08x, zero losses
-    //
-    // EVERY BOUND HAS A MEASURED COUNTEREXAMPLE ON THE OTHER SIDE:
-    //   * cfloat below 64 CTAs : 129x96x129 b8 = 48 CTAs, 0.79x LOSS.
-    //   * cdouble below 128    : 33x61x33 b64 = 64 CTAs, 0.93x LOSS. Note 64
-    //     CTAs also holds a cdouble WIN (96x64x96 b32, 1.31x), so the count does
-    //     not separate cleanly there -- 128 is chosen to admit no loss, and it
-    //     costs a real 1.37x (129x96x129 b16). Conservative on purpose.
-    //   * min_dim >= 32 : the CTA gate alone would admit tiny shapes at huge
-    //     batch. 16x16x16 loses 0.71x (cfloat) and 0.28x (cdouble); 32^3 wins
-    //     2.28x / 1.05x. The floor is the crossover, not a round number.
-    //
-    // A REGRESSION HERE WOULD BE SILENT: nothing in ctest asserts on kernel
-    // choice or throughput, and route_diff.sh records resolver Routes, not
-    // KernelVariant, so it is structurally blind to this change. That is why the
-    // gate is set to admit no measured loss rather than to maximise the geomean.
+    // The gate is a CTA count, not a batch size: that is what the crossover
+    // against Tiled16 tracks, and it is set to admit no measured loss rather
+    // than to maximise the geomean. NN is implied here -- every transposed form
+    // returned above. A regression would be silent: nothing in ctest asserts on
+    // kernel choice or throughput, and route_diff.sh records resolver Routes,
+    // not KernelVariant. evidence: docs/perf/gemm.md#the-cta-count-gate-for-complex
     if constexpr (is_std_complex_v<T>) {
         using Real = typename T::value_type;
         constexpr int64_t kMinCtas = std::is_same_v<Real, float> ? 64 : 128;
@@ -703,25 +548,8 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 
     if constexpr (std::is_same_v<T, double>) {
-        // The Direct/Tiled16 crossover for double is at 24, not 32. Measured on
-        // RTX 4090 / sm_89, median of 3, both betas, at saturation:
-        //
-        //   n   batch   Direct   Tiled16   winner
-        //   24    512     708      518     Direct,  1.37x
-        //   24   4096    1126      687     Direct,  1.64x
-        //   25   4096     750      746     a wash (inside spread)
-        //   28   4096     903      937     Tiled16, 1.04x
-        //   32    512     903      973     Tiled16, 1.08x
-        //   32   4096     938     1211     Tiled16, 1.29x
-        //
-        // This was worth finding rather than tidying: n=32 was the ONLY cell in
-        // the entire window preferred() accepts for double where the native
-        // route lost to cuBLAS (0.92-0.96x at batch 4096). Picking Tiled16
-        // there turns it into a 1.15-1.23x win, so the whole double window is
-        // now a native win from n=4 to n=512. See docs/perf/gemm.md#evidence-for-each-boundary E3.
-        //
-        // 24 rather than 25 because 25 is inside the run-to-run spread and a
-        // boundary should sit where the evidence is unambiguous.
+        // The Direct/Tiled16 crossover for double is at 24, not 32.
+        // evidence: docs/perf/gemm.md#evidence-for-each-boundary
         return max_dim <= 24 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
 
@@ -859,22 +687,12 @@ Event gemm_custom(Queue& ctx,
     case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
         return launch_register_128x64_k32_large_tt4x8_u2(ctx, A, B, C, alpha, beta, kernel_trace_name);
     case KernelVariant::Tiled128x128RegisterK8:
-        // float only, and NN only. A 64-accumulator thread tile is 64
-        // registers for float but 128 for double and 256 for complex<double>;
-        // and the kernel reads A as m x k and B as k x n directly, so it
-        // cannot serve a transposed operand. The selector never picks it
-        // outside those bounds, but it can also be forced by name, so fall
-        // back rather than compute the wrong thing.
-        //
-        // The reason for the float restriction is LAUNCHABILITY, not spilling
-        // -- this comment used to say "which spills" and that is measured
-        // false. At an 8x8 tile, double compiles to 208 total registers and
-        // complex<float> to 247, both with ZERO spill bytes on sm_89; only
-        // complex<double> spills, and only 3.4 KB. What actually fails is the
-        // hard limit of 65,536 registers per block: 208 x 512 threads
-        // overruns it and complex<double> throws at launch. Non-float goes to
-        // Tiled64x64RegisterK16Wide above, whose 4x4 tile fits every scalar.
-        // See docs/perf/gemm.md#the-wide-scalar-kernel section 2.
+        // float only, NN only. Wider scalars overrun the hard 65,536
+        // registers-per-block limit at this 64-accumulator tile (a launch
+        // failure, not spilling), and the kernel reads A as m x k and B as
+        // k x n so it cannot serve a transposed operand. The selector respects
+        // both, but the variant is forceable by name, so fall back rather than
+        // compute the wrong thing.
         if constexpr (std::is_same_v<T, float>) {
             if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
                 if (can_use_128x128_fast_path<T>(A, B, C)) {
@@ -888,12 +706,8 @@ Event gemm_custom(Queue& ctx,
         return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled64x64RegisterK16Wide:
         // NN only: the kernel reads A as m x k and B as k x n directly, so it
-        // cannot serve a transposed operand. Unlike the 128x128 float kernel
-        // every scalar is supported -- a 4x4 thread tile is 16 accumulators,
-        // i.e. 32 registers for double and complex<float> and 64 for
-        // complex<double>, measured at 72-134 total with zero spill bytes on
-        // sm_89. The selector never picks it outside these bounds, but it can
-        // be forced by name, so fall back rather than compute the wrong thing.
+        // cannot serve a transposed operand. Every scalar fits its 4x4 tile.
+        // Forceable by name, so fall back rather than compute the wrong thing.
         if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
             if (can_use_64x64_k16_wide_fast_path<T>(A, B, C)) {
                 return launch_register_64x64_k16_wide<T, true>(
