@@ -214,8 +214,10 @@ namespace batchlas{
     }
     } // namespace detail
 
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
+    Event spmm_vendor(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -264,8 +266,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
+    size_t spmm_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T, MFormat>& A,
                             const MatrixView<T, MatrixFormat::Dense>& B,
                             const MatrixView<T, MatrixFormat::Dense>& C,
@@ -283,9 +289,17 @@ namespace batchlas{
         static_cast<void>(transB);
         return 0;
     }
+
+    } // namespace backend
     
+    // The netlib gemm is the vendor implementation, so it moves into
+    // `backend` under its vendor name rather than being deleted: unlike
+    // cublas.cc and rocblas.cc, this TU had no separate gemm_vendor to forward
+    // to -- its public `gemm` WAS the CBLAS call.
+    namespace backend {
+
     template <Backend B, typename T>
-    Event gemm(Queue& ctx,
+    Event gemm_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& descrA,
                    const MatrixView<T, MatrixFormat::Dense>& descrB,
                    const MatrixView<T, MatrixFormat::Dense>& descrC,
@@ -349,8 +363,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event gemv(Queue& ctx,
+    Event gemv_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const VectorView<T>& X,
                const VectorView<T>& Y,
@@ -401,15 +419,24 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trsm(Queue& ctx,
+    Event trsm_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         const MatrixView<T, MatrixFormat::Dense>& descrB,
-        T alpha,
         Side side,
         Uplo uplo,
         Transpose transA,
-        Diag diag) {
+        Diag diag,
+        T alpha) {
+        // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
+        // alpha LAST, unlike the public trsm, which takes it third. The two
+        // orders coexisted for as long as each TU declared its own public trsm;
+        // now that one declaration serves every backend, they have to agree.
+
         auto A_view = descrA;
         auto B_view = descrB;
         return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
@@ -508,8 +535,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event symm(Queue& ctx,
+    Event symm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -575,8 +606,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, ComplexScalar T>
-    Event hemm(Queue& ctx,
+    Event hemm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -630,9 +665,13 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+
+    namespace backend {
 
     template <Backend B, ComplexScalar T>
-    Event herk(Queue& ctx,
+    Event herk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
                float_t<T> alpha,
@@ -688,8 +727,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, ComplexScalar T>
-    Event her2k(Queue& ctx,
+    Event her2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -748,8 +791,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syrk(Queue& ctx,
+    Event syrk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
                T alpha,
@@ -808,8 +855,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syr2k(Queue& ctx,
+    Event syr2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -877,8 +928,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trmm(Queue& ctx,
+    Event trmm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -940,8 +995,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event potrf(Queue& ctx,
+    Event potrf_vendor(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace,
@@ -973,6 +1032,8 @@ namespace batchlas{
             }
         });
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -1153,8 +1214,10 @@ namespace batchlas{
 
     } // namespace backend
 
+    namespace backend {
+
     template <Backend Back, typename T>
-    Event getrs(Queue& ctx,
+    Event getrs_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,
                 Transpose transA,
@@ -1195,8 +1258,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T>
-    size_t getrs_buffer_size(Queue& ctx,
+    size_t getrs_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              Transpose transA) {
@@ -1207,8 +1274,12 @@ namespace batchlas{
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getrf(Queue& ctx,
+    Event getrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
@@ -1252,16 +1323,24 @@ namespace batchlas{
         return ctx.get_event();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getrf_buffer_size(Queue& ctx,
+    size_t getrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getri(Queue& ctx,
+    Event getri_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
@@ -1300,16 +1379,24 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getri_buffer_size(Queue& ctx,
+    size_t getri_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event geqrf(Queue& ctx,
+    Event geqrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -1332,8 +1419,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t geqrf_buffer_size(Queue& ctx,
+    size_t geqrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -1342,8 +1433,12 @@ namespace batchlas{
         return 0;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event orgqr(Queue& ctx,
+    Event orgqr_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -1368,8 +1463,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t orgqr_buffer_size(Queue& ctx,
+    size_t orgqr_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -1377,6 +1476,8 @@ namespace batchlas{
         static_cast<void>(tau);
         return 0;
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -1436,8 +1537,10 @@ namespace batchlas{
 
     } // namespace backend
 
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t potrf_buffer_size(Queue& ctx,
+    size_t potrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& descrA,
                              Uplo uplo) {
         static_cast<void>(ctx);
@@ -1446,42 +1549,40 @@ namespace batchlas{
         return 0;
     }
 
+    } // namespace backend
+
 
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
     // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 
-    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F)
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
-    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
-    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
-    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk<fp>, herk, B_, fp)
-    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)
-    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
-    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
-    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
-    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_buffer_size<fp>, getrs_buffer_size, B_, fp)
-    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf<fp>, getrf, B_, fp)
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_buffer_size<fp>, getrf_buffer_size, B_, fp)
-    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri<fp>, getri, B_, fp)
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_buffer_size<fp>, getri_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
+    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm_vendor<fp BATCHLAS_COMMA F>, backend::spmm_vendor, B_, fp, F)
+    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<fp BATCHLAS_COMMA F>, backend::spmm_vendor_buffer_size, B_, fp, F)
+    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm_vendor<fp>, backend::gemm_vendor, B_, fp)
+    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv_vendor<fp>, backend::gemv_vendor, B_, fp)
+    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm_vendor<fp>, backend::trsm_vendor, B_, fp)
+    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm_vendor<fp>, backend::symm_vendor, B_, fp)
+    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm_vendor<fp>, backend::hemm_vendor, B_, fp)
+    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk_vendor<fp>, backend::syrk_vendor, B_, fp)
+    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk_vendor<fp>, backend::herk_vendor, B_, fp)
+    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k_vendor<fp>, backend::her2k_vendor, B_, fp)
+    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k_vendor<fp>, backend::syr2k_vendor, B_, fp)
+    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm_vendor<fp>, backend::trmm_vendor, B_, fp)
+    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf_vendor<fp>, backend::geqrf_vendor, B_, fp)
+    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_vendor_buffer_size<fp>, backend::geqrf_vendor_buffer_size, B_, fp)
+    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr_vendor<fp>, backend::orgqr_vendor, B_, fp)
+    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_vendor_buffer_size<fp>, backend::orgqr_vendor_buffer_size, B_, fp)
+    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs_vendor<fp>, backend::getrs_vendor, B_, fp)
+    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_vendor_buffer_size<fp>, backend::getrs_vendor_buffer_size, B_, fp)
+    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf_vendor<fp>, backend::getrf_vendor, B_, fp)
+    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_vendor_buffer_size<fp>, backend::getrf_vendor_buffer_size, B_, fp)
+    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri_vendor<fp>, backend::getri_vendor, B_, fp)
+    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_vendor_buffer_size<fp>, backend::getri_vendor_buffer_size, B_, fp)
     #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
     #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
-    #define POTRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::potrf<fp>, potrf, B_, fp)
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::potrf_buffer_size<fp>, potrf_buffer_size, B_, fp)
-    #define SYEV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syev<fp>, syev, B_, fp)
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp)    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
+    #define POTRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::potrf_vendor<fp>, backend::potrf_vendor, B_, fp)
+    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::potrf_vendor_buffer_size<fp>, backend::potrf_vendor_buffer_size, B_, fp)
     #define SYEV_VENDOR_INSTANTIATE(fp)         BATCHLAS_INSTANTIATE(sig::syev_vendor<fp>, backend::syev_vendor, B_, fp)
     #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::syev_vendor_buffer_size<fp>, backend::syev_vendor_buffer_size, B_, fp)
     #define GESVD_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::gesvd_vendor<fp>, backend::gesvd_vendor, B_, fp)
@@ -1501,16 +1602,12 @@ namespace batchlas{
         GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
         GETRI_INSTANTIATE(fp) \
         GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_INSTANTIATE(fp) \
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORMQR_VENDOR_INSTANTIATE(fp) \
         ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         ORGQR_INSTANTIATE(fp) \
         ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
         SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GESVD_VENDOR_INSTANTIATE(fp) \
@@ -1558,16 +1655,12 @@ namespace batchlas{
     #undef GETRF_BUFFER_SIZE_INSTANTIATE
     #undef GETRI_INSTANTIATE
     #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
     #undef ORMQR_VENDOR_INSTANTIATE
     #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef ORGQR_INSTANTIATE
     #undef ORGQR_BUFFER_SIZE_INSTANTIATE
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GESVD_VENDOR_INSTANTIATE

@@ -9,8 +9,10 @@
 
 namespace batchlas {
 
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
+    Event spmm_vendor(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -40,8 +42,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
+    size_t spmm_vendor_buffer_size(Queue& ctx,
                           const MatrixView<T, MFormat>& A,
                           const MatrixView<T, MatrixFormat::Dense>& B,
                           const MatrixView<T, MatrixFormat::Dense>& C,
@@ -68,10 +74,12 @@ namespace batchlas {
         return size;
     }
 
+    } // namespace backend
+
     #define SPMM_INSTANTIATE(fp, F) \
-    template Event spmm<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, Span<std::byte>);
+    template Event backend::spmm_vendor<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, Span<std::byte>);
     #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t spmm_buffer_size<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose);
+    template size_t backend::spmm_vendor_buffer_size<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose);
 
     #define ROCSPARSE_INSTANTIATE(fp, F) \
         SPMM_INSTANTIATE(fp, F) \

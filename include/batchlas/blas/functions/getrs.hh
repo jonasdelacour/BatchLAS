@@ -22,6 +22,24 @@ using getrs_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Transpose);
+
+// backend::getrs_vendor's signature, spelled out from the definition rather than
+// aliased to sig::getrs: a vendor parameter list can differ from the public one.
+template <typename T>
+using getrs_vendor = Event(Queue&,
+                           const MatrixView<T,MatrixFormat::Dense>&,
+                           const MatrixView<T,MatrixFormat::Dense>&,
+                           Transpose,
+                           Span<int64_t>,
+                           Span<std::byte>);
+
+// backend::getrs_vendor_buffer_size's signature, spelled out from the definition rather than
+// aliased to sig::getrs_buffer_size: a vendor parameter list can differ from the public one.
+template <typename T>
+using getrs_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        Transpose);
 }  // namespace sig
 
 
@@ -58,6 +76,33 @@ inline size_t getrs_buffer_size(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for getrs.
+//
+// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
+// `getrs` used to be defined inside each vendor TU, so dropping a vendor library
+// dropped the public entry point with it; WP0 S5 moves that definition to
+// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// implementation here, named as such.
+template <Backend Back, typename T>
+Event getrs_vendor(Queue& ctx,
+                   const MatrixView<T,MatrixFormat::Dense>& A,
+                   const MatrixView<T,MatrixFormat::Dense>& B,
+                   Transpose transA,
+                   Span<int64_t> pivots,
+                   Span<std::byte> work_space);
+
+
+template <Backend Back, typename T>
+size_t getrs_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<T,MatrixFormat::Dense>& A,
+                                const MatrixView<T,MatrixFormat::Dense>& B,
+                                Transpose transA);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

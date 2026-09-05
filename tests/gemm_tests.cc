@@ -342,7 +342,9 @@ TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
               batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// Guarded on the LIBRARY, not the family: cublasdx_gemm_select_variant lives
+// in gemm_cublasdx_dispatch.cc, which is compiled only when cuBLAS is found.
+#if BATCHLAS_HAS_CUBLAS
 TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     Matrix<float> A(128, 128, 1);
     Matrix<float> B(128, 128, 1);
@@ -350,7 +352,7 @@ TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     EXPECT_EQ(batchlas::backend::cublasdx_gemm_select_variant(A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans),
               batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN);
 }
-#endif // BATCHLAS_HAS_CUDA_BACKEND
+#endif // BATCHLAS_HAS_CUBLAS
 
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {

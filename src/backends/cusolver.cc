@@ -21,8 +21,10 @@ namespace batchlas {
         #pragma message("cuSOLVER X API is not available, using legacy API be wary batches of matrices larger than 128x128")
     #endif
 
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t potrf_buffer_size(Queue& ctx,
+    size_t potrf_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T,MatrixFormat::Dense>& A,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
@@ -38,8 +40,12 @@ namespace batchlas {
         return size;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event potrf(Queue& ctx,
+    Event potrf_vendor(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace,
@@ -60,6 +66,8 @@ namespace batchlas {
         }
         return ctx.create_event_after_external_work();
     }
+
+    } // namespace backend
 
     namespace backend {
         template <Backend B, typename T>
@@ -489,7 +497,7 @@ namespace batchlas {
     } // namespace backend
 
     #define POTRF_INSTANTIATE(fp) \
-    template Event potrf<Backend::CUDA, fp>( \
+    template Event backend::potrf_vendor<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         Uplo, \
@@ -497,26 +505,9 @@ namespace batchlas {
         Span<int32_t>);
     
     #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t potrf_buffer_size<Backend::CUDA, fp>( \
+    template size_t backend::potrf_vendor_buffer_size<Backend::CUDA, fp>( \
         Queue&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
-        Uplo);
-
-    #define SYEV_INSTANTIATE(fp) \
-    template Event syev<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, \
-        Uplo, \
-        Span<std::byte>);
-
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t syev_buffer_size<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, \
         Uplo);
 
     #define SYEV_VENDOR_INSTANTIATE(fp) \
@@ -560,8 +551,6 @@ namespace batchlas {
     #define CUSOLVER_INSTANTIATE(fp) \
         POTRF_INSTANTIATE(fp) \
         POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
         SYEV_VENDOR_INSTANTIATE(fp) \
         SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
         GESVD_VENDOR_INSTANTIATE(fp) \
@@ -575,8 +564,6 @@ namespace batchlas {
 
     #undef POTRF_INSTANTIATE
     #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
     #undef SYEV_VENDOR_INSTANTIATE
     #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
     #undef GESVD_VENDOR_INSTANTIATE
