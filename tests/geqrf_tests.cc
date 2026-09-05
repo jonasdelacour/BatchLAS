@@ -1,10 +1,9 @@
 // Native batched GEQRF and the ORGQR that consumes its output.
 //
-// The oracle is never the vendor: a forced route that supports() rejects falls
-// through to the vendor silently (route_resolve.hh:101), so every numerical test
-// calls the native entry points directly against a host reference in double.
-// Residuals are blind to the tau/beta convention -- geqrf's real contract -- which
-// is why the convention tests exist. evidence: docs/perf/qr.md
+// A forced route that supports() rejects falls through to the vendor silently, so every
+// numerical test calls the native entry points directly against a host reference in
+// double. Residuals are blind to the tau/beta convention -- geqrf's real contract --
+// which is why the convention tests exist. evidence: docs/perf/qr.md
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/geqrf.hh>
@@ -71,8 +70,8 @@ template <> inline std::complex<double> mk<std::complex<double>>(double re, doub
     return {re, im};
 }
 
-// A deterministic LCG rather than <random>: tests below assert that two batch
-// items DIFFER, and that assertion has to be about the data, not luck.
+// A deterministic LCG rather than <random>: tests below assert that two batch items
+// DIFFER, and that assertion has to be about the data, not luck.
 struct Rng {
     uint64_t s;
     explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
@@ -84,7 +83,7 @@ struct Rng {
 
 // Q is built by APPLYING the packed reflectors to the first k columns of I_m, in
 // LAPACK's order Q = H_0 H_1 ... H_{k-1}, H_i = I - tau_i v_i v_i^H with
-// v_i = [0 .. 0, 1, F(i+1:m-1, i)]. Deliberately the textbook definition.
+// v_i = [0 .. 0, 1, F(i+1:m-1, i)].
 template <typename T>
 std::vector<typename Prom<T>::type>
 host_form_Q(const T* F, const T* tau, int m, int k, int ld) {
@@ -180,10 +179,9 @@ struct GeqrfConfig {
     static constexpr Backend BackendVal = B;
 };
 
-// DISTINCT matrices per item at ld != rows and stride != ld*cols, so a view built on
-// the stride-defaulting constructor -- after which every item but the first reads the
-// wrong matrix -- is falsifiable by DEFAULT. The pad carries a large POISON, so an
-// out-of-window read is a wrong answer rather than a near one.
+// DISTINCT matrices per item at ld != rows and stride != ld*cols, so a view built on the
+// stride-defaulting constructor is falsifiable by DEFAULT. The pad carries a large POISON,
+// so an out-of-window read is a wrong answer rather than a near one.
 template <typename T>
 struct Problem {
     int m = 0, n = 0, k = 0, batch = 0, ld = 0, stride = 0;
@@ -244,8 +242,6 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // Correctness gates, not conveniences: route_geqrf.hh gate 3 (GPU only) and
-        // gate 4 (sub-group 32), both re-applied by the direct entry points.
         if (this->ctx->device().type != DeviceType::GPU) {
             GTEST_SKIP() << "the native geqrf kernels are GPU-only (route_geqrf.hh gate 3)";
         }
@@ -266,8 +262,7 @@ protected:
         return sycl_geqrf::geqrf_cta_fits<T>(m, n, budget());
     }
 
-    // Queried, never hardcoded: a test that must straddle a block boundary and cannot
-    // see where the boundary is stops testing anything the moment the width moves.
+    // Queried, never hardcoded: a hardcoded width silently stops straddling when it moves.
     int nb(int m, int n) const {
         return static_cast<int>(
             sycl_geqrf::geqrf_blocked_debug_params<T>(*this->ctx, m, n) & 0xffffu);
@@ -277,9 +272,8 @@ protected:
     }
 };
 
-// Both residuals plus finiteness and batch-distinctness, on EVERY batch item: item 0
-// sits at offset 0, so a wrong batch stride cannot move it, and the distinctness
-// assertion is what makes "the kernel broadcast item 0" a failure rather than a pass.
+// Both residuals plus finiteness and batch-distinctness on EVERY batch item. Item 0 sits
+// at offset 0, so only the distinctness check can fail a kernel that broadcast item 0.
 template <typename T>
 void check_one(const Problem<T>& p, const char* what) {
     for (int b = 0; b < p.batch; ++b) {
@@ -353,19 +347,16 @@ using GeqrfTestTypes = typename test_utils::backend_types<GeqrfConfig>::type;
 
 TYPED_TEST_SUITE(GeqrfTest, GeqrfTestTypes);
 
-// G0. THE 48 KB LAUNCH HOLE. DECLARED FIRST ON PURPOSE.
-//
-// A resident-leaf launch asking for EXACTLY 49,152 B of local memory is refused by
-// the CUDA backend. DO NOT MOVE THIS TEST, and do not add a resident-leaf launch
-// above it: the shared-memory cap the adapter raises is STICKY PER CUfunction, so an
-// earlier launch of a larger panel raises it for the rest of the process and this
-// guard can never fail again. GoogleTest runs a suite in declaration order.
-// evidence: docs/perf/qr.md#the-48-kib-launch-hole
+// G0. THE 48 KB LAUNCH HOLE. DECLARED FIRST ON PURPOSE: the shared-memory cap the CUDA
+// adapter raises is STICKY PER CUfunction, so an earlier resident-leaf launch of a larger
+// panel raises it for the rest of the process and this guard can never fail again.
+// GoogleTest runs a suite in declaration order -- do not move this test, and do not add a
+// resident-leaf launch above it. evidence: docs/perf/qr.md#the-48-kib-launch-hole
 TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
 
-    // The three byte sizes as element counts for THIS scalar type, split into an
-    // m x n panel with m >= n (supports() gate 2).
+    // Byte sizes as element counts for THIS scalar type, as an m x n panel with
+    // m >= n (supports() gate 2).
     struct S { std::size_t bytes; int m, n; };
     const std::size_t sz = sizeof(T);
     const S rows[] = {
@@ -375,8 +366,6 @@ TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
     };
 
     for (const S& r : rows) {
-        // ANTI-VACUITY: the row must ask for the byte count it names, and the tile must be
-        // admissible to the resident leaf, or this is a launch of some other size.
         ASSERT_EQ(static_cast<std::size_t>(r.m) * static_cast<std::size_t>(r.n) * sz, r.bytes)
             << "this row does not ask for " << r.bytes << " B";
         ASSERT_GE(r.m, r.n);
@@ -426,9 +415,8 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
 TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
     using T = typename TestFixture::T;
     struct S { int m, n, b; };
-    // 96x96's leading cdouble panel is exactly the 49,152 B G0 guards, but this is NOT
-    // a substitute for G0: an earlier row has already raised the sticky per-CUfunction
-    // cap by the time this test reaches it.
+    // 96x96's leading cdouble panel is exactly the 49,152 B G0 guards, but this is NOT a
+    // substitute for G0: an earlier row has already raised the sticky per-CUfunction cap.
     const S shapes[] = {{64, 64, 4},  {65, 65, 4},   {66, 66, 4}, {100, 64, 3},
                         {129, 33, 3}, {130, 130, 2}, {96, 96, 2}, {112, 80, 3}};
     for (const S& s : shapes) {
@@ -450,8 +438,7 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
 TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
     using T = typename TestFixture::T;
 
-    // Ask at a shape large enough that the answer is the type's own width, not the
-    // min(nb, k) clamp.
+    // Ask at a shape large enough that the answer is the type's own width, not min(nb, k).
     const int w = this->nb(512, 512);
     ASSERT_GE(w, 2) << "a block width of " << w << " cannot straddle anything";
 
@@ -482,9 +469,8 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
     }
 }
 
-// G4. Both panel leaves. The blocked driver picks a local_accessor tile or a raw
-// global pointer per panel, so this test ASSERTS which one it got before believing any
-// residual, and SEARCHES for the height that leaves the resident path.
+// G4. Both panel leaves. The blocked driver picks a local_accessor tile or a raw global
+// pointer per panel, so this test ASSERTS which one it got before believing any residual.
 TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
     using T = typename TestFixture::T;
     const int w = this->nb(4096, 64);
@@ -523,9 +509,9 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
     }
 }
 
-// G5. A rank-deficient input: one exactly-zero column and one exact duplicate. The
-// zero column drives larfg's tau = 0 identity branch, whose work-group uniformity
-// the kernel's `continue` depends on. Neither may NaN, and QR = A must still hold.
+// G5. A rank-deficient input: one exactly-zero column and one exact duplicate. The zero
+// column drives larfg's tau = 0 identity branch, whose work-group uniformity the kernel's
+// `continue` depends on.
 TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
     using T = typename TestFixture::T;
     for (int pass = 0; pass < 2; ++pass) {
@@ -567,9 +553,9 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
     }
 }
 
-// G6. The complex convention, which no residual can see: LAPACK's clarfg/zlarfg return
-// a REAL beta, internal::larfg is phase-preserving, and swapping the two leaves qr,
-// orth and the explicit-Q residual GREEN for every type.
+// G6. The complex convention no residual can see: LAPACK's clarfg/zlarfg return a REAL
+// beta, internal::larfg is phase-preserving, and swapping the two leaves qr, orth and the
+// explicit-Q residual GREEN for every type.
 TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
     using T = typename TestFixture::T;
     if constexpr (!test_utils::is_complex<T>::value) {
@@ -604,8 +590,7 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
 }
 
 // G7. The interface contract, in both directions: geqrf's output is a CONVENTION that
-// ormqr, orgqr, ormbr, sy2sb and band_reduction consume, and only crossing an
-// implementation boundary sees a convention error. A -- NATIVE geqrf -> ROUTED ormqr.
+// ormqr, orgqr, ormbr and sy2sb consume. A -- NATIVE geqrf -> ROUTED ormqr.
 TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -697,10 +682,9 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
     }
 }
 
-// G8b. THE CONVENTION, GUARDED WITHOUT A VENDOR. No residual can cover it: flipping
-// LAPACK's sign choice leaves qr, orth and qrQ green for every type, and ormqr merely
-// applies I - tau v v^H to whatever it is handed. The oracle is an independent host
-// xGEQR2 in double (beta = -SIGN(||x||, Re(alpha)), tau = (beta - alpha)/beta).
+// G8b. THE CONVENTION, GUARDED WITHOUT A VENDOR. Flipping LAPACK's sign choice leaves qr,
+// orth and qrQ green for every type, so the oracle is an independent host xGEQR2 in double
+// (beta = -SIGN(||x||, Re(alpha)), tau = (beta - alpha)/beta).
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
     using T = typename TestFixture::T;
@@ -751,10 +735,9 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
                 for (int i = j + 1; i < m; ++i)
                     w += hconj(W[static_cast<size_t>(j) * m + i]) *
                          W[static_cast<size_t>(c) * m + i];
-                // conj(TAU), NOT TAU, and this is LAPACK's own asymmetry: zgeqr2 forms the
-                // reflector with zlarfg and applies it with DCONJG(TAU), because reducing A
-                // from the left applies H^H. For a real T hconj is the identity, so half
-                // the type list cannot see this line.
+                // conj(TAU), NOT TAU: zgeqr2 forms the reflector with zlarfg and applies it with
+                // DCONJG(TAU), because reducing A from the left applies H^H. hconj is the identity
+                // for a real T, so half the type list cannot see this line.
                 const D f = hconj(tau) * w;
                 W[static_cast<size_t>(c) * m + j] -= f;
                 for (int i = j + 1; i < m; ++i)
@@ -781,7 +764,6 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
         }
         this->ctx->wait();
 
-        // EVERY BATCH ITEM, for the reason check_one gives.
         for (int b = 0; b < p.batch; ++b) {
             const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
             const T* A0 = p.a0.data() + static_cast<size_t>(b) * p.stride;
@@ -790,8 +772,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             std::vector<D> rdiag, taus;
             host_geqr2(A0, s.m, s.n, p.ld, rdiag, taus);
 
-            // The reference is unblocked and the kernel is not, so the two sum in different
-            // orders. This tolerance is NUMERICAL; the sign check below carries none at all.
+            // The reference is unblocked and the kernel is not. The sign check below has no tolerance.
             const double tol = 512.0 * double(std::numeric_limits<R>::epsilon()) *
                                double(s.m + s.n);
 
@@ -800,8 +781,8 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
                 const D tj = up(tau[j]);
 
                 if constexpr (!test_utils::is_complex<T>::value) {
-                    // THE EXACT BIT, and nothing else in this file notices when it flips. A
-                    // zero diagonal is the tau == 0 case and has no sign.
+                    // Nothing else in this file notices a sign flip; a zero diagonal is the
+                    // tau == 0 case and has no sign.
                     if (habs(rdiag[j]) > 0.0 && habs(rj) > 0.0) {
                         EXPECT_EQ(hreal(rj) < 0.0, hreal(rdiag[j]) < 0.0)
                             << "R(" << j << "," << j << ") has the WRONG SIGN: got "
@@ -825,16 +806,12 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
     }
 }
 
-// G8c. THE RECIPROCAL GUARD IN geqrf_larfg_scalars, ON DATA THAT REACHES IT.
-//
-//     out.use_mul = dev_isfinite(r) && !dev_is_zero(r);   // r = 1/(alpha-beta)
-//     out.vfactor = out.use_mul ? r : d;   // multiply by 1/d, or DIVIDE by d
-//
-// The `false` arm is reachable ONLY on SUBNORMAL input, so a "simplify this to a plain
-// reciprocal-multiply" edit would fill every such column's v with infinities and
-// nothing would go red. Hence FINITENESS and a loose, scale-invariant orthogonality
-// rather than a residual: ||A||_F^2 underflows to zero at this magnitude and the
-// oracle returns nan. The `!dev_is_zero(r)` half is uncovered: docs/perf/qr.md#open-debts
+// G8c. geqrf_larfg_scalars' division arm, on data that reaches it. That arm is taken ONLY
+// on SUBNORMAL input, so a "simplify this to a plain reciprocal-multiply" edit would fill
+// every such column's v with infinities and nothing would go red. Hence FINITENESS and a
+// loose, scale-invariant orthogonality rather than a residual: ||A||_F^2 underflows to
+// zero at this magnitude and the oracle returns nan. The `!dev_is_zero(r)` half is
+// uncovered: docs/perf/qr.md#open-debts
 TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -849,8 +826,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
         if (!s.blocked && !this->cta_fits(s.m, s.n)) continue;
         auto p = make_problem<T>(s.m, s.n, 2, 4441u + unsigned(s.n));
 
-        // Rescale the WINDOW only. The pad keeps its +/-9.75e3 poison, astronomically out
-        // of window at this magnitude, so an out-of-bounds read stays a wrong answer.
+        // Rescale the WINDOW only: the pad keeps its poison, far out of window at this scale.
         for (int b = 0; b < p.batch; ++b)
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i) {
@@ -860,15 +836,12 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
                 }
         p.a0.assign(p.buf.begin(), p.buf.end());
 
-        // ANTI-VACUITY ON THE CONFIGURATION.
         double biggest = 0.0;
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
                 biggest = std::max(biggest, habs(up(p.buf[static_cast<size_t>(j) * p.ld + i])));
         ASSERT_GT(biggest, 0.0)
             << "the rescaled problem flushed to all zeros; this test would prove nothing";
-        // The branch keys on 1/(alpha - beta) overflowing in R; if this reciprocal is
-        // finite the kernel never leaves the multiply path and the assertions are vacuous.
         ASSERT_FALSE(std::isfinite(R(1) / static_cast<R>(biggest * 16.0)))
             << "1/(" << biggest * 16.0 << ") is finite in this scalar type, so "
             << "geqrf_larfg_scalars keeps use_mul == true and the DIVISION path is never "
@@ -890,7 +863,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
             const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
 
-            // (1) FINITENESS -- the property the division arm exists to preserve.
+            // (1) Finiteness -- the property the division arm exists to preserve.
             for (int i = 0; i < p.k; ++i) {
                 ASSERT_TRUE(std::isfinite(hreal(up(tau[i]))) && std::isfinite(himag(up(tau[i]))))
                     << what << ": tau[" << i << "] is not finite at b=" << b
@@ -904,9 +877,8 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
                         << b << " -- 1/(alpha-beta) overflowed and was used anyway";
                 }
 
-            // (2) ORTHOGONALITY at a tolerance set by the INPUT's precision, not the
-            //     kernel's: a subnormal here carries ~5 bits for float, ~35 for double,
-            //     and v is scale-invariant.
+            // (2) Orthogonality at a tolerance set by the INPUT's precision, not the kernel's:
+            //     v is scale-invariant, and a subnormal carries ~5 bits for float, ~35 for double.
             const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
             const double orth = orth_of_promoted(Q, p.m, p.k);
             if (verbose()) {
@@ -955,8 +927,7 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                 sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
 
-            // A RELATIVE elementwise bound: the two implementations do not share a
-            // reduction order, so bit-exactness is not the claim.
+            // A RELATIVE elementwise bound: the two do not share a reduction order.
             double scale = 0.0, worst = 0.0, tworst = 0.0, tscale = 0.0;
             for (size_t i = 0; i < Fv.size(); ++i) scale = std::max(scale, habs(up(Fv[i])));
             for (size_t i = 0; i < Fv.size(); ++i)
@@ -980,9 +951,9 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
     }
 }
 
-// G8. m < n, m == n, m > n. route_geqrf.hh gate 2 refuses m < n as a CORRECTNESS gate,
-// not a speed one: a wide view walks the trailing update past the bottom of the panel.
-// The direct entry points are reachable without the table, so both are checked.
+// G8. m < n, m == n, m > n. route_geqrf.hh gate 2 refuses m < n as a CORRECTNESS gate:
+// a wide view walks the trailing update past the bottom of the panel. The direct entry
+// points are reachable without the table, so both are checked.
 TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1023,9 +994,9 @@ TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
     }
 }
 
-// The remaining direct-entry-point gates. Deleting the heterogeneous one does not
-// produce an error, it produces a SILENT WRONG ANSWER: one launch covers the batch
-// with a single (m, n, ld, stride) tuple and reads at the CAPACITY extents.
+// The remaining direct-entry-point gates. Dropping the heterogeneous one is not an error
+// but a SILENT WRONG ANSWER: one launch covers the batch with a single (m, n, ld, stride)
+// tuple and reads at the CAPACITY extents.
 TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     auto p = make_problem<T>(32, 16, 4, 14u);
@@ -1069,8 +1040,8 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     ASSERT_TRUE(dispatch::is_native(free_route))
         << "a vendor-free build has no geqrf route for 96x96; the fallback is broken";
 
-    // preferred() is false everywhere for geqrf, so WITH a vendor Origin::Auto must
-    // take the vendor; if that ever flips, this line is where it gets noticed.
+    // preferred() is false everywhere for geqrf, so Auto must take the vendor.
+    // evidence: docs/perf/qr.md#route-arms
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
         const auto auto_route =
             backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
@@ -1089,21 +1060,18 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     }
 }
 
-// G9b. THE NATIVE-VS-NATIVE TIE-BREAK, AND THAT IT IS NOT A supports() GATE.
-// supports() admits the CTA arm anywhere the tile fits SLM, past the shape where the
-// blocked driver overtakes it, so the vendor-free walk tie-breaks on
-// RouteTable::native_tier_preferred. Both arms must stay supports()-true on both sides:
-// a speed threshold moved into supports() makes a pinned `cta` fall through to
-// automatic() (route_resolve.hh:101) and measure something else, and the same window in
-// preferred() would flip the vendor-present answer too.
+// G9b. The native-vs-native tie-break lives in RouteTable::native_tier_preferred, NOT in
+// supports(): both arms must stay supports()-true on both sides of the crossover, or a
+// pinned `cta` falls through to automatic() and measures something else, and the same
+// window in preferred() would flip the vendor-present answer too.
 // evidence: docs/perf/qr.md#cta-vs-blocked-crossover
 TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     static constexpr Backend B = TestFixture::BackendType;
 
-    // The crossover this type's table declares (route_geqrf.hh); both complex types stay
-    // on CTA to the top of their capacity, so for them only the supports() half runs.
+    // The crossover route_geqrf.hh declares; both complex types stay on CTA to the top of
+    // their capacity, so for them only the supports() half runs.
     const bool has_crossover =
         std::is_same_v<T, float> || (std::is_same_v<T, double> && !test_utils::is_complex<T>::value);
     const int nc = std::is_same_v<R, float> ? 96 : 48;   // last n that prefers CTA
@@ -1128,7 +1096,7 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     auto V_lo = view_of(p_lo);
     auto V_hi = view_of(p_hi);
 
-    // (1) THE TIE-BREAK ITSELF, through the real shape builder.
+    // (1) The tie-break itself, through the real shape builder.
     const auto lo_free = backend::geqrf_route<B, T>(*this->ctx, V_lo, /*vendor_available=*/false);
     const auto hi_free = backend::geqrf_route<B, T>(*this->ctx, V_hi, /*vendor_available=*/false);
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
@@ -1141,7 +1109,7 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
             << dispatch::to_string(hi_free.algo);
     }
 
-    // (2) NEITHER ARM MAY HAVE LOST supports() ANYWHERE -- the half that keeps a pin honest.
+    // (2) Neither arm may have lost supports() anywhere -- the half that keeps a pin honest.
     {
         const auto sh_lo = backend::geqrf_op_shape<B, T>(*this->ctx, V_lo);
         const auto sh_hi = backend::geqrf_op_shape<B, T>(*this->ctx, V_hi);
@@ -1159,8 +1127,8 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
                "direction (route_geqrf.hh's 'NO LOWER BOUND ON THE EXTENTS' note).";
     }
 
-    // (3) THE VENDOR-PRESENT ANSWER MUST NOT HAVE MOVED: native_tier_preferred is
-    //     consulted only on the vendor-free walk, preferred() always.
+    // (3) The vendor-present answer must not have moved: native_tier_preferred is consulted
+    //     only on the vendor-free walk, preferred() always.
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
         EXPECT_TRUE(dispatch::is_vendor(
             backend::geqrf_route<B, T>(*this->ctx, V_lo, /*vendor_available=*/true)))
@@ -1171,10 +1139,9 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     }
 }
 
-// G10. THE FACADE REACHES THE KERNEL. The guard is BIT-EXACTNESS against the direct
-// entry point, NOT a residual: a residual bound is satisfied by either implementation,
-// and such a test here once stayed green on all four types while every number came from
-// cuSOLVER. The blocked arm must inject the SAME routed gemm the facade injects.
+// G10. THE FACADE REACHES THE KERNEL, guarded by BIT-EXACTNESS against the direct entry
+// point, not a residual: a residual bound is satisfied by either implementation. The
+// blocked arm must inject the SAME routed gemm the facade injects.
 TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1344,12 +1311,11 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     }
 }
 
-// G11. THE WORKSPACE CONTRACTS, both geqrf-specific.
-//   (a) Neither query may dereference A.data_ptr() or tau.data(): band_reduction sizes
-//       against a MatrixView built on nullptr, so a read there segfaults.
-//   (b) The sizes must be MONOTONE in (rows, cols, batch): band_reduction queries at
-//       (m_max x nb_max) and calls at an m x r sub-view, so a non-monotone query
-//       silently under-allocates sytrd.
+// G11. Two workspace contracts. (a) Neither query may dereference A.data_ptr() or
+// tau.data(): band_reduction sizes against a MatrixView built on nullptr, so a read there
+// segfaults. (b) The sizes must be MONOTONE in (rows, cols, batch): band_reduction queries
+// at (m_max x nb_max) and calls at an m x r sub-view, so a non-monotone query silently
+// under-allocates sytrd.
 TYPED_TEST(GeqrfTest, BufferSizeIsMonotoneAndNeverDereferencesTheData) {
     using T = typename TestFixture::T;
     const int ms[] = {16, 32, 64, 128, 257};
@@ -1383,9 +1349,8 @@ TYPED_TEST(GeqrfTest, BufferSizeIsMonotoneAndNeverDereferencesTheData) {
     }
 }
 
-// The facade's query must cover EVERY supported native tier, not the tier this
-// resolution happened to choose: a chosen-only size turns a query/call disagreement
-// into an UNDER-allocation.
+// The facade's query must cover EVERY supported native tier, not the one this resolution
+// chose: a chosen-only size turns a query/call disagreement into an UNDER-allocation.
 TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
