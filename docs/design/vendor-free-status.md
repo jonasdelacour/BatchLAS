@@ -56,7 +56,7 @@ The structural reason every native tier in this campaign is invisible to the hos
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
 (`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
 (`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`route_potrf.hh:38`), `trsm`
-(`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-92`). **`gemv`'s `Direct` arm and `spmm`'s
+(`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
 queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
 
@@ -96,22 +96,22 @@ rows and the resolved route.
 Every public dense op and `spmm` now has a native SYCL kernel. What differs is whether
 `preferred()` sends traffic to it in a **vendor-present** build. Vendor-free, an un-preferred
 native route still runs: `automatic()` accepts a merely *supported* native route when
-`vendor_available == false` (`route_resolve.hh:34-130`).
+`vendor_available == false` (`route_resolve.hh:34-51`).
 
 | op | native arms (`order` sequence) | `preferred()` in a vendor-present build | where |
 |---|---|---|---|
-| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-155` |
-| `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-481` |
-| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-306` |
-| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-342` |
-| `geqrf` | `CTA`, `Blocked` | **false everywhere**; tier choice via `native_tier_preferred` (`:443`) | `route_geqrf.hh:73-367` |
-| `orgqr` | `Blocked` | **false everywhere** | `route_orgqr.hh:60-235` |
+| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-67` |
+| `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
+| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-80` |
+| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-69` |
+| `geqrf` | `CTA`, `Blocked` | **false everywhere**; tier choice via `native_tier_preferred` (`:443`) | `route_geqrf.hh:73-77` |
+| `orgqr` | `Blocked` | **false everywhere** | `route_orgqr.hh:60-64` |
 | `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
-| `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-506` |
-| `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-700` |
-| `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-355` |
-| `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:65-305` |
-| `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:357-880` |
+| `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-74` |
+| `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-98` |
+| `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-72` |
+| `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:65-75` |
+| `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:357-385` |
 | `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule | `route_gesvd.hh:100` |
 
 Two families sit outside this table and must not be read from it:

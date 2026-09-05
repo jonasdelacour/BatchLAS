@@ -21,31 +21,31 @@ are now spelled independently.
 |---|---|---|---|
 | device family | `Backend` | which SYCL runtime family is this call compiled for | `include/batchlas/blas/enums.hh` |
 | library present | `BATCHLAS_HAS_<LIB>` | which third-party math library exists in this build | `cmake/BatchLASOptions.cmake:188-199` → `batchlas/backend_config.h` |
-| route | `Route{Origin, Algorithm}` | whose code runs for this call, and which strategy | `include/batchlas/blas/dispatch/route.hh:43-105` |
+| route | `Route{Origin, Algorithm}` | whose code runs for this call, and which strategy | `include/batchlas/blas/dispatch/route.hh:43-53` |
 
-`Origin ∈ {Auto, Native, Vendor}` answers *whose code* (`route.hh:16-58`); `Algorithm` answers *which
-strategy* (`route.hh:22-87`). "NVIDIA GPU with no cuBLAS" is therefore `Backend::CUDA` +
+`Origin ∈ {Auto, Native, Vendor}` answers *whose code* (`route.hh:16-20`); `Algorithm` answers *which
+strategy* (`route.hh:22-39`). "NVIDIA GPU with no cuBLAS" is therefore `Backend::CUDA` +
 `BATCHLAS_HAS_CUBLAS == 0`, not a new device family — the SYCL runtime is still targeting CUDA, and a
 build with no vendor library must not change the answer to "what am I running on". There is
 deliberately no `Origin::SYCL`: every route in the tree is SYCL, so the value would name nothing and
-would collide with the device-family axis (`route.hh:6-30`).
+would collide with the device-family axis (`route.hh:3-5`).
 
 The MathDx device libraries (cuBLASDx, cuSolverDx) are `Origin::Vendor` even though their kernels
 compile into our `.so`: the source is NVIDIA's and ships only for NVIDIA, so vendor independence has
 to be measurable without them (`route.hh:20-57`, `cmake/BatchLASOptions.cmake:184-191`).
 
 Two predicates sit on `Origin`, and confusing them is a shipped-and-fixed defect. `is_vendor(r)` is
-the gate question (`route.hh:56-111`). `is_plain_vendor(r)` — `Vendor` **and** `Algorithm::Auto` — is
-"the ordinary library call" (`route.hh:61-124`); the level-3 dispatchers' `request == Vendor` tests
+the gate question (`route.hh:56`). `is_plain_vendor(r)` — `Vendor` **and** `Algorithm::Auto` — is
+"the ordinary library call" (`route.hh:61-63`); the level-3 dispatchers' `request == Vendor` tests
 meant `cublasSsyrk` specifically, and rendering them as `is_vendor()` makes a forced cuBLASDx request
 answer yes to "did the caller ask for the vendor?".
 
 **Known wrong, deliberately left.** `Route::library` and `Route::library_valid` are declared as
-resolver outputs and excluded from `operator==` (`route.hh:48-103`), but nothing in the tree ever
+resolver outputs and excluded from `operator==` (`route.hh:46-51`), but nothing in the tree ever
 writes them: no resolver, no table, no facade. Every resolved `Route` still carries the default
 `BackendLibrary::CBLAS` with `library_valid == false`, so a consumer that believes the header comment
 and reads the field gets a wrong answer silently. The library name a coverage `miss` row carries comes
-from `throw_no_vendor_route`'s own `library` argument (`no_route.hh:137-147`), not from this field.
+from `throw_no_vendor_route`'s own `library` argument (`no_route.hh:63-72`), not from this field.
 
 ## The three routing predicates
 
@@ -70,22 +70,22 @@ Three rules follow, and each has cost this codebase something:
   above the vendor-free walk, which runs regardless of `vendor_available`. A window written to pick
   the right native tier therefore also moves vendor-present traffic onto that tier — including at
   shapes where the vendor beats both natives. That is what `native_tier_preferred` exists for
-  (`route_resolve.hh:18-83`).
+  (`route_resolve.hh:18-25`).
 * **Tables are pure.** Everything a table reads comes from its arguments: no `getenv`, no SYCL query,
   no dereference of operand data. That is what makes an op and its `*_buffer_size` query reach the
-  same route *by construction* (`route_resolve.hh:5-21`) — the `ormqr` defect where the sizing query
+  same route *by construction* (`route_resolve.hh:3-4`) — the `ormqr` defect where the sizing query
   returned 2560 bytes and the call then demanded 276480 is structurally unreachable now.
 
 `native_tier_preferred` is optional and defaults to `true` (`native_tier_preferred_or_default`,
-`route_resolve.hh:18-83`), which makes the two vendor-free passes identical for a table that does not
+`route_resolve.hh:18-25`), which makes the two vendor-free passes identical for a table that does not
 declare it — and it defaults to `true` rather than `false` because a table that has not thought about
 the question must keep its old answer. Three tables declare it today: `geqrf` (`route_geqrf.hh:79`),
 `getrf` (`route_getrf.hh:78`) and `getrs` (`route_getrs.hh:102`). The comment at
-`route_resolve.hh:40-118` still says "every op but geqrf" — stale.
+`route_resolve.hh:40-45` still says "every op but geqrf" — stale.
 
 ## The resolver
 
-`dispatch::resolve_route<Op, T>` (`route_resolve.hh:85-217`) is the instrumented entry point and the
+`dispatch::resolve_route<Op, T>` (`route_resolve.hh:85-103`) is the instrumented entry point and the
 only one ops call; it wraps a pure `resolve_route_uninstrumented` (`:89-176`). As implemented:
 
 1. `forced.origin == Auto` → `automatic()` (`:132-134`).
@@ -129,7 +129,7 @@ describe one call of this op", which resolves to the vendor (`spmm_route.hh:24-5
 must include only public headers plus at most one private kernel header — no `src/queue.hh`, no
 `<sycl/sycl.hpp>`. That constraint is what lets the vendor-free facade include them at all.
 
-An op whose routing reads something `OpShape` (`route.hh:148-262`) has no field for **extends** it
+An op whose routing reads something `OpShape` (`route.hh:148-187`) has no field for **extends** it
 rather than growing `OpShape` into a union of every op's arguments: `TrsmShape`, `GesvdShape`,
 `SpmmShape`, `GeqrfShape`, `GetrfShape`, `GetrsShape`. `resolve_route` deduces `Shape` as a third
 function template parameter (`route_resolve.hh:28-91`) and slices it back to `OpShape` on the way into
@@ -153,7 +153,7 @@ them into `preferred()` rejects the tile route for shapes it serves today. See
 [`docs/perf/dispatch.md`](../perf/dispatch.md) for the measurement that established this and for the
 windows themselves.
 
-`Op::iluk` exists in the enum (`route.hh:69-139`) and is referenced by nothing but `op_name`: ILU(k)
+`Op::iluk` exists in the enum (`route.hh:69-73`) and is referenced by nothing but `op_name`: ILU(k)
 is a BatchLAS algorithm with no vendor alternative and dispatches through `BATCHLAS_DISPATCH_ON_QUEUE`
 (`functions/iluk.hh:176-179`). `extensions.hh`'s entry points are absent from `Op` for the same
 reason (`route.hh:69-133`).
@@ -182,13 +182,13 @@ signatures a second time, and signature divergence between restated copies is a 
 has already shipped (`vendor_available.hh:15-21`). Where a *header* needs the same gate,
 `*_vendor_or_throw` shims do it inline (`functions/gesvd.hh:206-226`).
 
-When nothing serves a call, `throw_no_vendor_route<T>` (`no_route.hh:137-147`) records a coverage miss
+When nothing serves a call, `throw_no_vendor_route<T>` (`no_route.hh:63-72`) records a coverage miss
 and throws `NoRouteError`, whose message names the op, the scalar type and the build switch that would
 restore it (`:111-128`) — and deliberately not the backend, which `NoRouteError` carries but discards
 when formatting (`:126`).
 
 A fifth, separate question is "is the native kernel **linked**": `level3_tile_route_available<B, T>`
-(`route_compiled.hh:211-213`), which is `B == Backend::CUDA && (std::is_same_v<T, float> ||
+(`route_compiled.hh:62-64`), which is `B == Backend::CUDA && (std::is_same_v<T, float> ||
 bool(BATCHLAS_HAS_CUBLAS))`. Four sites in `src/extensions/` and one in `coverage.cc` used to spell
 this `B == Backend::CUDA`, which is wrong in the vendor-free build — the backend is still
 `Backend::CUDA` and the tile TUs are not compiled. It takes a **scalar** parameter because the answer
@@ -223,27 +223,27 @@ entry_points/*.cc          defines and instantiates  <op><B, T>, which routes an
 
 Five properties of this layer are load-bearing:
 
-* **Instantiation is keyed on the device family, not the library** (`level3.cc:394-521`). The bodies
+* **Instantiation is keyed on the device family, not the library** (`level3.cc:394`). The bodies
   compile to a throw when the library is absent, so the public symbol exists in every build that has
   the device — which is exactly what stopped being true when the definitions lived in the vendor TUs.
 * **An instantiation binds as hard as a definition.** `syev` and `ormqr` were already *defined* in
   headers, but their explicit instantiations lived in `cusolver.cc`/`cublas.cc`, which is enough to
   make them vanish from a build without those libraries; moving the instantiation is the whole change
   for those two (`eigen.cc:1-15`). `gesvd` needs no facade TU at all: its public template is `inline`
-  in `functions/gesvd.hh:420-467` and forwards to `gesvd_dispatch`.
+  in `functions/gesvd.hh:422-444` and forwards to `gesvd_dispatch`.
 * **The route gate runs before the vendor-available test.** Anything below `if constexpr
   (!<group>_vendor_available<Back>)` is unreachable in the vendor-free build, which is the build the
   campaign exists for. Every op in `level3.cc` resolves first and throws second.
 * **An op moves together with its `*_buffer_size` query.** Splitting them lets the two resolve
-  differently, which is exactly the `ormqr` 108x sizing defect (`factorization.cc:8-10`).
+  differently, which is exactly the `ormqr` 108x sizing defect (`factorization.cc:6-7`).
 * **Backend asymmetries are preserved, not normalised.** rocBLAS has no `hemm`/`herk`/`her2k`/`symm`
-  wrapper, so the ROCm backend instantiates only the ops it implements (`level3.cc:398-536`).
+  wrapper, so the ROCm backend instantiates only the ops it implements (`level3.cc:398`).
 
 The facade is also the **injection point** for native drivers that need a routed sub-operation. A
 native driver is instantiated per scalar type with no `Backend` parameter, so it cannot name
 `gemm<B, T>` itself; the facade passes a lambda. `trsm`'s blocked driver takes its trailing GEMM this
-way (`level3.cc:155-265`), `potrf`/`getrf`/`getrs`/`getri` take routed `gemm`/`trsm`, and `orgqr`'s
-native arm takes a routed `ormqr` (`factorization.cc:17-26`, `:60-65`). The alternative — the driver
+way (`level3.cc:155-165`), `potrf`/`getrf`/`getrs`/`getri` take routed `gemm`/`trsm`, and `orgqr`'s
+native arm takes a routed `ormqr` (`factorization.cc:18-21`, `:60-65`). The alternative — the driver
 calling `sycl_gemm::gemm_custom` directly — bypasses `RouteTable<Op::gemm>` and pins the native GEMM
 even on shapes it is measured to lose; see [`docs/perf/trsm.md`](../perf/trsm.md) and
 [`docs/perf/gemm.md`](../perf/gemm.md).
@@ -254,8 +254,8 @@ left behind, or an instantiation pointing at the wrong template, still compiles 
 ## Environment overrides
 
 Canonical spelling is `BATCHLAS_<OP>_ROUTE`, synthesised from `op_env_stem` — **no `route_env.hh` edit
-creates one** (`route_env.hh:135-217`). A value is an origin (`vendor`, `native`), an algorithm (`cta`,
-`expand_gemm`, …), or both joined by a colon (`native:register_tiled`); parser at `route_env.hh:50-99`.
+creates one** (`route_env.hh:135-164`). A value is an origin (`vendor`, `native`), an algorithm (`cta`,
+`expand_gemm`, …), or both joined by a colon (`native:register_tiled`); parser at `route_env.hh:50-70`.
 A bare algorithm implies `Native`, **except** `FusedDevice`, which is vendor code by definition
 (`:92-97`). `netlib` maps to `Vendor`, not to an algorithm, because netlib LAPACK is somebody else's
 code (`:47-53`).
@@ -289,7 +289,7 @@ measured window (`src/backends/triangular_expand.hh:50-60`), so a pin overrides 
 call-site guard that replicates only half of such a predicate is a shipped-and-fixed defect.
 `BATCHLAS_COVERAGE_OUT` turns the dynamic instrument on. Two per-op ad-hoc knobs
 (`BATCHLAS_ORTHO_GRAM`, `BATCHLAS_ORMQR_IMPL`) have not been folded into this vocabulary
-(`route_env.hh:7-15`).
+(`route_env.hh:3-6`).
 
 The vocabulary is pinned by `tests/route_vocabulary_tests.cc`, including every legacy spelling and
 every collision above; the GEMM transcription itself is pinned by
@@ -309,13 +309,13 @@ Two tables answer different questions, and reading either as the other is how a 
 **`linked` is not `reached`, and a symbol being present is never evidence it runs.** Several ops report
 `native = 1` in the `linked` table while `preferred()` is all-false for them, so a vendor-present build
 sends them nothing and only a vendor-free build reaches them, through the fallback at
-`route_resolve.hh:38-128`. `coverage.cc:164-219` states this at the point where it is easiest to get
+`route_resolve.hh:38-49`. `coverage.cc:164-219` states this at the point where it is easiest to get
 wrong. The `linked` column is reported **for `float`**, because the level-3 tile routes are float-only
 outside a cuBLAS build and a type-blind column would restate exactly the overclaim it exists to
-prevent (`coverage.cc:190-315`).
+prevent (`coverage.cc:190-194`).
 
 `native_route_supported` on a `reached` row is a **tri-state**: `1` yes, `0` no, `-1` the call site
-could not tell (`coverage.hh:62-66`, `level3_coverage.hh:47-62`). The third value is load-bearing: a
+could not tell (`coverage.hh:62-68`, `level3_coverage.hh:47-61`). The third value is load-bearing: a
 declining gate never enters `*_cuda_custom`, so it cannot distinguish "nothing native serves this
 shape" from "something does but the heuristic preferred the vendor", and recording either as definite
 would be a claim the call site cannot support. The gate-declined half is recorded explicitly, beside
@@ -326,7 +326,7 @@ Four properties of the row key:
 * `uplo`/`side`/`diag`/`transA`/`transB` are part of the **key**, not decoration (`coverage.cc:35-58`).
   They select which triangle or which operand an op touches, so two calls differing only in `uplo` must
   not collapse into one first-writer-wins row.
-* `shape_class` buckets `max(m,n,k)` and `batch` by power of two (`route.hh:179-261`), so a
+* `shape_class` buckets `max(m,n,k)` and `batch` by power of two (`route.hh:179-186`), so a
   10,000-iteration test collapses to a handful of rows rather than 10,000.
 * Rows are **first-writer-wins**, so the `m`/`n`/`k`/`batch` columns can report a *different* call's
   exact shape. A coverage row cannot confirm that a particular shape ran; prove that with a deliberate
@@ -342,11 +342,11 @@ test compiled without the macro interposed its uninstrumented copy and the libra
 producing a file with a correct header and **zero `reached` rows** (`coverage.hh:27-49`).
 `cmake/BatchLASOptions.cmake:109-117` records that the option was deliberately never added. Two further
 failure modes are fixed in place and worth not reintroducing: the tables are deliberately **leaked** so
-an `atexit` handler cannot walk a destroyed container (`coverage.cc:64-88`), and `emit()` writes **one
+an `atexit` handler cannot walk a destroyed container (`coverage.cc:64-67`), and `emit()` writes **one
 file per pid** because a `ctest` run is dozens of binaries and a shared `"w"` handle meant each
 truncated the last (`:129-146`).
 
-`route_resolve.hh:85-184` still claims a `-DBATCHLAS_ENABLE_COVERAGE=ON` build option — stale, as is
+`route_resolve.hh:85-103` still claims a `-DBATCHLAS_ENABLE_COVERAGE=ON` build option — stale, as is
 the same claim in `tests/route_vocabulary_tests.cc:742`. The static table's `trsm` row is hardcoded
 `false` (`coverage.cc:168`) although a native `trsm` ships; the `linked` half answers "does this build
 have a native route *registered*", and it is stale in both directions. Read the `reached` rows and the
@@ -379,7 +379,7 @@ twice, as `<name>` and `<name>_with_offset`; take the max.
 
 ## Adding an op, or moving a route
 
-1. Add the `Op` enumerator and its `op_name` case (`route.hh:69-139`, `:188-203`). The environment
+1. Add the `Op` enumerator and its `op_name` case (`route.hh:69-73`, `:188-203`). The environment
    variable name is synthesised from it; do **not** add a `legacy_variable_for` case for an op that
    never had a legacy spelling — that invents a legacy variable that never shipped.
 2. Write `RouteTable<Op::x, T>` under `include/batchlas/blas/dispatch/`: an order array, `supports()`
@@ -403,7 +403,7 @@ twice, as `<name>` and `<name>_with_offset`; take the max.
 
 Per-op performance debts live on the `docs/perf/` pages. These belong to the dispatch layer itself:
 
-1. **`Route::library` is never written** (`route.hh:48-103`). The header documents an output the
+1. **`Route::library` is never written** (`route.hh:46-51`). The header documents an output the
    resolver does not produce.
 2. **The four level-3 tile ops have no `RouteTable`** and never call `resolve_route`. Adding the tables
    as unwired additions alongside an equivalence test is cheap; *wiring* them is the change that moved
@@ -415,7 +415,7 @@ Per-op performance debts live on the `docs/perf/` pages. These belong to the dis
    [`docs/perf/dispatch.md`](../perf/dispatch.md).
 4. **The static coverage table is stale in both directions** — `trsm` hardcoded `false`
    (`coverage.cc:168`) — and two comments claim a `BATCHLAS_ENABLE_COVERAGE` option that does not
-   exist (`route_resolve.hh:85-184`, `tests/route_vocabulary_tests.cc:742`).
+   exist (`route_resolve.hh:85-103`, `tests/route_vocabulary_tests.cc:742`).
 5. **`route_diff.sh compare` applies no backend filter**, so `AUTO` rows from pure-layer tests inflate
    every diff.
 6. **`Backend::INTEL` is hard-wired false and oneMKL cannot be tested here**; only the dead branch that
