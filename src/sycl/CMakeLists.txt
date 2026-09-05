@@ -16,6 +16,7 @@ set(SYCL_SOURCES
     gemm_kernels.cc
     trsm_native.cc
     gemv_native.cc
+    spmm_native.cc
 )
 
 target_sources(batchlas_sycl_obj PRIVATE ${SYCL_SOURCES})
