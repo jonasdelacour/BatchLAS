@@ -22,11 +22,7 @@ namespace batchlas {
     template <typename T>
     struct StedcParams;
 
-    /**
-     * @brief Parameters for the Syevx algorithm (eigenvalues calculation)
-     * 
-     * @tparam T Data type
-     */
+    /** @brief Parameters for the Syevx algorithm (eigenvalue selection). */
     #ifndef SYEVSTRUCTS
     #define SYEVSTRUCTS
     template <typename T>
@@ -40,8 +36,8 @@ namespace batchlas {
         bool find_largest = true;                          // Whether to find largest eigenvalues
         T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Absolute tolerance
         T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());  // Relative tolerance
-        // ILU(k) approximates A^{-1}, so it is a valid LOBPCG preconditioner only for the
-        // SMALLEST eigenpairs; find_largest = true is rejected, not silently accepted.
+        // ILU(k) approximates A^{-1}: a valid preconditioner only for the SMALLEST
+        // eigenpairs, so find_largest = true is rejected, not silently accepted.
         const ILUKPreconditioner<T>* preconditioner = nullptr;
         // `Auto`: ILU(k) when a factor is supplied or requested below, otherwise none
         // (unless BATCHLAS_SYEVX_PRECONDITIONER names a default).
@@ -101,11 +97,7 @@ namespace batchlas {
         bool store_ritz_values = false;
     };
 
-    /**
-     * @brief Parameters for the Lanczos algorithm
-     * 
-     * @tparam T Data type
-     */
+    /** @brief Parameters for the Lanczos algorithm. */
     template <typename T>
     struct LanczosParams {
         using float_type = typename base_type<T>::type;
@@ -181,15 +173,7 @@ namespace batchlas {
                           transA, transM, workspace, algo, iterations);
     }
     
-    /**
-     * @brief Get required buffer size for orthogonalization
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Matrix to orthogonalize
-     * @param transA Whether to orthogonalize columns (NoTrans) or rows (Trans)
-     * @param algo Algorithm to use for orthogonalization
-     * @return size_t Required workspace size in bytes
-     */
+    /** @brief Required workspace size for `ortho`; arguments as for the call itself. */
     template <Backend B, typename T>
     size_t ortho_buffer_size(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -204,18 +188,7 @@ namespace batchlas {
         return ortho_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), transA, algo);
     }
 
-    /**
-     * @brief Get required buffer size for orthogonalization with external metric
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Matrix to orthogonalize
-     * @param M External metric matrix
-     * @param transA Whether to orthogonalize columns (NoTrans) or rows (Trans) of A
-     * @param transM Whether to use columns (NoTrans) or rows (Trans) of M
-     * @param algo Algorithm to use for orthogonalization
-     * @param iterations Number of iterations for improved stability
-     * @return size_t Required workspace size in bytes
-     */
+    /** @brief Required workspace size for the external-metric `ortho`; same arguments. */
     template <Backend B, typename T>
     size_t ortho_buffer_size(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -243,23 +216,17 @@ namespace batchlas {
      * @brief Computes selected eigenvalues and optionally eigenvectors of a
      *        Hermitian/symmetric matrix, dense or sparse.
      *
-     * `SyevxParams::select` picks the part of the spectrum: the `neigs` extremal
-     * eigenpairs, an index block `il..iu`, or the interval `(vl, vu]`.
-     *
      * @param ctx Execution context/device queue
      * @param A Matrix A (dense or CSR)
      * @param W Output array for eigenvalues, `neigs` entries per batch item
-     * @param neigs CAPACITY of `W` and of `V`'s columns per batch item -- not
-     *        necessarily the number produced.
+     * @param neigs CAPACITY of `W` and of `V`'s columns, not the number produced
      * @param workspace Pre-allocated workspace buffer
      * @param jobz Whether to compute eigenvectors
      * @param V Dense matrix to store eigenvectors (if jobz = EigenVectors)
-     * @param params Additional parameters for the algorithm
+     * @param params Selection range (`SyevxParams::select`) and algorithm parameters
      * @return Event Event to track operation completion
-     *
-     * @throws std::invalid_argument if `select` is `Value` (use the `m`-taking overload
-     *         below) or if a non-extremal range is asked of a path that cannot answer
-     *         one. See `syevx_select_algorithm`.
+     * @throws std::invalid_argument for `SyevxSelect::Value` (use the `m`-taking overload)
+     *         or a non-extremal range on a path that cannot answer one.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx(Queue& ctx,
@@ -295,23 +262,18 @@ namespace batchlas {
     }
 
     /**
-     * @brief `syevx` with a per-batch-item count of how many eigenpairs were
-     *        actually found. Required for `SyevxSelect::Value`.
+     * @brief `syevx` with a per-batch-item count of eigenpairs actually found.
+     *        Required for `SyevxSelect::Value`.
      *
-     * LAPACK's contract: `neigs` is a capacity, `min(m[b], neigs)` eigenpairs are written
-     * into the leading slots of item `b`, the rest of that item's `W` is left untouched,
-     * the remaining columns of its `V` are written as EXACTLY ZERO, and `m[b]` reports the
-     * TRUE count -- so `m[b] > neigs` is the caller's overflow signal. When truncating,
-     * the LOWEST `neigs` eigenvalues of the interval are kept. Zeroing `V` but not `W` is
-     * a CONTRACT: the subset path's back-transforms run over a uniform column count and
-     * need the unused columns inert.
+     * Item `b` gets `min(m[b], neigs)` eigenpairs (the lowest ones, when truncating), the
+     * rest of its `W` is left untouched, the remaining columns of its `V` are written as
+     * EXACTLY ZERO so the back-transform can run over a uniform column count, and `m[b]`
+     * reports the TRUE count, so `m[b] > neigs` is the caller's overflow signal.
      *
      * @param m Per-item count, at least `A.batch_size()` entries. Device-writable.
      *
-     * OVERLOAD-RESOLUTION INVARIANT: these stay unambiguous against the `m`-less forms
-     * only because argument positions 4 and 5 diverge into mutually non-convertible types,
-     * which relies on `Span`'s scalar constructor staying `explicit`. Never spell a bare
-     * `{}` in positions 4-6: it matches all of them at once and the call is ambiguous.
+     * Unambiguous against the `m`-less forms only because `Span`'s scalar constructor is
+     * `explicit`; a bare `{}` in positions 4-6 matches both and is ambiguous.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx(Queue& ctx,
@@ -350,20 +312,9 @@ namespace batchlas {
     }
 
     /**
-     * @brief Get required buffer size for the syevx operation
-     *
-     * Unlike the solve, this accepts `SyevxSelect::Value`: sizing writes no counts. It
-     * still resolves the range through `syevx_resolve_range`, because
-     * `syevx_direct_subset`'s workspace depends on it.
-     *
-     * @param ctx Execution context/device queue
-     * @param A Matrix A (dense or CSR)
-     * @param W Output array for eigenvalues
-     * @param neigs Capacity of W and V per batch item (see `syevx`)
-     * @param jobz Whether to compute eigenvectors
-     * @param V Dense matrix to store eigenvectors (if jobz = EigenVectors)
-     * @param params Additional parameters for the algorithm
-     * @return size_t Required workspace size in bytes
+     * @brief Get required buffer size for the syevx operation; arguments as for `syevx`
+     *        minus `workspace`. Unlike the solve, this accepts `SyevxSelect::Value`:
+     *        sizing writes no counts.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_buffer_size(Queue& ctx,
@@ -436,30 +387,25 @@ namespace batchlas {
     }
 
     /**
-     * @brief Resolved, algorithm-independent description of what the caller asked
-     *        for, produced by `syevx_resolve_range`.
+     * @brief Resolved, algorithm-independent description of the caller's request.
      *
-     * Every solver and every `*_buffer_size` derives its behaviour from this struct
-     * and never from SyevxParams::select / il / iu / find_largest directly, so that
-     * the solve and the sizing call can never disagree. `vl`/`vu` are deliberately
-     * absent -- they are forwarded verbatim, so read `params.vl` / `params.vu`.
+     * Solvers and `*_buffer_size` must derive their behaviour from this struct, never from
+     * SyevxParams::select / il / iu / find_largest, so solve and sizing cannot disagree.
+     * `vl`/`vu` are deliberately absent: they are forwarded verbatim from `params`.
      */
     struct SyevxResolvedRange {
         bool    value_range;  // true: (vl, vu]; false: the index block [il, iu]
         int64_t il;           // valid iff !value_range; 0-based, inclusive
         int64_t iu;           // valid iff !value_range; 0-based, inclusive
         // Upper bound on eigenpairs per item, clamped to [0, n] so a consumer may index
-        // [il, il + max_count) into an n-entry array without a bound of its own. Exact for
-        // an index block; for a value range the true m[b] may be larger.
+        // [il, il + max_count) unguarded. Exact for an index block; a value range may exceed it.
         int64_t max_count;
         bool    reverse;      // write the selected block in descending order
     };
 
     /**
-     * @brief Normalizes a range request into a SyevxResolvedRange.
-     *
-     * Legality is NOT checked here: the request must already have passed the host-side
-     * validator in syevx.cc. It clamps rather than throws so it stays usable when sizing.
+     * @brief Normalizes a range request into a SyevxResolvedRange. Legality is NOT checked
+     *        here; it clamps rather than throws so it stays usable when sizing.
      *
      * @param n     Matrix dimension
      * @param neigs Capacity of W and V per batch item (see `syevx`)
@@ -486,28 +432,20 @@ namespace batchlas {
     }
 
     /**
-     * @brief Resolves SyevxParams::method (and the BATCHLAS_SYEVX_ALGORITHM override)
-     *        to a concrete, implemented algorithm.
-     *
-     * Never returns `Auto`: an unavailable tier falls back to its nearest implemented
-     * neighbour. Deterministic in its inputs so that `syevx` and `syevx_buffer_size`
-     * always agree on the choice.
+     * @brief Resolves SyevxParams::method (and the BATCHLAS_SYEVX_ALGORITHM override) to a
+     *        concrete, implemented algorithm. Never returns `Auto`, and is deterministic
+     *        so that `syevx` and `syevx_buffer_size` always agree on the choice.
      *
      * @param format Matrix format of A (sparse formats always use LOBPCG)
      * @param n Matrix dimension
      * @param neigs Number of requested eigenpairs
      * @param requested Algorithm requested via SyevxParams::method
      * @param subset_supported Whether DirectSubset is available for this T/format
-     * @param jobz Whether eigenvectors are wanted -- load-bearing: the subset solver's
-     *        only advantage is the narrowed back-transform.
-     * @param batch_size Also load-bearing: the subset solver's reduction is parallel over
-     *        the batch, so it starves at small batch and wins at large.
-     * @param select Which part of the spectrum was asked for. This does not choose between
-     *        algorithms; it EXCLUDES the ones that cannot answer.
-     * @return SyevxAlgorithm A concrete, implemented algorithm
+     * @param jobz Whether eigenvectors are wanted; load-bearing for the choice
+     * @param batch_size Load-bearing: the subset solver starves at small batch
+     * @param select Excludes the algorithms that cannot answer the requested range
      * @throws std::invalid_argument for sparse input, or an explicit LOBPCG/Filtered
-     *         `method`, with a non-extremal range. BATCHLAS_SYEVX_ALGORITHM naming one
-     *         degrades to Direct and warns instead.
+     *         `method`, with a non-extremal range.
      */
     SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                           int64_t n,
@@ -519,34 +457,26 @@ namespace batchlas {
                                           SyevxSelect select = SyevxSelect::Extremal);
 
     /**
-     * @brief Resolves SyevxParams::preconditioner_type to a concrete family.
-     *
-     * Never returns `Auto`. Deterministic so that `syevx`, `syevx_buffer_size` and
-     * `syevx_lobpcg` always agree -- the Jacobi path adds a pool allocation the sizing
-     * call has to predict. Legality is checked by `syevx`, not here.
+     * @brief Resolves SyevxParams::preconditioner_type to a concrete family. Never returns
+     *        `Auto`; deterministic so solve and sizing agree on the pool allocation.
      *
      * @param requested SyevxParams::preconditioner_type
      * @param iluk_configured Whether an ILU(k) factor was supplied or requested
-     * @param find_largest An environment-supplied default that is illegal for the
-     *        requested end degrades to `None`; an explicit request throws.
+     * @param find_largest An environment default illegal for the requested end degrades to
+     *        `None`; an explicit request throws.
      */
     SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
                                                     bool iluk_configured,
                                                     bool find_largest);
 
     /**
-     * @brief Partial eigensolve by full decomposition followed by selection.
+     * @brief Partial eigensolve by full decomposition followed by selection. Runs `syev`
+     *        on a private copy of A. Dense input only, but every scalar type and every
+     *        `SyevxSelect` range: the universal fallback.
      *
-     * Runs `syev` on a private copy of A (A is not modified) and extracts the requested
-     * part of the spectrum. Dense input only, but every scalar type and every SyevxSelect
-     * range, which is what makes it the universal fallback. Ordering: descending when
-     * `params.find_largest` for the default `Extremal` selection, otherwise `params.order`.
-     *
-     * @param W Eigenvalue output. `neigs` is a CAPACITY: entries past `min(m[b], neigs)`
-     *        are left untouched. The stride is always `neigs`.
+     * @param W Eigenvalue output, stride `neigs`; entries past `min(m[b], neigs)` untouched
      * @param V Eigenvector output. Columns past `min(m[b], neigs)` are written as EXACTLY
-     *        ZERO -- not left untouched, unlike `W` -- so this path and
-     *        `syevx_direct_subset` answer the same question the same way.
+     *        ZERO -- unlike `W` -- so this path and `syevx_direct_subset` agree.
      * @param m Per-item count in the requested range, or an empty span to not report it.
      *        `m[b] > neigs` is the truncation signal; the LOWEST `neigs` are kept.
      */
@@ -562,9 +492,8 @@ namespace batchlas {
                 const SyevxParams<T>& params);
 
     /**
-     * @brief `syevx_direct` without the `m` output. Legal for `Extremal` and `Index`; a
-     *        `Value` range needs the form above. Distinguished by ARITY, so neither the
-     *        parameter-pack trap nor the trailing-`{}` trap can fire between them.
+     * @brief `syevx_direct` without the `m` output; `Extremal` and `Index` only.
+     *        Distinguished from the form above by ARITY, so no `{}` trap can fire.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx_direct(Queue& ctx,
@@ -590,23 +519,13 @@ namespace batchlas {
                 const SyevxParams<T>& params);
 
     /**
-     * @brief Partial eigensolve by two-stage reduction plus a subset tridiagonal
-     *        solve (`stebz` + `stein`) and a back-transform narrowed to the
+     * @brief Partial eigensolve by two-stage reduction plus a subset tridiagonal solve
+     *        (`stebz` + `stein`) and a narrowed back-transform. Real scalars and dense
+     *        input only; zero capacity is rejected (stein requires k >= 1).
      *
-     * Real scalar types and dense input only; `syevx` routes complex or sparse input
-     * elsewhere. Supports every `SyevxSelect` range. Zero capacity is rejected (stein
-     * requires k >= 1).
-     *
-     * A descending reversal is applied last, in the finalize kernel: `stein`'s cluster
-     * detection walks consecutive eigenvalues and requires ascending input, so `stebz` is
-     * never asked for descending mid-chain.
-     *
-     * @param W Eigenvalue output. `neigs` is a CAPACITY: entries past `min(m[b], neigs)`
-     *        are left untouched. The stride is always `neigs`.
-     * @param V Eigenvector output. Columns past `min(m[b], neigs)` are written as EXACTLY
-     *        ZERO by `stein`, and the back-transforms preserve that.
-     * @param m Per-item count in the requested range, or an empty span to not report it.
-     *        `m[b] > neigs` is the truncation signal; the LOWEST `neigs` are kept.
+     * `W`, `V` and `m` follow the same contract as `syevx_direct`, with `stein` doing the
+     * zeroing. The descending reversal is applied last, in the finalize kernel: `stein`'s
+     * cluster detection walks consecutive eigenvalues and requires ascending input.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_direct_subset(Queue& ctx,
@@ -619,10 +538,7 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
 
-    /**
-     * @brief `syevx_direct_subset` without the `m` output; same reason and same
-     *        arity-based disambiguation as the `syevx_direct` form above.
-     */
+    /** @brief `syevx_direct_subset` without the `m` output; arity-disambiguated as above. */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx_direct_subset(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
@@ -647,17 +563,13 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params);
 
-    /**
-     * @brief Whether `syevx_direct_subset` supports this scalar type and format.
-     */
+    /** @brief Whether `syevx_direct_subset` supports this scalar type and format. */
     template <typename T, MatrixFormat MFormat>
     inline constexpr bool syevx_direct_subset_supported() {
         return MFormat == MatrixFormat::Dense && std::is_same_v<T, typename base_type<T>::type>;
     }
 
-    /**
-     * @brief Partial eigensolve by LOBPCG. Supports dense and sparse input.
-     */
+    /** @brief Partial eigensolve by LOBPCG. Supports dense and sparse input. */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_lobpcg(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
@@ -678,12 +590,8 @@ namespace batchlas {
                 const SyevxParams<T>& params);
 
     /**
-     * @brief Chebyshev-filtered subspace iteration.
-     *
-     * Applies a Chebyshev polynomial in A to a block of vectors so that the wanted
-     * end of the spectrum is amplified, then does a Rayleigh-Ritz extraction. Needs
-     * only matvecs -- no preconditioner and no factorization -- and works for dense
-     * and CSR input.
+     * @brief Chebyshev-filtered subspace iteration: amplifies the wanted end of the
+     *        spectrum, then Rayleigh-Ritz. Needs only matvecs; dense and CSR input.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_filtered(Queue& ctx,
@@ -746,17 +654,7 @@ namespace batchlas {
         return lanczos<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
     }
 
-    /**
-     * @brief Get required buffer size for the Lanczos algorithm
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Sparse matrix A handle
-     * @param W Output array for eigenvalues
-     * @param jobz Whether to compute eigenvectors
-     * @param V Dense matrix to store eigenvectors (if jobz = EigenVectors)
-     * @param params Additional parameters for the algorithm
-     * @return size_t Required workspace size in bytes
-     */
+    /** @brief Required workspace size for `lanczos`; arguments as for the call itself. */
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t lanczos_buffer_size(Queue& ctx,
         const MatrixView<T, MFormat>& A,
@@ -803,24 +701,18 @@ namespace batchlas {
         return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
     }
 
-    // Vector-typed parameters in the tridiagonal group below (`stebz`, `stein`, `steqr`,
-    // `steqr_cta`, `stedc`): `VectorView<T>` for anything that is one vector per batch
-    // item, because it carries inc/stride/batch_size; `Span<...>` for flat per-item arrays
-    // (`m`, `counts`) and byte workspaces. A `VectorView` demoted to a `Span` silently
-    // drops the stride, so the two do not interconvert. See docs/cpp-api.md.
+    // Convention in the tridiagonal group below: `VectorView<T>` for one vector per batch
+    // item (it carries inc/stride/batch_size), `Span<...>` for flat per-item arrays and byte
+    // workspaces. Demoting a `VectorView` to a `Span` silently drops the stride.
 
-    /**
-     * @brief How a subset of the spectrum is selected.
-     */
+    /** @brief How a subset of the spectrum is selected. */
     enum class EigenRangeType {
         All,    // Every eigenvalue
         Index,  // Eigenvalues il..iu inclusive, 0-based, in ascending order
         Value   // Eigenvalues in the half-open interval (vl, vu]
     };
 
-    /**
-     * @brief Parameters for `stebz` (bisection on a symmetric tridiagonal matrix).
-     */
+    /** @brief Parameters for `stebz` (bisection on a symmetric tridiagonal matrix). */
     template <typename T>
     struct StebzParams {
         EigenRangeType range = EigenRangeType::All;
@@ -838,11 +730,9 @@ namespace batchlas {
     };
 
     /**
-     * @brief Computes selected eigenvalues of a batch of symmetric tridiagonal
-     *        matrices by bisection on Sturm sequence sign counts.
-     *
-     * One work-item bisects one eigenvalue, so a subset costs proportionally less than
-     * QR iteration or divide-and-conquer. Eigenvalues only; use `stein` for the vectors.
+     * @brief Computes selected eigenvalues of a batch of symmetric tridiagonal matrices by
+     *        bisection on Sturm sequence sign counts. Eigenvalues only; one work-item per
+     *        eigenvalue, so a subset costs proportionally less. Use `stein` for vectors.
      *
      * @param ctx Execution context/device queue
      * @param d Diagonal, n entries per batch item
@@ -866,8 +756,7 @@ namespace batchlas {
      * @brief Required workspace size, in bytes, for `stebz`.
      *
      * `params` is REQUIRED, not defaulted: it is the only argument carrying `T`, and
-     * defaulting it makes the queue-deducing dispatch wrapper's requires-clause fail and
-     * drop the overload, with no hint that `T` was undeducible. Pass `StebzParams<T>{}`.
+     * defaulting it silently drops the queue-deducing overload. Pass `StebzParams<T>{}`.
      */
     template <Backend B, typename T>
     size_t stebz_buffer_size(Queue& ctx,
@@ -890,9 +779,7 @@ namespace batchlas {
                            m, ws, params);
     }
 
-    /**
-     * @brief Parameters for `stein` (inverse iteration on a symmetric tridiagonal).
-     */
+    /** @brief Parameters for `stein` (inverse iteration on a symmetric tridiagonal). */
     template <typename T>
     struct SteinParams {
         // Two or three steps suffice for eigenvalues accurate to working precision.
@@ -904,12 +791,8 @@ namespace batchlas {
     };
 
     /**
-     * @brief Computes eigenvectors of a batch of symmetric tridiagonal matrices by
-     *        inverse iteration, given previously computed eigenvalues.
-     *
-     * Pairs with `stebz`. Each vector solves (T - lambda*I) x = b with a tridiagonal
-     * LU factorization (partial pivoting) from a pseudo-random start; clustered
-     * eigenvalues have their vectors reorthogonalized afterwards.
+     * @brief Computes eigenvectors of a batch of symmetric tridiagonal matrices by inverse
+     *        iteration, given previously computed eigenvalues. Pairs with `stebz`.
      *
      * @param ctx Execution context/device queue
      * @param d Diagonal, n entries per batch item
@@ -934,28 +817,21 @@ namespace batchlas {
     /**
      * @brief Sentinel meaning "every batch item has all `k` eigenvalues valid".
      *
-     * Spell this rather than a bare `{}` at `counts`: a bare `{}` in an argument position
-     * two overloads both accept has previously selected the wrong overload in this
-     * codebase and silently changed results.
+     * Spell this rather than a bare `{}` at `counts`: `{}` in a position two overloads both
+     * accept has silently selected the wrong one in this codebase before.
      */
     inline constexpr Span<const int32_t> stein_all_counts{};
 
     /**
      * @brief `stein` with a per-batch-item count of valid eigenvalues.
      *
-     * `k` is a *capacity* -- the columns of `Z` and entries of `w` per item -- while
-     * `counts[b]` is the number of leading entries of item `b`'s `w` that are real
-     * eigenvalues; the rest hold whatever the workspace last contained. Inverse iteration
-     * is not run on those invalid shifts and the cluster walk stops at `counts[b]`, so a
-     * real eigenvalue is never grouped with a garbage neighbour.
-     *
-     * Columns `[counts[b], k)` of `Z` are **written as exactly zero**, not left untouched,
-     * so callers may run a uniform-width back-transform over all `k` columns.
-     *
-     * `counts` is read on the device, so it may be the `m` span `stebz` just wrote.
-     *
-     * @param counts Per-item valid prefix length, at least `d.batch_size()` entries;
-     *               empty (or `stein_all_counts`) means "all `k`". Clamped to `[0, k]`.
+     * `k` is a capacity (columns of `Z`, entries of `w` per item); `counts[b]` is how many
+     * leading entries of item `b`'s `w` are real eigenvalues -- the rest hold stale
+     * workspace, and are neither iterated on nor joined to a cluster. Columns
+     * `[counts[b], k)` of `Z` are written as EXACTLY ZERO, not left untouched, so callers
+     * may back-transform a uniform `k` columns. `counts` is read on the device, so it may
+     * be the `m` span `stebz` just wrote; empty (or `stein_all_counts`) means "all `k`",
+     * and it is clamped to `[0, k]`.
      */
     template <Backend B, typename T>
     Event stein(Queue& ctx,
@@ -968,9 +844,8 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 SteinParams<T> params = SteinParams<T>());
 
-    // Forwarding overloads taking owning Vectors. These cannot collide with the
-    // primaries: deduction does not consider the implicit `VectorView(const Vector<T>&)`
-    // conversion, so exactly one set is ever viable.
+    // Forwarding overloads taking owning Vectors. They cannot collide with the primaries:
+    // deduction does not consider the implicit `VectorView(const Vector<T>&)` conversion.
     template <Backend B, typename T>
     inline Event stein(Queue& ctx,
                        const Vector<T>& d,
@@ -1007,9 +882,8 @@ namespace batchlas {
     /**
      * @brief Required workspace size, in bytes, for `stein`.
      *
-     * Sizes on the capacity `k` regardless of any per-item `counts`, so the `counts`
-     * overload needs no separate sizing entry point. `params` is REQUIRED for the same
-     * reason as `stebz_buffer_size`: it is the only argument carrying `T`.
+     * Sizes on the capacity `k`, so the `counts` overload needs no sizing entry of its own.
+     * `params` is REQUIRED, as for `stebz_buffer_size`: it is the only argument carrying `T`.
      */
     template <Backend B, typename T>
     size_t stein_buffer_size(Queue& ctx,
@@ -1053,7 +927,6 @@ namespace batchlas {
         // CTA STEQR only: shift strategy for the implicit QR/QL steps.
         SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;
         // CTA STEQR only: update scheme for the implicit QR/QL steps.
-        // CTA STEQR only: select the update scheme used in implicit QR/QL steps.
         SteqrUpdateScheme cta_update_scheme = SteqrUpdateScheme::EXP;
     };
 
@@ -1149,11 +1022,9 @@ namespace batchlas {
     };
 
     /**
-     * @brief CTA-optimized symmetric tridiagonal reduction for very small matrices.
-     *
-     * Overwrites A with the tridiagonal and reflector storage (SYTD2-style), and returns
-     * the diagonal/off-diagonal in (d,e) plus reflector scalars in tau. Intended for
-     * n <= 32; `ws` is unused but kept for API compatibility.
+     * @brief CTA-optimized symmetric tridiagonal reduction (SYTD2-style), n <= 32.
+     *        Overwrites A with the tridiagonal and reflector storage and returns (d,e)
+     *        plus reflector scalars in tau. `ws` is unused, kept for API compatibility.
      */
     template <Backend B, typename T>
     Event sytrd_cta(Queue& ctx,
@@ -1166,11 +1037,9 @@ namespace batchlas {
                     size_t cta_wg_size_multiplier = 1);
 
     /**
-     * @brief LATRD-like panel factorization used by blocked SYTRD (Lower only).
-     *
-     * Computes Householder vectors (stored in A) and W for a block of columns starting at
-     * j0, in the same SYTD2-style reflector layout used by sytrd. `Uplo::Lower` only;
-     * writes only the first `ib` columns of W (W is treated as n x nb).
+     * @brief LATRD-like panel factorization used by blocked SYTRD, `Uplo::Lower` only.
+     *        Householder vectors go into A, in sytrd's SYTD2-style reflector layout;
+     *        only the first `ib` columns of W are written (W is treated as n x nb).
      */
     template <Backend B, typename T>
     Event latrd_lower_panel(Queue& ctx,
@@ -1191,7 +1060,6 @@ namespace batchlas {
      *  - e_panel = E(Slice(j0, j0 + ib))
      *  - tau_panel = TAU(Slice(j0, j0 + ib))
      *  - w_panel = Wmat({j0, SliceEnd()}, {0, ib})
-     *
      * e_panel/tau_panel size must match w_panel.cols().
      */
     template <Backend B, typename T>
@@ -1204,11 +1072,9 @@ namespace batchlas {
                             bool fuse_trailing_update = false);
 
     /**
-     * @brief Blocked symmetric/Hermitian tridiagonal reduction for medium/large matrices.
-     *
-     * Overwrites A with the tridiagonal and reflector storage (SYTD2-style), and returns
-     * the diagonal/off-diagonal in (d,e) plus reflector scalars in tau. Intended for
-     * n > 32: blocked LATRD-style panel plus BLAS-3 trailing update, in-order queue only.
+     * @brief Blocked symmetric/Hermitian tridiagonal reduction, n > 32: LATRD-style panel
+     *        plus a BLAS-3 trailing update. Same SYTD2-style output as `sytrd_cta`.
+     *        In-order queue only.
      */
     template <Backend B, typename T>
     Event sytrd_blocked(Queue& ctx,
@@ -1230,11 +1096,9 @@ namespace batchlas {
                                      int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
 
     /**
-     * @brief First stage of two-stage reduction: symmetric/Hermitian dense -> band (SY2SB).
-     *
-     * Analogous to LAPACK xSYTRD_SY2SB: overwrites `A` with Householder reflector storage
-     * and writes the band matrix into `AB`. `tau_out` has size (n-kd). Requires an
-     * in-order queue; only `Uplo::Lower` is implemented.
+     * @brief First stage of two-stage reduction: dense -> band (LAPACK xSYTRD_SY2SB).
+     *        Overwrites `A` with reflector storage and writes the band into `AB`;
+     *        `tau_out` has size (n-kd). In-order queue, `Uplo::Lower` only.
      *
      * Band storage (AB), shape (kd+1) x n:
      *  - `Uplo::Lower`: AB(1+i-j,j) = A(i,j) for j<=i<=min(n,j+kd).
@@ -1258,18 +1122,11 @@ namespace batchlas {
                                    int32_t kd);
 
     /**
-     * @brief Second stage of two-stage reduction: symmetric/Hermitian band -> tridiagonal (SB2ST/HB2ST).
+     * @brief Second stage of two-stage reduction: band -> tridiagonal (LAPACK
+     *        xSB2ST/xHB2ST bulge chasing, VECT='N'). In-order queue, `Uplo::Lower` only.
      *
-     * Analogous to LAPACK xSB2ST/xHB2ST (bulge chasing) with VECT='N': reduces the band
-     * matrix to tridiagonal without forming eigenvectors. Requires an in-order queue;
-     * only `Uplo::Lower` is implemented.
-     *
-     * Band storage (AB), shape (kd+1) x n:
-     *  - `Uplo::Lower`: AB(1+i-j,j) = A(i,j) for j<=i<=min(n,j+kd).
-     *  - `Uplo::Upper`: AB(kd+1+i-j,j) = A(i,j) for max(1,j-kd)<=i<=j.
-     *
-     * `d_out` (size n) and `e_out` (size n-1) are always real-valued; `tau_out` (size n-1)
-     * is unused downstream and is set to 0.
+     * Band storage (AB) is as for `sytrd_sy2sb`. `d_out` (n) and `e_out` (n-1) are always
+     * real-valued; `tau_out` (n-1) is unused downstream and is set to 0.
      */
     template <Backend B, typename T>
     Event sytrd_sb2st(Queue& ctx,
@@ -1293,11 +1150,9 @@ namespace batchlas {
                                    int32_t block_size);
 
     /**
-     * @brief Symmetric/Hermitian band -> tridiagonal reduction (BANDR1-style).
-     *
-     * Requires an in-order queue; only `Uplo::Lower` is implemented. Produces real-valued
-     * (d,e); for complex input `e_out` is the magnitude of the (possibly phased)
-     * subdiagonal. `tau_out` is set to 0 (VECT='N' style).
+     * @brief Symmetric/Hermitian band -> tridiagonal reduction (BANDR1-style). In-order
+     *        queue, `Uplo::Lower` only. (d,e) are real; for complex input `e_out` is the
+     *        magnitude of the (possibly phased) subdiagonal, and `tau_out` is set to 0.
      */
 
     struct SytrdBandReductionParams {
@@ -1382,12 +1237,9 @@ namespace batchlas {
                                                         SytrdBandReductionParams params);
 
     /**
-     * @brief Debug/testing hook: execute exactly one BANDR1 “chase step”.
-     *
-     * Runs a single QR-panel + similarity update (Pre/Sym/Post/Right) on a working band
-     * matrix ABw: `ab_in` is lower-band with rows == kd+1, `abw_out` lower-band with rows
-     * == kd_work+1 (kd_work from params). Requires an in-order queue; `Uplo::Lower` only.
-     * Not a stable public API.
+     * @brief Debug/testing hook: execute exactly one BANDR1 “chase step”. Not a stable
+     *        public API. `ab_in` is lower-band with rows == kd+1, `abw_out` lower-band
+     *        with rows == kd_work+1 (kd_work from params). In-order queue, Lower only.
      */
     template <Backend B, typename T>
     Event sytrd_band_reduction_single_step(Queue& ctx,
@@ -1433,11 +1285,9 @@ namespace batchlas {
     }
 
     /**
-     * @brief CTA-optimized symmetric eigen-solver (SYEV-like) for very small matrices.
-     *
-     * Pipeline: sytrd_cta -> steqr_cta -> ormqx_cta (back-transform). Intended for
-     * n <= 32; real symmetric and complex Hermitian. Overwrites A with eigenvectors when
-     * jobz == EigenVectors. Eigenvalues ascend when SteqrParams::sort is set (default).
+     * @brief CTA-optimized symmetric eigen-solver (SYEV-like), n <= 32; real symmetric and
+     *        complex Hermitian. Overwrites A with eigenvectors when jobz == EigenVectors.
+     *        Eigenvalues ascend when SteqrParams::sort is set (default).
      */
     template <Backend B, typename T>
     Event syev_cta(Queue& ctx,
@@ -1456,13 +1306,11 @@ namespace batchlas {
                                 SteqrParams<T> steqr_params = SteqrParams<T>());
 
     /**
-     * @brief Fused (single-kernel) variant of syev_cta for very small matrices.
+     * @brief Fused (single-kernel) variant of syev_cta.
      *
-     * Same algorithm as syev_cta, but run end to end inside a single sub-group partition,
-     * so d, e, tau, the packed reflectors and the intermediate eigenvectors never reach
-     * global memory; results track syev_cta to within the reassociation implied by fusing.
-     * Unlike syev_cta, A is left untouched when jobz == NoEigenVectors. Requires no global
-     * workspace; `ws` is accepted for API symmetry and ignored.
+     * Runs end to end inside one sub-group partition, so results track syev_cta only to
+     * within the reassociation that fusing implies. Unlike syev_cta, A is left untouched
+     * when jobz == NoEigenVectors. `ws` is accepted for API symmetry and ignored.
      */
     template <Backend B, typename T>
     Event syev_cta_fused(Queue& ctx,
@@ -1484,10 +1332,10 @@ namespace batchlas {
     struct JacobiParams {
         using Real = typename base_type<T>::type;
 
-        // A rotation is applied to pivot pair (p,q) only when
-        //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
-        // The relative form, rather than the classical absolute test against max|a_kl|, is
-        // what yields the high relative accuracy; raising it trades accuracy for sweeps.
+            // A rotation is applied to pivot pair (p,q) only when
+            //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
+            // This relative test, not the classical absolute one, is what yields the high
+            // relative accuracy; raising it trades accuracy for sweeps.
         Real tol_multiplier = Real(1);
 
         // Cap on cyclic sweeps; a safety net for pathological inputs.
@@ -1502,21 +1350,14 @@ namespace batchlas {
     };
 
     /**
-     * @brief CTA-optimized Jacobi symmetric/Hermitian eigen-solver for very small matrices.
+     * @brief CTA-optimized Jacobi symmetric/Hermitian eigen-solver, n <= 32; real
+     *        symmetric and complex Hermitian.
      *
-     * Cyclic two-sided Jacobi run entirely inside a single sub-group partition: A and the
-     * eigenvector accumulator Z stay in local memory for the whole solve, so one kernel
-     * launch performs the complete eigendecomposition.
-     *
-     * Relative to syev_cta it trades throughput for high *relative* accuracy on graded or
-     * badly scaled input. The underlying theorem (Demmel & Veselic, SIMAX 13(4), 1992) is
-     * proved for symmetric positive definite input; indefinite matrices are solved
-     * correctly but do not inherit the bound.
-     *
-     * Intended for n <= 32; real symmetric and complex Hermitian. Overwrites A with
-     * eigenvectors when jobz == EigenVectors and leaves it untouched otherwise.
-     * Eigenvalues ascend when JacobiParams::sort is set (default). Requires no global
-     * workspace; `ws` is accepted for API symmetry and ignored.
+     * Trades throughput for high *relative* accuracy on graded or badly scaled input. The
+     * underlying theorem (Demmel & Veselic, SIMAX 13(4), 1992) is proved for symmetric
+     * positive definite input; indefinite matrices are solved correctly but do not inherit
+     * the bound. Overwrites A with eigenvectors when jobz == EigenVectors and leaves it
+     * untouched otherwise; `ws` is accepted for API symmetry and ignored.
      */
     template <Backend B, typename T>
     Event syev_jacobi_cta(Queue& ctx,
@@ -1534,10 +1375,9 @@ namespace batchlas {
                                        JacobiParams<T> params = JacobiParams<T>());
 
     /**
-     * @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large matrices.
-     *
-     * Pipeline: sytrd_blocked -> stedc -> ormqr_blocked (back-transform). Overwrites A
-     * with eigenvectors when jobz == EigenVectors. Only Uplo::Lower is supported.
+     * @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large n:
+     *        sytrd_blocked -> stedc -> ormqr_blocked. Overwrites A with eigenvectors when
+     *        jobz == EigenVectors. Only `Uplo::Lower` is supported.
      */
     template <Backend B, typename T>
     Event syev_blocked(Queue& ctx,
@@ -1556,12 +1396,10 @@ namespace batchlas {
                                     StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     /**
-     * @brief Two-stage symmetric/Hermitian eigen-solver (SYEV-like), opt-in path.
-     *
-     * Pipeline: sytrd_sy2sb (dense -> band) -> sytrd_sb2st (band -> tridiagonal) -> stedc.
-     * Eigenvectors are recovered with explicit phase/sign recovery and a reflector
-     * back-transform. Both modes use a real band width (choose_two_stage_kd, overridable
-     * via BATCHLAS_SYEV_TWO_STAGE_KD). Only Uplo::Lower is supported.
+     * @brief Two-stage symmetric/Hermitian eigen-solver (SYEV-like), opt-in path:
+     *        sytrd_sy2sb -> sytrd_sb2st -> stedc, then phase/sign recovery and a reflector
+     *        back-transform. Band width from choose_two_stage_kd (override with
+     *        BATCHLAS_SYEV_TWO_STAGE_KD). Only `Uplo::Lower` is supported.
      */
     template <Backend B, typename T>
     Event syev_two_stage(Queue& ctx,
@@ -1580,10 +1418,8 @@ namespace batchlas {
                                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
 
     /**
-     * @brief Unblocked GEBRD-like reduction to real bidiagonal form.
-     *
-     * Reduces each square matrix A to bidiagonal form in-place while returning
-     * bidiagonal coefficients (d,e) and Householder scalars (tauq,taup).
+     * @brief Unblocked GEBRD-like reduction to real bidiagonal form: reduces each square A
+     *        in place, returning (d,e) and the Householder scalars (tauq,taup).
      */
     template <Backend B, typename T>
     Event gebrd_unblocked(Queue& ctx,
@@ -1594,10 +1430,8 @@ namespace batchlas {
                           const VectorView<T>& taup);
 
     /**
-     * @brief CTA-parallel small-matrix GEBRD for real square matrices.
-     *
-     * Intended for very small dense problems (`1 <= n <= 32`) where one CTA can
-     * cooperatively reduce one matrix to upper bidiagonal form.
+     * @brief CTA-parallel small-matrix GEBRD for real square matrices, `1 <= n <= 32`,
+     *        where one CTA cooperatively reduces one matrix to upper bidiagonal form.
      */
     template <Backend B, typename T>
     Event gebrd_cta(Queue& ctx,
@@ -1608,11 +1442,7 @@ namespace batchlas {
                     const VectorView<T>& taup,
                     size_t cta_wg_size_multiplier = 1);
 
-    /**
-     * @brief Blocked GEBRD for real square dense matrices.
-     *
-     * Uses a DLABRD-style blocked panel factorization plus GEMM trailing updates.
-     */
+    /** @brief Blocked GEBRD for real square dense matrices: DLABRD-style panel + GEMM. */
     template <Backend B, typename T>
     Event gebrd_blocked(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1633,11 +1463,9 @@ namespace batchlas {
                                      int32_t block_size = 16);
 
     /**
-     * @brief Bidiagonal QR iteration for a real upper bidiagonal matrix.
-     *
-     * Computes singular values from bidiagonal coefficients `(d,e)`. The matrix overload
-     * additionally accumulates the alternating right and left Givens rotations into `vh`
-     * and `u`, matching LAPACK's `BDSQR` contract of returning `P^T * vh` and `u * Q`.
+     * @brief Bidiagonal QR iteration for a real upper bidiagonal matrix. The matrix
+     *        overload also accumulates the alternating Givens rotations into `u` and `vh`,
+     *        matching LAPACK `BDSQR`: it returns `u * Q` and `P^T * vh`.
      */
     template <Backend B, typename T>
     Event bdsqr(Queue& ctx,
@@ -1676,18 +1504,14 @@ namespace batchlas {
     }
 
     /**
-     * @brief Bidiagonal divide-and-conquer SVD for a real upper bidiagonal matrix.
+     * @brief Bidiagonal divide-and-conquer SVD for a real upper bidiagonal matrix. Same
+     *        problem as `bdsqr`, via the symmetric tridiagonal eigenproblem of the
+     *        interleaved Golub-Kahan form (order `2n`) handed to `stedc`.
      *
-     * Same problem as `bdsqr`, but parallel instead of a serial Golub-Kahan sweep: it
-     * reduces the bidiagonal SVD to the symmetric tridiagonal eigenproblem of the
-     * interleaved Golub-Kahan form (order `2n`) and hands that to `stedc`. Nothing is
-     * squared, so the error stays proportional to `kappa`, not `kappa^2`.
-     *
-     * Unlike `bdsqr`, which *accumulates* into whatever it is handed (`u <- u*Q`), `bdsdc`
-     * *writes* the leading `n x n` block of `u` and of `vh` and leaves the rest of those
-     * views untouched -- seed them with the identity if the trailing columns matter.
-     *
-     * Workspace is dominated by a `2n x 2n` eigenvector matrix per batch item.
+     * Unlike `bdsqr`, which accumulates into whatever it is handed (`u <- u*Q`), `bdsdc`
+     * WRITES the leading `n x n` block of `u` and of `vh` and leaves the rest untouched --
+     * seed them with the identity if the trailing columns matter. Workspace is dominated
+     * by a `2n x 2n` eigenvector matrix per batch item.
      */
     template <Backend B, typename T>
     Event bdsdc(Queue& ctx,
@@ -1716,10 +1540,9 @@ namespace batchlas {
 
     
     /**
-     * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors.
-     *
-        * Current implementation supports `vect='Q'` (tauq, CTA/blocked ORMQR path)
-        * and `vect='P'` (taup, blocked compact-WY path over the right reflectors).
+     * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors. Supports
+     *        `vect='Q'` (tauq, CTA/blocked ORMQR path) and `vect='P'` (taup, blocked
+     *        compact-WY path over the right reflectors).
      */
     template <Backend B, typename T>
     Event ormbr(Queue& ctx,
@@ -1743,10 +1566,9 @@ namespace batchlas {
                              int32_t block_size = 32);
 
     /**
-     * @brief Blocked native SVD for real dense matrices.
-     *
-     * Pipeline: GEBRD-style dense -> bidiagonal, then BDSQR (or BDSDC when explicitly
-     * selected in blocked mode), then ORMBR-style backtransforms for full U and V^H.
+     * @brief Blocked native SVD for real dense matrices: GEBRD-style dense -> bidiagonal,
+     *        then BDSQR (or BDSDC when explicitly selected), then ORMBR-style
+     *        back-transforms for full U and V^H.
      */
     template <Backend B, typename T>
     Event gesvd_blocked(Queue& ctx,
@@ -1789,10 +1611,8 @@ namespace batchlas {
                                      Uplo hermitian_uplo);
 
     /**
-     * @brief CTA-oriented native SVD entry point for very small real square matrices.
-     *
-     * Current scope matches the native blocked path except it is intended for
-     * `1 <= n <= 32` and small-batch CUDA execution.
+     * @brief CTA-oriented native SVD for very small real square matrices; scope matches
+     *        the blocked path but is intended for `1 <= n <= 32` and small batches.
      */
     template <Backend B, typename T>
     Event gesvd_cta(Queue& ctx,
@@ -1837,17 +1657,16 @@ namespace batchlas {
     /**
      * @brief Parameters for the one-sided Jacobi SVD (`gesvdj_cta`).
      *
-     * Deliberately NOT a reuse of JacobiParams: that struct's `sort_order` defaults
-     * to Ascending while gesvd's contract admits exactly one order (descending), so
-     * reusing it invites a silent reversal.
+     * Deliberately NOT a reuse of JacobiParams: its `sort_order` defaults to Ascending
+     * while gesvd admits exactly one order (descending), so reuse invites a silent flip.
      */
     template <typename T>
     struct GesvdjParams {
         using Real = typename base_type<T>::type;
 
-        // A rotation is applied to pivot pair (p,q) only when
-        //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
-        // over the 2x2 Gram entries of the current columns. This relative form is what
+            // A rotation is applied to pivot pair (p,q) only when
+            //     |a_pq| > tol_multiplier * n * eps * sqrt(|a_pp| * |a_qq|)
+            // over the 2x2 Gram entries of the current columns; again the relative test.
         Real tol_multiplier = Real(1);
 
         // Cap on cyclic sweeps. Convergence normally occurs in well under 10.
@@ -1869,13 +1688,12 @@ namespace batchlas {
     /**
      * @brief One-sided (Hestenes) Jacobi SVD for batches of small matrices.
      *
-     * Computes A = U * diag(s) * Vh with high RELATIVE accuracy: the error in the singular
-     * values is governed by the condition number of the column-equilibrated matrix rather
-     * than of A itself, so graded and badly scaled inputs keep their small singular values.
-     * The gebrd -> tridiagonal -> steqr path in `gesvd_cta` and `gesvd_blocked` does not.
+     * Computes A = U * diag(s) * Vh with high RELATIVE accuracy: the singular-value error
+     * is governed by the condition number of the column-equilibrated matrix rather than of
+     * A, so graded input keeps its small values; `gesvd_cta`/`gesvd_blocked` do not.
      *
-     * Supports max(m, n) <= 32, real and complex, rectangular in both orientations. A is
-     * DESTROYED. Singular values are returned descending. Requires no workspace.
+     * max(m, n) <= 32, real and complex, rectangular either way. A is DESTROYED, singular
+     * values are returned descending, and no workspace is required.
      */
     template <Backend B, typename T>
     Event gesvdj_cta(Queue& ctx,
@@ -1899,10 +1717,9 @@ namespace batchlas {
                                   GesvdjParams<T> params = GesvdjParams<T>());
 
     /**
-     * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx semantics) for very small matrices.
-     *
-     * This applies the implicit orthogonal/unitary matrix Q represented by Householder
-     * reflectors (A, TAU) from GEQRF (Upper) or GEQLF (Lower) to C.
+     * @brief CTA-optimized application of Q from a QR/QL factorization (ORMQx/UNMQx
+     *        semantics) for very small matrices: applies the implicit Q of the Householder
+     *        reflectors (A, TAU) from GEQRF (Upper) or GEQLF (Lower) to C.
      */
     template <Backend B, typename T>
     Event ormqx_cta(Queue& ctx,
@@ -2003,10 +1820,9 @@ namespace batchlas {
 
     /**
      * @brief Computes the Ritz values given a matrix and trial vectors
-     * 
-     * Ritz values are approximations to eigenvalues computed from the Rayleigh quotient:
-     * For each column v_j of V: ritz_value[j] = (v_j^T * A * v_j) / (v_j^T * v_j)
-     * 
+     *
+     * ritz_value[j] = (v_j^T * A * v_j) / (v_j^T * v_j) for each column v_j of V.
+     *
      * @param ctx Execution context/device queue
      * @param A Matrix (can be sparse or dense)
      * @param V Trial vectors (dense matrix, columns are trial eigenvectors)
@@ -2054,15 +1870,7 @@ namespace batchlas {
     }
 
 
-    /**
-     * @brief Computes the required workspace size for ritz_values
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Matrix (can be sparse or dense)
-     * @param V Trial vectors (dense matrix)
-     * @param ritz_vals Output vector for Ritz values
-     * @return size_t Required workspace size in bytes
-     */
+    /** @brief Required workspace size, in bytes, for `ritz_values`. */
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t ritz_values_buffer_size(Queue& ctx,
                                  const MatrixView<T, MFormat>& A,
@@ -2119,13 +1927,7 @@ namespace batchlas {
         return inv<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Ainv), workspace);
     }
 
-    /**
-     * @brief Get required workspace size for matrix inversion
-     *
-     * @param ctx Execution context/device queue
-     * @param A Matrix to invert
-     * @return size_t Required workspace size in bytes
-     */
+    /** @brief Required workspace size, in bytes, for `inv`. */
     template <Backend B, typename T>
     size_t inv_buffer_size(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A);
@@ -2136,13 +1938,7 @@ namespace batchlas {
         return inv_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
     }
 
-    /**
-     * @brief Convenience overload allocating output matrix internally
-     *
-     * @param ctx Execution context/device queue
-     * @param A Matrix to invert
-     * @return Matrix<T, MatrixFormat::Dense> Inverted matrix
-     */
+    /** @brief Convenience overload of `inv` allocating the output matrix internally. */
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A);
@@ -2160,9 +1956,8 @@ namespace batchlas {
 
 namespace batchlas {
 
-// Backend-deducing overloads for the extension surface: `f(ctx, ...)` uses ctx.backend().
-// The macro is constrained, so a name whose remaining template parameters are not
-// deducible from the arguments simply gets no overload here rather than an ill-formed one.
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend(). The macro is constrained,
+// so a name whose remaining template parameters are not deducible gets no overload here.
 
 BATCHLAS_DISPATCH_ON_QUEUE(ortho)
 BATCHLAS_DISPATCH_ON_QUEUE(ortho_buffer_size)
@@ -2258,10 +2053,8 @@ BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)
 // ---- ortho: option-struct and arena-backed spellings -----------------------
 //
 // Same layer as blas/options.hh, but it has to live HERE: blas/linalg.hh includes
-// blas/functions.hh (which ends by including options.hh) BEFORE this header, so `ortho`
-// is not yet declared when options.hh is parsed. None of options.hh's helpers are
-// reachable from here, so the MatrixView and Matrix spellings are written out separately.
-//
+// blas/functions.hh (which ends by including options.hh) BEFORE this header, so `ortho` is
+// not yet declared when options.hh is parsed, and none of its helpers are reachable here.
 // A lease is released when the call returns, which on an out-of-order Queue drains the
 // device first: the arena spelling is synchronous where the span-taking one is not.
 
@@ -2348,14 +2141,10 @@ inline Event ortho(Queue& ctx,
 }
 
 namespace detail {
-// The bare-`{}` trap, in the one place ortho has it. `ortho(ctx, A, {}, ws)` matches BOTH
-// the positional overload `(ctx, A, Transpose, ws, algo)` and the option overload
-// `(ctx, A, OrthoOptions, ws)`; `{}` is an exact match for a scoped enum but only a
-// user-defined conversion to a class type, so the positional overload would win silently
-// and hand the caller `Transpose{}` with no diagnostic. A third candidate at the same
-// exact-match rank makes the bare-`{}` call ambiguous instead, while every spelled-out
-// call still resolves exactly as before. Same job as options.hh's
-// EmptyBracesAreAmbiguous, which is not visible here.
+// The bare-`{}` trap, in the one place ortho has it: `ortho(ctx, A, {}, ws)` matches both
+// the positional `(ctx, A, Transpose, ws, algo)` and the option `(ctx, A, OrthoOptions, ws)`
+// overload, and the positional one would win silently, handing the caller `Transpose{}`. A
+// third candidate at the same exact-match rank makes the bare-`{}` call ambiguous instead.
 enum class OrthoEmptyBracesAreAmbiguous {};
 }  // namespace detail
 
@@ -2376,9 +2165,8 @@ Event ortho(Queue&, const Matrix<T, MatrixFormat::Dense>&,
             detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
 // ---- orthogonalisation against an external metric ---------------------------
-//
-// No `{}` guard is needed on this family: the positional metric form needs at least six
-// arguments while the option forms take four and five, so no argument list can reach both.
+// No `{}` guard is needed here: the positional metric form needs at least six arguments
+// while the option forms take four and five, so no argument list can reach both.
 
 template <Backend B, typename T>
 inline Event ortho(Queue& ctx,

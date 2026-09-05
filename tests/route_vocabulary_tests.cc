@@ -353,7 +353,8 @@ constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
-    // evidence: docs/perf/trsm.md#the-batch-floor
+    // Supported and un-preferred for a non-speed reason: batch below the measured
+    // floor. evidence: docs/perf/trsm.md#the-batch-floor
     const auto s = trsm_shape(/*tri_order=*/32, /*q=*/1024, /*batch=*/1, /*cta_max=*/32,
                               Side::Left);
     EXPECT_TRUE(TrsmTable::supports(kCta, s))
