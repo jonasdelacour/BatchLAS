@@ -10,6 +10,7 @@
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/blas/dispatch/route_trsm.hh>
 
 #include <cstdlib>
 #include <string>
@@ -353,4 +354,210 @@ TEST(RouteVocabulary, ShapeClassCollapsesIterationsButNotRegimes) {
     EXPECT_EQ(a.shape_class(), b.shape_class());
     EXPECT_NE(a.shape_class(), c.shape_class());
     EXPECT_EQ(a.max_dim(), 512);
+}
+
+
+// ---------------------------------------------------------------------------
+// WP3 step 1 -- RouteTable<Op::trsm, T>.
+//
+// These pin the one property the vendor-free build depends on and which a
+// single-boolean predicate cannot express: a route may be SUPPORTED while not
+// being PREFERRED. resolve_route (route_resolve.hh:60-63) implements the
+// vendor-off fallback by re-walking the candidate order testing supports()
+// ALONE, so if a speed threshold ever migrates into supports(), trsm stops
+// having any route at all without a vendor and level3.cc throws. That is the
+// exact regression WP3_TRSM_SPEC_CORRECTIONS.md finding 3 is about, and it
+// would otherwise only show up as a vendor-free suite going red much later.
+// ---------------------------------------------------------------------------
+namespace {
+
+TrsmShape trsm_shape(int64_t tri_order, int64_t q, int64_t batch, int cta_max,
+                     Side side = Side::Left) {
+    TrsmShape s;
+    s.op = Op::trsm;
+    s.scalar = ScalarKind::F32;
+    s.k = tri_order;                       // the triangular order n
+    s.m = tri_order;
+    s.n = q;                               // Side::Left -> q = B.cols()
+    if (side == Side::Right) { s.m = q; s.n = tri_order; }
+    s.side = side;
+    s.batch = batch;
+    s.is_gpu = true;
+    s.cta_max_n = cta_max;
+    s.blocked_available = (cta_max > 0);
+    return s;
+}
+
+using TrsmTable = RouteTable<Op::trsm, float>;
+constexpr Route kCta{Origin::Native, Algorithm::CTA};
+constexpr Route kBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
+
+} // namespace
+
+TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
+    // The supports/preferred split must stay visible even now that float wins
+    // everywhere measured, so this names a cell that is structurally supported
+    // and un-preferred for a NON-speed reason: batch below the measured floor.
+    // At batch=1 the native kernel measured 0.40-0.86x (experiments/wp3_s9),
+    // and that floor lives in preferred(), so a vendor-free build still routes
+    // it natively rather than throwing.
+    const auto s = trsm_shape(/*tri_order=*/32, /*q=*/1024, /*batch=*/1, /*cta_max=*/32,
+                              Side::Left);
+    EXPECT_TRUE(TrsmTable::supports(kCta, s))
+        << "batch size is a speed question; it must not gate CORRECTNESS";
+    EXPECT_FALSE(TrsmTable::preferred(kCta, s))
+        << "batch=1 measured 0.40-0.86x and must not be preferred";
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)))
+        << "un-preferred must never mean unroutable when there is no vendor";
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)))
+        << "and with a vendor present it must take it";
+}
+
+// ---------------------------------------------------------------------------
+// The measured window (WP3 step 9). These replace a pair of tests that pinned
+// preferred() as all-false -- correct while nothing had been measured, and
+// actively wrong now: the point of step 9 was to move traffic, so a test
+// asserting that no traffic moves would have to be deleted or the flip
+// abandoned. What is pinned instead is the SHAPE of the measurement, so that a
+// later edit widening a window has to come with its own numbers.
+// ---------------------------------------------------------------------------
+
+TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
+    // This test used to pin the boundary at 16, which is where it sat while
+    // Side::Left read B's columns one scattered lane at a time. WP3 step 12
+    // built the SLM staging tile and the boundary moved to 128: orders 32, 64
+    // and 128 went from 0.70-0.79x to 1.19-3.20x. Order 256 did NOT follow
+    // (0.76-0.93x), so there is still a window and it still has a top.
+    for (int64_t order : {8, 16, 32, 64, 128}) {
+        const Route r = (order <= 32) ? kCta : kBlocked;
+        EXPECT_TRUE(TrsmTable::preferred(r, trsm_shape(order, 1024, 2048, 32, Side::Left)))
+            << "float Side::Left order " << order << " wins after the staging tile";
+    }
+    // THE WORK THRESHOLD IS GONE (WP3 step 16). It existed because the large
+    // cells lost, and they lost on the trailing-update GEMM rather than on the
+    // solve; routing that GEMM turned 0.76-0.92x into 1.21-1.32x, so Side::Left
+    // is preferred at every order and every size. These two cells are the ones
+    // the old threshold excluded.
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
+        << "float Side::Left order 256 at q*batch=524288 now measures 1.32x";
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 1024, 512, 32, Side::Left)))
+        << "float Side::Left order 512 at q*batch=524288 now measures 1.28x";
+    EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 256, 128, 32, Side::Left)))
+        << "and the small-work cells it always won stay won";
+
+    // Same orders, other side: all preferred, and untouched by the tile --
+    // Side::Right never stages, and its register counts are byte-identical
+    // before and after (114/153/144/226 at N=32).
+    for (int64_t order : {8, 16, 32}) {
+        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Right)))
+            << "float Side::Right order " << order << " measured 1.54-4.59x";
+    }
+}
+
+TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
+    // batch=1 measured 0.40-0.86x at order >= 32; batch=8 already wins. The
+    // floor therefore sits at 8 -- and it lives in preferred(), so a vendor-free
+    // build at batch=1 still routes native rather than throwing.
+    const auto tiny = trsm_shape(16, 1024, 1, 32, Side::Right);
+    EXPECT_FALSE(TrsmTable::preferred(kCta, tiny));
+    EXPECT_TRUE(TrsmTable::supports(kCta, tiny));
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, tiny, /*vendor_available=*/false)));
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, tiny, /*vendor_available=*/true)));
+
+    EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(16, 1024, 8, 32, Side::Right)));
+}
+
+TEST(RouteTrsm, DoubleAndComplexWinEveryMeasuredCell) {
+    // 32/32, 30/30 and 30/30 cells respectively, both sides, order 8..256.
+    // Spelled as three separate instantiations because the predicate is
+    // `if constexpr` on T -- s.scalar is NOT what it reads, so a test that only
+    // varied s.scalar would pass while testing float three times.
+    for (int64_t order : {8, 32}) {
+        for (Side sd : {Side::Left, Side::Right}) {
+            const auto s = trsm_shape(order, 1024, 2048, 32, sd);
+            EXPECT_TRUE((RouteTable<Op::trsm, double>::preferred(kCta, s)))
+                << "double order " << order << " worst measured cell is 1.39x";
+            EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kCta, s)));
+            EXPECT_TRUE((RouteTable<Op::trsm, std::complex<double>>::preferred(kCta, s)));
+        }
+    }
+    // Above the CTA capacity the blocked driver carries the same verdict.
+    const auto big = trsm_shape(256, 1024, 512, 32, Side::Left);
+    EXPECT_TRUE((RouteTable<Op::trsm, double>::preferred(kBlocked, big)));
+    EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kBlocked, big)))
+        << "complex<float> order 256 Side::Left measured 21.1x";
+}
+
+TEST(RouteTrsm, VendorIsNeverItselfPreferred) {
+    // The vendor route is LAST in kTrsmOrder, so returning true for it would be
+    // indistinguishable from falling through -- until someone reorders the list
+    // and every native cell silently loses.
+    const auto s = trsm_shape(16, 1024, 2048, 32, Side::Right);
+    EXPECT_FALSE(TrsmTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s));
+}
+
+TEST(RouteTrsm, VendorFreeStillFindsANativeRouteAtEveryOrder) {
+    // Below the CTA capacity -> CTA. Above it -> Blocked. Never "no route".
+    const auto small = trsm_shape(32, 128, 4096, 64);
+    const auto big   = trsm_shape(4096, 128, 64, 64);
+
+    const Route rs = resolve_trsm_route<float>(kAuto, small, /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rs));
+    EXPECT_EQ(rs.algo, Algorithm::CTA);
+
+    const Route rb = resolve_trsm_route<float>(kAuto, big, /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rb));
+    EXPECT_EQ(rb.algo, Algorithm::Blocked)
+        << "an order above the register capacity must fall to the blocked driver, not vanish";
+}
+
+TEST(RouteTrsm, AbsentKernelIsUnsupportedRatherThanSelectable) {
+    // cta_max_n == 0 is the state until the kernel TU lands. Both native routes
+    // must report UNSUPPORTED, so this table can be merged before the kernel
+    // exists without ever selecting a launch that is not there.
+    const auto s = trsm_shape(32, 128, 4096, /*cta_max=*/0);
+    EXPECT_FALSE(TrsmTable::supports(kCta, s));
+    EXPECT_FALSE(TrsmTable::supports(kBlocked, s));
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)));
+}
+
+TEST(RouteTrsm, CorrectnessGatesAreNotSpeedGates) {
+    // Every false below must be "would compute a wrong answer", so each has a
+    // structural reason. Large batch and large q are NOT among them.
+    const auto ok = trsm_shape(32, 128, 4096, 64);
+    EXPECT_TRUE(TrsmTable::supports(kCta, ok));
+
+    auto cpu = ok;  cpu.is_gpu = false;
+    EXPECT_FALSE(TrsmTable::supports(kCta, cpu));
+
+    auto het = ok;  het.heterogeneous_batch = true;
+    EXPECT_FALSE(TrsmTable::supports(kCta, het));
+
+    auto empty_tri = ok;  empty_tri.k = 0;
+    EXPECT_FALSE(TrsmTable::supports(kCta, empty_tri));
+
+    auto over = ok;  over.k = 65;   // one past the capacity
+    EXPECT_FALSE(TrsmTable::supports(kCta, over));
+    EXPECT_TRUE(TrsmTable::supports(kBlocked, over))
+        << "the blocked driver splits the order itself, so the cap does not apply to it";
+
+    // ...but only when it exists. A table that advertises a tier the build does
+    // not contain hands the vendor-free caller a route nothing can service.
+    auto no_v2 = over;  no_v2.blocked_available = false;
+    EXPECT_FALSE(TrsmTable::supports(kBlocked, no_v2));
+
+    // A tiny batch is slow, not wrong: it must stay SUPPORTED.
+    auto tiny_batch = ok;  tiny_batch.batch = 1;
+    EXPECT_TRUE(TrsmTable::supports(kCta, tiny_batch))
+        << "batch size is a speed question; putting it in supports() breaks vendor-free trsm";
+}
+
+TEST(RouteTrsm, RhsCountFollowsSide) {
+    const auto left  = trsm_shape(32, 128, 16, 64, Side::Left);
+    const auto right = trsm_shape(32, 128, 16, 64, Side::Right);
+    EXPECT_EQ(left.tri_order(), 32);
+    EXPECT_EQ(right.tri_order(), 32);
+    EXPECT_EQ(left.rhs_count(), 128) << "Side::Left  -> q = B.cols()";
+    EXPECT_EQ(right.rhs_count(), 128) << "Side::Right -> q = B.rows()";
 }
