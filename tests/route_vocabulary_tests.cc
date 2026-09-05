@@ -12,6 +12,8 @@
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_trsm.hh>
 #include <batchlas/blas/dispatch/route_potrf.hh>
+#include <batchlas/blas/dispatch/route_geqrf.hh>
+#include <batchlas/blas/dispatch/route_orgqr.hh>
 
 #include <complex>
 #include <cstdlib>
@@ -860,6 +862,639 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
     {
         ScopedEnv e("BATCHLAS_POTRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::potrf);
+        EXPECT_FALSE(p.found);
+        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GEQRF's table (WP5 scaffolding). Same discipline as the RoutePotrf block
+// above, plus gates that have no potrf analogue at all.
+//
+// WHY THESE CASES EXIST AT A POINT WHERE NO KERNEL DOES. Every one of them pins
+// a property that is invisible while the capabilities report absent and becomes
+// load-bearing the instant one comes off zero:
+//
+//   * a speed threshold in supports() would remove geqrf's vendor-free route
+//     entirely (route_resolve.hh:60-63 re-walks the order testing supports()
+//     ALONE), and geqrf is the op the vendor-free burn-down is blocked on;
+//   * a forced route bypasses preferred() but NEVER supports()
+//     (route_resolve.hh:101), so a table with one gate wrong makes
+//     BATCHLAS_GEQRF_ROUTE=cta silently run cuSOLVER and pass green;
+//   * copying potrf's `m == n` gate here would strip geqrf of rectangular A,
+//     which is the entire point of the op (options.hh:727-730).
+//
+// THE BREAKS THAT WERE RUN AGAINST THESE CASES, AND WHAT EACH DID, recorded in
+// the shape of tests/potrf_tests.cc:28-70 -- because this repository has now
+// shipped FIVE tests that could not fail by construction, the most recent
+// written in the same change as the fix it guarded. Every break below was
+// applied to the source, REBUILT, and run; the two that turned nothing red are
+// reported, not hidden.
+//
+//   B1  a speed threshold in supports() (`if (s.batch < 64) return false;`)
+//         -> RED: VendorFreeFallbackHandsOverTheNativeRoute,
+//                 CorrectnessGatesAreNotSpeedGates
+//   B2  preferred() replaced by route_ormqr.hh:78-79's
+//       `is_native(r) && supports(r, s)`
+//         -> RED: PreferredIsFalseEverywhere,
+//                 VendorFreeFallbackHandsOverTheNativeRoute
+//   B3  the `m >= n` gate deleted
+//         -> RED: WideIsUnsupportedByEveryNativeArm
+//   B4  the CTA area test replaced by a per-extent bound
+//       (`s.n <= s.cta_max_elems` instead of `s.m * s.n <= s.cta_max_elems`)
+//         -> RED: CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds
+//   B5  the `cta_max_* < 1` absent-kernel guards deleted from both arms
+//         -> RED: AbsentKernelIsUnsupportedRatherThanSelectable
+//   B6  `case Op::geqrf/orgqr:` added to legacy_variable_for (route_env.hh:109)
+//         -> RED: BatchlasGeqrfRouteIsActuallyRead,
+//                 BatchlasOrgqrRouteIsActuallyRead
+//   B7  route_orgqr.hh's INHERITED complex + Transpose::Trans gate deleted
+//         -> RED: CorrectnessGatesIncludeTheOnesInheritedFromOrmqr
+//
+// AND THE TWO THAT NOTHING HERE CAN SEE, which is the more useful half:
+//
+//   B8  geqrf_cta_max_m_for_slm/geqrf_cta_max_elems_for_slm made non-zero with
+//       NO kernel behind them
+//         -> NOTHING in this file turned red, and nothing could: every case
+//            above builds its own GeqrfShape and never asks the build what its
+//            capabilities are. It was verified at the FACADE instead --
+//            build-novendor's orgqr_tests then failed with
+//            "geqrf_buffer_size: resolved to a native route (native:cta) but no
+//            native geqrf kernel is linked into this build", i.e. the whole
+//            chain (env read -> builder -> table -> vendor-free fallback ->
+//            facade native arm -> internal-consistency throw) is live.
+//   B9  B8 plus the facade's geqrf native arm and its buffer-size native terms
+//       deleted
+//         -> NOTHING turned red anywhere. build-novendor went straight back to
+//            the ordinary "no route for geqrf<float> ... built without cuBLAS"
+//            NoRouteError. THAT is the defect this scaffolding exists to
+//            prevent: without the native arm, a capability coming off zero is
+//            absorbed in silence, and in a vendor-PRESENT build the same
+//            deletion would quietly hand every call to cuSOLVER
+//            (route_compiled.hh:1-24). No unit test can catch it; only writing
+//            the arm before the kernel can.
+//
+// UPDATE, WP5 KERNELS: the kernels have since landed
+// (src/extensions/geqrf_cta_device.hh + geqrf_cta.cc + geqrf_blocked.cc, and
+// orgqr_blocked.cc), so the capacities now answer from the device's real
+// local_mem_size and geqrf_blocked_available/orgqr_blocked_available are true.
+// NONE of the cases below changed: each builds its own GeqrfShape/OrgqrShape by
+// hand and never asks the build what its capabilities are -- which is exactly
+// what B8 records. The kernels' own correctness is verified in
+// experiments/wp5_qr/kernels/ (a residual + orthogonality + ELEMENTWISE-vs-vendor
+// harness, five reference breaks and seven kernel breaks). preferred() is still
+// false for both ops, so PreferredIsFalseEverywhere is still the merge state and
+// still the thing to delete when a measured grid says otherwise.
+//
+// ONE PROPERTY DELIBERATELY LEFT UNGUARDED, stated so it is not mistaken for
+// covered: geqrf_op_shape/orgqr_op_shape set `s.backend = B` (the line trsm's
+// and ormqr's builders omit, which is why their coverage rows all read
+// Backend::AUTO). Deleting it turns nothing red here, because these cases build
+// their shapes by hand. It is only observable in a -DBATCHLAS_ENABLE_COVERAGE
+// build's CSV.
+// ---------------------------------------------------------------------------
+namespace {
+
+// PERMISSIVE DEFAULTS, one hostile field per case. If the fixture left the
+// capacities at 0 or has_sg32 at false, every "supports() is false" case below
+// would pass for the wrong reason -- the "test that cannot fail by construction"
+// family this repo has hit five times.
+GeqrfShape geqrf_shape(int64_t rows, int64_t cols, int64_t batch,
+                       int cta_max_m, int64_t cta_max_elems) {
+    GeqrfShape s;
+    s.op = Op::geqrf;
+    s.scalar = ScalarKind::F32;
+    // AUTO, deliberately -- the same reason as potrf_shape's: resolve_geqrf_route
+    // is the INSTRUMENTED entry point (route_resolve.hh:130-152), so every shape
+    // built here lands in the coverage table and shows up in a route_diff
+    // capture. The real builder sets s.backend = B (src/backends/geqrf_route.hh),
+    // so leaving this at AUTO keeps a synthetic unit-test row distinguishable
+    // from a row a library call actually produced.
+    s.backend = Backend::AUTO;
+    s.m = rows;
+    s.n = cols;
+    s.k = rows < cols ? rows : cols;   // the REFLECTOR COUNT, not an order
+    s.batch = batch;
+    s.is_gpu = true;
+    s.has_sg32 = true;
+    s.cta_max_m = cta_max_m;
+    s.cta_max_elems = cta_max_elems;
+    s.blocked_available = (cta_max_m > 0 && cta_max_elems > 0);
+    return s;
+}
+
+using GeqrfTable = RouteTable<Op::geqrf, float>;
+constexpr Route kGeqrfCta{Origin::Native, Algorithm::CTA};
+constexpr Route kGeqrfBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kGeqrfNativeBare{Origin::Native, Algorithm::Auto};
+constexpr Route kGeqrfAuto{Origin::Auto, Algorithm::Auto};
+
+} // namespace
+
+TEST(RouteGeqrf, VendorFreeFallbackHandsOverTheNativeRoute) {
+    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(). batch=1
+    // and a tiny panel are exactly the shapes a "minimum batch" or "minimum n"
+    // gate would make UNSUPPORTED, and route_resolve.hh:60-63 tests supports()
+    // alone -- so such a gate turns a vendor-free geqrf back into the
+    // NoRouteError that four ormqr/orgqr suites already die on.
+    const auto s = geqrf_shape(/*rows=*/64, /*cols=*/16, /*batch=*/1,
+                               /*cta_max_m=*/256, /*cta_max_elems=*/8192);
+
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, s))
+        << "batch size and panel size are speed questions; neither may gate "
+           "CORRECTNESS";
+    EXPECT_FALSE(GeqrfTable::preferred(kGeqrfCta, s))
+        << "nothing native about geqrf has been measured -- there is no kernel";
+
+    EXPECT_TRUE(is_native(resolve_geqrf_route<float>(kGeqrfAuto, s,
+                                                     /*vendor_available=*/false)))
+        << "un-preferred must never mean unroutable when there is no vendor";
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, s,
+                                                     /*vendor_available=*/true)))
+        << "and with a vendor present it must take it -- the WP5 scaffolding "
+           "gate is zero behaviour change";
+}
+
+TEST(RouteGeqrf, RectangularIsSupportedAndSquarenessIsNotAGate) {
+    // The single most likely wrong edit in this file is copying
+    // route_potrf.hh:213's `if (s.m != s.n) return false;`. A tall panel is what
+    // band_reduction.cc:595 and sytrd_sy2sb.cc:504 actually issue.
+    const auto tall   = geqrf_shape(1024, 32, 128, 2048, 1 << 20);
+    const auto square = geqrf_shape(64, 64, 128, 2048, 1 << 20);
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, tall))
+        << "rectangular A is the entire point of geqrf (options.hh:727-730)";
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, square));
+
+    // ...and k is the REFLECTOR COUNT, not either extent. A predicate that read
+    // s.n where it meant min(m,n) would silently disagree with tau's length.
+    EXPECT_EQ(tall.reflectors(), 32);
+    EXPECT_EQ(square.reflectors(), 64);
+    EXPECT_EQ(tall.rows(), 1024);
+    EXPECT_EQ(tall.cols(), 32);
+}
+
+TEST(RouteGeqrf, WideIsUnsupportedByEveryNativeArm) {
+    // m < n IS a correctness gate: both planned drivers are panel-oriented
+    // right-looking schedules over columns, and a wide view walks the trailing
+    // update past the bottom of the panel. It is also the conservative direction
+    // -- a superfluous gate sends the call to the vendor (loud in a vendor-free
+    // build), a missing one returns wrong numbers quietly.
+    const auto wide = geqrf_shape(/*rows=*/32, /*cols=*/1024, /*batch=*/128,
+                                  /*cta_max_m=*/2048, /*cta_max_elems=*/1 << 20);
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, wide));
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, wide));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, wide,
+                                                     /*vendor_available=*/false)))
+        << "no native route can serve it; the honest answer is 'needs a vendor'";
+
+    // GUARD AGAINST VACUITY: the same extents the other way round must be
+    // supported, or the assertions above pass for the wrong reason.
+    const auto tall = geqrf_shape(1024, 32, 128, 2048, 1 << 20);
+    ASSERT_TRUE(GeqrfTable::supports(kGeqrfCta, tall));
+}
+
+TEST(RouteGeqrf, CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds) {
+    // The CTA tile holds the whole m x n panel, so what fits is governed by m*n.
+    // A table that checked only per-extent ceilings would accept a panel whose
+    // tile is many times the budget -- an unlaunchable route, which is exactly
+    // what supports() exists to exclude.
+    //
+    // cta_max_m = 256, cta_max_elems = 8192.
+    const auto fits = geqrf_shape(/*rows=*/256, /*cols=*/32, /*batch=*/64, 256, 8192);
+    ASSERT_TRUE(GeqrfTable::supports(kGeqrfCta, fits))
+        << "guard: 256*32 == 8192 is exactly the area budget";
+
+    // Within BOTH per-extent bounds, over the AREA.
+    auto over_area = geqrf_shape(/*rows=*/256, /*cols=*/64, /*batch=*/64, 256, 8192);
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, over_area))
+        << "256*64 == 16384 does not fit an 8192-scalar tile, even though "
+           "256 <= cta_max_m";
+
+    // Within the AREA, over the HEIGHT.
+    auto over_height = geqrf_shape(/*rows=*/512, /*cols=*/8, /*batch=*/64, 256, 8192);
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, over_height))
+        << "512*8 == 4096 fits the tile, but one Householder vector spans 512 "
+           "rows and the reduction has its own ceiling";
+
+    // The BLOCKED arm inherits the PRESENCE of the leaf but not its capacity --
+    // it splits the panel itself. That is what makes the two-tier ladder a
+    // capability ladder rather than a tuned guess.
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, over_area));
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, over_height));
+
+    // ...but only when it exists.
+    auto no_blocked = over_area;
+    no_blocked.blocked_available = false;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, no_blocked));
+}
+
+TEST(RouteGeqrf, CorrectnessGatesAreNotSpeedGates) {
+    const auto ok = geqrf_shape(/*rows=*/128, /*cols=*/64, /*batch=*/256, 256, 8192);
+    ASSERT_TRUE(GeqrfTable::supports(kGeqrfCta, ok))
+        << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
+           "below passes for the wrong reason";
+
+    auto cpu = ok;  cpu.is_gpu = false;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, cpu));
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, cpu));
+
+    auto het = ok;  het.heterogeneous_batch = true;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, het))
+        << "one launch, one (m, n, ld, stride) tuple, no batch walker -- and "
+           "netlib's geqrf hoists m and n outside its loop too "
+           "(netlib_lapack.cc:1406-1417), so nothing in this tree serves it";
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, het));
+
+    auto empty_cols = ok;  empty_cols.n = 0;  empty_cols.k = 0;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, empty_cols));
+
+    auto empty_rows = ok;  empty_rows.m = 0;  empty_rows.k = 0;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, empty_rows));
+
+    auto no_batch = ok;  no_batch.batch = 0;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, no_batch));
+
+    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES. Each must stay SUPPORTED, and
+    // each is what a spec-shaped supports() would have refused.
+    auto tiny_batch = ok;  tiny_batch.batch = 1;
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, tiny_batch))
+        << "a minimum-batch threshold belongs in preferred()";
+    auto huge_batch = ok;  huge_batch.batch = 1 << 20;
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, huge_batch));
+    const auto tiny = geqrf_shape(1, 1, 256, 256, 8192);
+    EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, tiny))
+        << "`the panel is small so blocked should be false` is a FIT judgement "
+           "between two native routes; with it here a forced `blocked` at small "
+           "n silently measures the VENDOR (route_resolve.hh:101, :111)";
+}
+
+TEST(RouteGeqrf, Sg32GatesBothNativeArms) {
+    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel
+    // carrying [[sycl::reqd_sub_group_size(32)]], and the blocked driver's panel
+    // leaf IS that same device function -- so one missing capability must close
+    // BOTH arms, not just the CTA one.
+    //
+    // The panel is chosen ABOVE the CTA area so the blocked arm is the one
+    // actually under test; at a fitting size the CTA arm would answer first.
+    auto big = geqrf_shape(/*rows=*/1024, /*cols=*/1024, /*batch=*/64, 256, 8192);
+    ASSERT_FALSE(GeqrfTable::supports(kGeqrfCta, big))
+        << "guard: this panel must NOT fit the CTA tile, or the next assertions "
+           "test the wrong arm";
+    ASSERT_TRUE(GeqrfTable::supports(kGeqrfBlocked, big))
+        << "guard: the blocked arm must be OPEN before we close it";
+
+    big.has_sg32 = false;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, big));
+
+    auto small = geqrf_shape(/*rows=*/128, /*cols=*/64, /*batch=*/64, 256, 8192);
+    ASSERT_TRUE(GeqrfTable::supports(kGeqrfCta, small));
+    small.has_sg32 = false;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, small));
+
+    // And a vendor-free build must then say "needs a vendor" rather than handing
+    // back a route whose launch the device would reject.
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, small, false)));
+}
+
+TEST(RouteGeqrf, PreferredIsFalseEverywhere) {
+    // The merge state, asserted rather than assumed. With preferred() all-false,
+    // Origin::Auto takes the vendor for every shape, so no existing decision can
+    // move -- which is what makes the scaffolding gate ("same passes, same
+    // failures, same messages") a real gate. Delete this test when a measured
+    // window lands, and replace it with clauses citing the cells.
+    for (int64_t rows : {1, 32, 128, 512, 1024, 4096}) {
+        for (int64_t cols : {1, 16, 32, 128, 512}) {
+            if (cols > rows) continue;
+            for (int64_t batch : {1, 8, 128, 2048}) {
+                const auto s = geqrf_shape(rows, cols, batch, 4096, 1 << 24);
+                EXPECT_FALSE(GeqrfTable::preferred(kGeqrfCta, s));
+                EXPECT_FALSE(GeqrfTable::preferred(kGeqrfBlocked, s));
+                EXPECT_FALSE(GeqrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
+                    << "the vendor is where the walk ENDS, never itself preferred";
+                EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, s, true)))
+                    << "rows " << rows << " cols " << cols << " batch " << batch;
+            }
+        }
+    }
+    // ...and the other three scalar types, spelled out: were the table ever to
+    // become `if constexpr (is_same_v<T, float>)`, a loop that only varied
+    // s.scalar would test float three times.
+    const auto s = geqrf_shape(256, 64, 512, 4096, 1 << 24);
+    EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(kGeqrfCta, s)));
+    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<float>>::preferred(kGeqrfCta, s)));
+    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(kGeqrfCta, s)));
+    EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(kGeqrfBlocked, s)));
+    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<float>>::preferred(kGeqrfBlocked, s)));
+    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(kGeqrfBlocked, s)));
+}
+
+TEST(RouteGeqrf, BareOriginResolvesToASpecificAlgorithm) {
+    // geqrf has TWO native routes, so {Native, Auto} names neither and no
+    // dispatch tail can map it to a kernel (route_resolve.hh:87-98). Below the
+    // CTA capacity -> CTA; above it -> Blocked. Never {Native, Auto}, never "no
+    // route".
+    const auto small = geqrf_shape(128, 64, 256, 256, 8192);
+    const auto big   = geqrf_shape(1024, 1024, 64, 256, 8192);
+
+    const Route rs = resolve_geqrf_route<float>(kGeqrfNativeBare, small,
+                                                /*vendor_available=*/true);
+    EXPECT_EQ(rs.origin, Origin::Native);
+    EXPECT_EQ(rs.algo, Algorithm::CTA);
+
+    const Route rb = resolve_geqrf_route<float>(kGeqrfAuto, big,
+                                                /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rb));
+    EXPECT_EQ(rb.algo, Algorithm::Blocked)
+        << "a panel above the tile capacity must fall to the blocked driver, "
+           "not vanish";
+}
+
+TEST(RouteGeqrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
+    // ZERO CAPACITY / blocked_available == false is what THIS BUILD reports
+    // today: src/extensions/geqrf_cta.cc returns 0 from both capacity functions
+    // and geqrf_blocked.cc returns false for every type. Both native routes must
+    // then be UNSUPPORTED, so a capability that is absent can never select a
+    // launch that is not there. This is what lets the tables merge ahead of the
+    // kernels.
+    const auto s = geqrf_shape(/*rows=*/128, /*cols=*/64, /*batch=*/256,
+                               /*cta_max_m=*/0, /*cta_max_elems=*/0);
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, s));
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, s));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, s, false)))
+        << "vendor-free with nothing supported must say 'needs a vendor', not "
+           "invent a native route";
+
+    // AND FORCING MUST NOT ESCAPE IT. route_resolve.hh:101 gates the forced route
+    // on supports() and falls through to automatic() -- which is why a green
+    // forced-route test is not by itself evidence that a native kernel ran.
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfCta, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfBlocked, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfNativeBare, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfCta, s, false)));
+
+    // Half a capability is still absent: a build that reported a height but no
+    // area (or the reverse) must not select either arm.
+    auto half_a = geqrf_shape(128, 64, 256, /*cta_max_m=*/256, /*cta_max_elems=*/0);
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, half_a));
+    auto half_b = geqrf_shape(128, 64, 256, /*cta_max_m=*/0, /*cta_max_elems=*/8192);
+    half_b.blocked_available = true;
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, half_b));
+    EXPECT_FALSE(GeqrfTable::supports(kGeqrfBlocked, half_b))
+        << "the blocked driver's panel leaf IS the CTA device function, so it "
+           "inherits the presence gate";
+}
+
+TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
+    // geqrf had NO route resolution at all before WP5 -- the facade was four
+    // `if constexpr (!vendor) throw; else vendor;` bodies -- so "pin the native
+    // path with BATCHLAS_GEQRF_ROUTE" was a claim about a code path nobody had
+    // exercised for this op. The canonical spelling needs no registry entry
+    // (parse_route_env synthesises it, route_env.hh:214-217), but that is exactly
+    // the sort of claim that turns out to be false.
+    ClearRouteEnv clear(Op::geqrf);
+
+    EXPECT_EQ(op_env_stem(Op::geqrf), "GEQRF");
+    EXPECT_TRUE(std::string(legacy_variable_for(Op::geqrf)).empty())
+        << "no legacy geqrf variable ever shipped; a case in legacy_variable_for "
+           "would INVENT a legacy spelling. Note that Op::ormqr DOES have one "
+           "(route_env.hh:118) -- that is not a precedent for this op";
+
+    {
+        const auto unset = parse_route_env(Op::geqrf);
+        EXPECT_FALSE(unset.found);
+        EXPECT_FALSE(unset.unparsed);
+        EXPECT_EQ(legacy_unset_default(Op::geqrf).origin, Origin::Auto);
+    }
+    {
+        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "cta");
+        const auto p = parse_route_env(Op::geqrf);
+        ASSERT_TRUE(p.found) << "BATCHLAS_GEQRF_ROUTE was not read at all";
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
+            << "a bare algorithm implies Origin::Native";
+        EXPECT_EQ(p.source.variable, "BATCHLAS_GEQRF_ROUTE");
+        EXPECT_FALSE(p.source.legacy);
+    }
+    {
+        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "vendor");
+        const auto p = parse_route_env(Op::geqrf);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
+    }
+    {
+        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "native:blocked");
+        const auto p = parse_route_env(Op::geqrf);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
+    }
+    {
+        // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR.
+        // This is the measurement trap the campaign has hit before: a "native"
+        // run that looks identical to the vendor probably IS the vendor.
+        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
+        const auto p = parse_route_env(Op::geqrf);
+        EXPECT_FALSE(p.found);
+        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ORGQR's table (WP5 scaffolding).
+//
+// orgqr ships as ORMQR APPLIED TO AN IDENTITY, so its supports() is
+// RouteTable<Op::ormqr,T>::supports()' gates TRANSCRIBED plus orgqr's own --
+// because that table is what will actually serve the call, and silently omitting
+// an inherited gate is the wrong-answer class. These cases pin the transcription
+// as well as the split.
+// ---------------------------------------------------------------------------
+namespace {
+
+OrgqrShape orgqr_shape(int64_t rows, int64_t cols, int64_t batch,
+                       bool blocked_available = true) {
+    OrgqrShape s;
+    s.op = Op::orgqr;
+    s.scalar = ScalarKind::F32;
+    s.backend = Backend::AUTO;   // same reason as potrf_shape / geqrf_shape
+    s.m = rows;
+    s.n = cols;
+    s.k = rows < cols ? rows : cols;
+    s.batch = batch;
+    s.is_gpu = true;
+    // The builder pins the apply at (Left, NoTrans); mirror it, or the inherited
+    // complex-Trans case below would be testing a shape the builder never makes.
+    s.side = Side::Left;
+    s.transA = Transpose::NoTrans;
+    s.blocked_available = blocked_available;
+    return s;
+}
+
+using OrgqrTable = RouteTable<Op::orgqr, float>;
+using OrgqrTableC = RouteTable<Op::orgqr, std::complex<float>>;
+constexpr Route kOrgqrBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kOrgqrNativeBare{Origin::Native, Algorithm::Auto};
+constexpr Route kOrgqrAuto{Origin::Auto, Algorithm::Auto};
+
+} // namespace
+
+TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
+    // The same speed-threshold guard as geqrf's. It matters more here than the
+    // ratios suggest: the vendor orgqr is NOT batched (cublas.cc:1413-1420 loops
+    // cusolverDnXorgqr per batch item), so a gate that pushed orgqr back to the
+    // vendor would also restore a workspace of single_ws * batch
+    // (cublas.cc:1447).
+    const auto s = orgqr_shape(/*rows=*/64, /*cols=*/64, /*batch=*/1);
+
+    EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, s));
+    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, s));
+    EXPECT_TRUE(is_native(resolve_orgqr_route<float>(kOrgqrAuto, s,
+                                                     /*vendor_available=*/false)));
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s,
+                                                     /*vendor_available=*/true)));
+}
+
+TEST(RouteOrgqr, PreferredIsFalseEverywhere) {
+    // NOT route_ormqr.hh:78-79's `is_native(r) && supports(r, s)`. Copying that
+    // spelling would make native the default on every supported shape with no
+    // measured window at all -- and there IS a measured losing cell to respect
+    // (cfloat n=2048 loses at every batch that fits in 24 GB).
+    for (int64_t n : {1, 32, 64, 256, 1024, 2048}) {
+        for (int64_t batch : {1, 8, 128, 2048}) {
+            const auto s = orgqr_shape(n, n, batch);
+            EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, s));
+            EXPECT_FALSE(OrgqrTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
+                << "the vendor is where the walk ENDS, never itself preferred";
+            EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s, true)))
+                << "n " << n << " batch " << batch;
+        }
+    }
+    const auto s = orgqr_shape(256, 256, 512);
+    EXPECT_FALSE((RouteTable<Op::orgqr, double>::preferred(kOrgqrBlocked, s)));
+    EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<float>>::preferred(kOrgqrBlocked, s)));
+    EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<double>>::preferred(kOrgqrBlocked, s)));
+}
+
+TEST(RouteOrgqr, CorrectnessGatesIncludeTheOnesInheritedFromOrmqr) {
+    const auto ok = orgqr_shape(/*rows=*/256, /*cols=*/128, /*batch=*/256);
+    ASSERT_TRUE(OrgqrTable::supports(kOrgqrBlocked, ok))
+        << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
+           "below passes for the wrong reason";
+
+    // INHERITED from route_ormqr.hh:59 -- the native apply is GPU-only, which is
+    // also why the four ormqr/orgqr suites' Backend::NETLIB rows are NOT closable
+    // by WP5 (test_utils::backend_types instantiates them against Device("cpu")).
+    auto cpu = ok;  cpu.is_gpu = false;
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, cpu));
+
+    // INHERITED from route_ormqr.hh:63-66 -- complex with a plain Trans. It
+    // cannot fire through the builder, which pins transA to NoTrans, but the gate
+    // is transcribed rather than dropped, and this case is what proves the
+    // transcription is present and applies only to complex.
+    auto complex_trans = ok;  complex_trans.transA = Transpose::Trans;
+    EXPECT_FALSE(OrgqrTableC::supports(kOrgqrBlocked, complex_trans))
+        << "route_ormqr.hh:63-66's exclusion must be inherited, not silently "
+           "dropped; cuSOLVER refuses the same combination (CUSOLVER error: 3)";
+    EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, complex_trans))
+        << "and it must apply to COMPLEX only -- a real scalar with Trans is "
+           "served by the native ormqr and refused by cuSOLVER, the opposite "
+           "asymmetry";
+
+    // orgqr's OWN gates.
+    auto wide = ok;  wide.n = 512;  // n > m: more orthonormal columns than rows
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, wide))
+        << "Q's columns live in R^m; n > m asks for a basis that does not exist";
+
+    auto het = ok;  het.heterogeneous_batch = true;
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, het))
+        << "one identity, one apply, one (m, n, ld, stride) tuple -- and note "
+           "RouteTable<Op::ormqr> has no such gate and its builder never sets "
+           "the field, so ormqr's routing is blind to this today";
+
+    auto empty = ok;  empty.n = 0;  empty.k = 0;
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, empty));
+    auto no_batch = ok;  no_batch.batch = 0;
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, no_batch));
+
+    // NOT correctness gates.
+    auto tiny_batch = ok;  tiny_batch.batch = 1;
+    EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, tiny_batch));
+    auto huge = ok;  huge.m = 8192;  huge.n = 8192;  huge.k = 8192;
+    EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, huge))
+        << "n=2048 measuring slower than the vendor is a preferred() clause, "
+           "never a supports() gate";
+}
+
+TEST(RouteOrgqr, AbsentDriverIsUnsupportedRatherThanSelectable) {
+    // blocked_available == false is what THIS BUILD reports today
+    // (src/extensions/orgqr_blocked.cc). It is NOT "is ormqr_blocked compiled" --
+    // that is already true, and answering with it would hand a vendor-free caller
+    // a route the facade cannot service.
+    const auto s = orgqr_shape(/*rows=*/256, /*cols=*/256, /*batch=*/128,
+                               /*blocked_available=*/false);
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, s));
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s, false)));
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrBlocked, s, true)))
+        << "forcing must not escape supports() (route_resolve.hh:101, :111)";
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrNativeBare, s, false)));
+
+    // Guard against vacuity: with the driver present the same shape IS native
+    // in a vendor-free build.
+    const auto present = orgqr_shape(256, 256, 128, /*blocked_available=*/true);
+    EXPECT_TRUE(is_native(resolve_orgqr_route<float>(kOrgqrAuto, present, false)));
+}
+
+TEST(RouteOrgqr, BareOriginResolvesToASpecificAlgorithm) {
+    // orgqr has ONE native route, but {Native, Auto} must still come back as
+    // {Native, Blocked} rather than verbatim -- no dispatch tail can map an Auto
+    // algorithm to a kernel. Note the departure from route_ormqr.hh:57, which
+    // accepts Algorithm::Auto inside supports() as if it were Blocked.
+    const auto s = orgqr_shape(256, 256, 128);
+    const Route r = resolve_orgqr_route<float>(kOrgqrNativeBare, s,
+                                               /*vendor_available=*/true);
+    EXPECT_EQ(r.origin, Origin::Native);
+    EXPECT_EQ(r.algo, Algorithm::Blocked);
+    EXPECT_FALSE(OrgqrTable::supports(kOrgqrNativeBare, s))
+        << "a bare {Native, Auto} names no algorithm and must not be reported "
+           "as supported; the origin-restricted walk is what resolves it";
+}
+
+TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
+    ClearRouteEnv clear(Op::orgqr);
+
+    EXPECT_EQ(op_env_stem(Op::orgqr), "ORGQR");
+    EXPECT_TRUE(std::string(legacy_variable_for(Op::orgqr)).empty())
+        << "no legacy orgqr variable ever shipped; a case in legacy_variable_for "
+           "would INVENT a legacy spelling";
+
+    // AND THE OP IT DELEGATES TO IS PINNED BY A DIFFERENT VARIABLE. orgqr's
+    // native arm re-enters routed ormqr, which reads its own canonical spelling
+    // AND a legacy one. Pinning one and not the other is how a measurement ends
+    // up describing something other than what was intended.
+    EXPECT_EQ(legacy_variable_for(Op::ormqr), "BATCHLAS_ORMQR_PROVIDER");
+
+    {
+        const auto unset = parse_route_env(Op::orgqr);
+        EXPECT_FALSE(unset.found);
+        EXPECT_FALSE(unset.unparsed);
+        EXPECT_EQ(legacy_unset_default(Op::orgqr).origin, Origin::Auto);
+    }
+    {
+        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "blocked");
+        const auto p = parse_route_env(Op::orgqr);
+        ASSERT_TRUE(p.found) << "BATCHLAS_ORGQR_ROUTE was not read at all";
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
+        EXPECT_EQ(p.source.variable, "BATCHLAS_ORGQR_ROUTE");
+        EXPECT_FALSE(p.source.legacy);
+    }
+    {
+        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "vendor");
+        const auto p = parse_route_env(Op::orgqr);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
+    }
+    {
+        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "not-a-route");
+        const auto p = parse_route_env(Op::orgqr);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
     }
