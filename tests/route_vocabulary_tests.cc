@@ -11,7 +11,9 @@
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_trsm.hh>
+#include <batchlas/blas/dispatch/route_potrf.hh>
 
+#include <complex>
 #include <cstdlib>
 #include <string>
 
@@ -560,4 +562,305 @@ TEST(RouteTrsm, RhsCountFollowsSide) {
     EXPECT_EQ(right.tri_order(), 32);
     EXPECT_EQ(left.rhs_count(), 128) << "Side::Left  -> q = B.cols()";
     EXPECT_EQ(right.rhs_count(), 128) << "Side::Right -> q = B.rows()";
+}
+
+// ---------------------------------------------------------------------------
+// POTRF's table (WP4 step 0.4). Same discipline as the RouteTrsm block above,
+// and for the same reason: WP4_POTRF_SPEC.md:559/:567 put two BATCH thresholds
+// inside supports() and then claimed at :574 that the native routes would be
+// "reachable only by force". Both halves are wrong, and both are load-bearing:
+//
+//   * a batch threshold in supports() removes potrf's vendor-free route
+//     entirely (route_resolve.hh:60-63 re-walks the order testing supports()
+//     ALONE), which is the failure WP4 exists to remove; and
+//   * a forced route bypasses preferred() but NEVER supports()
+//     (route_resolve.hh:101), so "reachable only by force" would silently run
+//     cuSOLVER and pass green over an untested kernel.
+//
+// These cases pin the SPLIT, not any numbers -- there are no measured numbers
+// for potrf yet, which is what PotrfPreferredIsFalseEverywhere says out loud.
+// ---------------------------------------------------------------------------
+namespace {
+
+// PERMISSIVE DEFAULTS, one hostile field per case. If the fixture left
+// cta_max_n at 0 or has_sg32 at false, every "supports() is false" case below
+// would pass for the wrong reason -- the "test that cannot fail by
+// construction" family this repo has hit three times (trmm uplo/diag; a
+// conjugation test blind by construction; a ConjTrans test too small to reach
+// the tile it guarded).
+PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
+                       Uplo uplo = Uplo::Lower) {
+    PotrfShape s;
+    s.op = Op::potrf;
+    s.scalar = ScalarKind::F32;
+    // AUTO, deliberately. resolve_potrf_route is the INSTRUMENTED entry point
+    // (route_resolve.hh:130-152), so every shape built here lands in the
+    // coverage table and shows up in a scripts/route_diff.sh capture. The real
+    // builder sets s.backend = B (potrf_route.hh), so leaving this at AUTO is
+    // what keeps a synthetic unit-test row distinguishable from a row a library
+    // call actually produced -- otherwise the burn-down would read as though
+    // potrf had reached a native route on CUDA, which it has not.
+    s.backend = Backend::AUTO;
+    s.m = order;                 // square: m == n == k == the order
+    s.n = order;
+    s.k = order;
+    s.batch = batch;
+    s.uplo = uplo;
+    s.is_gpu = true;
+    s.has_sg32 = true;
+    s.cta_max_n = cta_max;
+    s.blocked_available = (cta_max > 0);
+    return s;
+}
+
+using PotrfTable = RouteTable<Op::potrf, float>;
+constexpr Route kPotrfCta{Origin::Native, Algorithm::CTA};
+constexpr Route kPotrfBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kPotrfNativeBare{Origin::Native, Algorithm::Auto};
+constexpr Route kPotrfAuto{Origin::Auto, Algorithm::Auto};
+
+} // namespace
+
+TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
+    // The one case the whole split exists for. 155 is the CTA fit ceiling WP4
+    // step 0.2 MEASURED for float (experiments/wp4_potrf/slm/maxn_fitcheck.csv;
+    // the spec's 105 came from a 45,056 B budget that the runtime query --
+    // sycl::info::device::local_mem_size == 101,376 B -- refutes), and batch=1
+    // is exactly the shape a spec-faithful supports() would have made
+    // UNSUPPORTED.
+    const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155);
+
+    EXPECT_TRUE(PotrfTable::supports(kPotrfCta, s))
+        << "batch size is a speed question; it must not gate CORRECTNESS";
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfCta, s))
+        << "nothing about potrf has been measured yet";
+    EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, s,
+                                                     /*vendor_available=*/false)))
+        << "un-preferred must never mean unroutable when there is no vendor";
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s,
+                                                     /*vendor_available=*/true)))
+        << "and with a vendor present it must take it -- WP4 step 0.7 is a "
+           "zero-behaviour-change gate";
+}
+
+TEST(RoutePotrf, VendorFreeFallbackPicksTheNativeRoute) {
+    // Below the CTA capacity -> CTA. Above it -> Blocked. Never "no route".
+    const auto small = potrf_shape(/*order=*/64,  /*batch=*/256, /*cta_max=*/155);
+    const auto big   = potrf_shape(/*order=*/512, /*batch=*/64,  /*cta_max=*/155);
+
+    const Route rs = resolve_potrf_route<float>(kPotrfAuto, small,
+                                                /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rs));
+    EXPECT_EQ(rs.algo, Algorithm::CTA);
+
+    const Route rb = resolve_potrf_route<float>(kPotrfAuto, big,
+                                                /*vendor_available=*/false);
+    EXPECT_TRUE(is_native(rb));
+    EXPECT_EQ(rb.algo, Algorithm::Blocked)
+        << "an order above the SLM capacity must fall to the blocked driver, "
+           "not vanish";
+
+    // A BARE ORIGIN must also resolve to a specific algorithm: potrf has two
+    // native routes, so {Native, Auto} names neither and no dispatch tail can
+    // map it to a kernel (route_resolve.hh:87-98).
+    const Route rbare = resolve_potrf_route<float>(kPotrfNativeBare, small,
+                                                   /*vendor_available=*/true);
+    EXPECT_EQ(rbare.origin, Origin::Native);
+    EXPECT_EQ(rbare.algo, Algorithm::CTA);
+}
+
+TEST(RoutePotrf, PreferredIsFalseEverywhere) {
+    // The merge state, asserted rather than assumed. This is what makes step
+    // 0.7's route_diff a real gate: with preferred() all-false, Origin::Auto
+    // takes the vendor for every shape, so no existing decision can move.
+    // Delete this test when the spec 10.3 grid is measured -- and replace it
+    // with clauses citing the cells, as route_trsm.hh:188-325 does.
+    for (int64_t order : {1, 8, 63, 64, 77, 109, 155, 156, 512, 4096}) {
+        for (int64_t batch : {1, 8, 128, 2048}) {
+            for (Uplo up : {Uplo::Lower, Uplo::Upper}) {
+                const auto s = potrf_shape(order, batch, 155, up);
+                EXPECT_FALSE(PotrfTable::preferred(kPotrfCta, s));
+                EXPECT_FALSE(PotrfTable::preferred(kPotrfBlocked, s));
+                EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
+                    << "the vendor is where the walk ENDS, never itself preferred";
+                EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, true)))
+                    << "order " << order << " batch " << batch;
+            }
+        }
+    }
+    // ...and the other three scalar types, spelled out: were the table ever to
+    // become `if constexpr (is_same_v<T, float>)`, a loop that only varied
+    // s.scalar would test float three times.
+    const auto s = potrf_shape(64, 512, 155);
+    EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, s)));
+    EXPECT_FALSE((RouteTable<Op::potrf, std::complex<float>>::preferred(kPotrfCta, s)));
+    EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfCta, s)));
+}
+
+TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
+    const auto ok = potrf_shape(/*order=*/64, /*batch=*/256, /*cta_max=*/155);
+    ASSERT_TRUE(PotrfTable::supports(kPotrfCta, ok))
+        << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
+           "below passes for the wrong reason";
+
+    // Each false below is "would compute a WRONG ANSWER or could not launch".
+    auto nonsquare = ok;  nonsquare.n = 65;     // m != n
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, nonsquare))
+        << "there is no Cholesky factor of a non-square view";
+
+    auto cpu = ok;  cpu.is_gpu = false;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, cpu));
+
+    auto het = ok;  het.heterogeneous_batch = true;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, het))
+        << "one launch, one (order, ld, stride) tuple, no batch walker";
+
+    auto empty = ok;  empty.k = 0;  empty.m = 0;  empty.n = 0;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, empty));
+
+    auto no_batch = ok;  no_batch.batch = 0;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, no_batch));
+
+    auto over = ok;  over.k = 156;  over.m = 156;  over.n = 156;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, over))
+        << "156 is one past the measured float SLM fit ceiling of 155";
+    EXPECT_TRUE(PotrfTable::supports(kPotrfBlocked, over))
+        << "the blocked driver splits the order itself, so the cap is not its cap";
+
+    // ...but only when it exists.
+    auto no_blocked = over;  no_blocked.blocked_available = false;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, no_blocked));
+
+    // THE THREE THINGS THAT ARE *NOT* CORRECTNESS GATES. Each is what the spec
+    // put in supports(); each must stay SUPPORTED.
+    auto tiny_batch = ok;  tiny_batch.batch = 1;
+    EXPECT_TRUE(PotrfTable::supports(kPotrfCta, tiny_batch))
+        << "spec:559's kPotrfCtaMinBatch belongs in preferred()";
+    auto huge_batch = ok;  huge_batch.batch = 1 << 20;
+    EXPECT_TRUE(PotrfTable::supports(kPotrfCta, huge_batch));
+    const auto tiny_order = potrf_shape(1, 256, 155);
+    EXPECT_TRUE(PotrfTable::supports(kPotrfBlocked, tiny_order))
+        << "spec:567's `n <= cta_max -> unsupported` would make a forced "
+           "`blocked` at small n silently measure the VENDOR";
+}
+
+TEST(RoutePotrf, Sg32GatesBothNativeArms) {
+    // The gate trsm does not have, so it cannot arrive by copying trsm's table.
+    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel
+    // carrying [[sycl::reqd_sub_group_size(32)]], and the blocked driver's
+    // diagonal leaf IS that same device function -- so one missing capability
+    // must close BOTH arms, not just the CTA one.
+    //
+    // The order is above the CTA ceiling so that the blocked arm is the one
+    // actually under test; at order 64 the CTA arm would answer first and the
+    // second assertion could not distinguish the two.
+    auto s = potrf_shape(/*order=*/200, /*batch=*/256, /*cta_max=*/155);
+    ASSERT_TRUE(PotrfTable::supports(kPotrfBlocked, s))
+        << "guard: the blocked arm must be OPEN before we close it, or the "
+           "next assertion cannot fail";
+
+    s.has_sg32 = false;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, s))
+        << "the blocked driver's leaf is the same reqd_sub_group_size(32) "
+           "device function";
+
+    auto small = potrf_shape(/*order=*/64, /*batch=*/256, /*cta_max=*/155);
+    ASSERT_TRUE(PotrfTable::supports(kPotrfCta, small));
+    small.has_sg32 = false;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, small));
+
+    // And a vendor-free build must then say "needs a vendor" rather than
+    // handing back a route whose launch the device would reject.
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, small, false)));
+}
+
+TEST(RoutePotrf, UpperIsUnsupportedByTheBlockedDriver) {
+    // Uplo::Upper on the blocked arm is a CORRECTNESS gate, not a preference:
+    // the driver implements the Lower recurrence only and would read and
+    // overwrite the wrong triangle. Contrast syev, whose blocked arms accept
+    // Upper because they MIRROR first (syev.hh:840-847, uplo_mirror.hh).
+    const auto lower = potrf_shape(/*order=*/512, /*batch=*/64, /*cta_max=*/155,
+                                   Uplo::Lower);
+    const auto upper = potrf_shape(/*order=*/512, /*batch=*/64, /*cta_max=*/155,
+                                   Uplo::Upper);
+    ASSERT_TRUE(PotrfTable::supports(kPotrfBlocked, lower));
+    EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, upper));
+
+    // ...so a vendor-free build has no native route for an Upper order above
+    // the CTA ceiling, and must say so.
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, upper,
+                                                     /*vendor_available=*/false)))
+        << "no native route can serve it; the honest answer is 'needs a vendor'";
+}
+
+TEST(RoutePotrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
+    // cta_max_n == 0 / blocked_available == false is what a build WITHOUT the
+    // kernel reports. blocked_available is exactly that state today
+    // (src/extensions/potrf_cta.cc returns false for every type -- the driver is
+    // Phase 2), and cta_max_n is that state on any device whose local memory
+    // cannot hold even a 1x1 tile. Both native routes must then report
+    // UNSUPPORTED, so a capability that is absent can never select a launch that
+    // is not there. This is what let the table merge ahead of the kernel.
+    const auto s = potrf_shape(/*order=*/64, /*batch=*/256, /*cta_max=*/0);
+    EXPECT_FALSE(PotrfTable::supports(kPotrfCta, s));
+    EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, s));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, false)))
+        << "vendor-free with nothing supported must say 'needs a vendor', not "
+           "invent a native route";
+
+    // AND FORCING MUST NOT ESCAPE IT. route_resolve.hh:101 gates the forced
+    // route on supports() and falls through to automatic() -- which is why a
+    // green forced-route test is not by itself evidence that a native kernel
+    // ran.
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfCta, s, true)));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfNativeBare, s, true)));
+}
+
+TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
+    // The spec's BATCHLAS_POTRF_PROVIDER is read by NOTHING in this tree, so
+    // "pin the native path with it" would have pinned nothing. The canonical
+    // spelling needs no registry entry -- parse_route_env synthesises
+    // "BATCHLAS_" + op_env_stem(op) + "_ROUTE" (route_env.hh:214-217) -- but
+    // that is a claim about a code path nobody had exercised for potrf.
+    ClearRouteEnv clear(Op::potrf);
+
+    EXPECT_EQ(op_env_stem(Op::potrf), "POTRF");
+    EXPECT_TRUE(std::string(legacy_variable_for(Op::potrf)).empty())
+        << "no legacy potrf variable ever shipped; a case in legacy_variable_for "
+           "would INVENT one";
+
+    {
+        const auto unset = parse_route_env(Op::potrf);
+        EXPECT_FALSE(unset.found);
+        EXPECT_FALSE(unset.unparsed);
+        EXPECT_EQ(legacy_unset_default(Op::potrf).origin, Origin::Auto);
+    }
+    {
+        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "cta");
+        const auto p = parse_route_env(Op::potrf);
+        ASSERT_TRUE(p.found) << "BATCHLAS_POTRF_ROUTE was not read at all";
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
+            << "a bare algorithm implies Origin::Native";
+        EXPECT_EQ(p.source.variable, "BATCHLAS_POTRF_ROUTE");
+        EXPECT_FALSE(p.source.legacy);
+    }
+    {
+        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "vendor");
+        const auto p = parse_route_env(Op::potrf);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
+    }
+    {
+        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "native:blocked");
+        const auto p = parse_route_env(Op::potrf);
+        ASSERT_TRUE(p.found);
+        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
+    }
+    {
+        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "not-a-route");
+        const auto p = parse_route_env(Op::potrf);
+        EXPECT_FALSE(p.found);
+        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
+    }
 }

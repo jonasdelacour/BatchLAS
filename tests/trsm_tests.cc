@@ -37,7 +37,6 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
     }
     
-    // Verify that the TRSM solution satisfies A*X = B or A^T*X = B depending on transpose
     bool verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
@@ -50,7 +49,6 @@ protected:
                     std::string(v) == "on" || std::string(v) == "ON");
         }();
 
-        // First check if B was actually modified from original
         bool anyChanges = false;
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
@@ -74,21 +72,18 @@ protected:
             return false;
         }
         
-        // Now verify each element of the result by checking AX = B_original or A^T*X = B_original
         bool allMatch = true;
         for (int i = 0; i < rows; ++i) {
             for (int j = 0; j < cols; ++j) {
                 ScalarType expected = B_original.at(i, j, batch_idx);
                 ScalarType calculated = static_cast<ScalarType>(0.0);
                 
-                // Calculate the result of A*X or A^T*X for this position
                 for (int k = 0; k < cols; ++k) {
                     int a_row = (trans == Transpose::NoTrans) ? i : k;
                     int a_col = (trans == Transpose::NoTrans) ? k : i;
                     calculated += A.at(a_row, a_col, batch_idx) * B.at(k, j, batch_idx);
                 }
                 
-                // Use a reasonable tolerance for floating point comparisons
                 auto tolerance = test_utils::tolerance<ScalarType>();
                 if (std::abs(calculated - expected) > tolerance) {
                     if (trace_enabled) {
@@ -109,7 +104,6 @@ protected:
     }
     
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
-        // Create matrices and fill on host to avoid device-side state or kernel ordering issues
         Matrix<ScalarType, MatrixFormat::Dense> A_matrix(rows, rows, test_batch_size);
         Matrix<ScalarType, MatrixFormat::Dense> B_matrix(rows, cols, test_batch_size);
 
@@ -144,10 +138,8 @@ protected:
             }
         }
         
-        // Keep original B for verification
         auto B_original = B_matrix.clone();
 
-        // Create matrix views (matrices are already column-major)
         if (test_batch_size == 1) {
             auto A_view = A_matrix.view();
             auto B_view = B_matrix.view();
@@ -165,7 +157,6 @@ protected:
             auto A_parent_view = A_matrix.view();
             auto B_parent_view = B_matrix.view();
             
-            // Process each batch using batch_item
             for (int b = 0; b < test_batch_size; ++b) {
                 auto A_view = A_parent_view.batch_item(b);
                 auto B_view = B_parent_view.batch_item(b);
@@ -194,68 +185,49 @@ protected:
 
 TYPED_TEST_SUITE(TrsmOperationsTest, TrsmTestTypes);
 
-// Test TRSM operation with a lower triangular matrix (no transpose)
 TYPED_TEST(TrsmOperationsTest, LowerTriangularSolveNoTrans) {
     this->performTrsmTest(Uplo::Lower, Transpose::NoTrans, 1);
 }
 
-// Test TRSM operation with a lower triangular matrix (transpose)
 TYPED_TEST(TrsmOperationsTest, LowerTriangularSolveTrans) {
     this->performTrsmTest(Uplo::Lower, Transpose::Trans, 1);
 }
 
-// Test TRSM operation with an upper triangular matrix (no transpose)
 TYPED_TEST(TrsmOperationsTest, UpperTriangularSolveNoTrans) {
     this->performTrsmTest(Uplo::Upper, Transpose::NoTrans, 1);
 }
 
-// Test TRSM operation with an upper triangular matrix (transpose)
 TYPED_TEST(TrsmOperationsTest, UpperTriangularSolveTrans) {
     this->performTrsmTest(Uplo::Upper, Transpose::Trans, 1);
 }
 
-// Test batched TRSM operation with lower triangular (no transpose)
 TYPED_TEST(TrsmOperationsTest, BatchedLowerTriangularSolveNoTrans) {
     this->performTrsmTest(Uplo::Lower, Transpose::NoTrans, this->batch_size);
 }
 
-// Test batched TRSM operation with lower triangular (transpose)
 TYPED_TEST(TrsmOperationsTest, BatchedLowerTriangularSolveTrans) {
     this->performTrsmTest(Uplo::Lower, Transpose::Trans, this->batch_size);
 }
 
-// Test batched TRSM operation with upper triangular (no transpose)
 TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveNoTrans) {
     this->performTrsmTest(Uplo::Upper, Transpose::NoTrans, this->batch_size);
 }
 
-// Test batched TRSM operation with upper triangular (transpose)
 TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
     this->performTrsmTest(Uplo::Upper, Transpose::Trans, this->batch_size);
 }
 
 // ===========================================================================
-// WP3 step 3 -- the native CTA kernel, Side::Right, called DIRECTLY.
-//
-// Nothing routes here yet (trsm_cta_max_n<T>() returns 0, so
-// RouteTable<Op::trsm,T>::supports() reports both native routes unsupported).
-// These call the kernel by hand so its correctness is settled before any
-// routing decision depends on it.
-//
-// THE ORACLE IS AN INDEPENDENT MULTIPLY-BACK, not a comparison against
-// batchlas::trsm. That is not fussiness: src/backends/netlib_lapack.cc:445-449
-// and src/backends/cublas.cc:1134-1137 perform the SAME canonical fold, so they
-// are one implementation with two spellings, and a kernel that reproduced a
-// shared fold error would agree with both. Multiplying the answer back through
-// op(A) and comparing to alpha*B tests the thing that actually matters.
-//
-// Side::Right solves X op(A) = alpha B, so the check is X op(A) == alpha B.
+// The native CTA kernel (V1), called directly rather than through the facade.
+// The oracle is an independent multiply-back, not a comparison against
+// batchlas::trsm: the vendor backends perform the same canonical fold, so a
+// kernel reproducing a shared fold error would agree with both of them.
+// evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
 // ===========================================================================
 namespace {
 
-
-// Host-side conjugate that compiles for real T as well: the drivers below are
-// instantiated for float and double too, so a bare std::conj would not build.
+// Also compiles for real T: the float and double drivers below would reject a
+// bare std::conj.
 template <typename T>
 inline T host_conj(const T& v) {
     if constexpr (batchlas::is_std_complex_v<T>) {
@@ -265,12 +237,9 @@ inline T host_conj(const T& v) {
     }
 }
 
-// Test data. THE IMAGINARY PARTS ARE THE POINT: a missing conjugation is
-// invisible on a real-valued complex matrix, and a Hermitian or symmetric
-// triangle hides a transposed-vs-conjugate-transposed confusion as well. This
-// fill is non-real, non-symmetric and non-Hermitian by construction -- the
-// imaginary part is a different function of (r,c) than the real part, and
-// neither is symmetric in r,c.
+// Must stay non-real, non-symmetric and non-Hermitian: a real-valued complex
+// triangle hides a missing conjugation, a symmetric or Hermitian one hides a
+// Trans/ConjTrans confusion.
 template <typename T>
 inline T tri_fill(int r, int c, bool diagonal) {
     using R = batchlas::float_t<T>;
@@ -314,17 +283,13 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
     Matrix<T, MatrixFormat::Dense> A(n, n, bs);
-    // Side::Right solves X op(A) = alpha B with B q x n; Side::Left solves
-    // op(A) X = alpha B with B n x q.
+    // Side::Left solves op(A) X = alpha B (B is n x q); Side::Right, X op(A) = alpha B (B is q x n).
     const int brows = (tc.side == Side::Left) ? n : q;
     const int bcols = (tc.side == Side::Left) ? q : n;
     Matrix<T, MatrixFormat::Dense> B(brows, bcols, bs);
     auto Av = A.view();
     auto Bv = B.view();
 
-    // Well-conditioned triangle, and deliberately NOT symmetric: a swapped Lc
-    // operand order (the Side::Right trap, spec section 2.1) is invisible on a
-    // symmetric triangle and wrong on this one.
     std::vector<T> a_host(static_cast<size_t>(n) * n * bs);
     std::vector<T> b_in(static_cast<size_t>(brows) * bcols * bs);
     for (int b = 0; b < bs; ++b) {
@@ -350,18 +315,13 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    // Accumulate complex in complex; a real accumulator would silently drop the
-    // imaginary part of the product and the check would pass on wrong answers.
+    // A real accumulator would drop the imaginary part and pass on wrong answers.
     using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
-    // float_t<T>, not T: std::is_same_v<T,float> is FALSE for
-    // std::complex<float>, which would judge a single-precision solve at the
-    // double tolerance. base_type is at include/batchlas/blas/enums.hh:19-27.
-    // The tolerance is a MAGNITUDE, so it stays real even when Acc is complex.
+    // float_t<T>, not T: is_same_v<T,float> is false for std::complex<float>,
+    // which would judge a single-precision solve at the double tolerance.
     const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 2e-3 : 1e-10;
 
     for (int b = 0; b < bs; ++b) {
-        // op(A) built from the DEFINITION, with no reference to the kernel's
-        // canonicalisation, so the two cannot share a fold error.
         std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
         for (int c = 0; c < n; ++c) {
             for (int r = 0; r < n; ++r) {
@@ -369,9 +329,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
                 if (!in_tri) continue;
                 T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
                 if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                // op(A)(i,j): NoTrans -> A(i,j); Trans -> A(j,i);
-                // ConjTrans -> conj(A(j,i)). Built from the DEFINITION, so it
-                // cannot share a fold error with the kernel's canonicalisation.
+                // Built from the definition, so it cannot share the kernel's fold error.
                 if (tc.transA == Transpose::NoTrans) {
                     opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
                 } else {
@@ -406,10 +364,6 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
 
 }  // namespace
 
-// The full canonical cross product: BOTH sides x uplo x transA x diag = 16
-// cells per scalar type. This is the table WP3_TRSM_SPEC.md section 2.1 folds
-// into one recurrence, and folding it wrongly is the failure mode the whole
-// design is exposed to.
 TEST(TrsmNativeCta, CanonicalCrossProductFloat) {
     for (Side sd : {Side::Left, Side::Right})
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
@@ -426,8 +380,7 @@ TEST(TrsmNativeCta, CanonicalCrossProductDouble) {
                     RunTrsmNative<double>({8, 24, 3, sd, up, tr, dg, 1.0});
 }
 
-// alpha != 1 is easy to get wrong: it scales B, once, before the subtraction,
-// not after the divide.
+// alpha scales B once, before the subtraction, not after the divide.
 TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
     for (Side sd : {Side::Left, Side::Right}) {
         RunTrsmNative<double>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
@@ -435,25 +388,23 @@ TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
     }
 }
 
-// n strictly inside its bucket exercises the zero-padded tail: rows n..N-1 must
-// contribute nothing, which is what makes the fully unrolled loop legal.
+// Rows n..N-1 of a partly filled bucket must contribute nothing; that is what
+// makes the fully unrolled loop legal.
 TEST(TrsmNativeCta, PartialBucketIsZeroPadded) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {5, 9, 13, 17, 30})
             RunTrsmNative<double>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
-// q not a multiple of the work-group size: the tail lanes must be inert, not
-// merely harmless -- they must not store.
+// With q not a multiple of the work-group size, the tail lanes must not store.
 TEST(TrsmNativeCta, RaggedRhsCount) {
     for (Side sd : {Side::Left, Side::Right})
         for (int q : {1, 7, 31, 33, 129, 257})
             RunTrsmNative<double>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
-// The largest bucket the register probe cleared. n=32 keeps x[] in registers
-// (114 float / 153 double registers, zero stack frame); n=64 does not, which is
-// why there is no 64 bucket and why n > 32 is V2's job.
+// n=32 is the largest order that keeps x[] in registers; n > 32 is V2's job.
+// evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
 TEST(TrsmNativeCta, LargestResidentOrder) {
     for (Side sd : {Side::Left, Side::Right}) {
         RunTrsmNative<float>({32, 64, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0f});
@@ -462,15 +413,9 @@ TEST(TrsmNativeCta, LargestResidentOrder) {
 }
 
 
-// V1's contract is n <= trsm_cta_max_n<T>() (32). The bucket ladder had a hole:
-// smallest_bucket_ge(33) returned 64, which the dispatch switch's `default:`
-// label collapsed onto the N=32 instantiation -- so a 33-order solve silently
-// solved the leading 32x32 system and left the last row of B untouched. It was
-// unreachable through the facade, because supports(CTA) caps the order, but the
-// direct entry is what V2 will call on its diagonal blocks, so it was one step
-// from being live.
-//
-// The contract is now enforced rather than assumed: over-capacity throws.
+// V1's contract, n <= trsm_cta_max_n<T>(), is enforced rather than assumed: an
+// over-capacity order once truncated to the leading 32x32 solve in silence.
+// evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
 TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
     const int n = 33, q = 8, bs = 1;
@@ -496,8 +441,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
 
 
 // ===========================================================================
-// V2, the blocked driver. Same independent multiply-back oracle as V1; the only
-// difference is that n exceeds the CTA capacity, so the driver blocks.
+// V2, the blocked driver: the same multiply-back oracle, with n past CTA capacity.
 // ===========================================================================
 namespace {
 template <typename T>
@@ -532,8 +476,6 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    // Accumulate complex in complex; a real accumulator would silently drop the
-    // imaginary part of the product and the check would pass on wrong answers.
     using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
     const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 5e-3 : 1e-9;
     for (int b = 0; b < bs; ++b) {
@@ -544,9 +486,6 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
                 if (!in_tri) continue;
                 T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
                 if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                // op(A)(i,j): NoTrans -> A(i,j); Trans -> A(j,i);
-                // ConjTrans -> conj(A(j,i)). Built from the DEFINITION, so it
-                // cannot share a fold error with the kernel's canonicalisation.
                 if (tc.transA == Transpose::NoTrans) {
                     opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
                 } else {
@@ -575,9 +514,43 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
 }
 }  // namespace
 
-// The crossover and the block structure. 33 is one past the capacity (two
-// blocks, the second of width 1 -- the short-final-block case); 64 is exactly
-// two full blocks; 96 is three; 100 is three plus a ragged 4.
+// Guards the group barrier between V1's SLM staging loop and the reciprocal loop
+// that reads another lane's write. Without it the answers are wrong only when the
+// work-group ladder picks more than one sub-group; every other case in this file
+// lands on wg=32, one sub-group in lock step, where the race cannot express itself.
+// evidence: docs/perf/trsm.md#the-missing-group-barrier
+namespace {
+int trsm_expected_wg(const Queue& ctx, int q, int bs) {
+    const auto dev = ctx.device();
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    int wg = 32;
+    for (int cand : {256, 128, 64, 32}) {
+        if (cand > max_wg) continue;
+        wg = cand;
+        const int64_t groups_c = (q + cand - 1) / cand;
+        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
+    }
+    return wg;
+}
+}  // namespace
+
+TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
+    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int q = 976, bs = 128;
+    ASSERT_GT(trsm_expected_wg(*probe, q, bs), 32)
+        << "this device's ladder still picks a single sub-group at q=" << q
+        << " batch=" << bs << ", so this test cannot see the defect it exists "
+           "for; raise q or batch";
+
+    // Order 48 is one full N=32 block plus a ragged N=16 one; orders that
+    // divide evenly into the CTA capacity do not reproduce the race.
+    RunTrsmBlocked<float>({48, q, bs, Side::Right, Uplo::Lower,
+                           Transpose::Trans, Diag::NonUnit, 1.0f});
+    RunTrsmBlocked<double>({48, q, bs, Side::Right, Uplo::Lower,
+                            Transpose::Trans, Diag::NonUnit, 1.0});
+}
+
 TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {33, 40, 64, 96, 100})
@@ -585,11 +558,8 @@ TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
                                     Diag::NonUnit, 1.0});
 }
 
-// ALPHA != 1 IS THE TEST THAT MATTERS HERE. alpha is applied exactly once, and
-// for blocks i>0 that happens through the trailing GEMM's BETA, not through V1.
-// Writing the natural beta = 1 computes B_i - sum(...) where alpha*B_i - sum(...)
-// is required: correct at block 0, wrong at every later block, and invisible to
-// any alpha == 1 test -- which is every other test in this file.
+// For blocks i>0 alpha rides the trailing GEMM's beta, not V1: the natural
+// beta = 1 is correct at block 0 and wrong at every later one.
 TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOncePerBlock) {
     for (Side sd : {Side::Left, Side::Right})
         for (double a : {-2.5, 0.75, 3.0})
@@ -615,25 +585,12 @@ TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
 
 
 // ===========================================================================
-// COMPLEX. Two things here are not exercised anywhere above, and each is a
-// silent wrong answer if got wrong:
-//
-//   * ConjTrans. For a real scalar it is identical to Trans, so every existing
-//     cell in this file is blind to it. Canonical::do_conj was written by
-//     canonicalise() and read by nothing until complex arrived.
-//   * The complex reciprocal. The real path divides by a scalar; complex needs
-//     an overflow-safe reciprocal (Smith), and the textbook conj(d)/|d|^2 form
-//     silently returns 0 for inputs whose true reciprocal is representable.
-//
-// The test DATA is what makes these visible. tri_fill gives every element a
-// non-zero imaginary part that is a different function of (r,c) than the real
-// part, so the triangle is neither real, nor symmetric, nor Hermitian. On a
-// real-valued complex matrix a missing conj is invisible; on a Hermitian one a
-// Trans/ConjTrans confusion is invisible.
+// Complex. Two paths reach nothing above, each a silent wrong answer: ConjTrans,
+// identical to Trans for a real scalar, and the complex reciprocal, which must be
+// the overflow-safe Smith form -- conj(d)/|d|^2 returns 0 for inputs whose true
+// reciprocal is representable.
 // ===========================================================================
 
-// All 24 canonical cells per type: 2 sides x 2 uplo x 3 transA (NoTrans, Trans,
-// ConjTrans) x 2 diag, inside the CTA capacity.
 TEST(TrsmNativeCta, ComplexCanonicalCrossProductFloat) {
     for (Side sd : {Side::Left, Side::Right})
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
@@ -652,8 +609,7 @@ TEST(TrsmNativeCta, ComplexCanonicalCrossProductDouble) {
                         {8, 24, 3, sd, up, tr, dg, std::complex<double>(1.0, 0.0)});
 }
 
-// A COMPLEX alpha with a non-zero imaginary part. A real alpha cannot catch an
-// error that drops the imaginary cross-terms of the alpha*B product.
+// A real alpha cannot catch an error that drops the imaginary cross-terms.
 TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
     for (Side sd : {Side::Left, Side::Right})
         for (Transpose tr : {Transpose::NoTrans, Transpose::ConjTrans}) {
@@ -679,8 +635,6 @@ TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
     }
 }
 
-// V2 with complex: the blocked driver's trailing GEMM is a complex GEMM, and
-// its beta carries a complex alpha.
 TEST(TrsmNativeBlocked, ComplexCrossoverAndAlpha) {
     for (Side sd : {Side::Left, Side::Right}) {
         for (int n : {33, 64, 70, 96})
@@ -703,24 +657,9 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
 }
 
 // ===========================================================================
-// TWO-LEVEL BLOCKING (WP3 step 13).
-//
-// V2's outer block width was decoupled from the CTA capacity: the trailing
-// update now runs at OUTER_NB (default 128) and each panel is solved by the old
-// nb = 32 loop against its own prefix.
-//
-// EVERY BLOCKED TEST ABOVE STOPS AT ORDER 100. With OUTER_NB = 128 that is a
-// SINGLE panel, so all of them take LO == 0 and the outer level never runs --
-// they passed unchanged against the two-level driver while proving nothing
-// about it. These orders are chosen to cross OUTER_NB:
-//
-//   129  two panels, the second one element wide (short-final-panel)
-//   256  exactly two full panels
-//   300  two full panels plus a ragged 44
-//   384  three full panels
-//
-// and BATCHLAS_TRSM_OUTER_NB is exercised too, because a tuning knob nobody
-// tests is a tuning knob that silently stops working.
+// Two-level blocking. The trailing update runs at OUTER_NB (default 128), so the
+// blocked tests above all stay inside one panel; these orders cross it.
+// evidence: docs/perf/trsm.md#the-two-level-blocked-driver
 // ===========================================================================
 
 TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
@@ -730,12 +669,8 @@ TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
                                     Diag::NonUnit, 1.0});
 }
 
-// THE ALPHA TEST FOR THE OUTER LEVEL, and it is a different bug from the inner
-// one. With two levels a block in panel p > 0 is touched by the OUTER gemm
-// (beta), then by an inner gemm (beta), then by the solve (alpha) -- three
-// chances to apply alpha and exactly one of them is right. The inner-level
-// version of this test (AlphaIsAppliedExactlyOncePerBlock) cannot see it: at
-// order <= 100 there is only ever one panel.
+// Distinct from the inner-level bug: a block in panel p > 0 is touched by the
+// outer gemm's beta, then an inner gemm's beta, then the solve's alpha.
 TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOnceAcrossPanels) {
     for (Side sd : {Side::Left, Side::Right})
         for (double a : {-2.5, 0.75})
@@ -762,10 +697,8 @@ TEST(TrsmNativeBlocked, TwoLevelFloatAndComplex) {
     }
 }
 
-// The knob itself. OUTER_NB = 64 puts four panels into an order that the
-// default would cover in two, and OUTER_NB = 32 collapses the driver back to
-// the original single-level schedule -- which must still be correct, since it
-// is what shipped before this change.
+// OUTER_NB = 32 collapses the driver back to the single-level schedule, which
+// must still be correct. evidence: docs/perf/trsm.md#tuning-knobs-and-environment
 TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
     struct EnvGuard {
         const char* key;
@@ -779,12 +712,9 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
         }
         ~EnvGuard() { had ? setenv(key, saved.c_str(), 1) : unsetenv(key); }
     };
-    // NOTE: trsm_outer_block caches the parse in a function-local static, so the
-    // FIRST blocked call in this process fixes the value. Setting it here can
-    // therefore be a no-op depending on test order -- which is precisely why
-    // this test asserts CORRECTNESS under whatever value is live rather than
-    // asserting a particular schedule. A schedule assertion would pass or fail
-    // on gtest's ordering, not on the code.
+    // trsm_outer_block caches the parse in a function-local static, so the first
+    // blocked call in the process fixes the value and this setenv may be a no-op:
+    // assert correctness under whatever value is live, never a schedule.
     for (const char* v : {"64", "32", "256"}) {
         EnvGuard g("BATCHLAS_TRSM_OUTER_NB", v);
         for (Side sd : {Side::Left, Side::Right})
@@ -794,20 +724,8 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
 }
 
 // ===========================================================================
-// float / Side::Left ACROSS THE WHOLE BLOCKED RANGE (WP3 step 14).
-//
-// These were written to cover V3, a cooperative CTA solve in which eight
-// work-items shared one solve so the order could reach 128 in registers. V3
-// WORKED and was REJECTED: it passes the register gate at N=128 in 106
-// registers -- fewer than V1 needs for N=32 -- and then measures 0.39x at order
-// 64 and 0.80x at order 128 against the V1-plus-blocking schedule it replaced,
-// with no gain at all at 256 and 512. See experiments/wp3_s14/README.md.
-//
-// The tests outgrew the kernel. They are kept because nothing else covered
-// float / Side::Left at this density of orders, and every one of them exercises
-// the blocked driver's real path: 33 is one past V1's capacity, 128 and 129
-// straddle the outer panel width, and the ragged q values drive the `live`
-// guard. The suite name is retained so the history stays greppable.
+// float / Side::Left across the blocked range -- nothing else covers that pair
+// at this density of orders.
 // ===========================================================================
 
 TEST(TrsmFloatLeftOrders, SpanningTheBlockedRange) {
@@ -824,9 +742,6 @@ TEST(TrsmFloatLeftOrders, CanonicalCrossProduct) {
                     RunTrsmBlocked<float>({n, 20, 2, Side::Left, up, tr, dg, -1.5f});
 }
 
-// alpha is applied exactly once per element of B, and with the two-level driver
-// which operation carries it depends on the panel: see the note on
-// AlphaIsAppliedExactlyOnceAcrossPanels.
 TEST(TrsmFloatLeftOrders, AlphaAcrossOrders) {
     for (float a : {-2.5f, 0.75f, 3.0f})
         for (int n : {64, 129, 200})
@@ -834,18 +749,16 @@ TEST(TrsmFloatLeftOrders, AlphaAcrossOrders) {
                                    Diag::NonUnit, a});
 }
 
-// q is the number of independent solves, and a q that is not a multiple of the
-// work-group's solve count exercises the `live` guard on both the load and the
-// store.
+// A q that is not a multiple of the work-group's solve count exercises the
+// `live` guard on both the load and the store.
 TEST(TrsmFloatLeftOrders, RaggedSolveCount) {
     for (int q : {1, 7, 31, 33, 129, 257})
         RunTrsmBlocked<float>({96, q, 2, Side::Left, Uplo::Lower, Transpose::Trans,
                                Diag::NonUnit, 1.25f});
 }
 
-// The same orders on the other side. The two sides take DIFFERENT schedules
-// (Side::Left blocks at 128, Side::Right at 32; see trsm_outer_block), which is
-// the thing a later "simplification" to one constant would quietly break.
+// The two sides take different schedules (Side::Left blocks at 128,
+// Side::Right at 32), which a later collapse to one constant would break.
 TEST(TrsmFloatLeftOrders, RightSideAlso) {
     for (int n : {64, 129, 200})
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})

@@ -250,7 +250,7 @@ void append_static_rows(std::ostringstream& out) {
         {"getrs", factorization_vendor_available<B>, false},
         {"getri", factorization_vendor_available<B>, false},
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        false},
+        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta (Phase 1) + potrf_blocked (Phase 2)
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
         {"spmm",  sparse_vendor_available<B>,        false},
