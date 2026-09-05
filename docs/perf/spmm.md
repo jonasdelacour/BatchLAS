@@ -9,36 +9,36 @@ build, and a measured refusal for the transposed arm. Hardware for every number 
 
 ### Route arms
 
-`kSpmmOrder` (`include/batchlas/blas/dispatch/route_spmm.hh:33-178`) has exactly two entries:
+`kSpmmOrder` (`include/batchlas/blas/dispatch/route_spmm.hh:33-36`) has exactly two entries:
 
 | Origin | Algorithm | bodies behind it |
 |---|---|---|
 | `Native` | `Direct` | three, in `src/sycl/spmm_native.cc`: the `NoTrans` gather (body 1), and the scale + atomic scatter pair (bodies 0 and 2) that together serve `Trans`/`ConjTrans` |
 | `Vendor` | `Auto` | `cusparseSpMM` / rocSPARSE / netlib |
 
-Body selection is in the launcher, on `transA` (`spmm_native.cc:386-611`, under the note at `:560-565`), deliberately below the
+Body selection is in the launcher, on `transA` (`spmm_native.cc:386-417`, under the note at `:560-565`), deliberately below the
 routing vocabulary — the decomposition-not-algorithm rule `gemv` already uses, so no `Algorithm` enumerator,
 `to_string(Algorithm)` case or `parse_algorithm_word` case ships. `transA` *is* in `variant_key`, so gather-vs-scatter stays
 separable in `scripts/route_diff.sh`; scale-vs-scatter does not.
 
 The env variable is `BATCHLAS_SPMM_ROUTE`, read through the shared `origin[:algorithm]` grammar
-(`route_env.hh:50-99`): `native:direct`, `native`, `direct`, `vendor`, `auto`. A misspelling is **silent** —
+(`route_env.hh:50-70`): `native:direct`, `native`, `direct`, `vendor`, `auto`. A misspelling is **silent** —
 `ParsedRouteEnv::unparsed` is discarded and every decision goes to the vendor with no message; reproduced deliberately, see
 [Measurement harness and hygiene](#measurement-harness-and-hygiene).
 
 ### The preferred window, as implemented
 
-`route_spmm.hh:65-427`, stripped of its ~140 lines of evidence comments:
+`route_spmm.hh:65-75`, stripped of its ~140 lines of evidence comments:
 
 ```cpp
 static bool preferred(Route r, const SpmmShape& s) {
-    if (!is_native(r) || r.algo != Algorithm::Direct) return false;   // :296
-    if (s.format != MatrixFormat::CSR) return false;                  // :297
-    if (s.transA != Transpose::NoTrans) return false;                 // :366
-    if constexpr (std::is_same_v<T, std::complex<float>>) {           // :412
-        if (s.transB != Transpose::NoTrans) return false;             // :413
+    if (!is_native(r) || r.algo != Algorithm::Direct) return false;   // :66
+    if (s.format != MatrixFormat::CSR) return false;                  // :67
+    if (s.transA != Transpose::NoTrans) return false;                 // :69
+    if constexpr (std::is_same_v<T, std::complex<float>>) {           // :71
+        if (s.transB != Transpose::NoTrans) return false;             // :72
     }
-    return true;                                                      // :426
+    return true;                                                      // :74
 }
 ```
 
@@ -58,7 +58,7 @@ of apparent churn; `experiments/sparse_spmm/route_census.py` keys on the decisio
 
 ### supports(), and what is deliberately not in it
 
-`route_spmm.hh:42-259`. Correctness gates only: CSR format (`:198`); no heterogeneous *dense* batch (`:211` — a CSR view is never
+`route_spmm.hh:42-61`. Correctness gates only: CSR format (`:198`); no heterogeneous *dense* batch (`:211` — a CSR view is never
 heterogeneous in the `active_rows_` sense, and per-item `nnz` variation is handled exactly through the row offsets); no negative
 extent, no empty batch (`:217`); then the capability flag for the body that would actually run (`:250-251`). Three absences are WP8
 deliverables:
@@ -69,7 +69,7 @@ deliverables:
 * **No transpose refusal.** All nine `(transA, transB)` spellings are served. Refusing `transB` would foreclose the caller-side
   layout lever: handing the dense block as `transB = Trans` collapses the gather's `op(B)` touch from `nrhs` 32-byte sectors per
   nonzero to `ceil(nrhs*sizeof(T)/32)`.
-* **No `nnz` field on `SpmmShape`** (`route_spmm.hh:32-141`). `MatrixView::nnz()` is the per-item *capacity* (the batch maximum);
+* **No `nnz` field on `SpmmShape`** (`route_spmm.hh:30-31`). `MatrixView::nnz()` is the per-item *capacity* (the batch maximum);
   the honest per-item `nnz(b)` reads `row_offsets`, device memory the same builder touches from `spmm_buffer_size`, where a read is
   a segfault rather than a wrong route. This single constraint kills both rejected wider clauses below.
 
@@ -85,7 +85,7 @@ clock. Named cells are `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) la
 (2048, 16, 25, 128) LOBPCG.
 
 * **Event timing is deliberately not installed.** `make_event_timed_kernel_ms` costs a recorded ~0.36 ms per call
-  (recorded at `VENDOR_INDEPENDENCE_PLAN.md:1949`; `spmm_benchmark.cc:7` cites this section back); cell L's
+  (recorded at `VENDOR_INDEPENDENCE_PLAN.md:1949`; `spmm_benchmark.cc:6` cites this section back); cell L's
   ideal-traffic roof is 22.9 µs, so event timing would be 15x the thing being measured.
 * **The vendor's per-call chain is inside the timed region for both arms**: `setStream`, the `SpmmCsrBatchPlan` host walk over every
   item's row offsets, the `cusparseSpMM_bufferSize` **re-query on every call**, the `BumpAllocator` carve. No caller can hoist it —
@@ -242,7 +242,7 @@ The loss switches on between batch 4 and 8 and is **worst in the middle of the l
 b=512), so no batch floor fixes it; only `complex<float>` crosses, so the type conditional is exactly as narrow as the data. **The
 cost is recorded rather than hidden**: at batch 1-4 the excluded family is a 1.7-1.9x native win the clause now declines, and buying
 it back would take a `batch <= 4` sub-clause on a type-conditional, on a shape with no in-tree caller, one ladder rung wide.
-**Mechanism, hypothesis only, not confirmed by profile**: `kNCmax<Cx<float>>` is 8 (`spmm_native.cc:49-92`), so `nrhs=25` needs
+**Mechanism, hypothesis only, not confirmed by profile**: `kNCmax<Cx<float>>` is 8 (`spmm_native.cc:49-52`), so `nrhs=25` needs
 `ceil(25/8) = 4` passes over A with 7 idle accumulator lanes while `nrhs=32` needs 4 with none — and `nrhs=32` measures 1.157-1.159
 against `nrhs=25`'s 1.714-1.731.
 
@@ -302,7 +302,7 @@ median 1.030, worst **3.011**.
 | `... AND nrhs <= 2 AND type != cdouble` | 111 | PASSES | 1.023 | **rejected anyway** — see below |
 | `... AND nrhs <= 4 AND type != cdouble` | 150 | FAILS 1/150 | 1.101 | double m=2048 nnz/row=16 nrhs=4 b=512, p1=1.101 p2=1.101 |
 
-Every refuting cell in that table is on the **scattered** pattern (`pat=1`), the worst one included. `route_spmm.hh:69-341` and
+Every refuting cell in that table is on the **scattered** pattern (`pat=1`), the worst one included. `route_spmm.hh:69-73` and
 `VENDOR_INDEPENDENCE_PLAN.md`'s negative-results list both label the 3.011 cell "banded"; that is a mislabel — `verdict.txt` gives
 it `pat=1`, its row in `pass{1,2}/joined.csv` carries the tag `lobpcg_ta1`, and that sweep passes pattern 1 explicitly
 (`run_all.sh:34`, `LOBPCG_ARGS="... 0 0 1"`; `spmm_benchmark.cc:31-143` fixes `kBanded = 0` / `kRandom = 1`, and `:99` says so in
@@ -390,12 +390,15 @@ strides, alpha/beta corners) is the first suite to cover their axes. Prior cover
 
 ### The eleventh blind guard
 
-The four deliberate breaks are logged at `tests/spmm_tests.cc:1356-1510`. **B4 (`scatterBound`) came back GREEN over all 352 cases
+The four deliberate breaks are logged at `tests/spmm_tests.cc:1356-1510` **in the archived
+revision** — the comment pass removed the log block from the tree, so read it with
+`git show perf-evidence/vendor-independence:tests/spmm_tests.cc`. The tests it names are still
+in-tree (`PaddingAboveNnzIsNotReadTrans` and its controls). **B4 (`scatterBound`) came back GREEN over all 352 cases
 the first time it was run** — the transposed `nnz` bound was completely unguarded, and a kernel reading uninitialised padding on
 every transposed call would have shipped.
 
 What made the guard blind: `PaddingAboveNnzIsNotReadTrans` poisoned the padding with a NaN value at an **out-of-range** column index
-(2^30), and the scatter's own range guard (`spmm_native.cc:367-542`) `continue`s **before** `av` is multiplied — so both halves of
+(2^30), and the scatter's own range guard (`spmm_native.cc:367-375`) `continue`s **before** `av` is multiplied — so both halves of
 the poison went in the bin together and the test was green because of a kernel guard, not the property it named. Two control runs
 established that rather than argued it: broken bound + range guard deleted → the case **segfaults** (exit 139, on the `double`
 instantiation), so the over-read is real and lethal; correct bound + range guard deleted → 352/352 green, so deleting the guard is
@@ -428,7 +431,7 @@ form of the transposed over-read had no twin at all. Four rules this produced:
 Two further deliberate properties: the tolerance denominator is a backward-error scale (sum of `|a|*|b|` over the contributions to
 that element, floored at 1), never `|expected|`, because the transposed path is an atomic scatter and is **not** bitwise
 reproducible run to run; and a transposed case whose backend *throws* is SKIPPED, not failed — disabled when the pin names
-**native** (`tests/spmm_tests.cc:339-512`: `pin_text` containing `native`, or equal to `direct`/`cta`/`blocked`), so pinned-route
+**native** (`tests/spmm_tests.cc:339-343`: `pin_text` containing `native`, or equal to `direct`/`cta`/`blocked`), so pinned-route
 break runs cannot be silently skipped past. Note the narrowness, which is itself a finding: the file's own header comment at `:92`
 still says "disabled when `BATCHLAS_SPMM_ROUTE` is set", and keying it that way is what **turned 92 pre-existing `Backend::NETLIB`
 skips into 92 failures** under `BATCHLAS_SPMM_ROUTE=vendor` — netlib hard-throws on any transpose, so a vendor pin must leave the
@@ -460,9 +463,11 @@ at all: `cusparse.cc` checks no cuSPARSE status, so
   `src/dispatch/entry_points/sparse.cc:59-110`'s route-neutrality comment states that `preferred()` "is false for every route, every
   type and every shape (route_spmm.hh:65)" and derives byte-identical vendor routing from that; the shipped `preferred()` is not
   all-false, the code is still correct, but the justification no longer holds and the line reference now points into a block that
-  says the opposite. (b) `tests/spmm_tests.cc:27` says the transposed refusal-skip is "DISABLED when `BATCHLAS_SPMM_ROUTE` is set";
-  the code at `:508-512` disables it only for a **native** pin, and the loose form is what turned 92 NETLIB skips into 92 failures.
-  (c) `route_spmm.hh:69-341` (and the plan's negative-results list) call the worst transposed cell "banded"; `verdict.txt` and the
+  says the opposite. (b) is **closed**: the comment saying the transposed refusal-skip was "DISABLED when `BATCHLAS_SPMM_ROUTE` is set" no longer
+  exists — the comment pass removed it, and the skip at `tests/spmm_tests.cc:339-353` tests for a **native** pin, which is the
+  correct form. (The loose wording is what turned 92 NETLIB skips into 92 failures; read it at
+  `git show perf-evidence/vendor-independence:tests/spmm_tests.cc` line 27.)
+  (c) `route_spmm.hh:69-73` (and the plan's negative-results list) call the worst transposed cell "banded"; `verdict.txt` and the
   sweep's own arguments make it `pat=1`, scattered.
 * **Coverage blindness, known and accepted**: `variant_key` packs only `uplo/side/diag/transA/transB` and `shape_class` buckets
   `max(m,n,k)` and batch by power of two, so a CSR and a Dense `spmm` at the same extents would collapse into one first-writer-wins
