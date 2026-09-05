@@ -45,6 +45,7 @@
 // only enums/matrix/queue, and gemm_variant.hh stopped including linalg-impl.hh
 // (its sole CUDA tie) in the same step.
 #include "../../backends/gemm_variant.hh"
+#include "../../backends/gemm_heterogeneous.hh"
 #include "../../sycl/gemm_kernels.hh"
 
 // WP1 S6: the four level-3 custom-route gates live here now, not in cublas.cc.
@@ -100,14 +101,35 @@ Event gemm(Queue& ctx,
         // resolve_route already has a branch for it (route_resolve.hh: a
         // requested vendor that does not exist falls back to the ordinary
         // automatic choice rather than being honoured).
+        // WP2 C2. A heterogeneous batch is handled BEFORE routing, and has to
+        // be: no strided-batched call can serve members of differing shape, so
+        // the question is not which kernel but how the batch is walked. The
+        // loop, the m==0/n==0 skips and the k==0 -> scale(beta) substitution
+        // are shared verbatim with cublas.cc (WP2 C1) rather than restated --
+        // this codebase has twice paid for restating one behaviour twice.
+        //
+        // Recursion is not a hazard here, unlike the level-3 seam in WP1: each
+        // batch_item() is HOMOGENEOUS by construction, so the inner call takes
+        // the ordinary path below and cannot re-enter this branch.
+        if (backend::gemm_has_heterogeneous_batch(A, B, C)) {
+            return backend::detail::gemm_heterogeneous_loop<T>(
+                ctx, A, B, C, beta, transA, transB,
+                [&](const MatrixView<T, MatrixFormat::Dense>& a,
+                    const MatrixView<T, MatrixFormat::Dense>& b,
+                    const MatrixView<T, MatrixFormat::Dense>& c) {
+                    return ::batchlas::gemm<Back, T>(ctx, a, b, c, alpha, beta,
+                                                     transA, transB, precision);
+                });
+        }
+
         const auto route = backend::gemm_route<T>(ctx, A, B, C, transA, transB,
                                                   precision, /*vendor_available=*/false);
         if (dispatch::is_native(route)) {
             return sycl_gemm::gemm_custom<T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }
         // Still honest about the gap: shapes the native kernel does not serve
-        // (heterogeneous batches, non-Default precision, degenerate dims) have
-        // no route at all without a vendor, and say so by name.
+        // (non-Default precision, degenerate dims) have no route at all without
+        // a vendor, and say so by name.
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::gemm, Back, dispatch::kLevel3Library<Back>);
     } else {
