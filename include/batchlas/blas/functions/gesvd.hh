@@ -14,6 +14,8 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/no_route.hh>
+#include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_gesvd.hh>
 #include <batchlas/blas/queue-dispatch.hh>
@@ -196,6 +198,36 @@ size_t gesvd_vendor_buffer_size(Queue& ctx,
 
 } // namespace batchlas::backend
 
+
+namespace batchlas::blas::dispatch::detail {
+
+// The vendor call, gated on the vendor actually being compiled in.
+//
+// Without this, a build with no cuSOLVER / rocSOLVER / netlib library leaves backend::gesvd_vendor<B, T> undefined and the LINK fails -- which is
+// the state WP0 exists to remove. Being `if constexpr`, the vendor call is not
+// compiled at all when the library is absent, so there is no symbol to satisfy.
+template <Backend B, typename T, typename... Args>
+Event gesvd_vendor_or_throw(Args&&... args) {
+    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
+        batchlas::dispatch::throw_no_vendor_route<T>(
+            batchlas::dispatch::Op::gesvd, B, batchlas::dispatch::kSolverLibrary<B>);
+    } else {
+        return batchlas::backend::gesvd_vendor<B, T>(std::forward<Args>(args)...);
+    }
+}
+
+template <Backend B, typename T, typename... Args>
+size_t gesvd_vendor_buffer_size_or_throw(Args&&... args) {
+    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
+        batchlas::dispatch::throw_no_vendor_route<T>(
+            batchlas::dispatch::Op::gesvd, B, batchlas::dispatch::kSolverLibrary<B>);
+    } else {
+        return batchlas::backend::gesvd_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
+    }
+}
+
+} // namespace batchlas::blas::dispatch::detail
+
 namespace batchlas::blas::dispatch {
 
 namespace detail {
@@ -285,7 +317,7 @@ inline Event gesvd_dispatch(Queue& ctx,
 
     size_t need_ws = 0;
     if (d::is_vendor(chosen)) {
-        need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+        need_ws = detail::gesvd_vendor_buffer_size_or_throw<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else if (chosen.algo == d::Algorithm::Jacobi) {
         need_ws = gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     } else if (chosen.algo == d::Algorithm::CTA) {
@@ -318,7 +350,7 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (d::is_vendor(chosen)) {
-        return backend::gesvd_vendor<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+        return detail::gesvd_vendor_or_throw<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
     // The explicit branch is not optional: the tail of this function is an
@@ -364,7 +396,7 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
         : detail::gesvd_route<T>(ctx, A, jobu, jobvh, hermitian_uplo);
 
     if (d::is_vendor(chosen)) {
-        return backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
+        return detail::gesvd_vendor_buffer_size_or_throw<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
     if (chosen.algo == d::Algorithm::Jacobi) {

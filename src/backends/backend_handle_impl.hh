@@ -6,8 +6,14 @@
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
+#endif
+#if BATCHLAS_HAS_CUBLAS
     #include <cublas_v2.h>
+#endif
+#if BATCHLAS_HAS_CUSPARSE
     #include <cusparse.h>
+#endif
+#if BATCHLAS_HAS_CUSOLVER
     #include <cusolverDn.h>
 #endif
 
@@ -26,27 +32,27 @@ struct BackendMatrixHandle {
 
     BackendMatrixHandle(const Matrix<T, MType>& matrix) : BackendMatrixHandle(matrix.view()) {}
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
+    #if BATCHLAS_HAS_CUSPARSE
         constexpr inline operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
         constexpr inline operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
     #endif
 
-    #if BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCSPARSE
         constexpr inline operator rocsparse_dnmat_descr() const { return rocsparse_descr_; }
         constexpr inline operator rocsparse_spmat_descr() const { return rocsparse_descr_sp_; }
     #endif
 
 private:
     void initialize(const MatrixView<T, MType>& matrix) {
-        #if BATCHLAS_HAS_CUDA_BACKEND
+        #if BATCHLAS_HAS_CUSPARSE
             initialize_cuda_descriptors(matrix);
         #endif
-        #if BATCHLAS_HAS_ROCM_BACKEND
+        #if BATCHLAS_HAS_ROCSPARSE
             initialize_rocm_descriptors(matrix);
         #endif
     }
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
+    #if BATCHLAS_HAS_CUSPARSE
         void initialize_cuda_descriptors(const MatrixView<T, MType>& matrix) {
             if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
@@ -66,7 +72,7 @@ private:
         cusparseSpMatDescr_t cusparse_descr_sp_ = nullptr;
     #endif
 
-    #if BATCHLAS_HAS_ROCM_BACKEND
+    #if BATCHLAS_HAS_ROCSPARSE
         static constexpr rocsparse_datatype rocsparse_value_type() {
             if constexpr (std::is_same_v<T, float>) {
                 return rocsparse_datatype_f32_r;

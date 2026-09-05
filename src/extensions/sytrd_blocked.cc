@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <batchlas/blas/dispatch/route_compiled.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -811,8 +812,11 @@ Event sytrd_blocked_impl(Queue& ctx,
     // route, but its scratch is 16 bytes per element, halving the headroom in
     // the fit check below, and none of it has been measured. Admit it when it
     // has been -- guessing is how the 7.8x inversion above got written down.
+    // `B == Backend::CUDA` here meant "the syr2k tile kernel is wired on this
+    // route", not anything about NVIDIA. Asked properly, so a vendor-free build
+    // -- same Backend::CUDA, tile TU absent -- gets the right answer.
     constexpr bool rank2k_trailing_update_supported =
-        (B == Backend::CUDA) &&
+        dispatch::level3_tile_kernels_compiled<B> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&

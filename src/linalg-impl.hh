@@ -115,12 +115,15 @@ namespace batchlas{
             return static_cast<rocblas_side>(side == Side::Left ? rocblas_side_left : rocblas_side_right);
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS){
             return static_cast<CBLAS_SIDE>(
                 side == Side::Left ? CblasLeft : CblasRight
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 side == Side::Left ? 'L' : 'R'
             );
@@ -181,12 +184,15 @@ namespace batchlas{
             return diag == Diag::NonUnit ? rocblas_diagonal_non_unit : rocblas_diagonal_unit;
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_DIAG>(
                 diag == Diag::NonUnit ? CblasNonUnit : CblasUnit
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 diag == Diag::NonUnit ? 'N' : 'U'
             );
@@ -216,12 +222,15 @@ namespace batchlas{
             return static_cast<rocsparse_order>(layout == Layout::RowMajor ? rocsparse_order_row : rocsparse_order_column);
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_LAYOUT>(
                 layout == Layout::RowMajor ? CblasRowMajor : CblasColMajor
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<lapack_int>(
                 layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
@@ -260,12 +269,15 @@ namespace batchlas{
             return uplo == Uplo::Upper ? rocsparse_fill_mode_upper : rocsparse_fill_mode_lower;
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_UPLO>(
                 uplo == Uplo::Upper ? CblasUpper : CblasLower
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 uplo == Uplo::Upper ? 'U' : 'L'
             );
@@ -318,12 +330,15 @@ namespace batchlas{
             }
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS) {
             return static_cast<CBLAS_TRANSPOSE>(
                 trans == Transpose::NoTrans ? CblasNoTrans : trans == Transpose::ConjTrans ? CblasConjTrans : CblasTrans
             );
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             return static_cast<char>(
                 trans == Transpose::NoTrans ? 'N' : trans == Transpose::ConjTrans ? 'C' : 'T'
             );
@@ -416,7 +431,7 @@ namespace batchlas{
             }
         } else
 #endif
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CBLAS
         if constexpr (B == BackendLibrary::CBLAS) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float**>(ptr);
@@ -473,7 +488,10 @@ namespace batchlas{
             } else if constexpr (std::is_same_v<T, std::complex<double>>) {
                 return reinterpret_cast<void*>(ptr);
             }
-        } else if constexpr (B == BackendLibrary::LAPACKE) {
+        } else
+#endif
+#if BATCHLAS_HAS_LAPACKE
+        if constexpr (B == BackendLibrary::LAPACKE) {
             if constexpr (std::is_same_v<T, float>) {
                 return reinterpret_cast<float*>(ptr);
             } else if constexpr (std::is_same_v<T, double>) {

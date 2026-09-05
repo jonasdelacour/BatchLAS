@@ -95,21 +95,10 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
+    namespace backend {
 
     template <Backend B, typename T>
-    Event gemv(Queue& ctx,
+    Event gemv_vendor(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
         const VectorView<T>& X,
         const VectorView<T>& Y,
@@ -134,15 +123,24 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trsm(Queue& ctx,
+    Event trsm_vendor(Queue& ctx,
                const MatrixView<T,MatrixFormat::Dense>& A,
                const MatrixView<T,MatrixFormat::Dense>& Bmat,
-               T alpha,
                Side side,
                Uplo uplo,
                Transpose transA,
-               Diag diag) {
+               Diag diag,
+               T alpha) {
+        // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
+        // alpha LAST, unlike the public trsm, which takes it third. The two
+        // orders coexisted for as long as each TU declared its own public trsm;
+        // now that one declaration serves every backend, they have to agree.
+
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
@@ -163,8 +161,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syrk(Queue& ctx,
+    Event syrk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& C,
                T alpha,
@@ -230,8 +232,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syr2k(Queue& ctx,
+    Event syr2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& C,
@@ -305,8 +311,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trmm(Queue& ctx,
+    Event trmm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -416,20 +426,22 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
     #define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
+    template Event backend::gemm_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
     #define GEMV_INSTANTIATE(fp) \
-    template Event gemv<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
+    template Event backend::gemv_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
     #define TRSM_INSTANTIATE(fp) \
-    template Event trsm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
+    template Event backend::trsm_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, Side, Uplo, Transpose, Diag, fp);
     #define TRMM_INSTANTIATE(fp) \
-    template Event trmm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
+    template Event backend::trmm_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
     #define SYRK_INSTANTIATE(fp) \
-    template Event syrk<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
+    template Event backend::syrk_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
     #define SYR2K_INSTANTIATE(fp) \
-    template Event syr2k<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
+    template Event backend::syr2k_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
 
     // syrk is constrained to RealScalar T — only instantiate for real types.
     #define BLAS_INSTANTIATE(fp) \

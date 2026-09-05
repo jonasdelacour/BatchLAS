@@ -274,6 +274,37 @@ if(BATCHLAS_SMOKE_TEST_TARGETS)
 endif()
 
 # ---------------------------------------------------------------------------
+# batchlas_coverage: what this build can do, and what a run reached.
+#
+#   cmake --build build --target batchlas_coverage
+#
+# Writes build/coverage.csv. Two kinds of row:
+#
+#   linked,<op>,,<backend>,...   -- STATIC. What is compiled in. Exact, needs no
+#                                   GPU and no test run, and is the planning
+#                                   input: it names the ops with no native
+#                                   kernel at all.
+#   miss,<op>,<scalar>,...       -- a call that found no route, with the library
+#                                   that would have served it.
+#   reached,<op>,...             -- DYNAMIC, per shape_class. Present only in a
+#                                   build configured with
+#                                   -DBATCHLAS_ENABLE_COVERAGE=ON; see
+#                                   dispatch/coverage.hh for why it is opt-in.
+#
+# Run it against a vendor-free build to turn VENDOR_FREE_BASELINE.md's list of
+# failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
+# suites, and the suite list cannot tell you that.
+add_custom_target(batchlas_coverage
+    COMMAND ${CMAKE_COMMAND} -E env
+            BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
+            ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E echo "coverage table: ${CMAKE_BINARY_DIR}/coverage.csv"
+    DEPENDS ${TEST_TARGETS}
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+
+# ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.
 #
 # Everything above tests the library from inside its own build tree, where the

@@ -217,7 +217,12 @@ TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
                                          C_custom.view(),
                                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 } catch (const std::runtime_error& err) {
+#if BATCHLAS_HAS_CUBLAS
+                    // syr2k_cublasdx::available() is defined in a TU compiled
+                    // only when cuBLAS is present; without it there is nothing
+                    // to assert absent.
                     EXPECT_FALSE(batchlas::backend::syr2k_cublasdx::available());
+#endif
                     EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYR2K_VARIANT=cublasdx"), std::string::npos);
                     return;
                 }

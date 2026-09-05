@@ -147,7 +147,9 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
                                     C_custom.view(),
                                     {.alpha = alpha, .diag = diag}).wait();
             } catch (const std::runtime_error& err) {
+#if BATCHLAS_HAS_CUBLAS
                 EXPECT_FALSE(batchlas::backend::trmm_cublasdx::available());
+#endif
                 EXPECT_NE(std::string(err.what()).find("BATCHLAS_TRMM_VARIANT=cublasdx"), std::string::npos);
                 return;
             }

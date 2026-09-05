@@ -90,33 +90,8 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend B, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
-               const MatrixView<T, MFormat>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B_mat,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               Span<std::byte> workspace) {
-        return backend::spmm_vendor<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB, workspace);
-    }
-
-    template <Backend B, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
-                            const MatrixView<T, MFormat>& A,
-                            const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                            const MatrixView<T, MatrixFormat::Dense>& C,
-                            T alpha,
-                            T beta,
-                            Transpose transA,
-                            Transpose transB) {
-        return backend::spmm_vendor_buffer_size<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB);
-    }
-
     #define SPMM_INSTANTIATE(fp, F) \
-    template Event spmm<Backend::CUDA, fp, F>( \
+    template Event backend::spmm_vendor<Backend::CUDA, fp, F>( \
         Queue&, \
         const MatrixView<fp, F>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
@@ -124,7 +99,7 @@ namespace batchlas {
         fp, fp, Transpose, Transpose, Span<std::byte>);
     
     #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t spmm_buffer_size<Backend::CUDA, fp, F>( \
+    template size_t backend::spmm_vendor_buffer_size<Backend::CUDA, fp, F>( \
         Queue&, \
         const MatrixView<fp, F>&, \
         const MatrixView<fp, MatrixFormat::Dense>&, \

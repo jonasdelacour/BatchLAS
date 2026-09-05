@@ -197,12 +197,12 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		// stebz's wg-clamped strided slot loop (wg = min(256, max_wanted)), so
 		// that gap was precisely the one this test was widened to close.
 		{
-			auto ws_ref = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<B>(*this->ctx,
+			auto ws_ref = UnifiedVector<std::byte>(batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, Scalar>(*this->ctx,
 																A_ref.view(),
 																W_ref.to_span(),
 																JobType::NoEigenVectors,
 																Uplo::Lower));
-			backend::syev_vendor<B>(*this->ctx,
+			batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Scalar>(*this->ctx,
 							A_ref.view(),
 							W_ref.to_span(),
 							JobType::NoEigenVectors,

@@ -25,16 +25,18 @@ if(BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS)
     )
 endif()
 
-# mkl.cc has never been compiled -- this block has been commented out for its
-# whole history -- while Backend::MKL is still reachable in with_backend() and
-# still instantiated by several extension TUs. Wiring an enum value to nothing
-# is precisely the defect this work package exists to remove; the spec's S5
-# deletes Backend::MKL outright rather than pretending it is a backend.
-if(BATCHLAS_HAS_ONEMKL)
-    #list(APPEND BACKEND_SOURCES
-    #    mkl.cc
-    #)
-endif()
+# mkl.cc is DELETED as of S5, along with this block.
+#
+# It had never been compiled -- the list(APPEND) here was commented out for its
+# whole history -- yet it carried its own copies of the public gemm/gemv/trsm
+# definitions. S5 moves those definitions out of every vendor TU, and keeping a
+# fourth, uncompiled, silently diverging copy would have made each remaining
+# op's move harder for no benefit. It is also one of the four TUs named in the
+# spec's Risk 1, so deleting it removes a quarter of that risk outright.
+#
+# Backend::MKL the ENUM VALUE is untouched: it is the GPU-backend alias in
+# tests/test_utils.hh and across the benchmarks, so retiring it is a separate,
+# wider change (the spec's Backend-narrowing), not part of the facade move.
 
 if(BATCHLAS_HAS_CUBLAS)
     list(APPEND BACKEND_CUDA_SOURCES cublas.cc)
