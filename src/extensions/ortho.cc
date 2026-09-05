@@ -176,10 +176,10 @@ namespace batchlas {
         constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
         // "syrk reaches the gram tile kernel on this route", not "this is NVIDIA".
         const bool gram_via_syrk =
-            dispatch::level3_tile_kernels_compiled<B> && gram_is_real &&
+            dispatch::level3_tile_route_available<B, T> && gram_is_real &&
             k <= gram_max_k && !gram_pinned_to_gemm;
         auto gram_into_C = [&](const auto& in_mat) {
-            if constexpr (dispatch::level3_tile_kernels_compiled<B> && gram_is_real) {
+            if constexpr (dispatch::level3_tile_route_available<B, T> && gram_is_real) {
                 if (gram_via_syrk) {
                     return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
                 }

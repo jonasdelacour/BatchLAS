@@ -286,10 +286,15 @@ endif()
 #                                   kernel at all.
 #   miss,<op>,<scalar>,...       -- a call that found no route, with the library
 #                                   that would have served it.
-#   reached,<op>,...             -- DYNAMIC, per shape_class. Present only in a
-#                                   build configured with
-#                                   -DBATCHLAS_ENABLE_COVERAGE=ON; see
-#                                   dispatch/coverage.hh for why it is opt-in.
+#   reached,<op>,...             -- DYNAMIC, per shape_class: the route the
+#                                   resolver actually returned. Recorded by any
+#                                   build whenever BATCHLAS_COVERAGE_OUT is set,
+#                                   which this target sets. No special configure
+#                                   step -- see dispatch/coverage.hh for why the
+#                                   compile-time option was removed.
+#
+# scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
+# change is held to "no dispatch decision moved".
 #
 # Run it against a vendor-free build to turn VENDOR_FREE_BASELINE.md's list of
 # failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
@@ -298,6 +303,10 @@ add_custom_target(batchlas_coverage
     COMMAND ${CMAKE_COMMAND} -E env
             BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
             ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # Each test BINARY writes its own shard. Merging is not optional: a single
+    # shared file meant every process truncated the last, so this target used to
+    # report the rows of whichever binary finished last.
+    COMMAND ${PROJECT_SOURCE_DIR}/scripts/coverage_merge.sh ${CMAKE_BINARY_DIR}/coverage.csv
     COMMAND ${CMAKE_COMMAND} -E echo "coverage table: ${CMAKE_BINARY_DIR}/coverage.csv"
     DEPENDS ${TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

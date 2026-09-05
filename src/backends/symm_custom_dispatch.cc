@@ -1,9 +1,15 @@
 #include "symm_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "symm_cublasdx_fused.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
+#include "level3_coverage.hh"
+#include "level3_fused.hh"
+#include "level3_vendor_fallback.hh"
+
+// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
+// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
+// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
+// queue-dispatch.hh.
+#include <batchlas/blas/functions/gemm.hh>
 #include "triangular_expand.hh"
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -109,7 +115,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
     }
 
     if (side == Side::Left) {
-        return gemm_cublasdx(ctx,
+        return ::batchlas::gemm<Backend::CUDA, float>(ctx,
                              expanded,
                              B,
                              C,
@@ -120,7 +126,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
                              ComputePrecision::Default);
     }
 
-    return gemm_cublasdx(ctx,
+    return ::batchlas::gemm<Backend::CUDA, float>(ctx,
                          B,
                          expanded,
                          C,
@@ -157,50 +163,36 @@ Event symm_cuda_custom(Queue& ctx,
                        float beta,
                        Side side,
                        Uplo uplo) {
+    // WP1 S0 instrumentation -- beside every return, never in place of one, and
+    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    const auto rec = [&](dispatch::Route taken, bool native_supported) {
+        detail::record_level3_route(dispatch::Op::symm, taken,
+                                    C.rows(), C.cols(), A.rows(),
+                                    A.batch_size(), native_supported,
+                                    {uplo, side, Diag::NonUnit, Transpose::NoTrans});
+    };
+
     if (!symm_problem_supported(A, B, C, side)) {
-        return symm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, side, uplo);
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        return detail::symm_vendor_fallback(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    const auto variant = cublasdx_gemm_select_variant(side == Side::Left ? A : B,
-                                                      side == Side::Left ? B : A,
-                                                      C,
-                                                      Transpose::NoTrans,
-                                                      Transpose::NoTrans);
-    if (detail::cublasdx_variant_needs_fallback(variant, symm_cublasdx::available())) {
-        return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). Both of its
+    // non-Ran outcomes mean the same thing for symm -- fall back to the
+    // expansion -- but they are kept distinct at the seam because syr2k and
+    // trmm react to them differently.
+    auto fused = detail::symm_fused_try(ctx, A, B, C, alpha, beta, side, uplo);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
     }
 
-    symm_cublasdx::SymmLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.b_ptr = B.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldb = B.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_b = B.stride();
-    desc.stride_c = C.stride();
-    desc.m = C.rows();
-    desc.n = C.cols();
-    desc.k = A.rows();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-    desc.beta = beta;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("symm_cuda_custom.fused");
-    const cudaError_t status = symm_cublasdx::launch_float(variant,
-                                                            desc,
-                                                            side,
-                                                            uplo,
-                                                            detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYMM launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    // symm's only portable kernel is the mirrored expansion; everything after
+    // it is a GEMM. ExpandGemm names that honestly -- and note it is NOT a
+    // claim that the GEMM is native, which is what WP1 S5 has to make true.
+    rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
+    return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
 }
+
 
 } // namespace batchlas::backend

@@ -17,6 +17,7 @@
 
 #include "gemm_cublasdx_dispatch.hh"
 #include "gemm_variant.hh"
+#include "level3_coverage.hh"
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
 #include "syrk_custom_dispatch.hh"
@@ -264,13 +265,11 @@ namespace batchlas {
                       T beta,
                       Side side,
                       Uplo uplo) {
-        if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (symm_use_cuda_custom(ctx, A, B, C, side, uplo)) {
-                    return symm_cuda_custom(ctx, A, B, C, alpha, beta, side, uplo);
-                }
-            }
-        }
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
 
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
@@ -759,11 +758,17 @@ namespace batchlas {
                       Uplo uplo,
                       Transpose transA) {
         if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
-                    return syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
-                }
-            } else {
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
+            //
+            // The NON-float gram route below stays: it is reachable only from
+            // here, so double and complex syrk still have no native route in a
+            // vendor-free build. That is why WP1 S7 refuses to flip
+            // level3_tile_kernels_compiled to a bare `true`.
+            if constexpr (!std::is_same_v<T, float>) {
                 // Everything that is not float reaches the single-tile Gram
                 // kernel only. It is the one route here whose staging and
                 // fragment loads are not written around a 128-bit packet, so it
@@ -878,11 +883,11 @@ namespace batchlas {
                     throw std::runtime_error("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
                 }
             }
-            if constexpr (std::is_same_v<T, float>) {
-                if (syr2k_use_cuda_custom(ctx, A, B, C, uplo, transA)) {
-                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
-                }
-            }
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
         }
 
         return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
@@ -1001,11 +1006,15 @@ namespace batchlas {
                     throw std::runtime_error("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
                 }
             }
-            if constexpr (std::is_same_v<T, float>) {
-                if (trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
-                    return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
-                }
-            } else {
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
+            //
+            // The NON-float tile route below stays, and is reachable only from
+            // here -- see the syrk note and WP1 S7.
+            if constexpr (!std::is_same_v<T, float>) {
                 // The tile kernel is type-generic; only its routing was ever
                 // float. The alternative for double and complex is the same
                 // expansion-plus-GEMM as for float, which is strictly more work

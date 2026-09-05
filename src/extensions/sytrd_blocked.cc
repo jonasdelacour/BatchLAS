@@ -816,7 +816,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     // route", not anything about NVIDIA. Asked properly, so a vendor-free build
     // -- same Backend::CUDA, tile TU absent -- gets the right answer.
     constexpr bool rank2k_trailing_update_supported =
-        dispatch::level3_tile_kernels_compiled<B> &&
+        dispatch::level3_tile_route_available<B, T> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&

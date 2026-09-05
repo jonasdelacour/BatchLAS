@@ -20,6 +20,7 @@
 // -- which is what makes an op and its *_buffer_size query reach the same route
 // by construction rather than by a comment asking them to.
 
+#include <batchlas/blas/dispatch/coverage.hh>
 #include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas::dispatch {
@@ -33,7 +34,8 @@ struct RouteTable;
 // Hermitian flag -- passes a struct deriving from it, rather than growing
 // OpShape into a union of every op's arguments.
 template <Op O, typename T, typename Shape>
-inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
+inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
+                                          bool vendor_available = true) {
     using Table = RouteTable<O, T>;
 
     // The choice with nobody forcing anything.
@@ -107,6 +109,47 @@ inline Route resolve_route(Route forced, const Shape& s, bool vendor_available =
     // vendor present its automatic choice for an unsupported shape IS the
     // vendor -- which is why the equivalence test still holds.
     return automatic();
+}
+
+// The instrumented entry point, and the ONLY one ops should call.
+//
+// Every op reaches its route through here, so one call site records all of
+// them -- no per-op plumbing, and no way for a new op to be added and silently
+// go unmeasured. `record_if_enabled` compiles to nothing unless the build was
+// configured with -DBATCHLAS_ENABLE_COVERAGE=ON, so the default build pays a
+// dead `if constexpr (false)` and nothing else.
+//
+// The two extra facts recorded are what make a `reached` row worth having:
+// `native_existed` says this op HAS a native route at all, and
+// `native_supported` says one could have served THIS shape. A row where the
+// vendor was chosen and native_supported is true is a tuning question; one
+// where native_existed is false is a missing kernel. Those are different work
+// items and the row has to distinguish them.
+//
+// `s` is sliced to OpShape on purpose: GesvdShape and SyevShape carry extra
+// routing inputs that the CSV has no column for, and the shape_class bucket is
+// computed from the base fields anyway.
+template <Op O, typename T, typename Shape>
+inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
+    const Route chosen = resolve_route_uninstrumented<O, T, Shape>(forced, s, vendor_available);
+
+    // Runtime-gated, not compiled out: see the note in coverage.hh on why the
+    // macro version silently recorded nothing. The extra order walk below is
+    // inside the branch, so an ordinary call pays one predicted test.
+    if (coverage::dynamic_enabled()) {
+        using Table = RouteTable<O, T>;
+        bool native_existed = false;
+        bool native_supported = false;
+        for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+            if (!is_native(*r)) continue;
+            native_existed = true;
+            if (Table::supports(*r, s)) native_supported = true;
+        }
+        coverage::record_if_enabled(s.op, s.scalar, s.backend, static_cast<const OpShape&>(s),
+                                    chosen, native_existed, native_supported);
+    }
+
+    return chosen;
 }
 
 } // namespace batchlas::dispatch
