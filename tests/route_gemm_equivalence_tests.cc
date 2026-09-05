@@ -1,12 +1,10 @@
-// Equivalence test for the Route-based GEMM dispatch: it diffs the CHOSEN
-// ROUTE, not the timing, against a replica of the legacy gemm_use_sycl_custom()
-// decision over the whole input space, and pins the intended divergences.
+// Equivalence test for the Route-based GEMM dispatch: it diffs the CHOSEN ROUTE,
+// not the timing, against a replica of the legacy gemm_use_sycl_custom() decision,
+// and pins the intended divergences.
 //
-// The replica is transcribed from src/backends/gemm_variant.hh rather than
-// called, so this stays a pure decision test with no MatrixView, Queue or
-// getenv; `ReplicaIsFaithful` pins the transcription, so a drift in the replica
-// cannot make the diff pass vacuously.
-// Window and evidence: docs/perf/gemm.md#the-preferred-window-as-implemented
+// The replica is transcribed from src/backends/gemm_variant.hh rather than called;
+// `ReplicaIsFaithful` pins it, so a drift in the replica cannot make the diff pass
+// vacuously. Window and evidence: docs/perf/gemm.md#the-preferred-window-as-implemented
 
 #include <gtest/gtest.h>
 
@@ -23,12 +21,11 @@ using namespace batchlas::dispatch;
 
 namespace {
 
-// Faithful replica of the CURRENT decision, from src/backends/gemm_variant.hh.
+// Replica of the legacy decision, transcribed from src/backends/gemm_variant.hh.
 
 enum class LegacyRequest { Vendor, Sycl, Native, CuBLASDx, Auto };
 
-// gemm_variant_request(): the default when the variable is UNSET is Vendor, not
-// Auto. That asymmetry against the level-3 ops is load-bearing.
+// gemm_variant_request(): UNSET means Vendor for gemm, not Auto.
 LegacyRequest legacy_request_from(const char* raw) {
     if (!raw) return LegacyRequest::Vendor;
     std::string v(raw);
@@ -97,7 +94,7 @@ bool new_uses_native(const char* env_value, const OpShape& s) {
     return is_native(chosen);
 }
 
-// The env spellings that appear in benchmark scripts, plus unset.
+// The env spellings benchmark scripts use; nullptr is unset.
 const std::vector<const char*> kEnvValues = {
     nullptr, "vendor", "sycl", "custom", "auto", "cublasdx", "dx",
     "native", "cuda-native", "direct-cuda",
@@ -128,8 +125,7 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
             }
         }
     }
-    // Non-square, heterogeneous and non-default-precision cells, where a
-    // correctness gate and a speed window are most easily confused.
+    // Cells where a correctness gate and a speed window are most easily confused.
     for (int64_t d : dims) {
         OpShape s;
         s.op = Op::gemm; s.scalar = scalar;
@@ -149,14 +145,9 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
     return out;
 }
 
-// The intended divergences from the legacy decision. They are classified and
-// COUNTED SEPARATELY below so that none can quietly stop being reached: a single
-// "is this expected?" boolean would let one divergence's cells disappear from
-// the grid while another kept the count non-zero.
-//
-// Deliberately an exception list rather than an edit to the replica -- editing
-// the replica to match the new behaviour would make the two agree by
-// construction and the test would stop detecting anything.
+// The intended divergences. Deliberately an exception list rather than an edit to
+// the replica: editing the replica would make the two agree by construction. Each
+// divergence is counted separately below so none can quietly stop being reached.
 // evidence: docs/perf/gemm.md#evidence-for-each-boundary
 enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped,
                         DoubleWindowWidened };
@@ -169,8 +160,7 @@ Divergence classify_divergence(const char* env, const OpShape& s,
     if (s.heterogeneous_batch && forced_native && !old_native && new_native) {
         return Divergence::HeterogeneousWidened;
     }
-    // Narrow on purpose: only an unset env, and only in the direction the
-    // default flip goes. Anything else at env == nullptr is still compared.
+    // Narrow on purpose: only an unset env, and only in the flip's direction.
     if (env == nullptr && !old_native && new_native) {
         return Divergence::DefaultFlipped;
     }
@@ -226,8 +216,6 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
     EXPECT_GT(compared, 1000u) << "grid too small to be meaningful";
     EXPECT_GT(native_cases, 0u) << "grid never exercised the native route for " << type_name;
 
-    // Every exception count is ASSERTED, not merely allowed: an exception list
-    // that can silently become vacuous is a disabled test.
     EXPECT_GT(het_widened, 0u)
         << "grid no longer reaches the intended heterogeneous divergence for "
         << type_name << " -- the exception is now vacuous";
@@ -262,8 +250,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
     }
 }
 
-// What the DefaultFlipped exception excuses, asserted positively: an unset
-// environment must decide exactly as an explicit "auto" does, on every shape.
+// The positive form of the DefaultFlipped exception: unset must decide as "auto".
 template <typename T>
 void expect_unset_equals_auto(ScalarKind kind, const char* type_name) {
     size_t compared = 0, native_cases = 0;
@@ -323,9 +310,8 @@ TEST(RouteGemmEquivalence, ReplicaIsFaithful) {
 }
 
 TEST(RouteGemmEquivalence, SupportsIsCorrectnessOnlyNotSpeed) {
-    // If the measured window leaked into supports(), a large float GEMM would
-    // have NO supported native route and a vendor-off build would break an op
-    // that works today.
+    // If the measured window leaked into supports(), a large float GEMM would have
+    // NO supported native route and a vendor-off build would break a working op.
     using Table = RouteTable<Op::gemm, float>;
     OpShape big; big.op = Op::gemm; big.scalar = ScalarKind::F32;
     big.m = big.n = big.k = 1024; big.batch = 256; big.is_gpu = true;
@@ -341,9 +327,9 @@ TEST(RouteGemmEquivalence, SupportsIsCorrectnessOnlyNotSpeed) {
 TEST(RouteGemmEquivalence, CorrectnessGateSurvivesForcing) {
     using Table = RouteTable<Op::gemm, float>;
 
-    // Forcing bypasses preferred(), never supports(), so it cannot select a
-    // route that computes the WRONG ANSWER. The unsupported example is a
-    // non-Default ComputePrecision: select_kernel_variant has no TF32 path.
+    // Forcing bypasses preferred(), never supports(), so it cannot select a route
+    // that computes the WRONG ANSWER. Here the unsupported shape is a non-Default
+    // ComputePrecision: select_kernel_variant has no TF32 path.
     OpShape unsupported; unsupported.op = Op::gemm; unsupported.scalar = ScalarKind::F32;
     unsupported.m = unsupported.n = unsupported.k = 256;
     unsupported.batch = 512; unsupported.is_gpu = true;
@@ -364,9 +350,8 @@ TEST(RouteGemmEquivalence, CorrectnessGateSurvivesForcing) {
 }
 
 TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
-    // 8x8x8 at batch 1 is SUPPORTED by the native kernel but far outside the
-    // measured window. Taking "the first supported route" would pick native --
-    // the order lists it first -- and silently invert GEMM's vendor-by-default.
+    // 8x8x8 at batch 1 is SUPPORTED but far outside the measured window. Taking
+    // "the first supported route" would pick native and invert vendor-by-default.
     OpShape tiny; tiny.op = Op::gemm; tiny.scalar = ScalarKind::F32;
     tiny.m = tiny.n = tiny.k = 8; tiny.batch = 1; tiny.is_gpu = true;
     const Route automatic{Origin::Auto, Algorithm::Auto};
@@ -374,14 +359,10 @@ TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
     EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, tiny, /*vendor_available=*/true)))
         << "with a vendor present, an unpreferred native route must not be chosen";
 
-    // With no vendor compiled in, correctness beats preference: a supported
-    // route is better than no route at all.
     const Route chosen = resolve_gemm_route<float>(automatic, tiny, /*vendor_available=*/false);
     EXPECT_TRUE(is_native(chosen))
         << "with no vendor available, the supported native route must be chosen";
 
-    // ...but only when it is actually supported: vendor-off must not
-    // manufacture a wrong answer.
     OpShape unsupported = tiny;
     unsupported.precision = ComputePrecision::F32;
     // Aliased because the comma in RouteTable<Op::gemm, float> is a macro
@@ -406,15 +387,13 @@ TEST(RouteGemmEquivalence, ForcedVendorStillDegradesWhenThereIsNoVendor) {
     EXPECT_EQ(defaulted.origin, Origin::Auto)
         << "WP2 E6: GEMM's unset default is Auto, like every other op";
 
-    // 8x8 at batch 1 is outside every measured window, so Auto still defers to
-    // the vendor when there is one.
+    // 8x8 at batch 1 is outside every measured window, so Auto defers to a vendor.
     EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/true)));
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/false)))
         << "a vendor that is not compiled in cannot be the answer";
 
-    // An explicitly forced vendor degrades the same way: silently running native
-    // is the better failure than dispatching to a library that is not there, and
-    // announcing it is the S6 gate's job, not the resolver's.
+    // A forced vendor degrades the same way: running native is a better failure than
+    // dispatching to a library that is not there.
     const Route explicit_vendor{Origin::Vendor, Algorithm::Auto};
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(explicit_vendor, tiny, /*vendor_available=*/false)));
 

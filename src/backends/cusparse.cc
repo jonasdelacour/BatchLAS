@@ -38,13 +38,11 @@ namespace batchlas {
                 return enum_convert<BackendLibrary::CUSPARSE>(trans);
             }
 
-            // The strided-batch nnz contract: cusparseCreateCsr takes ONE nnz and
-            // cusparseCsrSetStridedBatch adds no per-item one, but A.nnz() is the
-            // per-item CAPACITY, sized by the batch maximum. Trusting it makes a
-            // short item's descriptor cover padding the conversion never wrote:
-            // wrong last rows, or CUDA_ERROR_ILLEGAL_ADDRESS. The plan therefore
-            // takes nnz from the items' own row offsets, and a non-uniform batch is
-            // issued as one cusparseSpMM per item -- the only shape the API offers.
+            // cuSPARSE takes ONE nnz for the whole strided batch, but A.nnz() is the
+            // per-item CAPACITY (the batch maximum): trusting it makes a short item's
+            // descriptor cover padding the conversion never wrote, giving wrong last
+            // rows or CUDA_ERROR_ILLEGAL_ADDRESS. So nnz comes from the items' own row
+            // offsets, and a non-uniform batch is issued one cusparseSpMM per item.
             // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
             struct SpmmCsrBatchPlan {
                 std::vector<int> item_nnz;      // what each item actually stores
@@ -52,10 +50,9 @@ namespace batchlas {
                 bool matches_capacity = true;   // ... and equal to A.nnz()
             };
 
-            // Reads the row offsets ON THE HOST: whatever kernel filled them must
-            // have completed, the same precondition MatrixView::nnz(b) documents.
-            // Device-only memory is not host-reachable, so that case is detected and
-            // staged rather than assumed; no caller in this tree takes it.
+            // Reads the row offsets ON THE HOST: whatever kernel filled them must have
+            // completed, the same precondition MatrixView::nnz(b) documents. Device-only
+            // memory is not host-reachable, so it is staged first.
             template <typename T>
             SpmmCsrBatchPlan spmm_csr_batch_plan(Queue& ctx,
                                                  const MatrixView<T, MatrixFormat::CSR>& A) {
@@ -251,8 +248,7 @@ namespace batchlas {
                                  BackendScalar<T, BackendLibrary::CUSPARSE>::type,
                                  CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
                 } else {
-                    // One call per item: this batch is inexpressible as a single
-                    // cuSPARSE descriptor.
+                    // Inexpressible as one strided descriptor: a call per item.
                     for (int i = 0; i < bs; ++i) {
                         LocalCsrDescr<T> a(A, i, 1,
                                            plan.item_nnz[static_cast<std::size_t>(i)]);

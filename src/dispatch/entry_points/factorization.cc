@@ -338,9 +338,7 @@ Event getrf(Queue& ctx,
             return sycl_getrf::getrf_cta_dispatch<T>(ctx, A, pivots, work_space, info);
         }
         if (route.algo == dispatch::Algorithm::Blocked) {
-            // The trailing GEMM and the panel TRSM go through the ROUTER: a direct
-            // native call bypasses RouteTable and takes the native kernel even on
-            // shapes it loses.
+            // GEMM and TRSM go through the ROUTER -- see geqrf above.
             return sycl_getrf::getrf_blocked_dispatch<T>(
                 ctx, A, pivots, work_space, info,
                 [](Queue& c,
@@ -631,9 +629,7 @@ Event potrf(Queue& ctx,
             return sycl_potrf::potrf_cta_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
         }
         if (route.algo == dispatch::Algorithm::Blocked) {
-            // The trailing GEMM and the panel TRSM go through the ROUTER: a direct
-            // native call bypasses RouteTable and takes the native kernel even on
-            // shapes it loses.
+            // GEMM and TRSM go through the ROUTER -- see geqrf above.
             return sycl_potrf::potrf_blocked_dispatch<T>(
                 ctx, descrA, uplo, workspace, info_out,
                 [](Queue& c,

@@ -47,7 +47,6 @@ constexpr std::size_t kPotrfReferenceSlmBudget = 97280;
 // Soft occupancy target for matrices per work-group: 4 resident blocks/SM on sm_89.
 constexpr std::size_t kPotrfSlmSoftTarget = 24576;
 
-// The L ladder's two knobs.
 constexpr int kPotrfMaxL = 256;
 constexpr int kPotrfElemsPerItem = 24;
 

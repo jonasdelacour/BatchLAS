@@ -164,8 +164,8 @@ inline constexpr int64_t syev_cta_max_n_default_for() {
     using Real = typename base_type<T>::type;
     constexpr bool kReal = std::is_same_v<T, Real>;
     constexpr bool kDouble = std::is_same_v<Real, double>;
-    // complex<double> only, deliberately not "complex": the crossover at 25 rather
-    // than 33 tracks this card's 1/64 FP64 rate, and complex<float> does not cross.
+    // complex<double> only, deliberately not all complex: complex<float> never crosses.
+    // evidence: docs/perf/README.md#the-raw-data
     if constexpr (!kReal && kDouble) return 24;
     return 32;
 }
@@ -184,7 +184,7 @@ inline int64_t syev_cta_max_n_for_vectors() {
 }
 
 // The small-n (CTA) kernel, per type and n; BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi
-// overrides it. The `double` rule is tuned on a 1/64-rate FP64 card; re-measure on a 1:2 one.
+// overrides it. evidence: docs/perf/README.md#the-raw-data
 enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
 
 inline SyevSmallKernel syev_small_kernel_env(bool& forced) {

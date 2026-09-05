@@ -1,9 +1,9 @@
 // Native batched ORGQR, blocked tier: Q = H_1 H_2 ... H_k I_{m x n}, i.e. the
-// routed ormqr applied to an identity. Evidence: docs/perf/qr.md#the-vendor-baseline
+// routed ormqr applied to an identity. evidence: docs/perf/qr.md#the-vendor-baseline
 //
-// Both apply-Q seams are injected, never defaulted: this driver is instantiated
-// per scalar type with no Backend parameter, so only the facade can name the
-// routed ormqr and its workspace size. An empty seam therefore throws.
+// Both apply-Q seams must be injected, never defaulted: this driver is
+// instantiated per scalar type with no Backend parameter, so only the facade
+// can name the routed ormqr. An empty seam throws.
 
 #include "orgqr_native.hh"
 
@@ -31,9 +31,8 @@ template <typename T> class OrgqrIdentityKernel;
 template <typename T> class OrgqrCopyBackKernel;
 
 // The WY block width handed to the apply. Deliberately NOT
-// tuning::ormqr_block_size_for_n, whose ladder was tuned on CUDA/float only.
-// Multiple of 16, never below 32 for complex (gemm_kernels.cc:700's min_dim >= 32
-// wide-scalar gate). evidence: docs/perf/qr.md#block-width-evidence
+// tuning::ormqr_block_size_for_n. Multiple of 16, never below 32 for complex
+// (the wide-scalar gemm gate). evidence: docs/perf/qr.md#block-width-evidence
 template <typename T>
 constexpr int32_t orgqr_nb_for_type() {
     if constexpr (std::is_same_v<T, double>) {
@@ -60,9 +59,8 @@ inline MatrixView<T, MatrixFormat::Dense> orgqr_c_view(T* p, int m, int n, int b
                                               batch, nullptr);
 }
 
-// Described once and replayed by both the query and the call. `apply_bytes` is
-// computed outside, against the CALLER's views: a nested size query may not be
-// asked about workspace-derived views (mempool.hh:179-184).
+// `apply_bytes` is computed outside, against the CALLER's views: a nested size
+// query may not be asked about workspace-derived views.
 template <typename T>
 struct OrgqrWs {
     Span<T> c;
@@ -144,9 +142,8 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
     const int k = std::min(m, n);
 
-    // supports()'s gates are re-applied here: route_resolve.hh:101 falls through
-    // to automatic() when a forced route is unsupported, so a pinned-route test
-    // that is wrong about one gate silently measures the vendor instead.
+    // supports()'s gates are re-applied here: a forced route that is unsupported
+    // falls through to automatic(), so a wrong gate silently measures the vendor.
     if (m < 1 || n < 1 || batch < 1) {
         throw std::invalid_argument("orgqr_blocked: degenerate extents");
     }
@@ -186,7 +183,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
             static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
         // C := I. Dim 2 is the ROW, not the column: sycl::id<3> makes dim 2 the
         // fastest-varying index and C is column-major with ld m, so indexing the
-        // column there writes m*sizeof(T) apart -- 32 sectors per warp, not 4.
+        // column there would stride m*sizeof(T).
         ctx->parallel_for<OrgqrIdentityKernel<T>>(
             sycl::range<3>(static_cast<std::size_t>(batch), static_cast<std::size_t>(n),
                            static_cast<std::size_t>(m)),
@@ -200,18 +197,16 @@ Event orgqr_blocked_dispatch(Queue& ctx,
             });
     }
 
-    // The apply reads the identity this fill just wrote; an out-of-order queue
-    // needs the explicit wait.
+    // The apply reads the identity just written; out-of-order queues need this wait.
     if (!ctx.in_order()) ctx.wait();
 
-    // (2) C := Q C, through the injected ROUTED ormqr, so it honours
-    // BATCHLAS_ORMQR_ROUTE. Argument order is the POSITIONAL entry point's
-    // (ormqr.hh:311-320); an option struct orders its fields differently.
+    // C := Q C through the injected routed ormqr. Argument order is the POSITIONAL
+    // ormqr entry point's; an option struct orders its fields differently.
     (void)apply_q(ctx, A, C, Side::Left, Transpose::NoTrans, tau, ws.apply, nb);
 
     if (!ctx.in_order()) ctx.wait();
 
-    // (3) A := C -- orgqr overwrites its input, ormqr writes a separate C.
+    // A := C -- orgqr overwrites its input, ormqr writes a separate C.
     {
         const T* const cp = ws.c.data();
         T* const ap = A.data_ptr();
@@ -219,7 +214,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
         const int stride_a = A.stride();
         const std::size_t stride_c =
             static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
-        // Dim 2 is the ROW, as in the fill above; uncoalesced on both sides.
+        // Dim 2 is the ROW, as in the fill above.
         ctx->parallel_for<OrgqrCopyBackKernel<T>>(
             sycl::range<3>(static_cast<std::size_t>(batch), static_cast<std::size_t>(n),
                            static_cast<std::size_t>(m)),
@@ -238,8 +233,6 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     return ctx.get_event();
 }
 
-// Instantiated per scalar type only, no Backend cross-product -- the point of
-// the injected seams, in a build that is device-link-bound.
 #define BATCHLAS_ORGQR_BLOCKED_INSTANTIATE(T)                                                 \
     template std::size_t orgqr_blocked_buffer_size<T>(                                        \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&, Span<T>,                           \

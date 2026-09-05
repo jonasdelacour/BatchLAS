@@ -1,12 +1,10 @@
 #pragma once
 
-// Native batched GETRF: capability queries, workspace sizing, the routed seams
-// the blocked driver injects, and direct-call entry points. The blocked driver's
-// panel leaf IS the CTA tier's device function, so both TUs must sit in one
-// device-code cluster. PIVOT CONTRACT: the int64_t span physically holds packed
-// 1-based int32 in its first half (as_span<int>()) -- an interchange list, not a
-// permutation -- which is why supports() rejects the genuinely-int64 NETLIB arm;
-// complex pivots on cabs1, not cuBLAS's modulus.
+// Native batched GETRF: capability queries, workspace sizing, routed seams, and
+// direct-call entry points. The blocked driver's panel leaf IS the CTA tier's device
+// function, so both TUs must sit in one device-code cluster. PIVOT CONTRACT: the
+// int64_t span packs 1-based int32 in its first half (as_span<int>()) -- an
+// interchange list, not a permutation; complex pivots on cabs1, not cuBLAS's modulus.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <batchlas/blas/enums.hh>
@@ -20,8 +18,8 @@
 
 namespace batchlas::sycl_getrf {
 
-// A RUNTIME local_mem_size budget, not device_limits.hh's build-time constant,
-// and it must cover the pivot-search scratch as well as the tile. 0 = absent.
+// A RUNTIME local_mem_size budget, not device_limits.hh's build-time constant, and
+// it must cover the pivot-search scratch as well as the tile. 0 = absent.
 template <typename T>
 int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes);
 
@@ -31,8 +29,7 @@ int getrf_cta_max_n();
 template <typename T>
 bool getrf_blocked_available();
 
-// Size by replaying the layout through BumpAllocator::measuring(), never by
-// hand-summing; zero is legitimate, and neither query may touch A.data_ptr().
+// Zero is a legitimate size, and neither query may touch A.data_ptr().
 template <typename T>
 std::size_t getrf_cta_buffer_size(Queue& ctx,
                                   const MatrixView<T, MatrixFormat::Dense>& A);
@@ -41,8 +38,7 @@ template <typename T>
 std::size_t getrf_blocked_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);
 
-// For tests: nb in the low 16 bits, the leading panel's leaf in the high 16
-// (1 = local-memory-resident, 2 = global); 0 means the driver is absent.
+// Test hook: low 16 bits nb, high 16 the leading panel's leaf (1 = local, 2 = global); 0 if absent.
 template <typename T>
 unsigned getrf_blocked_debug_params(Queue& ctx, int n);
 
@@ -79,17 +75,16 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              GetrfTrailingGemm<T> trailing_gemm = {},
                              GetrfPanelSolveTrsm<T> panel_trsm = {});
 
-// Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch
-// at specific byte counts near 48 KB. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch at
+// specific byte counts near 48 KB. evidence: docs/perf/lu.md#the-48-kb-launch-hole
 template <typename T>
 bool getrf_cta_fits(int n, std::size_t slm_budget_bytes);
 
 template <typename T>
 bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
 
-// `piv_stride` is the ORDER of the whole matrix, never the panel width, and
-// `piv_base` the panel's first global row; together they make ipiv global and
-// 1-based. `info_ptr` is read as well as written, so zero it before panel 0.
+// `piv_stride` is the matrix ORDER, never the panel width; `piv_base` is the panel's
+// first global row. `info_ptr` is read as well as written, so zero it before panel 0.
 template <typename T>
 Event getrf_panel_factorize(Queue& ctx,
                             T* a_ptr, int ld, int stride,

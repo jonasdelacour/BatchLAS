@@ -38,13 +38,9 @@ struct RouteTable<Op::getrf, T> {
         if (!is_native(r)) return false;
 
         if (s.m != s.n) return false;
-
         if (!s.is_gpu) return false;
-
         if (!s.has_sg32) return false;
-
         if (s.heterogeneous_batch) return false;
-
         if (s.order() < 1 || s.batch < 1) return false;
 
         // Pivot Span<int64_t> layout is backend-dependent: CUDA/ROCm and the native
@@ -66,11 +62,10 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // Blocked only, at batch >= 128: float order >= 256, cfloat order >= 512; double families never.
+    // Blocked only: float order >= 256, cfloat order >= 512; double families never.
     // evidence: docs/perf/lu.md#getrf-window-evidence
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
-
         if (r.algo != Algorithm::Blocked) return false;
 
         if constexpr (std::is_same_v<T, float>)               return s.order() >= 256;

@@ -1,9 +1,8 @@
 #pragma once
 
-// GETRF shape builder and route resolution. It lives in src/ because the route
-// table must read only its arguments -- every getenv and device query happens
-// here. It must not gain src/queue.hh or <sycl/sycl.hpp>: the vendor-free facade
-// includes this header. Windows and evidence: docs/perf/lu.md#getrf-window-evidence
+// GETRF shape builder and route resolution. Must not gain src/queue.hh or
+// <sycl/sycl.hpp>: the vendor-free facade includes this header.
+// Windows and evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getrf.hh>
@@ -33,7 +32,6 @@ inline std::optional<dispatch::GetrfShape> getrf_op_shape(
     s.scalar = dispatch::scalar_kind_of<T>;
     s.backend = B;
 
-    // k is the order; the table reads only order().
     s.m = A.rows();
     s.n = A.cols();
     s.k = A.rows();
@@ -55,9 +53,8 @@ inline std::optional<dispatch::GetrfShape> getrf_op_shape(
     return s;
 }
 
-// Resolves the route for one call and is the only environment read on this path.
-// getrf and getrf_buffer_size must call it with identical arguments, or the sizing
-// query and the call can resolve differently.
+// The only environment read on this path. getrf and getrf_buffer_size must call it
+// with identical arguments, or the sizing query and the call can resolve differently.
 template <Backend B, typename T>
 inline dispatch::Route getrf_route(
     const Queue& ctx,

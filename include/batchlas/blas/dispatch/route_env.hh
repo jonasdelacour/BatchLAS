@@ -1,9 +1,8 @@
 #pragma once
 
 // One environment vocabulary for route selection: BATCHLAS_<OP>_ROUTE, taking an
-// origin, an algorithm, or both joined by a colon. The legacy per-op spellings
-// map onto it and must keep working -- they appear in committed benchmark
-// scripts and in the provenance of recorded results under output/.
+// origin, an algorithm, or both joined by a colon. The legacy per-op spellings map
+// onto it and must keep working: benchmark scripts and recorded results use them.
 // evidence: docs/perf/dispatch.md#the-environment-vocabulary
 
 #include <cctype>
@@ -64,7 +63,6 @@ inline std::optional<Route> parse_route_value(std::string_view raw) {
         return Route{*o, Algorithm::Auto};
     }
     if (const auto a = parse_algorithm_word(v)) {
-        // Bare algorithms imply Native, except device-library ones.
         const Origin o = (*a == Algorithm::FusedDevice) ? Origin::Vendor : Origin::Native;
         return Route{o, *a};
     }
@@ -85,19 +83,17 @@ inline std::string_view legacy_variable_for(Op op) {
     }
 }
 
-// Every op's unset default is Auto, i.e. whatever preferred() says. GEMM used to
-// default to Vendor; an explicit BATCHLAS_GEMM_VARIANT=vendor still pins it.
-// evidence: docs/perf/gemm.md#the-auto-flip
+// Every op's unset default is Auto, i.e. whatever preferred() says; GEMM's former
+// Vendor default is gone. evidence: docs/perf/gemm.md#the-auto-flip
 inline Route legacy_unset_default(Op op) {
     static_cast<void>(op);
     return Route{Origin::Auto, Algorithm::Auto};
 }
 
-// Legacy values whose meaning does NOT match the canonical vocabulary; these
-// collisions are load-bearing. `BATCHLAS_GEMM_VARIANT=native` means the raw CUDA
-// VENDOR path (consumed only as an exclusion from both custom arms), the opposite
-// of canonical "native"; "custom" means the fused cuBLASDx kernel here but the
-// register-tiled GEMM family to the canonical parser. Pinned by tests/route_*.cc.
+// The legacy vocabulary collides with the canonical one, load-bearingly: legacy
+// `native` is the raw CUDA VENDOR path (the opposite of canonical "native"), and
+// legacy `custom` is the fused cuBLASDx kernel, not the register-tiled GEMM family.
+// Do not "simplify" these away; pinned by tests/route_vocabulary_tests.cc.
 inline bool is_level3_tile_op(Op op) {
     return op == Op::symm || op == Op::syrk || op == Op::syr2k || op == Op::trmm;
 }
@@ -118,9 +114,8 @@ inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw
             return Route{Origin::Native, Algorithm::GramTiles};
         }
         if ((op == Op::syrk || op == Op::syr2k) && v == "gemm") {
-            // Deliberately WRONG: it computes and stores BOTH triangles, kept
-            // only as a measurement baseline for what the triangular kernel
-            // saves. Vendor because it runs through the cuBLASDx entry point.
+            // Deliberately WRONG: it stores BOTH triangles, and exists only as a
+            // measurement baseline. Vendor: it runs through the cuBLASDx entry point.
             return Route{Origin::Vendor, Algorithm::DiagFullGemm};
         }
     }
@@ -135,8 +130,8 @@ struct ParsedRouteEnv {
     bool unparsed = false;   // a variable was set but its value was not understood
 };
 
-// Canonical variable first, then the legacy one. found=false when neither is
-// set; the CALLER supplies the default.
+// Canonical variable first, then the legacy one; on found=false the CALLER supplies
+// the default.
 inline ParsedRouteEnv parse_route_env(Op op) {
     ParsedRouteEnv out;
 
@@ -157,7 +152,6 @@ inline ParsedRouteEnv parse_route_env(Op op) {
         const std::string key(legacy);
         if (const char* raw = std::getenv(key.c_str()); raw && *raw) {
             out.source = {key, raw, true};
-            // The LEGACY parser, not the canonical one: see above.
             if (const auto r = parse_legacy_route_value(op, raw)) {
                 out.route = *r;
                 out.found = true;

@@ -30,8 +30,7 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
                                           bool vendor_available = true) {
     using Table = RouteTable<O, T>;
 
-    // Preference first; a merely supported native route only when no vendor is
-    // left. Vendor when nothing serves the shape, so the caller can diagnose.
+    // Returns Vendor when nothing serves the shape, so the caller can diagnose it.
     auto automatic = [&]() -> Route {
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
             if (Table::supports(*r, s) && Table::preferred(*r, s)) return *r;

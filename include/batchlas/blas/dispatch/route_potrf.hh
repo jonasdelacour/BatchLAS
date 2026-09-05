@@ -9,8 +9,7 @@
 namespace batchlas::dispatch {
 
 struct PotrfShape : OpShape {
-    // 0 means the CTA kernel is absent from this build. Device-queried by the same function that sizes the kernel's local_accessor.
-    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
+    // 0 means the CTA kernel is absent from this build; device-queried by the same function that sizes the kernel's local_accessor.
     int cta_max_n = 0;
 
     bool blocked_available = false;
@@ -31,7 +30,7 @@ template <typename T>
 struct RouteTable<Op::potrf, T> {
     // Correctness only: a speed threshold here removes potrf's vendor-free route.
     static bool supports(Route r, const PotrfShape& s) {
-        if (is_vendor(r)) return true;   // the vendor serves everything it is given
+        if (is_vendor(r)) return true;
         if (!is_native(r)) return false;
 
         if (s.m != s.n) return false;
@@ -46,8 +45,7 @@ struct RouteTable<Op::potrf, T> {
 
         switch (r.algo) {
             case Algorithm::CTA:
-                // No uplo gate, unlike Blocked below: Upper is the same recurrence on the
-                // transformed tile S(i,c) = conj(A(c,i)), so one kernel serves both triangles.
+                // No uplo gate, unlike Blocked below: Upper is the same recurrence on the transformed tile S(i,c) = conj(A(c,i)).
                 if (s.cta_max_n < 1) return false;
                 return s.order() <= s.cta_max_n;
 
@@ -62,7 +60,7 @@ struct RouteTable<Op::potrf, T> {
         }
     }
 
-    // Nothing is preferred at any shape yet, so Auto takes the vendor; un-preferred is not unroutable, and a vendor-free build still gets a supported native arm.
+    // The window is empty: Auto takes the vendor at every shape, and a vendor-free build still resolves to a supported native arm.
     // evidence: docs/perf/potrf.md#preferred-is-false-everywhere
     static bool preferred(Route r, const PotrfShape& s) {
         static_cast<void>(r);

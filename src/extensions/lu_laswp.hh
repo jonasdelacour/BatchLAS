@@ -7,8 +7,7 @@
 // evidence: docs/perf/lu.md#the-laswp-gather
 
 #include "../sycl/device_scalar.hh"
-// ../queue.hh: the public header only forward-declares QueueImpl, which
-// `ctx->submit` needs defined.
+// ../queue.hh: the public header only forward-declares QueueImpl; ctx->submit needs it defined.
 #include "../queue.hh"
 
 #include <batchlas/util/sycl-device-queue.hh>
@@ -78,11 +77,8 @@ Event lu_laswp_launch(Queue& ctx,
     return ctx.get_event();
 }
 
-// The deferred left-hand interchange, as one SLM-staged gather: one launch
-// replaces the blocked driver's P-1 (S-left) launches. It is legal because block
-// r receives, under LAPACK's schedule, exactly the list [j0_{r+1}, n) in
-// increasing k, and no column below j0 is read again after its own panel step --
-// so applying that list once at the end is the same composition, bit for bit.
+// The deferred left-hand interchange as one SLM-staged gather: one launch replaces
+// the blocked driver's P-1 left-side launches, and composes to the same permutation.
 // evidence: docs/perf/lu.md#getrf-deferred-left-gather
 
 template <typename Tag, typename T> class LuLaswpGatherKernel;
@@ -207,8 +203,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                 for (int cb = 0; cb < ib; cb += Cs) {
                     const int cw = ((ib - cb) < Cs) ? (ib - cb) : Cs;
 
-                    // Flat over (column, row), ROW fastest -- column-major's
-                    // only contiguous direction.
+                    // Flat over (column, row), ROW fastest -- the contiguous direction.
                     int col = lid / R;
                     int row = lid - col * R;
                     while (col < cw) {

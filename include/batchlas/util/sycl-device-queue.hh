@@ -71,8 +71,8 @@ inline constexpr std::string_view to_string(Vendor v) {
     return "Vendor(?)";
 }
 
-// One overload per enum with the type named, not a constrained template: a
-// template would tie with batchlas' and make every enum stream ambiguous.
+// One overload per enum, not a constrained template: a template would tie with
+// batchlas' and make every enum stream ambiguous.
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
     return os << to_string(value);
@@ -159,10 +159,9 @@ struct Device{
     Vendor get_vendor() const;
     size_t get_property(DeviceProperty property) const;
 
-// ENUMERATED from sycl::info::device::sub_group_sizes. Not
-// get_property(MAX_SUB_GROUP_SIZE), which returns sub_group_sizes()[0] and is
-// wrong in both directions -- the false-accept aborts a
-// [[sycl::reqd_sub_group_size(32)]] launch. evidence: docs/perf/gemv.md#the-sub-route-gates
+    // ENUMERATED from sycl::info::device::sub_group_sizes, not
+    // get_property(MAX_SUB_GROUP_SIZE): a false accept aborts a
+    // [[sycl::reqd_sub_group_size]] launch. evidence: docs/perf/gemv.md#the-sub-route-gates
     bool supports_sub_group_size(size_t size) const;
 
 
@@ -195,9 +194,7 @@ struct QueueImpl;
 
 // A Queue is SINGLE-THREADED: it owns an unsynchronised workspace arena and a
 // cached "last event", and the operations that mutate either throw if called
-// from a thread other than the constructing one. Not a mutex, deliberately: the
-// arena rewinds a cursor on release, so serialising would still interleave
-// leases out of one block. docs/cpp-api.md#synchronisation-and-threading
+// from another thread. docs/cpp-api.md#synchronisation-and-threading
 struct Queue{
 
     /* Declared here, defined in the .cc: QueueImpl is incomplete here. */
@@ -206,8 +203,7 @@ struct Queue{
 
     Queue(Device device, bool in_order = true);
     Queue(Device device, batchlas::Backend backend, bool in_order = true);
-    // Shares `base`'s SYCL context/device, so USM pointers and workspaces made
-    // for `base` stay usable.
+    // Shares `base`'s context/device: USM pointers and workspaces for `base` stay usable.
     Queue(const Queue& base, bool in_order);
     Queue(Queue&& other); //= default;
     Queue& operator=(Queue&& other);// = default;
@@ -220,8 +216,8 @@ struct Queue{
     
     void enqueue(Event& event);
     Event get_event() const;
-    // Force creation of a barrier event for tracking external library calls (cuBLAS, rocBLAS, etc.)
-    // that execute on the queue's underlying stream but don't go through SYCL submission.
+    // Barrier event for external library work (cuBLAS, rocBLAS) that runs on the
+    // queue's stream without going through SYCL submission.
     Event create_event_after_external_work();
 
     template <typename EventContainer>
@@ -234,21 +230,18 @@ struct Queue{
     void wait() const;
     void wait_and_throw() const;
 
-    // Transfer single-thread ownership to the caller -- a transfer, not a share.
-    // Call once from the new owner before its first use and while no other thread
-    // is using the Queue; that is unchecked. Throws if a lease is outstanding.
+    // Transfers single-thread ownership (not a share). Call once from the new owner
+    // while no other thread uses the Queue; unchecked. Throws if a lease is outstanding.
     void attach_to_current_thread();
 
     // Borrow `bytes` of device scratch. The queue owns it: it stays valid until
     // the lease is released, not until the caller returns. See workspace.hh.
     [[nodiscard]] batchlas::WorkspaceLease workspace(size_t bytes);
 
-    // Total bytes the arena currently holds. Diagnostics and tests only.
     size_t workspace_capacity() const;
 
-    // Return the arena's memory to the runtime; otherwise it only frees in ~Queue.
-    // Returns false and does nothing while any lease is outstanding. Blocks until
-    // the queue is idle first, so it can throw -- not a noexcept cleanup call.
+    // Returns the arena's memory to the runtime (otherwise it frees only in ~Queue).
+    // Returns false while any lease is outstanding; waits for idle first, so it can throw.
     [[nodiscard]] bool trim_workspace();
 
     std::unique_ptr<QueueImpl> impl_;
@@ -261,25 +254,21 @@ struct Queue{
     batchlas::Backend backend() const;
     batchlas::Backend requested_backend() const { return backend_; }
 
-    // Pin this queue to a backend, or hand it back to AUTO. Throws if the
-    // backend was not compiled in.
+    // Pin this queue to a backend, or hand it back to AUTO. Throws if not compiled in.
     void set_backend(batchlas::Backend backend);
 
     static bool backend_available(batchlas::Backend backend);
 
-    // True for any USM allocation in this queue's context, and on a host/CPU
-    // device for ordinary host memory too. Costs one USM query: affordable per
-    // call, not per element. docs/cpp-api.md#where-the-memory-has-to-live-the-usm-contract
+    // True for any USM allocation in this queue's context, and for host memory on a
+    // host/CPU device. docs/cpp-api.md#where-the-memory-has-to-live-the-usm-contract
     bool is_device_accessible(const void* ptr) const;
 
-    // is_device_accessible, but throws std::invalid_argument. `what` should name
-    // the parameter at the call site ("gemm: A"), since that is the point.
+    // Same, but throws std::invalid_argument; `what` names the call-site parameter ("gemm: A").
     void require_device_accessible(const void* ptr, const char* what) const;
 
-    // The native stream, as an opaque pointer: CUstream on CUDA, hipStream_t on
-    // HIP, nullptr on every other backend (host/CPU included). Owned by the Queue.
-    // Your work on it is ordered after BatchLAS's, but not the reverse -- for that
-    // take create_event_after_external_work(). docs/cpp-api.md#interop-with-cuda-and-with-your-own-sycl
+    // Native stream as an opaque pointer: CUstream on CUDA, hipStream_t on HIP,
+    // nullptr elsewhere; owned by the Queue. Your work on it is ordered after
+    // BatchLAS's, not the reverse -- for that see create_event_after_external_work().
     void* native_handle() const;
 
     private:

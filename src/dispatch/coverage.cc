@@ -15,9 +15,7 @@
 
 namespace batchlas::dispatch::coverage {
 
-// One definition in one TU, so the library and every consumer necessarily
-// agree. Keyed on the SAME variable emit() reads: a table that is recorded
-// into is always a table that gets written.
+// One definition in one TU, keyed on the same variable emit() reads.
 bool g_dynamic_enabled = [] {
     const char* p = std::getenv("BATCHLAS_COVERAGE_OUT");
     return p != nullptr && *p != '\0';
@@ -36,10 +34,8 @@ struct Row {
     uint64_t calls = 0;
 };
 
-// The structural flags that change WHICH TRIANGLE or which operand an op
-// touches are part of the KEY: without them two calls differing only in `uplo`
-// collapse into one first-writer-wins row, and the instrument stops being able
-// to see that class of defect. evidence: docs/perf/dispatch.md#instrument-defects
+// Structural flags belong in the KEY; without them calls differing only in
+// `uplo` collapse into one row. evidence: docs/perf/dispatch.md#instrument-defects
 uint32_t variant_key(const OpShape& s) {
     return (static_cast<uint32_t>(s.uplo)   << 12) |
            (static_cast<uint32_t>(s.side)   <<  9) |
@@ -48,9 +44,8 @@ uint32_t variant_key(const OpShape& s) {
            (static_cast<uint32_t>(s.transB));
 }
 
-// Keyed on shape_class, not on the exact shape: shape_class() buckets
-// max(m,n,k) and batch by power of two, so a 10,000-iteration test collapses to
-// a handful of rows.
+// Keyed on shape_class, not the exact shape: it buckets max(m,n,k) and batch by
+// power of two, so a 10,000-iteration test collapses to a handful of rows.
 uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
                 uint32_t variant = 0) {
     return (static_cast<uint64_t>(op) << 56) | (static_cast<uint64_t>(s) << 48) |
@@ -63,11 +58,9 @@ std::mutex& table_mutex() {
     return *m;
 }
 
-// DELIBERATELY LEAKED. The atexit handler below reads these maps, and a
-// function-local static constructed AFTER the installer is destroyed BEFORE
-// emit() runs. That presented not as a crash but as a file with a correct
-// header and no `miss` rows at all. Never destroying them removes the ordering
-// question; process exit reclaims the memory.
+// DELIBERATELY LEAKED: emit() runs from atexit, and a function-local static
+// constructed after the installer is destroyed before it runs -- which showed
+// up not as a crash but as an output file with no `miss` rows at all.
 std::unordered_map<uint64_t, Row>& table() {
     static auto* t = new std::unordered_map<uint64_t, Row>();
     return *t;
@@ -92,9 +85,8 @@ const char* backend_name(Backend b) {
         case Backend::ROCM:   return "ROCM";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
-        // Expected, not a defect: the adapters that build an OpShape do not set
-        // `backend` -- it is a TEMPLATE parameter at the call site -- so
-        // `reached` rows read AUTO. The row is still keyed uniquely without it.
+        // Expected, not a defect: adapters that build an OpShape leave `backend`
+        // unset (it is a template parameter), so `reached` rows read AUTO.
         case Backend::AUTO:   return "AUTO";
         default:              return "?";
     }
@@ -106,14 +98,12 @@ void emit() {
         return;
     }
 
-    // ONE FILE PER PROCESS. A ctest run is 53 separate binaries, each with its
-    // own atexit handler: opening the shared path with "w" had every process
-    // truncate the previous one's table, and appending instead would tear lines
-    // under `ctest -j`. Merge the shards with scripts/coverage_merge.sh.
+    // ONE FILE PER PROCESS: a shared path is truncated by the next process, and
+    // appending tears lines under `ctest -j`. Merge with scripts/coverage_merge.sh.
     const std::string out = std::string(path) + "." + std::to_string(::getpid());
 
-    // Deliberately FILE* and no SYCL object: this runs from atexit, where any
-    // SYCL handle is already a use-after-free risk.
+    // FILE* and no SYCL object: this runs from atexit, where any SYCL handle is
+    // already a use-after-free risk.
     std::FILE* f = std::fopen(out.c_str(), "w");
     if (!f) {
         return;
@@ -167,22 +157,18 @@ void append_static_rows(std::ostringstream& out) {
         bool vendor;
         bool native;
     };
-    // `native` means "BatchLAS has a kernel for this op that is LINKED in this
-    // build", NOT that traffic reaches it -- a symbol being present is never
-    // evidence it runs; the `reached` rows are what answer that.
+    // `native` means a kernel is LINKED in this build, not that traffic reaches
+    // it; the `reached` rows answer that. Float is reported because tile-route
+    // availability is per (backend, scalar).
     // evidence: docs/perf/dispatch.md#the-coverage-instrument
-    //
-    // Reported FOR FLOAT: tile-route availability is per (backend, SCALAR), and
-    // double and complex differ (syr2k has no non-float tile route at all).
     const bool tiles_f32 = level3_tile_route_available<B, float>;
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        true},
         {"trsm",  level3_vendor_available<B>,        false},
         {"trmm",  level3_vendor_available<B>,        tiles_f32},
-        // symm has no tile kernel: its only portable path is the mirrored
-        // expansion (triangular_expand.hh) feeding a GEMM, which must itself be
-        // native for symm to be vendor-free.
+        // symm has no tile kernel; its portable path is the mirrored expansion
+        // (triangular_expand.hh) feeding a GEMM, which must itself be native.
         {"symm",  level3_vendor_available<B>,        tiles_f32},
         {"syrk",  level3_vendor_available<B>,        tiles_f32},
         {"syr2k", level3_vendor_available<B>,        tiles_f32},
@@ -195,10 +181,10 @@ void append_static_rows(std::ostringstream& out) {
         {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
         {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta (Phase 1) + potrf_blocked (Phase 2)
+        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta + potrf_blocked
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
-        {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr: gather (transA=NoTrans) + scale & atomic scatter
+        {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr (gather + atomic scatter)
     };
     for (const auto& e : entries) {
         out << "linked," << e.op << ",float,"

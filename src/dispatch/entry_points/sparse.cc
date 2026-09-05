@@ -1,6 +1,5 @@
 // The public sparse entry points, defined once outside every vendor TU so that
-// dropping a vendor library cannot drop the public entry point with it. spmm's
-// extra MatrixFormat parameter is why its instantiations are spelled out below.
+// dropping a vendor library cannot drop the public entry point with it.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 
 #include <batchlas/backend_config.h>
@@ -55,12 +54,10 @@ Event spmm(Queue& ctx,
         ctx, A, B_mat, C, transA, transB,
         /*vendor_available=*/dispatch::sparse_vendor_available<B>);
 
-    // preferred() is false for every spmm route, type and shape, so a
-    // vendor-present build with BATCHLAS_SPMM_ROUTE unset skips this block.
+    // preferred() is false for every spmm route, shape and type: forced only.
     // evidence: docs/perf/spmm.md#the-preferred-window-as-implemented
     if (dispatch::is_native(route)) {
-        // supports() refuses every non-CSR format, forced routes included, so
-        // this `if constexpr` cannot hide a reachable arm.
+        // supports() refuses every non-CSR format, forced routes included.
         if constexpr (MFormat == MatrixFormat::CSR) {
             if (route.algo == dispatch::Algorithm::Direct) {
                 return sycl_spmm::spmm_native_csr<T>(ctx, A, B_mat, C, alpha,
@@ -87,17 +84,15 @@ size_t spmm_buffer_size(Queue& ctx,
                         T beta,
                         Transpose transA,
                         Transpose transB) {
-    // Same builder, same *_route call, same arguments as spmm() above: the two
-    // must resolve to one Route, or the allocation misses what the call demands.
+    // Must resolve to the same Route as spmm(), or the allocation undershoots.
     const dispatch::Route route = backend::spmm_route<B, T, MFormat>(
         ctx, A, B_mat, C, transA, transB,
         /*vendor_available=*/dispatch::sparse_vendor_available<B>);
 
-    // max() over every SUPPORTED native tier, not the tier this resolution
-    // chose, so a query/call disagreement over- rather than under-allocates.
-    // `native_fired` is not `native_need != 0`: the native need is exactly zero.
-    // Nothing below may touch device memory -- spmm_op_shape reads only int
-    // metadata; row_offsets() and A.nnz(b) are not host-reachable here.
+    // max() over every supported native tier, not the resolved one, so a
+    // query/call disagreement over- rather than under-allocates. `native_fired`
+    // cannot be `native_need != 0`: the native need is exactly zero. Nothing
+    // here may touch device memory: row_offsets()/nnz() are not host-reachable.
     std::size_t native_need = 0;
     bool native_fired = false;
     if (dispatch::is_native(route)) {
@@ -133,7 +128,6 @@ size_t spmm_buffer_size(Queue& ctx,
     BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F) \
     BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
 
-// CSR is the only sparse format any backend instantiates today.
 #define SPMM_ALL(B_)                                    \
     SPMM_ONE(B_, float, MatrixFormat::CSR)              \
     SPMM_ONE(B_, double, MatrixFormat::CSR)             \

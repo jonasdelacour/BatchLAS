@@ -78,8 +78,7 @@ Event gemm(Queue& ctx,
         if (dispatch::is_native(route)) {
             return sycl_gemm::gemm_custom<T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }
-        // Shapes the native kernel does not serve (non-Default precision,
-        // degenerate dims) have no route at all without a vendor.
+        // Non-Default precision and degenerate dims have no route without a vendor.
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::gemm, Back, dispatch::kLevel3Library<Back>);
     } else {
@@ -96,12 +95,10 @@ Event gemv(Queue& ctx,
            T beta,
            Transpose transA) {
     // The gate runs BEFORE the vendor-available test: anything below that test
-    // is unreachable in the vendor-free build.
-    //
-    // No validation call is hoisted here, unlike trsm. The native kernel must
-    // accept exactly what the vendor accepts, and a new throw would turn an
-    // existing silent bug into a crash in a live path (docs/design/known-defects.md,
-    // defect 1).
+    // is unreachable in the vendor-free build. Deliberately no hoisted
+    // validation, unlike trsm -- the native kernel must accept exactly what the
+    // vendor accepts, and a new throw would turn the live silent bug in
+    // docs/design/known-defects.md (defect 1) into a crash.
     const dispatch::Route route = backend::gemv_route<Back, T>(
         ctx, A, X, Y, transA,
         /*vendor_available=*/dispatch::level3_vendor_available<Back>);
@@ -116,8 +113,7 @@ Event gemv(Queue& ctx,
     }
 
     if constexpr (!dispatch::level3_vendor_available<Back>) {
-        // What reaches here is what supports() refuses: a heterogeneous A, a
-        // negative extent, an empty batch, or views that do not describe one gemv.
+        // Reached only by what supports() refuses (heterogeneous A, bad extents).
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::gemv, Back, dispatch::kLevel3Library<Back>);
     } else {
@@ -134,9 +130,9 @@ Event trsm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
-    // Validation first, hoisted here so every backend gets it -- netlib_lapack.cc
-    // never called trsm_validate_params. It must precede the shape builder, which
-    // reads A.rows()/B.rows()/B.cols() and would index a non-conforming shape.
+    // Validation is hoisted here so every backend gets it, and must precede the
+    // shape builder, which reads A.rows()/B.rows()/B.cols() and would index a
+    // non-conforming shape.
     trsm_validate_params(A, B, side, uplo, transA, diag);
 
     // The gate runs BEFORE the vendor-available test: anything below that test
@@ -152,12 +148,10 @@ Event trsm(Queue& ctx,
                     ctx, A, B, alpha, side, uplo, transA, diag);
             }
             if (route.algo == dispatch::Algorithm::Blocked) {
-                // The trailing update goes through the ROUTER, not straight to
-                // sycl_gemm::gemm_custom: every operand trsm issues is a sub-view
-                // carrying its parent's leading dimension, and the native GEMM
-                // collapses on a strided ld where the vendor does not.
-                // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-                // Injected as a lambda so the kernel TU stays free of dispatch.
+                // Routed, not a direct sycl_gemm::gemm_custom call: trsm's operands
+                // are sub-views carrying the parent's ld, and the native GEMM
+                // collapses on a strided ld. The lambda keeps dispatch out of the
+                // kernel TU. evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
                 return sycl_trsm::trsm_native_blocked<T>(
                     ctx, A, B, alpha, side, uplo, transA, diag,
                     [](Queue& c,

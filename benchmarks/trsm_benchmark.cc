@@ -9,7 +9,6 @@
 #include <vector>
 using namespace batchlas;
 
-// Single TRSM benchmark
 template <typename T, Backend B>
 static void BM_TRSM(minibench::State& state) {
     // SquareBatchSizes emits Args({s, s, bs}): batch is range(2), not range(1).
@@ -38,14 +37,12 @@ static void BM_TRSM(minibench::State& state) {
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_TRSM, SquareBatchSizes);
 
-// The ortho-shaped grid: the only shape the library issues. Both trsm call sites
-// (src/extensions/ortho.cc:202, :289) pass a k x k Cholesky factor as A and an
-// m x k basis as B, so n is small and q large; the square sweep above has no caller.
+// The ortho-shaped grid: the only shape the library issues -- ortho.cc passes a k x k
+// Cholesky factor as A and an m x k basis as B, so n is small and q large.
 // evidence: docs/perf/trsm.md#the-measured-grid
 
-// Cells over the cap are dropped and PRINTED, so a grid that shrinks cannot pass
-// for one that covered everything. The cap is computed for complex<double> and
-// applied to every type, so all four run an identical grid.
+// The cap is computed for complex<double> and applied to every type, so all four run
+// an identical grid. Dropped cells are printed.
 static constexpr double kTrsmGridCapBytes = 6.0e9;   // of 24 GB
 
 static inline double trsm_grid_bytes(double n, double q, double batch) {
@@ -80,8 +77,8 @@ inline void TrsmOrthoSizes(Benchmark* b) {
     }
 }
 
-// Profile-only, NOT for ranking: these rows exist to make the starvation knee
-// visible, and a ratio read off them is an overhead ratio, not an algorithm one.
+// Profile-only, NOT for ranking: these rows are unsaturated, so a ratio read off them
+// is an overhead ratio, not an algorithm one.
 template <typename Benchmark>
 inline void TrsmOrthoStarvedSizes(Benchmark* b) {
     for (int n : {8, 32, 128}) {
@@ -93,8 +90,8 @@ inline void TrsmOrthoStarvedSizes(Benchmark* b) {
     }
 }
 
-// Report the parse of BATCHLAS_TRSM_ROUTE once per process: an unrecognised value
-// silently measures the default route on both sides of an A/B and reports 1.0.
+// An unrecognised BATCHLAS_TRSM_ROUTE silently measures the default route on both
+// sides of an A/B and reports 1.0, so announce the parse once per process.
 static void trsm_announce_route_env() {
     static bool done = false;
     if (done) return;
@@ -123,8 +120,8 @@ static void BM_TRSM_OrthoBody(minibench::State& state) {
     const size_t q     = state.range(1);
     const size_t batch = state.range(2);
 
-    // ConjTrans for complex, Trans for real -- what ortho.cc issues. The resolver
-    // keys on the enum, so the two spellings are not interchangeable here.
+    // ConjTrans for complex, Trans for real -- what ortho.cc issues; the resolver keys
+    // on the enum, so the two spellings are not interchangeable here.
     constexpr Transpose kTrans =
         batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     constexpr Transpose trans = (SD == Side::Right) ? kTrans : Transpose::NoTrans;
@@ -146,8 +143,8 @@ static void BM_TRSM_OrthoBody(minibench::State& state) {
                         trsm(qq, std::forward<decltype(xs)>(xs)...);
                     });
 
-    // Real-arithmetic flop convention for all four types so the columns compare
-    // directly; complex GFLOPS therefore understates by 4x by construction.
+    // Real-arithmetic flop convention for all four types, so complex GFLOPS understates
+    // by 4x by construction.
     state.SetMetric("GFLOPS", double(batch) * (1e-9 * double(n) * double(n) * double(q)),
                     minibench::Rate);
     state.SetMetric("Time (us) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
@@ -157,8 +154,8 @@ template <typename T, Backend Bk>
 static void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
 template <typename T, Backend Bk>
 static void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, Bk, Side::Left>(s); }
-// Separate symbols, and NOT named *OrthoRightStarved: --name matches by SUBSTRING,
-// so that spelling would fold these profile-only rows into every ranking run.
+// NOT named *OrthoRightStarved: --name matches by SUBSTRING, so that spelling would
+// fold these profile-only rows into every ranking run.
 template <typename T, Backend Bk>
 static void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
 template <typename T, Backend Bk>

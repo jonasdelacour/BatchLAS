@@ -1,8 +1,8 @@
 #pragma once
 
-// GEMM's routing table. supports() is correctness only -- a speed cutoff here
-// strands shapes with no route at all in a vendor-free build; preferred() is the
-// measured window. Pure: the env read lives in route_env.hh. docs/perf/dispatch.md
+// GEMM's routing table, pure -- the env read lives in route_env.hh. A speed
+// cutoff in supports() would strand shapes with no route at all in a vendor-free
+// build; preferred() is the measured window. docs/perf/dispatch.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -39,9 +39,7 @@ struct RouteTable<Op::gemm, T> {
 
         if (s.heterogeneous_batch) return false;
 
-        // Complex has no register kernel -- select_kernel_variant's ladder is
-        // float-only -- so relaxing this routes complex to Tiled16, not to a
-        // register tile. evidence: docs/perf/gemm.md#complex-is-refused
+        // Complex has no register kernel. evidence: docs/perf/gemm.md#complex-is-refused
         if constexpr (is_std_complex_v<T>) {
             return false;
         } else {
@@ -51,16 +49,15 @@ struct RouteTable<Op::gemm, T> {
 
             if constexpr (std::is_same_v<T, float>) {
                 if (s.m != s.n || s.n != s.k) return false;
-                // float: NN, square, max_dim <= 32; native loses transposed and
-                // 128..512. evidence: docs/perf/gemm.md#float-nn-at-max_dim-32
+                // float: square NN only, max_dim <= 32.
+                // evidence: docs/perf/gemm.md#float-nn-at-max_dim-32
                 if (s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans) {
                     return false;
                 }
                 if (max_dim <= 32) return true;
                 return false;
             } else if constexpr (std::is_same_v<T, double>) {
-                // double: any transpose, any size, k >= 2; k=1 is a rank-1
-                // update, the one shape the vendor wins.
+                // double: any transpose, any size, k >= 2 (k=1 rank-1 goes to the vendor).
                 // evidence: docs/perf/gemm.md#double-the-only-fully-native-window
                 return s.k >= 2;
             } else {
@@ -75,7 +72,7 @@ struct RouteTable<Op::gemm, T> {
     }
 };
 
-// Pure. A default-constructed `forced` means "no opinion"; see route_env.hh.
+// A default-constructed `forced` means "no opinion"; see route_env.hh.
 template <typename T>
 inline Route resolve_gemm_route(Route forced, const OpShape& s,
                                 bool vendor_available = true) {

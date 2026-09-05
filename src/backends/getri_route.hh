@@ -3,10 +3,8 @@
 // The GETRI shape builder and route resolution; the routed window itself lives in
 // route_getri.hh (evidence: docs/perf/lu.md#getri-window-evidence). This header must
 // not gain src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade includes it.
-//
 // The shape is built from A alone because getri_buffer_size has no C, and both call
-// sites must build it identically to reach the same route. An A/C disagreement
-// therefore cannot gate the route: the arena spellings check it, and so must a driver.
+// sites must build it identically to reach the same route.
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getri.hh>

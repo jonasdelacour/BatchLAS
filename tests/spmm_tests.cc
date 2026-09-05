@@ -18,14 +18,12 @@
 
 using namespace batchlas;
 
-// ===========================================================================
 // spmm coverage: all nine (transA, transB) spellings, per-item sparsity
 // patterns, heterogeneous nnz, empty/unsorted/duplicate rows, padded leading
-// dimensions and batch strides, and the alpha/beta corners. Fixtures are
-// hand-built: convert_to<CSR> is correct only for SQUARE inputs, so a generated
-// rectangular fixture would compare the kernel against a garbage A.
-// Findings: docs/perf/spmm.md#correctness-findings
-// ===========================================================================
+// dimensions and strides, and the alpha/beta corners. Fixtures are hand-built:
+// convert_to<CSR> is correct only for SQUARE inputs, so a generated rectangular
+// fixture would compare the kernel against a garbage A.
+// evidence: docs/perf/spmm.md#correctness-findings
 
 template <typename T, Backend B>
 struct TestConfig {
@@ -80,8 +78,8 @@ struct SpmmPatternSpec {
     bool duplicate_cols = false;
 };
 
-// Columns are distinct by construction, so duplicate and unsorted rows appear
-// only where asked for: the structure axes stay independent.
+// Columns are distinct by construction, so the duplicate and unsorted axes
+// stay independent.
 std::vector<SpmmPattern> spmm_build_pattern(const SpmmPatternSpec& p) {
     std::vector<SpmmPattern> out(static_cast<size_t>(std::max(0, p.batch)));
     for (int b = 0; b < p.batch; ++b) {
@@ -105,14 +103,12 @@ std::vector<SpmmPattern> spmm_build_pattern(const SpmmPatternSpec& p) {
                 }
                 std::sort(cols.begin(), cols.end());
                 if (p.duplicate_cols && (i % 2) == 0) {
-                    // Adjacent, so the row stays non-decreasing: duplicated, NOT
-                    // also unsorted.
+                    // Adjacent, so the row stays non-decreasing: not also unsorted.
                     const int dup = cols.front();
                     cols.insert(cols.begin() + 1, dup);
                 }
                 if (p.unsorted_cols && cols.size() > 1) {
-                    // Neither ascending nor descending -- what convert_to<CSR>
-                    // actually emits.
+                    // Neither ascending nor descending -- what convert_to<CSR> emits.
                     std::rotate(cols.begin(), cols.begin() + 1, cols.end());
                 }
             }
@@ -154,23 +150,21 @@ protected:
         bool duplicate_cols = false;
 
         // --- memory-state axes ---
-        // NaN values at an out-of-range column (2^30) above each item's own nnz.
-        // Arms the NoTrans gather and faults a vendor that over-reads -- but under
-        // Trans the scatter's range guard discards the entry BEFORE the NaN is
-        // multiplied, so the poison is swallowed whole.
+        // NaN at an out-of-range column (2^30) above each item's own nnz. Live
+        // for the NoTrans gather only: under Trans the scatter's range guard
+        // discards the entry before the NaN is ever multiplied.
         bool poison_padding = false;
-        // A large FINITE sentinel at an IN-RANGE column: an entry the scatter
-        // accepts, and so the only poison that makes the transposed nnz bound
-        // observable. docs/perf/spmm.md#the-eleventh-blind-guard
+        // A finite sentinel at an IN-RANGE column -- the only poison the
+        // transposed scatter accepts, so the only one that makes its nnz bound
+        // observable. evidence: docs/perf/spmm.md#the-eleventh-blind-guard
         bool poison_padding_in_range = false;
-        // C starts non-finite. Only meaningful with beta == 0, where C must not
-        // be read at all and the answer must come back finite.
+        // C starts non-finite; only meaningful with beta == 0, where C must not
+        // be read at all.
         bool c_starts_nan = false;
-        // A's live values start non-finite. Only meaningful with alpha == 0,
-        // which makes the guard observable rather than the identity 0*x == 0.
+        // A's live values start non-finite; only meaningful with alpha == 0.
         bool a_starts_nan = false;
-        // One column of B is uninitialised and its output column discarded --
-        // the lanczos shape. Only expressible with transB == NoTrans.
+        // One column of B uninitialised and its output discarded -- the lanczos
+        // shape. Only expressible with transB == NoTrans.
         int b_nan_col = -1;
 
         // --- stride and leading-dimension pads ---
@@ -208,8 +202,7 @@ protected:
             max_nnz = std::max(
                 max_nnz, static_cast<int>(items[static_cast<size_t>(b)].ci.size()));
         }
-        // Per-item CAPACITY: the batch maximum, as convert_to<CSR> sizes it, so a
-        // heterogeneous batch really does carry unwritten slots.
+        // Per-item CAPACITY is the batch maximum, as convert_to<CSR> sizes it.
         const int matrix_stride = std::max(1, max_nnz + c.matrix_stride_pad);
         const int offset_stride = c.m + 1 + c.offset_stride_pad;
 
@@ -218,8 +211,7 @@ protected:
         const S nan_v = static_cast<S>(std::numeric_limits<R>::quiet_NaN());
         const int idx_poison = 1 << 30;
 
-        // The IN-RANGE pad column: a column of A names a row of op(B) under
-        // NoTrans and an output row of C under Trans, both of extent kA.
+        // The in-range pad column: a column of A indexes an extent-kA axis either way.
         const int pad_col = std::max(0, c.kA - 1);
         const S pad_sentinel = static_cast<S>(R(8192));
         ASSERT_FALSE(c.poison_padding && c.poison_padding_in_range)
@@ -252,8 +244,8 @@ protected:
                     c.a_starts_nan ? nan_v
                                    : spmm_cov_value<S>(b * 104729 + p * 31 + 7);
             }
-            // The slots above this item's own nnz. The default fill is a large
-            // value at column 0 -- in range either way, so an over-read is visible.
+            // Slots above this item's own nnz; the default fill is in range
+            // either way, so an over-read is visible.
             for (int p = nnz_b; p < matrix_stride; ++p) {
                 int ci_fill = 0;
                 S val_fill = poison;
@@ -290,8 +282,8 @@ protected:
         // ---- C, plus a guard band --------------------------------------------
         const int ldc = std::max(1, out_rows + c.ldc_pad);
         const int str_c = std::max({1, ldc * c.nrhs + c.c_stride_pad, ldc});
-        // A guard band past the last batch item: the transposed body writes C through
-        // an index taken from col_indices, so a stray write needs somewhere to land.
+        // The transposed body writes C through an index taken from col_indices,
+        // so a stray write past the last item needs somewhere to land.
         constexpr int kGuard = 64;
         const size_t c_live = static_cast<size_t>(str_c) * static_cast<size_t>(c.batch);
         UnifiedVector<S> c_data(c_live + kGuard);
@@ -331,8 +323,8 @@ protected:
         ASSERT_EQ(C_view.stride(), str_c);
         ASSERT_EQ(C_view.rows(), out_rows);
         ASSERT_EQ(C_view.cols(), c.nrhs);
-        // And that the row offsets are ITEM-LOCAL: nnz(b) is offsets[b*os + m] -
-        // offsets[b*os], which a global array would turn into a running total.
+        // Row offsets must be ITEM-LOCAL: a global array would turn nnz(b) into
+        // a running total.
         for (int b = 0; b < c.batch; ++b) {
             ASSERT_EQ(A_view.nnz(b),
                       static_cast<int>(items[static_cast<size_t>(b)].ci.size()))
@@ -341,8 +333,8 @@ protected:
 
         // ---- the call --------------------------------------------------------
         const bool transposed = !a_nt || !b_nt;
-        // Keyed on a NATIVE pin, not on "a pin exists": a vendor pin can still land
-        // on a backend that legitimately refuses transposes, which would turn the
+        // Keyed on a NATIVE pin, not on "a pin exists": a vendor pin can land on
+        // a backend that legitimately refuses transposes, turning the
         // pre-existing NETLIB skips into failures.
         const char* const route_pin = std::getenv("BATCHLAS_SPMM_ROUTE");
         const std::string_view pin_text = route_pin ? route_pin : "";
@@ -371,9 +363,8 @@ protected:
         }
 
         // ---- the reference, written FROM THE DEFINITION ----------------------
-        // Accumulated over the NONZEROS, not the outputs, so one loop serves both
-        // directions and duplicate columns in a row SUM -- which MatrixView::at and
-        // KernelMatrixView::get would lose: both return the FIRST match.
+        // Accumulated over the NONZEROS so one loop serves both directions and
+        // duplicate columns SUM -- MatrixView::at returns only the FIRST match.
         const R tol = test_utils::tolerance<S>();
         for (int b = 0; b < c.batch; ++b) {
             const SpmmPattern& it = items[static_cast<size_t>(b)];
@@ -381,8 +372,8 @@ protected:
             std::vector<S> expect(n_out, S(0));
             std::vector<R> scale(n_out, R(0));
 
-            // alpha == 0 NEVER READS A, in the reference exactly as in the kernel:
-            // summing a NaN-filled A here would predict NaN and check nothing.
+            // alpha == 0 must not read A here either: summing a NaN-filled A
+            // would predict NaN and check nothing.
             if (c.alpha != S(0)) {
                 for (int i = 0; i < c.m; ++i) {
                     const int rs = it.ro[static_cast<size_t>(i)];
@@ -391,8 +382,7 @@ protected:
                         S a = a_val[static_cast<size_t>(b) * matrix_stride +
                                     static_cast<size_t>(p)];
                         const int j = it.ci[static_cast<size_t>(p)];
-                        // ConjTrans conjugates the SPARSE operand. std::conj on a
-                        // real returns std::complex, so the branch is compile-time.
+                        // ConjTrans conjugates the SPARSE operand.
                         if constexpr (test_utils::is_complex<S>::value) {
                             if (c.transA == Transpose::ConjTrans) a = std::conj(a);
                         }
@@ -457,8 +447,8 @@ protected:
                 }
             }
 
-            // Every slot of C that is not a live element must be UNTOUCHED: a body that
-            // ignored ldc, or derived C's batch stride, passes every check above.
+            // Every non-live slot of C must be UNTOUCHED: a body that ignored
+            // ldc, or derived C's batch stride, passes every check above.
             for (int t = 0; t < str_c; ++t) {
                 const int col = t / ldc;
                 const int row = t - col * ldc;
@@ -488,7 +478,6 @@ protected:
 TYPED_TEST_SUITE(SpmmCoverageTest, MyTypes);
 
 // --- 1. Baseline pair: batch 1 and batch > 1 on the SAME uniform pattern ---
-// The control for section 2: both are identities for a dropped per-item base.
 
 TYPED_TEST(SpmmCoverageTest, SingleItemSquareNoTrans) {
     using S = typename TestFixture::ScalarType;
@@ -507,8 +496,8 @@ TYPED_TEST(SpmmCoverageTest, BatchedSquareUniformPatternNoTrans) {
 }
 
 // --- 2. Distinct sparsity patterns per batch item ---
-// Reading col_indices at `p` instead of `b*matrix_stride + p` is an identity at
-// batch 1 and at any batch whose items share a pattern; only this shape sees it.
+// Dropping the b*matrix_stride base is an identity at batch 1 and on a uniform
+// batch; only this shape sees it.
 
 TYPED_TEST(SpmmCoverageTest, DistinctPatternsAcrossBatch) {
     using S = typename TestFixture::ScalarType;
@@ -531,8 +520,7 @@ TYPED_TEST(SpmmCoverageTest, DistinctPatternsAcrossBatchTrans) {
 
 // --- 3. Heterogeneous nnz, and the uninitialised padding above it ---
 // The only legal bound on the nonzero loop is the item's own row_offsets[i+1];
-// A.nnz() is the per-item CAPACITY, and the slots above an item's own nnz hold
-// whatever the allocator left.
+// A.nnz() is the per-item CAPACITY.
 // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
 
 TYPED_TEST(SpmmCoverageTest, HeterogeneousNnzAcrossBatch) {
@@ -544,8 +532,7 @@ TYPED_TEST(SpmmCoverageTest, HeterogeneousNnzAcrossBatch) {
     this->run_case(c);
 }
 
-// The gather has no range guard on the column index, so the out-of-range poison
-// is live here.
+// The gather has no range guard on the column index, so the poison is live here.
 TYPED_TEST(SpmmCoverageTest, PaddingAboveNnzIsNotRead) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -569,8 +556,8 @@ TYPED_TEST(SpmmCoverageTest, HeterogeneousNnzAcrossBatchTrans) {
 }
 
 // The transposed nnz bound. The poison is IN-RANGE deliberately: an out-of-range
-// one is discarded by the scatter's range guard before it is ever multiplied,
-// which made this case vacuous. docs/perf/spmm.md#the-eleventh-blind-guard
+// one is discarded by the scatter's range guard, which made this case vacuous.
+// evidence: docs/perf/spmm.md#the-eleventh-blind-guard
 TYPED_TEST(SpmmCoverageTest, PaddingAboveNnzIsNotReadTrans) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -598,7 +585,6 @@ TYPED_TEST(SpmmCoverageTest, PaddingAboveNnzOutOfRangeIsNotReadTrans) {
 }
 
 // --- 4. All six pads at once: four batch strides, two leading dimensions ---
-// Non-natural strides are the norm at the real call sites (lanczos, LOBPCG).
 
 TYPED_TEST(SpmmCoverageTest, StridePadsAreReadNotDerived) {
     using S = typename TestFixture::ScalarType;
@@ -630,8 +616,7 @@ TYPED_TEST(SpmmCoverageTest, StridePadsAreReadNotDerivedTrans) {
 }
 
 // --- 5. The three structure axes RandomSparseHermitian cannot produce ---
-// Empty rows must yield exactly beta*C, and the same column twice in one row
-// MUST SUM -- which MatrixView::at and KernelMatrixView::get do not.
+// Empty rows must yield exactly beta*C; the same column twice in one row MUST SUM.
 
 TYPED_TEST(SpmmCoverageTest, EmptyRowsContributeOnlyBeta) {
     using S = typename TestFixture::ScalarType;
@@ -691,9 +676,8 @@ TYPED_TEST(SpmmCoverageTest, DuplicateColumnsSumTrans) {
 }
 
 // --- 6. The two scalar guards, made observable ---
-// beta == 0 means C IS NOT READ: callers pass unzeroed BumpAllocator memory, so
-// an unconditional beta*C returns 0 * garbage. alpha == 0 means A IS NOT READ
-// and the answer is C = beta*C, NOT a quick return leaving C untouched.
+// beta == 0 means C IS NOT READ -- callers pass unzeroed BumpAllocator memory.
+// alpha == 0 means A is not read and the answer is beta*C, not a quick return.
 
 TYPED_TEST(SpmmCoverageTest, BetaZeroDoesNotReadC) {
     using S = typename TestFixture::ScalarType;
@@ -736,8 +720,7 @@ TYPED_TEST(SpmmCoverageTest, AlphaZeroScalesCAndDoesNotReadATrans) {
 }
 
 // --- 7. The lanczos shape: a column of B that is genuinely uninitialised ---
-// lanczos writes column it+1 only after the spmm at iteration it, so B's second
-// column is uninitialised every iteration and its output discarded.
+// lanczos writes column it+1 only after the spmm at iteration it.
 
 TYPED_TEST(SpmmCoverageTest, UninitialisedBColumnDoesNotContaminateTheOthers) {
     using S = typename TestFixture::ScalarType;
@@ -788,9 +771,9 @@ TYPED_TEST(SpmmCoverageTest, RectangularTallTrans) {
 }
 
 // --- 9. All nine transA x transB combinations, on one padded batched fixture ---
-// The three transA arms are DIFFERENT KERNEL BODIES (a gather for NoTrans, a
-// scale plus an atomic scatter otherwise), so the 3x3 cannot be sampled at its
-// corners. Expect skips on Backend::NETLIB: docs/perf/spmm.md#the-transposed-refusal
+// The transA arms are DIFFERENT KERNEL BODIES (a gather for NoTrans, an atomic
+// scatter otherwise), so the 3x3 cannot be sampled at its corners. Skips on
+// Backend::NETLIB: docs/perf/spmm.md#the-transposed-refusal
 
 namespace {
 template <typename Case>
@@ -828,9 +811,8 @@ SPMM_NINE_CASE(NineConjTransConjTrans, ConjTrans, ConjTrans)
 #undef SPMM_NINE_CASE
 
 // --- 10. The nrhs ladder ---
-// nrhs is the extent an spmm design register-blocks over. These are the widths
-// the library asks for: 1 (python), 2 (lanczos), 3 (ritz_values), 12/25/50
-// (LOBPCG); 25 and 50 divide no plausible block width.
+// The widths the library asks for: 1 (python), 2 (lanczos), 3 (ritz_values),
+// 12/25/50 (LOBPCG); 25 and 50 divide no plausible register-block width.
 
 TYPED_TEST(SpmmCoverageTest, NrhsOne) {
     using S = typename TestFixture::ScalarType;
@@ -888,8 +870,7 @@ TYPED_TEST(SpmmCoverageTest, NrhsFifty) {
     this->run_case(c);
 }
 
-// The transposed arm has its OWN fixed-width column-block loop; 50 is not a
-// multiple of 4.
+// The transposed arm has its own column-block loop; 50 is not a multiple of 4.
 TYPED_TEST(SpmmCoverageTest, NrhsFiftyTrans) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -902,8 +883,7 @@ TYPED_TEST(SpmmCoverageTest, NrhsFiftyTrans) {
 }
 
 // --- 11. A complex alpha and beta ---
-// Every alpha and beta above is real, so the cross-terms of `alpha * acc` are
-// unchecked until here.
+// Every alpha and beta above is real, so the cross-terms are unchecked until here.
 
 TYPED_TEST(SpmmCoverageTest, ComplexAlphaBetaConjTrans) {
     using S = typename TestFixture::ScalarType;
@@ -947,7 +927,7 @@ TYPED_TEST(SpmmCoverageTest, LargeBatchLanczosShapeTrans) {
 }
 
 // --- 13. The degenerate extent ---
-// nrhs == 0 is legal, and C must come back COMPLETELY untouched -- not scaled by
+// nrhs == 0 is legal and C must come back COMPLETELY untouched, not scaled by
 // beta. m == 0 is deliberately absent: vacuous under NoTrans.
 
 TYPED_TEST(SpmmCoverageTest, ZeroNrhsLeavesCUntouched) {
@@ -964,5 +944,4 @@ int main(int argc, char** argv) {
     return RUN_ALL_TESTS();
 }
 
-// The four deliberate breaks that verify this suite -- what each mutates, which
-// tests must go red, and the pinning recipe: docs/perf/spmm.md#the-eleventh-blind-guard
+// The mutation checks that verify this suite: docs/perf/spmm.md#the-eleventh-blind-guard

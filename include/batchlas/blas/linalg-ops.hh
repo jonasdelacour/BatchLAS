@@ -5,8 +5,8 @@
 #include <utility>
 
 #include <batchlas/blas/enums.hh>
-// Needed here, not merely by our includers: the forwards below name their
-// targets with a qualified id, looked up at template-definition context.
+// Needed here, not merely by our includers: the qualified ids in the forwards
+// below bind at template-definition context.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/matrix.hh>
@@ -18,8 +18,7 @@
 // batchlas::linalg -- the convenience layer: elementwise operations, and
 // value-returning wrappers that allocate their own result. Free functions only.
 // Membership rule: value-returning, backend from the Queue, workspace from the
-// arena => linalg::; out-parameter, workspace yours => batchlas::. `norm`,
-// `cond` and `svd` wait; everything else here merely enqueues.
+// arena => linalg::; out-parameter, workspace yours => batchlas::.
 // See docs/cpp-api.md#the-linalg-convenience-layer.
 namespace batchlas::linalg {
 
@@ -63,7 +62,7 @@ Event elementwise_into(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& B,
                        const MatrixView<T, MatrixFormat::Dense>& C);
 
-// C = alpha*A + beta*B. Covers scaling (beta = 0) and accumulation.
+// C = alpha*A + beta*B.
 template <typename T>
 Event axpby_into(Queue& ctx,
                  T alpha,
@@ -202,9 +201,9 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     return C;
 }
 
-// Cholesky factor of A, as a new matrix. A is not modified.
 inline constexpr Uplo kDefaultUplo = Uplo::Lower;
 
+// Cholesky factor of A, as a new matrix. A is not modified.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -290,8 +289,7 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
 
 // ---- forwarding aliases ----------------------------------------------------
 // Every call below must stay EXPLICITLY qualified with ::batchlas::: linalg is
-// nested inside batchlas, so unqualified lookup stops at the linalg:: name and
-// `return inv(ctx, A);` here is well-formed infinite recursion.
+// nested inside batchlas, so `return inv(ctx, A);` here is infinite recursion.
 
 // A^-1, as a new matrix. A is not modified. Square only (getrf's precondition).
 template <typename T>
@@ -300,9 +298,8 @@ inline Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
     return ::batchlas::inv(ctx, A);
 }
 
-// Plain transpose, NOT the conjugate transpose. Real scalars only: the complex
-// instantiations are commented out in src/extra/transpose.cc (transpose_impl
-// does not conjugate), so the `requires` makes a complex call a compile error.
+// Plain transpose, NOT the conjugate transpose. Real only: transpose_impl does
+// not conjugate, so the `requires` makes a complex call a compile error.
 template <typename T>
     requires RealScalar<T>
 inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
@@ -311,7 +308,7 @@ inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
 }
 
 // One norm per batch item. THIS ONE WAITS: ::batchlas::norm calls .wait()
-// internally (src/extra/norm.cc); its out-parameter form stays asynchronous.
+// internally; its out-parameter form stays asynchronous.
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> norm(
         Queue& ctx,
@@ -321,7 +318,7 @@ inline UnifiedVector<typename base_type<T>::type> norm(
 }
 
 // Condition number per batch item, ||A|| * ||A^-1|| (eigenvalue ratio for
-// Spectral). WAITS, like norm. Real only: cond is float/double on Dense alone.
+// Spectral). WAITS, like norm. Real only.
 template <typename T>
     requires RealScalar<T>
 inline UnifiedVector<T> cond(Queue& ctx,
@@ -340,8 +337,8 @@ struct Svd {
 };
 
 // Singular value decomposition. A is not modified -- gesvd overwrites its input,
-// so it gets a copy. Complex input can throw std::runtime_error at run time: the
-// blocked route has no complex path and the cta route rejects max(m, n) > 32.
+// so it gets a copy. Complex input can throw at run time: no blocked route has a
+// complex path, and the cta route rejects max(m, n) > 32.
 template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -394,9 +391,8 @@ inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 // linalg::qr is deliberately absent: geqrf + triangular_mask_into + orgqr
-// returned Q R != A by four orders of magnitude once an earlier linalg::qr test
-// had run in the same process, and passed when run alone; cause unknown.
-// Reproducer: tests/linalg_layer_tests.cc, four concurrent runs of the binary.
+// returned Q R != A once an earlier linalg::qr test had run in the same process,
+// and passed alone; cause unknown (repro: tests/linalg_layer_tests.cc, 4x).
 
 
 }  // namespace batchlas::linalg

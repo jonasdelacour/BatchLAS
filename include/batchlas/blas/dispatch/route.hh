@@ -1,9 +1,8 @@
 #pragma once
 
-// The routing vocabulary: a Route is an {Origin, Algorithm} pair -- whose code
-// runs, and which strategy it uses. Device family (Backend) and vendor library
-// (BackendLibrary) are separate axes and stay in enums.hh.
-// See docs/design/vendor-independence.md#the-three-axes.
+// The routing vocabulary: a Route is an {Origin, Algorithm} pair -- whose code runs,
+// and which strategy it uses. Backend (device family) and BackendLibrary are separate
+// axes and stay in enums.hh. See docs/design/vendor-independence.md#the-three-axes.
 
 #include <cstdint>
 #include <string>
@@ -14,23 +13,19 @@
 
 namespace batchlas::dispatch {
 
-// Axis 1 -- ORIGIN: whose code is it.
 enum class Origin : uint8_t {
-    Auto,    // let the resolver decide
+    Auto,
     Native,  // a kernel in this repository
-    Vendor,  // third-party math code; the MathDx device libraries (cuBLASDx,
-             // cuSolverDx) count as Vendor too -- NVIDIA source, never portable.
+    Vendor,  // third-party math code; the MathDx device libraries count as Vendor.
 };
 
-// Axis 2 -- ALGORITHM: what the code does. Orthogonal to Origin: the same
-// strategy can in principle be reached natively or via a vendor device library.
 enum class Algorithm : uint8_t {
     Auto,
     Direct,           // one vendor call, or one monolithic kernel
     CTA,              // one work-group per matrix
-    Blocked,          // panel factorisation + blocked trailing update
-    TwoStage,         // dense -> band -> tridiagonal
-    Jacobi,           // one-sided / cyclic Jacobi
+    Blocked,
+    TwoStage,
+    Jacobi,
     RegisterTiled,    // the register-tiled GEMM family (src/sycl/gemm/)
     SplitK,           // k-partitioned GEMM
     ExpandGemm,       // materialise the structured operand, then batched GEMM
@@ -39,19 +34,17 @@ enum class Algorithm : uint8_t {
     FusedDevice,      // one fused device-library kernel (cuBLASDx / cuSolverDx)
 
     // Deliberately WRONG, kept only as a measurement baseline: it stores BOTH
-    // triangles, clobbering the half the caller owns. Auto must never select
-    // it; it is reachable only by naming it explicitly.
+    // triangles, clobbering the half the caller owns. Auto must never select it.
     DiagFullGemm,
 };
 
-// A selection is a PAIR; `library` is a resolver output and so is excluded from
-// equality. Known wrong, deliberately left: nothing in the tree ever writes
-// `library`/`library_valid`, so a resolved Route still reads CBLAS/false.
+// A selection is a PAIR: `library` is a resolver output and is excluded from equality.
+// Known wrong, deliberately left: nothing writes it, so a resolved Route reads CBLAS/false.
 struct Route {
     Origin origin = Origin::Auto;
     Algorithm algo = Algorithm::Auto;
-    BackendLibrary library = BackendLibrary::CBLAS;  // resolver output
-    bool library_valid = false;                      // false until resolved
+    BackendLibrary library = BackendLibrary::CBLAS;
+    bool library_valid = false;
 
     friend constexpr bool operator==(const Route& a, const Route& b) {
         return a.origin == b.origin && a.algo == b.algo;
@@ -59,15 +52,12 @@ struct Route {
     friend constexpr bool operator!=(const Route& a, const Route& b) { return !(a == b); }
 };
 
-// The vendor gate question, as a predicate rather than a list of names, so that
-// adding an Algorithm can never accidentally escape the gate.
+// The vendor gate question as a predicate, so a new Algorithm cannot escape the gate.
 inline constexpr bool is_vendor(Origin o) { return o == Origin::Vendor; }
 inline constexpr bool is_vendor(const Route& r) { return is_vendor(r.origin); }
 
-// "The ordinary vendor library call", as distinct from any vendor route: the
-// MathDx routes are Origin::Vendor too, so writing an old `request == Vendor`
-// test as is_vendor() makes a forced cuBLASDx request answer yes to "did the
-// caller ask for cublasSsyrk?". Use this wherever that is the question.
+// "The ordinary vendor library call", not merely "some vendor route": MathDx routes are
+// Origin::Vendor too, so a forced cuBLASDx request also answers yes to is_vendor().
 inline constexpr bool is_plain_vendor(const Route& r) {
     return r.origin == Origin::Vendor && r.algo == Algorithm::Auto;
 }
@@ -75,8 +65,7 @@ inline constexpr bool is_native(Origin o) { return o == Origin::Native; }
 inline constexpr bool is_native(const Route& r) { return is_native(r.origin); }
 
 // The dispatchable leaf ops -- one per include/batchlas/blas/functions/*.hh.
-// extensions.hh's entry points are absent on purpose: no vendor alternative to
-// choose between, so they still dispatch through BATCHLAS_DISPATCH_ON_QUEUE.
+// extensions.hh's entry points are absent on purpose: no vendor alternative to choose.
 enum class Op : uint8_t {
     gemm, gemv, trsm, trmm, symm, hemm, syrk, herk, syr2k, her2k,
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm, iluk,
@@ -185,8 +174,8 @@ struct OpShape {
                " T=" + std::string(to_string(scalar));
     }
 
-    // Power-of-two bucket on max(m,n,k) and on batch, so a 10,000-iteration
-    // test collapses to a handful of coverage rows rather than 10,000.
+    // Power-of-two buckets on max(m,n,k) and batch, so a 10,000-iteration test
+    // collapses to a handful of coverage rows.
     uint32_t shape_class() const {
         auto log2b = [](int64_t v) -> uint32_t {
             uint32_t r = 0;
@@ -197,12 +186,11 @@ struct OpShape {
     }
 };
 
-// Where a forced selection came from, so a diagnostic can quote the exact
-// spelling the caller typed. Load-bearing: tests/trmm_tests.cc asserts on the
-// literal text "BATCHLAS_TRMM_VARIANT".
+// Where a forced selection came from, so a diagnostic can quote the spelling the caller
+// typed. Load-bearing: tests/trmm_tests.cc asserts on the literal "BATCHLAS_TRMM_VARIANT".
 struct RouteRequestSource {
     std::string variable;   // "BATCHLAS_TRMM_VARIANT" / "BATCHLAS_TRMM_ROUTE"
-    std::string value;      // "cublasdx"
+    std::string value;
     bool legacy = false;    // true when it came from a pre-Route spelling
 };
 

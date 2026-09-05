@@ -2,7 +2,7 @@
 
 // Routing table for geqrf's two native arms (CTA, blocked) and the vendor.
 // Evidence: docs/perf/qr.md. supports() is correctness only: a speed cutoff
-// here deletes the native arm from vendor-free builds (route_resolve.hh:60-63).
+// here deletes the native arm from vendor-free builds (route_resolve.hh).
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>

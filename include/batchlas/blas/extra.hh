@@ -78,14 +78,9 @@ namespace batchlas
     }
 
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
-    //
-    // `algo` defaults to CGS2, not to a Cholesky variant, deliberately: Chol-QR
-    // squares the condition number of its input, which here is an uncontrolled
-    // Matrix::Random, so in float potrf fails, its info code is discarded (see
-    // src/extra/random_cond.cc) and whole batch items come back non-finite.
-    // Householder is the tempting alternative and is worse: it removes the NaNs
-    // but leaves some items singular, so the requested kappa is then silently
-    // not honoured.
+    // `algo` defaults to CGS2 deliberately: Chol-QR squares the condition number of an
+    // uncontrolled random input and returns non-finite items in float, and Householder
+    // leaves some items singular, silently not honouring the requested kappa.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
                                                                   int n,
@@ -162,12 +157,10 @@ namespace batchlas
         return transpose<T,MF>(ctx, MatrixView<T,MF>(A));
     }
 
-    // Backend-deducing overloads; see BATCHLAS_DISPATCH_ON_QUEUE in
-    // blas/queue-dispatch.hh. The random_*_with_log10_cond_metric generators are
-    // deliberately absent: their `T` appears only as `float_t<T>` (a non-deduced
-    // context) and in the return type, so the macro would expand to nothing and
-    // read as if they were dispatchable. They keep the explicit f<Backend, T>
-    // spelling; see docs/cpp-api.md#which-spelling-each-entry-point-takes.
+    // Backend-deducing overloads. The random_*_with_log10_cond_metric generators are
+    // deliberately absent: their `T` is non-deduced (it appears only as `float_t<T>`
+    // and in the return type), so the macro would expand to nothing.
+    // See docs/cpp-api.md#which-spelling-each-entry-point-takes.
     BATCHLAS_DISPATCH_ON_QUEUE(cond)
     BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)
 
