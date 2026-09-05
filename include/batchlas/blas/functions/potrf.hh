@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -14,7 +16,7 @@ namespace sig {
 template <typename T>
 using potrf = Event(Queue&,
                     const MatrixView<T, MatrixFormat::Dense>&,
-                    Uplo, Span<std::byte>);
+                    Uplo, Span<std::byte>, Span<int32_t>);
 
 template <typename T>
 using potrf_buffer_size = size_t(Queue&,
@@ -28,11 +30,36 @@ size_t potrf_buffer_size(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
                     Uplo uplo);
 
+// `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
+// and >0 for the leading minor at which the item stopped being positive
+// definite. It used to be unreachable -- every backend allocated the array the
+// vendor call needs, passed it, and dropped it -- so a caller could not tell a
+// batch that factorised from one where item 37 is rank-deficient and everything
+// downstream is noise (see issue #73).
+//
+// An EMPTY span means "not requested" and is exactly today's behaviour: the
+// backend falls back to its own scratch allocation. The workspace size is
+// deliberately the same either way, so potrf_buffer_size stays correct whether
+// or not a caller asks for status.
 template <Backend B, typename T>
 Event potrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         Uplo uplo,
-        Span<std::byte> workspace);
+        Span<std::byte> workspace,
+        Span<int32_t> info);
+
+// Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
+// sig:: aliases above are function *types* and function types cannot carry
+// default arguments (see src/util/template-instantiations.hh), so a default
+// would not be part of the instantiated signature. A separate overload keeps
+// every existing four-argument call site compiling unchanged.
+template <Backend B, typename T>
+inline Event potrf(Queue& ctx,
+        const MatrixView<T, MatrixFormat::Dense>& descrA,
+        Uplo uplo,
+        Span<std::byte> workspace) {
+        return potrf<B,T>(ctx, descrA, uplo, workspace, Span<int32_t>{});
+}
 
 template <Backend B, typename T>
 inline size_t potrf_buffer_size(Queue& ctx,
@@ -45,8 +72,17 @@ template <Backend B, typename T>
 inline Event potrf(Queue& ctx,
                 const Matrix<T, MatrixFormat::Dense>& descrA,
                 Uplo uplo,
+                Span<std::byte> workspace,
+                Span<int32_t> info) {
+        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace, info);
+}
+
+template <Backend B, typename T>
+inline Event potrf(Queue& ctx,
+                const Matrix<T, MatrixFormat::Dense>& descrA,
+                Uplo uplo,
                 Span<std::byte> workspace) {
-        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace);
+        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace, Span<int32_t>{});
 }
 
 }  // namespace batchlas

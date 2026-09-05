@@ -98,7 +98,7 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 32};
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
     stedc(*this->ctx, a.view(), b.view(), eigvals.view(),
                       ws, JobType::EigenVectors, params, eigvects.view());
@@ -144,7 +144,7 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 16};
 
-    UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
     Matrix<float_type> reconstructed = Matrix<float_type>::Zeros(n, n, batch);
     reconstructed.view().fill_tridiag(*this->ctx, b, a, b).wait();
@@ -234,8 +234,8 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         auto eigvecs_rec = Matrix<float_type>::Identity(n, batch);
         auto eigvecs_lvl = Matrix<float_type>::Identity(n, batch);
 
-        UnifiedVector<std::byte> ws_rec(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
-        UnifiedVector<std::byte> ws_lvl(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
+        UnifiedVector<std::byte> ws_rec(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
+        UnifiedVector<std::byte> ws_lvl(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
         stedc(*this->ctx, a_rec.view(), b_rec.view(), eigvals_rec.view(), ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec.view());
         stedc(*this->ctx, a_lvl.view(), b_lvl.view(), eigvals_lvl.view(), ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
@@ -293,8 +293,8 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
         .enable_rescale = true,
     };
 
-    UnifiedVector<std::byte> ws_base(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_base));
-    UnifiedVector<std::byte> ws_fused(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
+    UnifiedVector<std::byte> ws_base(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_base));
+    UnifiedVector<std::byte> ws_fused(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
 
     stedc(*this->ctx, a_base.view(), b_base.view(), eigvals_base.view(), ws_base, JobType::EigenVectors, params_base, eigvecs_base.view());
     stedc(*this->ctx, a_fused.view(), b_fused.view(), eigvals_fused.view(), ws_fused, JobType::EigenVectors, params_fused, eigvecs_fused.view());
@@ -339,7 +339,7 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
         .secular_threads_per_root = 32,
     };
 
-    UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
     stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
@@ -412,7 +412,7 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
                 .secular_threads_per_root = P,
             };
 
-            UnifiedVector<std::byte> ws(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+            UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
             stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals.view(), ws, JobType::EigenVectors, params, eigvecs.view());
             this->ctx->wait();
 
@@ -472,7 +472,7 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
             .secular_threads_per_root = P,
         };
 
-        UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+        UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
         stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
         this->ctx->wait();
 
@@ -516,7 +516,7 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
         .secular_threads_per_root = forced_threads_per_root,
     };
 
-    UnifiedVector<std::byte> ws_cta(stedc_workspace_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
+    UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
     stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 

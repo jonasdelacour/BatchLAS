@@ -283,7 +283,7 @@ DenseMatrix dense_trsm_impl(const DenseMatrix& a_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::trsm<B, T>(queue, a.view(), out.view(), side, uplo, trans_a, diag, alpha);
+        batchlas::trsm<B, T>(queue, a.view(), out.view(), alpha, side, uplo, trans_a, diag);
     });
     queue.wait();
     return wrap_dense(std::move(out));
@@ -362,13 +362,10 @@ void init_blas_ops(py::module_& module) {
             Queue& queue = acquire_queue(device_name, backend);
             visit_backend(queue, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
-                if (typed_a.is_heterogeneous() || typed_b.is_heterogeneous()) {
-                    batchlas::gemm_heterogeneous<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(),
-                                                                 typed_alpha, typed_beta, trans_a, trans_b, precision);
-                } else {
-                    batchlas::gemm<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(), typed_alpha,
-                                                   typed_beta, trans_a, trans_b, precision);
-                }
+                // One call for both shapes: gemm dispatches on
+                // gemm_has_heterogeneous_batch internally, on every backend.
+                batchlas::gemm<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(), typed_alpha,
+                                               typed_beta, trans_a, trans_b, precision);
             });
             queue.wait();
             return wrap_dense(std::move(c));
@@ -402,7 +399,7 @@ void init_blas_ops(py::module_& module) {
             Queue& queue = acquire_queue(device_name, backend);
             visit_backend(queue, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
-                batchlas::gemm_heterogeneous<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(),
+                batchlas::gemm<B, scalar_type>(queue, typed_a.view(), typed_b.view(), c.view(),
                                                              typed_alpha, typed_beta, trans_a, trans_b, precision);
             });
             queue.wait();

@@ -6,6 +6,9 @@
 #include "cublasdx_dispatch_common.hh"
 #include "triangular_expand.hh"
 
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+
 #include "../util/kernel-trace.hh"
 
 #include <batchlas/util/mempool.hh>
@@ -18,17 +21,15 @@ namespace batchlas::backend {
 
 namespace {
 
-enum class SymmVariantRequest {
-    Vendor,
-    CuBLASDx,
-    Auto,
-};
-
-SymmVariantRequest symm_variant_request() {
-    return detail::parse_cublasdx_variant_request("BATCHLAS_SYMM_VARIANT",
-                                                  SymmVariantRequest::Vendor,
-                                                  SymmVariantRequest::CuBLASDx,
-                                                  SymmVariantRequest::Auto);
+// The private three-value enum is gone; the same three states are Route's
+// Origin::Vendor / {Vendor, FusedDevice} / Origin::Auto. Legacy spellings are
+// unchanged and pinned by tests/route_vocabulary_tests.cc -- note that "custom"
+// means the FUSED kernel here, not the register-tiled GEMM family the canonical
+// vocabulary reads it as. See parse_legacy_route_value.
+dispatch::Route symm_route_request() {
+    const auto parsed = dispatch::parse_route_env(dispatch::Op::symm);
+    return parsed.found ? parsed.route
+                        : dispatch::legacy_unset_default(dispatch::Op::symm);
 }
 
 bool symm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -138,12 +139,12 @@ bool symm_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& C,
                           Side side,
                           Uplo) {
-    const auto request = symm_variant_request();
+    const auto request = symm_route_request();
     const bool problem_supported = symm_problem_supported(A, B, C, side);
     return detail::should_use_cublasdx(ctx,
                                        request,
-                                       SymmVariantRequest::Vendor,
-                                       SymmVariantRequest::CuBLASDx,
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice},
                                        problem_supported,
                                        problem_supported && symm_prefer_cuda_custom_heuristic(A, B, C, side));
 }

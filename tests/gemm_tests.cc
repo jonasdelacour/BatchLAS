@@ -11,6 +11,7 @@
 #include <batchlas/backend_config.h>
 #if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/gemm_cublasdx_dispatch.hh"
+#include "../src/backends/gemm_variant.hh"
 #endif
 #include "../src/sycl/gemm_kernels.hh"
 #include "test_utils.hh"
@@ -462,7 +463,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
         gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = ScalarType(1), .beta = ScalarType(0)});
     }
 
-    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
+    gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -563,7 +564,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
         gemm(*(this->ctx), Ab, Bb, Cb, {.alpha = alpha, .beta = beta});
     }
 
-    gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
+    gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -642,13 +643,13 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmForcedCuBLASDxVariant) {
     {
         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
         ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn");
-        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
+        gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 
     {
         ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        gemm_heterogeneous(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
                                         Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     }
 
@@ -2068,6 +2069,159 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
 
     auto tol = test_utils::tolerance<ScalarType>() * 50;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+// ---------------------------------------------------------------------------
+// The Route adapter, on live views.
+//
+// tests/route_gemm_equivalence_tests.cc proves the DECISION -- resolve_gemm_route
+// over an OpShape -- matches what gemm_use_sycl_custom used to compute. It says
+// nothing about the step that now feeds it: gemm_op_shape(), which turns three
+// MatrixViews and a Queue into that OpShape. These tests cover exactly that
+// seam, because a bug there would be silent: the numerical comparisons above
+// force BATCHLAS_GEMM_VARIANT=sycl and diff against vendor, so an adapter that
+// wrongly returned Vendor for both arms would compare vendor with vendor and
+// still pass.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+template <typename ScalarType>
+batchlas::dispatch::Route route_for(Queue& ctx, int m, int n, int k, int batch,
+                                    Transpose transA = Transpose::NoTrans,
+                                    Transpose transB = Transpose::NoTrans,
+                                    ComputePrecision precision = ComputePrecision::Default,
+                                    bool vendor_available = true) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+    Matrix<ScalarType> A(a_rows, a_cols, batch);
+    Matrix<ScalarType> B(b_rows, b_cols, batch);
+    Matrix<ScalarType> C(m, n, batch);
+    return batchlas::backend::gemm_route<ScalarType>(
+        ctx, A.view(), B.view(), C.view(), transA, transB, precision, vendor_available);
+}
+
+} // namespace
+
+TYPED_TEST(GemmTest, RouteAdapterUnsetTakesVendorForTinyShape) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
+
+    // 8x8x8 at batch 1 is far outside every measured window, and GEMM's unset
+    // default is Vendor. This is the cell that caught the order-walk fallback
+    // bug: taking "first merely supported" would answer Native here.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if (this->ctx->device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "the measured window is GPU-only";
+    }
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "auto");
+
+    const auto in_window = route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128);
+    if constexpr (test_utils::is_complex<ScalarType>::value) {
+        // Complex is excluded from the window outright. WP2 measured that the
+        // wide-scalar tiles beat both cuBLAS and the in-tree Tiled16 fallback
+        // here, so this is expected to change -- but as a routing change with
+        // its own measurement, not as a side effect of this refactor.
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(in_window));
+    } else {
+        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
+        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
+    }
+
+    // 1024^3 is outside the window for every type, so Auto declines it.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterForcedSyclBypassesTheWindowButNotCorrectness) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
+
+    // Non-square, batch 1, possibly not even a GPU: every speed condition is
+    // false and the route is still Native, because forcing is what `preferred`
+    // exists to be overridden by.
+    EXPECT_TRUE(batchlas::dispatch::is_native(
+        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1)));
+
+    // But a non-default precision is a CORRECTNESS condition, and forcing must
+    // not be able to run the kernel where it would compute the wrong answer.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::F32)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterLegacyNativeStillMeansTheRawVendorPath) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if (this->ctx->device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "the measured window is GPU-only";
+    }
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "native");
+
+    // The collision documented on parse_legacy_route_value, reaching all the
+    // way through the adapter: on a shape that Auto would send to the native
+    // kernel, the legacy spelling "native" must still land on the vendor.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterMismatchedViewsTakeVendor) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
+
+    // OpShape is a POD of scalars and cannot say "these views disagree", so
+    // gemm_op_shape returns nullopt instead. Even a forced native request has
+    // to yield here -- this is the batch-size / k==k_b / m==C.rows() arm of the
+    // old gemm_custom_problem_supported.
+    {
+        Matrix<ScalarType> A(64, 64, 4);
+        Matrix<ScalarType> B(64, 64, 4);
+        Matrix<ScalarType> C(32, 64, 4);   // wrong rows
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
+            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
+            ComputePrecision::Default)));
+    }
+    {
+        Matrix<ScalarType> A(64, 64, 4);
+        Matrix<ScalarType> B(64, 64, 8);   // batch mismatch
+        Matrix<ScalarType> C(64, 64, 4);
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
+            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
+            ComputePrecision::Default)));
+    }
+}
+
+TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
+
+    // The configuration this whole work package is building toward. The same
+    // 8x8x8 that takes the vendor above has to be served natively once there is
+    // no vendor to take -- supported-but-unpreferred means slower, not wrong.
+    EXPECT_TRUE(batchlas::dispatch::is_native(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::Default,
+                              /*vendor_available=*/false)));
+
+    // ...but not where it would be wrong. A non-default precision has no native
+    // route at all, so even with no vendor available the answer stays Vendor,
+    // which is the honest "there is nothing that can serve this" signal.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::F32,
+                              /*vendor_available=*/false)));
 }
 
 int main(int argc, char **argv) {

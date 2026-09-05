@@ -1,7 +1,6 @@
 #include "init.hh"
 #include "support.hh"
 
-#include <batchlas/blas/dispatch/context.hh>
 
 namespace batchlas::python {
 
@@ -264,7 +263,7 @@ py::object stedc_common(const DenseVector& d_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     const std::size_t workspace_size = visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        return batchlas::stedc_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
+        return batchlas::stedc_buffer_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
     });
     UnifiedVector<std::byte> workspace(workspace_size);
     visit_backend(queue, [&](auto backend_tag) {
@@ -843,17 +842,20 @@ void init_spectral_ops(py::module_& module) {
         // Only device capabilities are queried here, so the backend is irrelevant.
         Queue& queue = acquire_queue(device_name, Backend::AUTO);
         namespace dispatch = batchlas::blas::dispatch;
-        const dispatch::DeviceCaps caps = dispatch::query_caps(queue);
         return visit_dense(matrix, [&](auto tag, const auto& typed_matrix) {
             using scalar_type = typename decltype(tag)::type;
             const auto view = typed_matrix.view();
             py::dict out;
-            out["device"] = caps.name;
-            out["is_gpu"] = caps.is_gpu;
-            out["max_sub_group"] = caps.max_sub_group;
-            out["cta"] = dispatch::detail::syev_supports_cta<scalar_type>(caps, view);
-            out["blocked"] = dispatch::detail::syev_supports_blocked<scalar_type>(caps, view, uplo);
-            out["two_stage"] = dispatch::detail::syev_supports_two_stage<scalar_type>(caps, view, uplo);
+            out["device"] = queue.device().get_name();
+            out["is_gpu"] = queue.device().type == DeviceType::GPU;
+            out["max_sub_group"] =
+                static_cast<int>(queue.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+            // These now ask the routing table rather than a parallel copy of its
+            // predicates, so this introspection cannot drift from what dispatch
+            // actually does.
+            out["cta"] = dispatch::detail::syev_supports_cta<scalar_type>(queue, view);
+            out["blocked"] = dispatch::detail::syev_supports_blocked<scalar_type>(queue, view, uplo);
+            out["two_stage"] = dispatch::detail::syev_supports_two_stage<scalar_type>(queue, view, uplo);
             return out;
         });
     });

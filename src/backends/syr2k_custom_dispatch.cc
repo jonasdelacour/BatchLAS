@@ -6,6 +6,9 @@
 #include "syr2k_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+
 #include "../util/kernel-trace.hh"
 
 #include <cctype>
@@ -27,38 +30,12 @@ namespace {
 // half the caller did not name is the caller's storage. It exists to measure
 // what the triangular route saves, and the automatic choice never selects it --
 // reaching it takes naming it here.
-enum class Syr2kRoute {
-    Auto,
-    Vendor,
-    Fused,
-    Triangular,
-    Gemm,
-};
-
-Syr2kRoute syr2k_route_request() {
-    const char* raw = std::getenv("BATCHLAS_SYR2K_VARIANT");
-    if (!raw) {
-        return Syr2kRoute::Auto;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return Syr2kRoute::Vendor;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return Syr2kRoute::Fused;
-    }
-    if (value == "triangular" || value == "tiles") {
-        return Syr2kRoute::Triangular;
-    }
-    if (value == "gemm") {
-        return Syr2kRoute::Gemm;
-    }
-    return Syr2kRoute::Auto;
+// The private Syr2kRoute enum is gone; see the note in syrk_custom_dispatch.cc.
+// Legacy spellings are unchanged and pinned by tests/route_vocabulary_tests.cc.
+dispatch::Route syr2k_route_request() {
+    const auto parsed = dispatch::parse_route_env(dispatch::Op::syr2k);
+    return parsed.found ? parsed.route
+                        : dispatch::legacy_unset_default(dispatch::Op::syr2k);
 }
 
 bool syr2k_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -141,7 +118,7 @@ Event syr2k_cublasdx_fallback_gemm(Queue& ctx,
 } // namespace
 
 bool syr2k_cuda_custom_forced() {
-    return syr2k_route_request() == Syr2kRoute::Fused;
+    return syr2k_route_request().algo == dispatch::Algorithm::FusedDevice;
 }
 
 bool syr2k_use_cuda_custom(const Queue& ctx,
@@ -151,10 +128,10 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
                            Uplo,
                            Transpose transA) {
     const auto route = syr2k_route_request();
-    if (route != Syr2kRoute::Auto && route != Syr2kRoute::Vendor) {
+    if (route.origin != dispatch::Origin::Auto && !dispatch::is_plain_vendor(route)) {
         return true;
     }
-    if (route == Syr2kRoute::Vendor || !detail::is_gpu_queue(ctx) ||
+    if (dispatch::is_plain_vendor(route) || !detail::is_gpu_queue(ctx) ||
         !syr2k_problem_supported(A, B, C, transA) || !syr2k_triangular_supported(A, B, C)) {
         return false;
     }
@@ -173,7 +150,7 @@ Event syr2k_cuda_custom(Queue& ctx,
                         Uplo uplo,
                         Transpose transA) {
     const auto route = syr2k_route_request();
-    const bool forced = route == Syr2kRoute::Fused;
+    const bool forced = route.algo == dispatch::Algorithm::FusedDevice;
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
@@ -187,10 +164,11 @@ Event syr2k_cuda_custom(Queue& ctx,
         return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
-    if (route == Syr2kRoute::Gemm) {
+    if (route.algo == dispatch::Algorithm::DiagFullGemm) {
         return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
     }
-    if (route == Syr2kRoute::Triangular || route == Syr2kRoute::Auto) {
+    if (route.algo == dispatch::Algorithm::TriangularTiles ||
+        route.origin == dispatch::Origin::Auto) {
         if (syr2k_triangular_supported(A, B, C)) {
             return detail::syr2k_triangular_tiles(ctx, A, B, C, alpha, beta, uplo, transA);
         }

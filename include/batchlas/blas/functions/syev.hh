@@ -13,9 +13,9 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extensions.hh>
 
-#include <batchlas/blas/dispatch/context.hh>
-#include <batchlas/blas/dispatch/env.hh>
-#include <batchlas/blas/dispatch/provider.hh>
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/blas/dispatch/route_resolve.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {
@@ -116,49 +116,17 @@ inline SteqrParams<T> syev_cta_steqr_params(JobType jobtype) {
     return params;
 }
 
+// The three support predicates that used to live here are now the `supports`
+// arm of RouteTable<Op::syev, T> below, taking shape facts rather than a
+// DeviceCaps + MatrixView so the table stays pure. syev_supports_* survive only
+// as the thin wrappers below, which exist for the Python _syev_variant_support
+// introspection binding.
 template <typename T>
-inline bool syev_supports_cta(const DeviceCaps& caps, const MatrixView<T, MatrixFormat::Dense>& A) {
-    const int64_t n = A.rows();
-    if (A.rows() != A.cols()) return false;
-    if (n < 1 || n > 32) return false;
-    // CTA supports small sizes (n<=32). Note: some sizes may be slower than others,
-    // but this predicate is about functional support, not performance heuristics.
-    if (!caps.is_gpu) return false;
-    if (caps.max_sub_group < 32) return false;
-    return true;
-}
-
-// Uplo::Upper is supported: syev_blocked mirrors the upper triangle into the lower one
-// (an O(n^2) pass, see src/extensions/uplo_mirror.hh) and runs the ordinary Lower pipeline.
-// Before that, every Upper call fell through to the vendor no matter how much faster this
-// path was at that shape.
+inline bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
 template <typename T>
-inline bool syev_supports_blocked(const DeviceCaps& caps,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  Uplo uplo) {
-    (void)uplo;
-    if (A.rows() != A.cols()) return false;
-    if (A.rows() < 1 || A.batch_size() < 1) return false;
-    if (!caps.is_gpu) return false;
-    return true;
-}
-
-// Uplo::Upper supported by the same mirror; see syev_supports_blocked above.
+inline bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
 template <typename T>
-inline bool syev_supports_two_stage(const DeviceCaps& caps,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    Uplo uplo) {
-    (void)uplo;
-    if (A.rows() != A.cols()) return false;
-    if (A.rows() < 1 || A.batch_size() < 1) return false;
-    if (!caps.is_gpu) return false;
-    return true;
-}
-
-inline Provider normalize_vendor_like(Provider p) {
-    if (p == Provider::Netlib) return Provider::Vendor;
-    return p;
-}
+inline bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
 
 // Should Auto prefer the vendor eigensolver over the BatchLAS blocked one?
 //
@@ -274,8 +242,8 @@ inline Provider normalize_vendor_like(Provider p) {
 // (12.5x at n=1024). That is the same starvation defect again -- both our
 // reductions are parallel over the batch only -- and it is the thing to fix if
 // these thresholds are ever to move left.
-inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch) {
-    if (!caps.is_gpu) return false;
+inline bool syev_prefer_vendor(bool is_gpu, int64_t n, int64_t batch) {
+    if (!is_gpu) return false;
     if (n <= 32) return false;
     if (n >= 320 && n <= 640 && batch >= 128) return false;
     return true;
@@ -315,7 +283,7 @@ inline bool syev_prefer_vendor(const DeviceCaps& caps, int64_t n, int64_t batch)
 //     it keeps CTA and cannot regress;
 //   * only where CTA would actually have been chosen, so nothing that already
 //     routes elsewhere changes;
-//   * an explicitly forced Provider::BatchLAS_CTA still wins, since the forced
+//   * an explicitly forced native:cta still wins, since the forced
 //     branch returns before this is consulted.
 // The default is per type: see syev_cta_max_n_default_for<T> below. The env knob
 // overrides whatever that default is, for every type.
@@ -490,25 +458,21 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     }
 }
 
+// Takes the shape facts directly rather than a DeviceCaps + MatrixView, so it
+// can be called from RouteTable<Op::syev, T>::preferred, which is pure. The
+// `syev_supports_cta` call it used to make is now the CTA arm of that table's
+// `supports`, inlined here as the same three conditions.
 template <typename T>
-inline bool syev_prefer_vendor_over_cta(const DeviceCaps& caps,
-                                        const MatrixView<T, MatrixFormat::Dense>& A,
+inline bool syev_prefer_vendor_over_cta(bool is_gpu,
+                                        int64_t n,
+                                        int max_sub_group,
                                         JobType jobtype) {
-    if (!caps.is_gpu) return false;
+    if (!is_gpu) return false;
     if (jobtype != JobType::EigenVectors) return false;
-    if (!syev_supports_cta(caps, A)) return false;
-    return A.rows() > syev_cta_max_n_for_vectors<T>();
+    if (n < 1 || n > 32 || max_sub_group < 32) return false;   // == supports(CTA)
+    return n > syev_cta_max_n_for_vectors<T>();
 }
 
-// Eigenvalues-only: is the two-stage solver the best choice for this shape?
-// Checked before syev_prefer_vendor, since it overrides it where it applies.
-// SUPERSEDED by syev_saturated_provider_for_n_values. Retained only because the batch >= 256
-// term is a documented cautionary tale: an n = 1024 solve at batch 254 fell through it to the
-// vendor and paid 2.75x. No longer consulted by choose_syev_provider.
-inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int64_t batch) {
-    if (!caps.is_gpu) return false;
-    return n >= 512 && batch >= 256;
-}
 
 // --- Eigenvector routing, decided AT SATURATION and keyed on n alone ----------
 //
@@ -683,7 +647,12 @@ inline bool syev_prefer_two_stage_values(const DeviceCaps& caps, int64_t n, int6
 // absorb it. See syev_saturated_provider_for_n_values, which is correct as
 // committed and is deliberately NOT changed.
 template <typename T>
-inline Provider syev_saturated_provider_for_n(int64_t n) {
+inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
+    // Algorithm::Auto here means "no native algorithm is preferred at this n",
+    // i.e. what the table used to spell Provider::Vendor. Saying it that way
+    // keeps this function about ALGORITHMS and leaves the origin to the
+    // resolver -- which is the whole point of splitting the two axes.
+    using A = batchlas::dispatch::Algorithm;
     // `internal::is_complex` is not visible from this public header; for a real
     // T, base_type<T>::type IS T. Same detection as syev_choose_small_kernel.
     using Real = typename base_type<T>::type;
@@ -697,23 +666,23 @@ inline Provider syev_saturated_provider_for_n(int64_t n) {
     // is inside the 1.10x neutral band, so there is no measured reason to move
     // the boundary. It stays at the last n with a real margin.
     if constexpr (!kReal && kDouble) {
-        return n <= 256 ? Provider::BatchLAS_Blocked : Provider::Vendor;
+        return n <= 256 ? A::Blocked : A::Auto;
     } else if constexpr (!kReal) {
         // complex<float>: 512, not 448 -- see the re-measured grid above.
-        return n <= 512 ? Provider::BatchLAS_Blocked : Provider::Vendor;
+        return n <= 512 ? A::Blocked : A::Auto;
     } else {
         // 64..448: blocked, by up to 2.33x over the vendor and never behind it.
         // Unchanged for the real types: `mac` routes them to the plain
         // multiply-add, so the symv fix did not move their timings at all.
-        if (n <= 448) return Provider::BatchLAS_Blocked;
+        if (n <= 448) return A::Blocked;
         if constexpr (!kDouble) {
             // float only: two-stage ties blocked at 512/640, wins 1.06x at 768,
             // and is within 1.02x of the vendor at 1024. All neutral, so this
             // keeps the committed behaviour rather than churning it.
-            if (n <= 1024) return Provider::BatchLAS_TwoStage;
-            return Provider::Vendor;               // 2048+, 1.65x (see the caveat)
+            if (n <= 1024) return A::TwoStage;
+            return A::Auto;                        // 2048+, 1.65x (see the caveat)
         } else {
-            return Provider::Vendor;               // double
+            return A::Auto;                        // double
         }
     }
 }
@@ -746,86 +715,205 @@ inline Provider syev_saturated_provider_for_n(int64_t n) {
 // fell through to the vendor and paid 2.75x. Two callers differing by two matrices got
 // completely different providers for reasons unrelated to which kernel is better. Routing is
 // keyed on n alone.
-inline Provider syev_saturated_provider_for_n_values(int64_t n) {
-    if (n <= 320) return Provider::BatchLAS_Blocked;   // 64..320, 1.05x - 1.21x
-    return Provider::BatchLAS_TwoStage;                // 512..2048, 1.29x - 2.75x
+inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n_values(int64_t n) {
+    using A = batchlas::dispatch::Algorithm;
+    if (n <= 320) return A::Blocked;   // 64..320, 1.05x - 1.21x
+    return A::TwoStage;                // 512..2048, 1.29x - 2.75x
 }
 
+// The routing inputs, in one place so the call and its buffer-size query cannot
+// build different ones. syev's routing reads `jobtype`, which OpShape has no
+// field for.
+struct SyevShape : batchlas::dispatch::OpShape {
+    JobType jobtype = JobType::EigenVectors;
+};
+
+template <typename T>
+inline SyevShape syev_op_shape(const Queue& ctx,
+                               Backend backend,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               Uplo uplo,
+                               JobType jobtype) {
+    SyevShape s;
+    s.op = batchlas::dispatch::Op::syev;
+    s.scalar = batchlas::dispatch::scalar_kind_of<T>;
+    s.backend = backend;
+    s.m = A.rows();
+    s.n = A.cols();
+    s.k = A.rows();
+    s.batch = A.batch_size();
+    s.uplo = uplo;
+    s.jobtype = jobtype;
+    try {
+        s.is_gpu = ctx.device().type == DeviceType::GPU;
+    } catch (...) {
+        // query_caps was best-effort and never threw; keep that contract.
+    }
+    try {
+        s.max_sub_group =
+            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+    } catch (...) {
+        // leave default
+    }
+    return s;
+}
+
+} // namespace detail
+} // namespace batchlas::blas::dispatch
+
+namespace batchlas::dispatch {
+
+// SYEV's routing table.
+//
+// UNLIKE gemm/ormqr/gesvd, THIS ONE LIVES IN THE OP'S OWN HEADER rather than in
+// dispatch/route_syev.hh. Its `preferred` is a thin shell over four measured
+// predicates -- syev_prefer_vendor, syev_prefer_vendor_over_cta and the two
+// syev_saturated_algorithm_for_n* grids -- each of which carries the benchmark
+// table that justifies it, several hundred lines in total. Relocating that
+// commentary to satisfy a file-naming convention would be churn with real
+// transcription risk and no reader benefit. The split that matters --
+// correctness in `supports`, measurement in `preferred`, the environment read
+// in the alias table -- is the same as everywhere else.
+inline constexpr Route kSyevOrder[] = {
+    {Origin::Native, Algorithm::CTA},
+    {Origin::Native, Algorithm::Blocked},
+    {Origin::Native, Algorithm::TwoStage},
+    {Origin::Vendor, Algorithm::Auto},
+};
+
+template <typename T>
+struct RouteTable<Op::syev, T> {
+    using Shape = batchlas::blas::dispatch::detail::SyevShape;
+
+    // ---- CORRECTNESS ------------------------------------------------------
+    // The three syev_supports_* predicates, transcribed and nothing more. Note
+    // that all three are shape/device facts only: not one of them mentions
+    // speed, which is why moving the grids below out of the order walk changes
+    // no capability claim.
+    static bool supports(Route r, const Shape& s) {
+        if (is_vendor(r)) return true;
+        if (!is_native(r)) return false;
+        if (s.m != s.n) return false;
+        if (!s.is_gpu) return false;
+
+        switch (r.algo) {
+            case Algorithm::CTA:
+                // CTA supports small sizes (n <= 32). Some sizes may be slower
+                // than others; this predicate is about functional support, not
+                // performance heuristics.
+                if (s.n < 1 || s.n > 32) return false;
+                return s.max_sub_group >= 32;
+            case Algorithm::Blocked:
+            case Algorithm::TwoStage:
+                // Uplo::Upper is supported: both paths mirror the upper triangle
+                // into the lower one (an O(n^2) pass, src/extensions/uplo_mirror.hh)
+                // and run the ordinary Lower pipeline. Before that, every Upper
+                // call fell through to the vendor no matter how much faster this
+                // path was at that shape.
+                return s.n >= 1 && s.batch >= 1;
+            default:
+                // Including Algorithm::Auto: syev has three native routes, so a
+                // bare "native" names none of them. resolve_route walks the
+                // order to pick one.
+                return false;
+        }
+    }
+
+    // ---- MEASURED WINDOW --------------------------------------------------
+    static bool preferred(Route r, const Shape& s) {
+        namespace det = batchlas::blas::dispatch::detail;
+        if (!is_native(r)) return false;
+        if (!supports(r, s)) return false;
+
+        // Restricted to CUDA because that is the only backend the grids were
+        // measured on -- the same call on rocSOLVER keeps the historical
+        // ordering until someone measures it there.
+        if (s.backend == Backend::CUDA) {
+            if (s.n > 32) {
+                // Routed per n from the saturated measurements. The eigenvalues-only
+                // grid is checked first because it overlaps the vendor-preferred
+                // region, and it replaces syev_prefer_two_stage_values, whose
+                // batch >= 256 term sent an n=1024 solve at batch 254 to the vendor
+                // at 2.75x the cost of two-stage. Routing is keyed on n alone.
+                const Algorithm want = (s.jobtype != JobType::EigenVectors)
+                    ? det::syev_saturated_algorithm_for_n_values(s.n)
+                    : det::syev_saturated_algorithm_for_n<T>(s.n);
+                // want == Algorithm::Auto means the grid prefers no native route
+                // here, so nothing matches and the resolver takes the vendor.
+                return r.algo == want;
+            }
+
+            // Only reachable for n <= 32 now, where it returns false by
+            // construction -- both jobtype branches above return for n > 32.
+            // Kept so that changing those branches cannot silently drop it.
+            // See the SUPERSEDED note on the grid.
+            if (det::syev_prefer_vendor(s.is_gpu, s.n, s.batch)) return false;
+
+            // Small n with eigenvectors: CTA claims the whole n <= 32 range, but
+            // the vendor is faster over part of it. This declines the CALL, not
+            // just the CTA route -- the old chooser returned Vendor outright
+            // here, before the order walk -- so no native route is preferred.
+            // See syev_prefer_vendor_over_cta.
+            if (det::syev_prefer_vendor_over_cta<T>(s.is_gpu, s.n, s.max_sub_group,
+                                                    s.jobtype)) {
+                return false;
+            }
+        }
+
+        // Otherwise the order decides, exactly as the old walk did: CTA, then
+        // blocked, then two-stage, each taken wherever it is supported.
+        return true;
+    }
+
+    static constexpr const Route* order_begin() { return kSyevOrder; }
+    static constexpr const Route* order_end() {
+        return kSyevOrder + (sizeof(kSyevOrder) / sizeof(kSyevOrder[0]));
+    }
+};
+
+} // namespace batchlas::dispatch
+
+namespace batchlas::blas::dispatch {
+namespace detail {
+
+// The introspection wrappers promised above. They report exactly what the
+// resolver's `supports` reports, by asking it -- so the Python binding cannot
+// drift from the routing it is meant to describe, which is what a second copy
+// of the predicates would eventually do.
+template <typename T>
+inline bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    namespace d = batchlas::dispatch;
+    return d::RouteTable<d::Op::syev, T>::supports(
+        {d::Origin::Native, d::Algorithm::CTA},
+        syev_op_shape<T>(ctx, Backend::AUTO, A, Uplo::Lower, JobType::EigenVectors));
+}
+
+template <typename T>
+inline bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    namespace d = batchlas::dispatch;
+    return d::RouteTable<d::Op::syev, T>::supports(
+        {d::Origin::Native, d::Algorithm::Blocked},
+        syev_op_shape<T>(ctx, Backend::AUTO, A, uplo, JobType::EigenVectors));
+}
+
+template <typename T>
+inline bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    namespace d = batchlas::dispatch;
+    return d::RouteTable<d::Op::syev, T>::supports(
+        {d::Origin::Native, d::Algorithm::TwoStage},
+        syev_op_shape<T>(ctx, Backend::AUTO, A, uplo, JobType::EigenVectors));
+}
+
+// One resolution per call, shared by syev_dispatch and its buffer-size query.
 template <Backend B, typename T>
-inline Provider choose_syev_provider(const DispatchPolicy& policy,
-                                     const DeviceCaps& caps,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     Uplo uplo,
-                                     JobType jobtype) {
-    Provider chosen = normalize_vendor_like(policy.forced);
-    // If the user requested a specific provider, try it first. If it cannot support
-    // the current matrix/problem (e.g. CTA for n>32), fall back to the regular order
-    // instead of hard-failing.
-    if (chosen != Provider::Auto) {
-        if (chosen == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return chosen;
-        if (chosen == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return chosen;
-        if (chosen == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) return chosen;
-        if (chosen == Provider::Vendor) return Provider::Vendor;
-        // Unsupported request: fall through to Auto selection.
-        chosen = Provider::Auto;
-    }
-
-    // Auto, and the shape is one the vendor wins: skip the order below, which
-    // would otherwise hand every GPU matrix to the blocked path. Restricted to
-    // CUDA because that is the only backend the grid above was measured on --
-    // the same call on rocSOLVER keeps the historical ordering until someone
-    // measures it there.
-    if constexpr (B == Backend::CUDA) {
-        // Eigenvalues-only at large n and large batch: our two-stage solver wins
-        // outright since its stage-2 chase was fixed. Checked first because it
-        // overlaps the vendor-preferred region.
-        // EIGENVALUES-ONLY, n > 32: routed per n from the saturated measurement, replacing
-        // syev_prefer_two_stage_values. Its batch >= 256 term sent an n=1024 solve at batch
-        // 254 to the vendor at 2.75x the cost of two-stage; routing is keyed on n alone.
-        if (jobtype != JobType::EigenVectors && A.rows() > 32) {
-            const Provider want = syev_saturated_provider_for_n_values(A.rows());
-            if (want == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) {
-                return want;
-            }
-            if (want == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) {
-                return want;
-            }
-            return Provider::Vendor;
-        }
-        // EIGENVECTORS, n > 32: routed per n from the saturated measurement above, NOT from
-        // the batch-dependent syev_prefer_vendor grid, which was built from unsaturated
-        // cells and picks the wrong provider at five of nine measured sizes. n <= 32 falls
-        // through to the order loop so the CTA branch keeps it.
-        if (jobtype == JobType::EigenVectors && A.rows() > 32) {
-            const Provider want = syev_saturated_provider_for_n<T>(A.rows());
-            if (want == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) {
-                return want;
-            }
-            if (want == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) {
-                return want;
-            }
-            // Unsupported for this shape -- the vendor handles everything. (Uplo::Upper is
-            // no longer such a case; both BatchLAS paths mirror it into Lower.)
-            return Provider::Vendor;
-        }
-        // Only reachable for n <= 32 now, where it returns false by construction -- both
-        // jobz branches above return for n > 32. Kept so an explicit provider order still
-        // behaves, but it no longer decides anything. See the SUPERSEDED note on the grid.
-        if (syev_prefer_vendor(caps, A.rows(), A.batch_size())) return Provider::Vendor;
-        // Small n with eigenvectors: CTA claims the whole n <= 32 range, but the
-        // vendor is faster over part of it. See syev_prefer_vendor_over_cta.
-        if (syev_prefer_vendor_over_cta<T>(caps, A, jobtype)) return Provider::Vendor;
-    }
-
-    for (Provider p : policy.order) {
-        p = normalize_vendor_like(p);
-        if (p == Provider::BatchLAS_CTA && syev_supports_cta(caps, A)) return p;
-        if (p == Provider::BatchLAS_Blocked && syev_supports_blocked(caps, A, uplo)) return p;
-        if (p == Provider::BatchLAS_TwoStage && syev_supports_two_stage(caps, A, uplo)) return p;
-        if (p == Provider::Vendor) return Provider::Vendor;
-    }
-
-    return Provider::Vendor;
+inline batchlas::dispatch::Route syev_route(const Queue& ctx,
+                                            const MatrixView<T, MatrixFormat::Dense>& A,
+                                            Uplo uplo,
+                                            JobType jobtype) {
+    namespace d = batchlas::dispatch;
+    const auto parsed = d::parse_route_env(d::Op::syev);
+    const d::Route forced = parsed.found ? parsed.route : d::legacy_unset_default(d::Op::syev);
+    return d::resolve_route<d::Op::syev, T>(forced, syev_op_shape<T>(ctx, B, A, uplo, jobtype));
 }
 
 } // namespace detail
@@ -839,18 +927,17 @@ inline Event syev_dispatch(Queue& ctx,
                            JobType jobtype,
                            Uplo uplo,
                            Span<std::byte> workspace) {
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo, jobtype);
-
-    if constexpr (B == Backend::NETLIB) {
-        chosen = Provider::Vendor;
-    }
+    namespace d = batchlas::dispatch;
+    // NETLIB has no native syev route at all, so the resolution is skipped
+    // rather than overridden after the fact.
+    const d::Route chosen = (B == Backend::NETLIB)
+        ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
+        : detail::syev_route<B, T>(ctx, descrA, uplo, jobtype);
 
     size_t need_ws = 0;
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
-    } else if (chosen == Provider::BatchLAS_CTA) {
+    } else if (chosen.algo == d::Algorithm::CTA) {
         switch (detail::syev_choose_small_kernel<T>(descrA)) {
             case detail::SyevSmallKernel::Jacobi:
                 need_ws = syev_jacobi_cta_buffer_size<B, T>(ctx, descrA, jobtype);
@@ -864,21 +951,24 @@ inline Event syev_dispatch(Queue& ctx,
                                                      detail::syev_cta_steqr_params<T>(jobtype));
                 break;
         }
-    } else if (chosen == Provider::BatchLAS_TwoStage) {
+    } else if (chosen.algo == d::Algorithm::TwoStage) {
         need_ws = syev_two_stage_buffer_size<B, T>(ctx,
                                                    descrA,
                                                    jobtype,
                                                    uplo,
                                                    StedcParams<typename base_type<T>::type>{});
-    } else if (chosen == Provider::BatchLAS_Blocked) {
+    } else if (chosen.algo == d::Algorithm::Blocked) {
         need_ws = syev_blocked_buffer_size<B, T>(ctx,
                                                  descrA,
                                                  jobtype,
                                                  uplo,
                                                  StedcParams<typename base_type<T>::type>{});
     } else {
-        chosen = Provider::Vendor;
-        need_ws = backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
+        // Unreachable: the resolver returns a vendor route or one of the three
+        // native algorithms above. Kept as a hard failure rather than a silent
+        // reset to Vendor, which is what let ormqr's buffer size and call
+        // disagree (see route_ormqr.hh).
+        throw std::logic_error("syev: resolver returned a route with no dispatch arm");
     }
 
     if (workspace.size() < need_ws) {
@@ -901,9 +991,9 @@ inline Event syev_dispatch(Queue& ctx,
     }
 
     Event e;
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         e = backend::syev_vendor<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
-    } else if (chosen == Provider::BatchLAS_CTA) {
+    } else if (chosen.algo == d::Algorithm::CTA) {
         // Which of the three n<=32 kernels -- see syev_choose_small_kernel. The workspace
         // query above MUST take the same branch; both call the same selector, and the
         // selector reads its env override fresh, so it must not be flipped between the
@@ -933,7 +1023,7 @@ inline Event syev_dispatch(Queue& ctx,
                                    /*cta_wg_size_multiplier=*/1);
                 break;
         }
-    } else if (chosen == Provider::BatchLAS_TwoStage) {
+    } else if (chosen.algo == d::Algorithm::TwoStage) {
         e = syev_two_stage<B, T>(*run_q,
                                  descrA,
                                  eigenvalues,
@@ -960,18 +1050,17 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
                                         Span<typename base_type<T>::type> eigenvalues,
                                         JobType jobtype,
                                         Uplo uplo) {
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("SYEV");
-    Provider chosen = detail::choose_syev_provider<B, T>(policy, caps, descrA, uplo, jobtype);
+    namespace d = batchlas::dispatch;
+    // NETLIB has no native syev route at all, so the resolution is skipped
+    // rather than overridden after the fact.
+    const d::Route chosen = (B == Backend::NETLIB)
+        ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
+        : detail::syev_route<B, T>(ctx, descrA, uplo, jobtype);
 
-    if constexpr (B == Backend::NETLIB) {
-        chosen = Provider::Vendor;
-    }
-
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         return backend::syev_vendor_buffer_size<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     }
-    if (chosen == Provider::BatchLAS_CTA) {
+    if (chosen.algo == d::Algorithm::CTA) {
         // Must mirror syev_dispatch exactly: a caller that sizes its workspace here and then
         // runs a different small-n kernel would under-allocate. Both sites call the same
         // selector with the same arguments.
@@ -986,7 +1075,7 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
                                                   detail::syev_cta_steqr_params<T>(jobtype));
         }
     }
-    if (chosen == Provider::BatchLAS_TwoStage) {
+    if (chosen.algo == d::Algorithm::TwoStage) {
         return syev_two_stage_buffer_size<B, T>(ctx,
                                                 descrA,
                                                 jobtype,

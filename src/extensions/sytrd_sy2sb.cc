@@ -52,7 +52,7 @@ namespace {
 //   0 / "off"      -> never hint; restores the pre-change tuning-table behaviour
 //   <positive int> -> force that block width unconditionally
 //
-// Read fresh on every call (like policy_from_env) so an A/B harness can flip it
+// Read fresh on every call (like dispatch::parse_route_env) so an A/B harness can flip it
 // inside one process. It must NOT be changed between a sytrd_sy2sb_buffer_size
 // query and the matching sytrd_sy2sb call -- that would desynchronise the
 // workspace size from the block width actually used.
