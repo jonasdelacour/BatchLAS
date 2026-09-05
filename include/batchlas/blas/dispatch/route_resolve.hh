@@ -1,63 +1,48 @@
 #pragma once
 
-// One resolver, shared by every op's RouteTable.
-//
-// The body was written for GEMM (route_gemm.hh) and factored out here, because
-// the questions it answers are not GEMM-specific:
-//
-//   * a forced route bypasses `preferred` -- that is what forcing is for --
-//     but never bypasses `supports`, because that hands back a wrong answer
-//     rather than a slow one;
-//   * a forced route that cannot serve the shape falls back to the ORDINARY
-//     automatic choice, not straight to the vendor;
-//   * a requested VENDOR still has to exist;
-//   * "supported but not preferred" is reached only when there is nothing
-//     better left, which is the vendor-off configuration this work package is
-//     building toward.
-//
-// Each op supplies a RouteTable<Op, T> with `supports`, `preferred`, and an
-// order. Everything here reads only its arguments -- no getenv, no SYCL query
-// -- which is what makes an op and its *_buffer_size query reach the same route
-// by construction rather than by a comment asking them to.
+// The one route resolver, shared by every op's RouteTable; it reads only its
+// arguments. See docs/design/vendor-independence.md#the-resolver
 
 #include <batchlas/blas/dispatch/coverage.hh>
 #include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas::dispatch {
 
-// Declared here so every per-op header specialises the same template.
 template <Op O, typename T>
 struct RouteTable;
 
-// `Shape` is deduced. Most ops pass OpShape; an op whose routing reads
-// something OpShape has no field for -- gesvd needs jobu/jobvh and the
-// Hermitian flag -- passes a struct deriving from it, rather than growing
-// OpShape into a union of every op's arguments.
+// Optional third predicate for ops with several native routes: among the native
+// routes that can serve s, is r the better one? A speed threshold in supports()
+// would break forcing, and in preferred() would move vendor-present traffic too;
+// an absent hook means `true`. evidence: docs/perf/qr.md#the-third-predicate
+template <typename Table, typename Shape>
+inline bool native_tier_preferred_or_default(Route r, const Shape& s) {
+    if constexpr (requires { Table::native_tier_preferred(r, s); }) {
+        return Table::native_tier_preferred(r, s);
+    } else {
+        return true;
+    }
+}
+
+// `Shape` is deduced: an op routing on more than OpShape passes a derived struct.
 template <Op O, typename T, typename Shape>
 inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
                                           bool vendor_available = true) {
     using Table = RouteTable<O, T>;
 
-    // The choice with nobody forcing anything.
-    //
-    // Preference decides first: a native route wins only where it is BOTH able
-    // to serve the shape and measured to be the better choice for it.
-    //
-    // Then -- and only if there is no vendor left to fall back to -- a merely
-    // SUPPORTED native route. Reaching for that unconditionally is wrong, and
-    // the GEMM equivalence test catches it: the orders list the native routes
-    // first, so a tiny problem far outside every measured window would select a
-    // native kernel where today it goes to the vendor, silently inverting the
-    // default.
-    //
-    // Returning Vendor when nothing at all can serve the shape is deliberate:
-    // it is the honest "this needs a vendor and there isn't one" signal, which
-    // the caller turns into a diagnostic rather than a wrong answer.
+    // Returns Vendor when nothing serves the shape, so the caller can diagnose it.
     auto automatic = [&]() -> Route {
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
             if (Table::supports(*r, s) && Table::preferred(*r, s)) return *r;
         }
         if (!vendor_available) {
+            // Two passes: the tie-break, then the plain walk a table without the hook needs.
+            for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+                if (is_native(*r) && Table::supports(*r, s) &&
+                    native_tier_preferred_or_default<Table>(*r, s)) {
+                    return *r;
+                }
+            }
             for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
                 if (is_native(*r) && Table::supports(*r, s)) return *r;
             }
@@ -69,23 +54,13 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
         return automatic();
     }
 
-    // A REQUESTED VENDOR STILL HAS TO EXIST. Not hypothetical: GEMM's unset
-    // default IS Vendor (legacy_unset_default), so an ordinary call with
-    // nothing set arrives here rather than at `automatic` above. Honouring the
-    // request unconditionally made the vendor-off degradation unreachable
-    // through the real call path -- provable only at the pure layer, on an
-    // Origin::Auto input the adapter never produces.
+    // A requested vendor still has to exist: GEMM's unset default IS Vendor, so
+    // an ordinary call arrives here rather than at `automatic` above.
     if (is_vendor(forced)) {
         return vendor_available ? forced : automatic();
     }
 
-    // A BARE ORIGIN LEAVES THE ALGORITHM FREE, so "native" has to resolve to a
-    // specific one. For gemm and ormqr there is only one native route and the
-    // distinction is invisible; gesvd has three, and returning {Native, Auto}
-    // verbatim would hand the caller a route no dispatch tail can map to a
-    // kernel. Walk the order restricted to the requested origin -- preference
-    // first, then mere support, since the caller has already said it wants this
-    // origin whatever the cost.
+    // A bare origin must resolve to a concrete route: {Native, Auto} maps to no kernel.
     if (forced.algo == Algorithm::Auto) {
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
             if (r->origin == forced.origin && Table::supports(*r, s) && Table::preferred(*r, s)) {
@@ -100,42 +75,17 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
 
     if (Table::supports(forced, s)) return forced;
 
-    // FORCED, BUT UNABLE TO SERVE THIS SHAPE. It falls back to the ordinary
-    // automatic choice rather than to the vendor. That distinction is real and
-    // came from choose_gesvd_provider, whose forced arm ended in
-    // `chosen = Provider::Auto;` and re-entered the order walk: a forced `cta`
-    // on a real 64x64 matrix is unsupported by the CTA path but must still
-    // reach the blocked one, not the vendor. GEMM is unaffected -- with a
-    // vendor present its automatic choice for an unsupported shape IS the
-    // vendor -- which is why the equivalence test still holds.
+    // Forced but unsupported falls back to automatic(), not to the vendor: a
+    // forced `cta` too big for the CTA path must still reach the blocked one.
     return automatic();
 }
 
-// The instrumented entry point, and the ONLY one ops should call.
-//
-// Every op reaches its route through here, so one call site records all of
-// them -- no per-op plumbing, and no way for a new op to be added and silently
-// go unmeasured. `record_if_enabled` compiles to nothing unless the build was
-// configured with -DBATCHLAS_ENABLE_COVERAGE=ON, so the default build pays a
-// dead `if constexpr (false)` and nothing else.
-//
-// The two extra facts recorded are what make a `reached` row worth having:
-// `native_existed` says this op HAS a native route at all, and
-// `native_supported` says one could have served THIS shape. A row where the
-// vendor was chosen and native_supported is true is a tuning question; one
-// where native_existed is false is a missing kernel. Those are different work
-// items and the row has to distinguish them.
-//
-// `s` is sliced to OpShape on purpose: GesvdShape and SyevShape carry extra
-// routing inputs that the CSV has no column for, and the shape_class bucket is
-// computed from the base fields anyway.
+// The instrumented entry point, and the ONLY one ops should call; `s` is sliced
+// to OpShape on purpose. evidence: docs/design/vendor-independence.md#the-coverage-instrument
 template <Op O, typename T, typename Shape>
 inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
     const Route chosen = resolve_route_uninstrumented<O, T, Shape>(forced, s, vendor_available);
 
-    // Runtime-gated, not compiled out: see the note in coverage.hh on why the
-    // macro version silently recorded nothing. The extra order walk below is
-    // inside the branch, so an ordinary call pays one predicted test.
     if (coverage::dynamic_enabled()) {
         using Table = RouteTable<O, T>;
         bool native_existed = false;

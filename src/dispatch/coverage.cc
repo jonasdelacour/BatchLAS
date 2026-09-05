@@ -244,8 +244,19 @@ void append_static_rows(std::ostringstream& out) {
         {"hemm",  level3_vendor_available<B>,        false},
         {"herk",  level3_vendor_available<B>,        false},
         {"her2k", level3_vendor_available<B>,        false},
-        {"geqrf", factorization_vendor_available<B>, false},
-        {"orgqr", factorization_vendor_available<B>, false},
+        // WP5 landed the kernels behind these two. geqrf has both native tiers
+        // (geqrf_cta.cc's resident panel and geqrf_blocked.cc's WY driver) and
+        // orgqr has its blocked driver (orgqr_blocked.cc: ormqr on an identity).
+        //
+        // This column answers "is the kernel IN THE BUILD" and NOT "does traffic
+        // reach it" -- the distinction at :207-219, which is how
+        // VENDOR_FREE_BASELINE.md came to claim a working vendor-free gemm.
+        // preferred() is still false for both ops, so a vendor-present build
+        // sends them nothing; a vendor-free build now reaches them through
+        // route_resolve.hh:60-63 instead of throwing. Reading `true` here as
+        // "the default moved" would be exactly the misreading the note warns of.
+        {"geqrf", factorization_vendor_available<B>, true},   // geqrf_cta + geqrf_blocked
+        {"orgqr", factorization_vendor_available<B>, true},   // orgqr_blocked (ormqr on I)
         {"getrf", factorization_vendor_available<B>, false},
         {"getrs", factorization_vendor_available<B>, false},
         {"getri", factorization_vendor_available<B>, false},
