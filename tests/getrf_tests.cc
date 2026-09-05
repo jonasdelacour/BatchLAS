@@ -66,6 +66,20 @@
 // ---------------------------------------------------------------------------
 // EVERY TEST IN THIS FILE WAS BROKEN ON PURPOSE, AND THE RESULTS ARE RECORDED
 // AT THE BOTTOM OF THIS FILE -- INCLUDING THE BREAKS THAT TURNED NOTHING RED.
+//
+// THERE ARE TWO SUCH RECORDS AT THE BOTTOM, in this order: the FUSED-GETRS one
+// (L0b plus the F-series, fourteen breaks) and then the original WP6 one (L0
+// through L15, fourteen breaks). They are separate because they corrupt separate
+// files -- src/extensions/getrs_fused.cc against src/extensions/getrf_*.cc -- and
+// because their tooling is separate: experiments/wp6_getrs/tests/ against
+// experiments/wp6_lu/tests/.
+//
+// THE FUSED NARROW-RHS GETRS TIER (src/extensions/getrs_fused.cc) IS THE SECOND
+// NATIVE getrs ARM and it is what a vendor-free build now takes at every width
+// its right-hand side is resident for. It is covered by L0b (the 48 KB ladder,
+// declared early ON PURPOSE) and by F1-F7 near the end of this file; the composed
+// tier's own tests (L8, L10, L11) are unchanged and still pin the arm the fused
+// one hands back to.
 // ---------------------------------------------------------------------------
 #include <gtest/gtest.h>
 
@@ -701,6 +715,245 @@ struct EnvGuard {
     }
 };
 
+// ===========================================================================
+// THE FUSED NARROW-RHS GETRS TIER -- SHARED SCAFFOLDING.
+//
+// src/extensions/getrs_fused.cc is a SECOND native getrs arm: one work-group per
+// matrix, the interchange walk and BOTH substitutions in ONE kernel, no GEMM and
+// no separate laswp. It is reachable three ways and every one of them is
+// exercised below: the direct entry point getrs_fused_dispatch, the facade under
+// BATCHLAS_GETRS_ROUTE=cta, and -- in a vendor-free build -- the AUTOMATIC route,
+// because native_tier_preferred puts {Native, CTA} ahead of {Native, Blocked}
+// wherever supports() admits it.
+// ===========================================================================
+
+// The tier's local-memory request, RESTATED here and then PINNED against the
+// library's own capacity query rather than trusted. Both halves are copied from
+// src/extensions/getrs_fused.cc:
+//
+//   * the request is (n * nrhs + nb * (nb + 1)) scalars, and the CAPACITY QUERY
+//     charges the LARGEST nb the tier ever uses (32) rather than the nb this
+//     call would pick, so a caller can compare against one conservative ceiling;
+//   * a request landing in the 48 KB launch hole -- (47104, 49664] BYTES -- is
+//     raised to 49920, which is why the inversion in getrs_fused_max_rhs_elems
+//     is NOT the obvious one: getrs_hole_padded is not monotone.
+constexpr std::size_t kFusedHoleLo    = 47104;
+constexpr std::size_t kFusedHoleHi    = 49664;
+constexpr std::size_t kFusedHolePadTo = 49920;
+constexpr int kFusedNbMax = 32;
+
+inline std::size_t fused_pad(std::size_t bytes) {
+    return (bytes > kFusedHoleLo && bytes <= kFusedHoleHi) ? kFusedHolePadTo : bytes;
+}
+
+// What the LAUNCHER will actually ask for, given the block width it will pick.
+inline int fused_nb_for(int n) {
+    const int nb = (n >= 1024) ? 32 : 16;
+    return (nb > n) ? n : nb;
+}
+inline std::size_t fused_launch_bytes(int n, int nrhs, std::size_t sz) {
+    const int nb = fused_nb_for(n);
+    return fused_pad((std::size_t(n) * std::size_t(nrhs) +
+                      std::size_t(nb) * std::size_t(nb + 1)) * sz);
+}
+// What the CAPACITY QUERY charges for a given element count (the largest nb).
+inline std::size_t fused_capacity_bytes(std::size_t rhs_elems, std::size_t sz) {
+    return fused_pad((rhs_elems + std::size_t(kFusedNbMax) * std::size_t(kFusedNbMax + 1)) * sz);
+}
+
+// The order n whose RAW (pre-pad) launch request is exactly `want` bytes at this
+// nrhs, or -1 when no such order exists. Solved rather than tabulated because nb
+// itself depends on n, so both candidate block widths have to be tried and only
+// the one the launcher would actually choose kept.
+inline int fused_order_for_raw_bytes(std::size_t want, int nrhs, std::size_t sz) {
+    if (want % sz) return -1;
+    const std::size_t total = want / sz;
+    for (int nb : {16, 32}) {
+        const std::size_t blk = std::size_t(nb) * std::size_t(nb + 1);
+        if (total <= blk) continue;
+        const std::size_t rhs = total - blk;
+        if (rhs % std::size_t(nrhs)) continue;
+        const std::size_t n = rhs / std::size_t(nrhs);
+        if (n < 1 || n > (std::size_t(1) << 20)) continue;
+        if (fused_nb_for(int(n)) != nb) continue;   // the launcher must agree
+        return int(n);
+    }
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// A FABRICATED LU FACTOR, built directly on the host, with NO getrf.
+//
+// The 48 KB ladder below runs at orders of 334-1428 to hit the byte thresholds
+// exactly, and a ||PA - LU|| oracle there is O(n^3) -- seconds per rung per type.
+// Fabricating the factor removes getrf from that test entirely AND makes an
+// EXACT O(n^2) residual available (see fused_factor_residual): the getrs contract
+// is stated in terms of L, U and the interchange list, so a reference that never
+// forms A can still check the whole of it.
+//
+// U is strongly diagonally dominant (|U(k,k)| = 4n against off-diagonals <= 1)
+// and L is near-identity (|L(i,k)| <= 1/4), so the solve is well conditioned and
+// a backward-stable answer is a small residual.
+//
+// The pivot list is a genuine INTERCHANGE LIST -- ipiv[k] in [k+1, n], 1-BASED,
+// PACKED int32 into the public int64 span -- and interchange_is_involution is
+// asserted false at the use site, so the transposed arm's backwards walk is
+// falsifiable here too.
+// ---------------------------------------------------------------------------
+template <typename T>
+Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
+                             int ld_pad = 5, int stride_pad = 11) {
+    Lu<T> p;
+    alloc(p, n, batch, ld_pad, stride_pad);
+    Rng rg(seed);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                T v;
+                if (i == j)      v = mk<T>(4.0 * double(n), 0.0);
+                else if (i < j)  v = mk<T>(rg.next(), rg.next());                 // U
+                else             v = scale(mk<T>(rg.next(), rg.next()), 0.25);    // L
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = v;
+            }
+        int* ip = reinterpret_cast<int*>(p.piv.data()) + size_t(b) * n;
+        for (int k = 0; k < n; ++k) {
+            const int span = n - k;
+            const int off = int(std::fabs(rg.next()) * double(span)) % span;
+            ip[k] = k + off + 1;                       // 1-BASED, in [k+1, n]
+        }
+        if (b == 0) p.expect_piv.assign(ip, ip + n);
+    }
+    p.a0.assign(p.buf.begin(), p.buf.end());
+    return p;
+}
+
+// ---------------------------------------------------------------------------
+// THE O(n^2) GETRS RESIDUAL, straight from the contract.
+//
+//   NoTrans   b = F^{-1}( L ( U x ) )          F^{-1} = the list walked BACKWARDS
+//   Trans/CT  b = op(U) ( op(L) ( F x ) )      F      = the list walked FORWARDS
+//
+// Both are two triangular products and one permutation walk, so this is O(n^2)
+// per right-hand side where forming A and multiplying is O(n^3). Returns
+// ||b_ref - b|| / (||U||_F ||x||_F).
+//
+// NOTE what this oracle can and cannot see, MEASURED rather than assumed. It is
+// exact for the arithmetic and the pivot base, and the break record at the
+// bottom of this file records it going RED for `trans_perm_forward`,
+// `perm_wrong_side`, `swap_solves`, `piv_base` and `rhs_ld` -- so a direction
+// flip IN THE KERNEL is caught here, contrary to the first reading of this
+// comment. What it cannot see is a flip of the CONVENTION ITSELF: it never forms
+// A, so if the library and this reference both changed "forwards" to
+// "backwards" they would still agree. That last property is what the tests
+// running against a real getrf factor and the ||op(A)X - B|| oracle carry.
+// ---------------------------------------------------------------------------
+template <typename T>
+double fused_factor_residual(const T* F, const int* ipiv, const T* X, const T* B0,
+                             int n, int nrhs, int ldf, int ldb, Transpose op) {
+    using D = typename Prom<T>::type;
+    const bool tr   = (op != Transpose::NoTrans);
+    const bool conj = (op == Transpose::ConjTrans);
+
+    double nu = 0.0, nx = 0.0;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i <= j; ++i) {
+            const double u = habs(up(F[size_t(j) * ldf + i]));
+            nu += u * u;
+        }
+    for (int j = 0; j < nrhs; ++j)
+        for (int i = 0; i < n; ++i) {
+            const double x = habs(up(X[size_t(j) * ldb + i]));
+            nx += x * x;
+        }
+
+    auto El = [&](int i, int j) { return up(F[size_t(j) * ldf + i]); };
+
+    double num = 0.0;
+    std::vector<D> v(n), w(n);
+    for (int c = 0; c < nrhs; ++c) {
+        for (int i = 0; i < n; ++i) v[i] = up(X[size_t(c) * ldb + i]);
+
+        if (!tr) {
+            for (int i = 0; i < n; ++i) {                    // w = U v
+                D acc = D(0);
+                for (int t = i; t < n; ++t) acc += El(i, t) * v[t];
+                w[i] = acc;
+            }
+            for (int i = n - 1; i >= 0; --i) {               // v = L w, UNIT lower
+                D acc = w[i];
+                for (int t = 0; t < i; ++t) acc += El(i, t) * w[t];
+                v[i] = acc;
+            }
+            for (int k = n - 1; k >= 0; --k) {               // F^{-1}, BACKWARDS
+                const int q = ipiv[k] - 1;
+                if (q != k) std::swap(v[k], v[q]);
+            }
+        } else {
+            for (int k = 0; k < n; ++k) {                    // F, FORWARDS
+                const int q = ipiv[k] - 1;
+                if (q != k) std::swap(v[k], v[q]);
+            }
+            for (int i = 0; i < n; ++i) {                    // w = op(L) v, UNIT upper
+                D acc = v[i];
+                for (int t = i + 1; t < n; ++t) {
+                    const D l = El(t, i);
+                    acc += (conj ? hconj(l) : l) * v[t];
+                }
+                w[i] = acc;
+            }
+            for (int i = n - 1; i >= 0; --i) {               // v = op(U) w, LOWER
+                D acc = D(0);
+                for (int t = 0; t <= i; ++t) {
+                    const D u = El(t, i);
+                    acc += (conj ? hconj(u) : u) * w[t];
+                }
+                v[i] = acc;
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            const D d = v[i] - up(B0[size_t(c) * ldb + i]);
+            num += habs(d) * habs(d);
+        }
+    }
+    const double sc = std::sqrt(nu) * std::sqrt(nx);
+    return (sc > 0.0) ? std::sqrt(num) / sc : std::sqrt(num);
+}
+
+// The RHS pad and the inter-item gap must come back BIT-IDENTICAL. The fused
+// kernel writes B[i + c*ldb] for i < n and c < nrhs and nothing else, so a wrong
+// ld, a wrong stride, or a loop that runs to ld instead of n shows up here and in
+// nothing else -- a residual over the live block cannot see it.
+template <typename T>
+void check_rhs_pad_intact(const Rhs<T>& r, const char* what) {
+    for (int b = 0; b < r.batch; ++b)
+        for (int j = 0; j < r.stride; ++j) {
+            const int col = j / r.ld, row = j % r.ld;
+            const bool live = (col < r.nrhs) && (row < r.n);
+            if (live) continue;
+            const size_t k = size_t(b) * r.stride + j;
+            ASSERT_EQ(habs(up(r.buf[k]) - up(r.b0[k])), 0.0)
+                << what << ": the RHS PAD was written at b=" << b << " offset " << j
+                << " (ld=" << r.ld << ", n=" << r.n << ", nrhs=" << r.nrhs
+                << ", stride=" << r.stride << ")";
+        }
+}
+
+// Every batch item, and the LAST one especially: item 0 sits at offset 0, so a
+// wrong batch stride cannot move it.
+template <typename T>
+void check_items_differ(const Rhs<T>& r, const char* what) {
+    if (r.batch < 2) return;
+    bool differ = false;
+    const T* x0 = r.buf.data();
+    const T* xl = r.buf.data() + size_t(r.batch - 1) * r.stride;
+    for (int c = 0; c < r.nrhs && !differ; ++c)
+        for (int i = 0; i < r.n && !differ; ++i)
+            if (habs(up(x0[size_t(c) * r.ld + i]) - up(xl[size_t(c) * r.ld + i])) > 0.0)
+                differ = true;
+    EXPECT_TRUE(differ) << what << ": the first and last batch items' solutions are identical, "
+                           "so this shape cannot see a batch-stride defect";
+}
+
 using LuTestTypes = typename test_utils::backend_types<LuConfig>::type;
 
 }  // namespace
@@ -868,6 +1121,157 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
                 << "the " << r.bytes << " B panel launched but factorised incorrectly at b=" << b;
         }
     }
+}
+
+// ===========================================================================
+// L0b. THE 48 KB LAUNCH HOLE, FOR THE **FUSED GETRS** KERNELS.
+//
+// DECLARED HERE, SECOND IN THE FILE AND AHEAD OF EVERY OTHER FUSED-GETRS TEST,
+// AND THAT IS LOAD-BEARING RATHER THAN TIDINESS -- the same rule L0 above states
+// for GetrfPanelResidentKernel, applied to a different pair of CUfunctions.
+// MaxDynamicSharedMemorySize is raised STICKILY PER CUfunction, and the fused
+// tier's kernels are GetrsFusedNKernel<T, NR> / GetrsFusedTKernel<T, NR> with NR
+// the compile-time accumulator width (1, 2, 4 or 8, chosen by nrhs). Every rung
+// below runs at nrhs = 8, i.e. NR = 8, so ANY earlier test issuing a getrs with
+// 4 < nrhs <= 8 would warm those two functions and this guard could never fail
+// again. DO NOT MOVE IT BELOW THE F-SERIES.
+//
+// The cold check by hand:
+//     ./build/tests/getrf_tests --gtest_filter='*FusedGetrsLaunchHole*'
+//
+// TWO INDEPENDENT LAYERS, as L0 has:
+//
+//   (a) THE CAPACITY INVERSION, a pure-function assertion that needs no device.
+//       getrs_fused_max_rhs_elems<T>(budget) answers "how many RHS elements fit",
+//       and its inverse is NOT the obvious one because getrs_hole_padded is NOT
+//       MONOTONE: a request landing in (47104, 49664] is RAISED to 49920, so a
+//       naive floor division can advertise a capacity whose launch then asks for
+//       MORE than the budget. The sweep below is dense over the whole band and
+//       past it, one byte at a time, and asserts the only thing that matters:
+//       THE ADVERTISED CAPACITY MUST BE LAUNCHABLE WITHIN THE BUDGET IT WAS
+//       ASKED ABOUT. This layer found a real defect -- see the break record.
+//
+//   (b) THE LAUNCH ITSELF, on a ladder of orders whose RAW request is exactly
+//       47104 / 48896 / 49152 / 49664 / 49920 bytes, crossing the band from both
+//       sides, in BOTH kernels (NoTrans and Trans are separate CUfunctions).
+//       Each rung is checked against an EXACT O(n^2) host residual built from
+//       the contract itself, so a rung that launches but computes nothing
+//       sensible is still red.
+//
+// The orders are SOLVED for, not tabulated, because the block width the launcher
+// picks depends on n. On this box they come out as, at nrhs = 8:
+//     float             1340 1396 1404 1420 1428   (nb = 32)
+//     double / cfloat    702  730  734  742  746   (nb = 16)
+//     cdouble            334  348  350  354  356   (nb = 16)
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
+    using T = typename TestFixture::T;
+    const std::size_t sz = sizeof(T);
+
+    // ---- layer (a): the capacity inversion --------------------------------
+    //
+    // Every budget from below the band to well past the pad target, one byte at
+    // a time. `cap` is what the library advertises; fused_capacity_bytes is this
+    // file's restatement of what a caller sized by that capacity would then ask
+    // the runtime for. The second must never exceed the budget the first was
+    // asked about.
+    for (std::size_t budget = kFusedHoleLo - 2048; budget <= kFusedHolePadTo + 2048; ++budget) {
+        const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(budget);
+        if (cap == 0) continue;
+        ASSERT_LE(fused_capacity_bytes(cap, sz), budget)
+            << "getrs_fused_max_rhs_elems advertised " << cap << " elements for a budget of "
+            << budget << " B, but that capacity asks the runtime for "
+            << fused_capacity_bytes(cap, sz)
+            << " B once the 48 KB hole pad is applied -- an UNLAUNCHABLE capacity, which is "
+               "route_getrs.hh's fused_max_elems and therefore a supports() that promises a "
+               "route the facade cannot service";
+    }
+    // Coarse ladder past the band, including this device's own budget, so a
+    // regression that only shows up at realistic sizes is caught too.
+    for (std::size_t budget : {std::size_t(4096), std::size_t(16384), std::size_t(32768),
+                               std::size_t(65536), std::size_t(98304), std::size_t(163840),
+                               std::size_t(232448), this->budget()}) {
+        const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(budget);
+        if (cap == 0) continue;
+        ASSERT_LE(fused_capacity_bytes(cap, sz), budget) << "budget " << budget;
+    }
+    // ANTI-VACUITY for the sweep: the pad must actually fire somewhere inside it,
+    // otherwise the loop above is a tautology over a function that never pads.
+    {
+        const std::size_t blk = std::size_t(kFusedNbMax) * std::size_t(kFusedNbMax + 1) * sz;
+        bool padded_somewhere = false;
+        for (std::size_t e = 0; e * sz + blk <= kFusedHolePadTo; ++e)
+            if (fused_capacity_bytes(e, sz) == kFusedHolePadTo && e * sz + blk != kFusedHolePadTo)
+                padded_somewhere = true;
+        ASSERT_TRUE(padded_somewhere)
+            << "no element count in range lands inside the (47104, 49664] band, so layer (a) "
+               "cannot see a pad regression at all";
+    }
+    // And the device must advertise a usable capacity, or the tier is dead here.
+    ASSERT_GT(sycl_getrs::getrs_fused_max_rhs_elems<T>(this->budget()), std::size_t(0))
+        << "the fused tier reports zero capacity on this device";
+
+    // ---- layer (b): the launch, across the band ---------------------------
+    const int nrhs = int(sycl_getrs::kGetrsFusedMaxRhs);
+    ASSERT_EQ(nrhs, 8) << "the ladder is solved at nrhs = 8; re-derive the orders if this moves";
+
+    const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(this->budget());
+    int rungs_run = 0, rungs_over_capacity = 0;
+    for (std::size_t want : {kFusedHoleLo, std::size_t(48896), std::size_t(49152),
+                             kFusedHoleHi, kFusedHolePadTo}) {
+        const int n = fused_order_for_raw_bytes(want, nrhs, sz);
+        if (n < 0) {
+            ADD_FAILURE() << "no order lands on a raw request of exactly " << want
+                          << " B at nrhs=" << nrhs << " for a " << sz << "-byte scalar; the "
+                             "ladder cannot cross the band and this test is vacuous";
+            continue;
+        }
+        if (std::size_t(n) * std::size_t(nrhs) > cap) { ++rungs_over_capacity; continue; }
+
+        // The rung must land where this file thinks it does, PAD INCLUDED.
+        const std::size_t asked = fused_launch_bytes(n, nrhs, sz);
+        const bool in_band = (want > kFusedHoleLo && want <= kFusedHoleHi);
+        ASSERT_EQ(asked, in_band ? kFusedHolePadTo : want)
+            << "rung " << want << " B (n=" << n << "): the launcher asks for " << asked;
+
+        auto p = make_fabricated_factor<T>(n, 1, 2200u + unsigned(want % 1000u));
+        ASSERT_FALSE(interchange_is_involution(p.expect_piv))
+            << "rung " << want << ": the fabricated interchange list is SELF-INVERSE, so the "
+               "transposed arm's backwards walk is indistinguishable from a forwards one";
+
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans}) {
+            auto rhs = make_rhs<T>(n, nrhs, 1,
+                                   3300u + unsigned(want % 1000u) + unsigned(int(op)));
+            auto A = view_of(p);
+            auto Bv = view_of(rhs);
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
+                << "rung " << want << " B (n=" << n << ", asked " << asked
+                << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
+            this->ctx->wait();
+
+            const double res = fused_factor_residual<T>(
+                p.buf.data(), reinterpret_cast<const int*>(p.piv.data()),
+                rhs.buf.data(), rhs.b0.data(), n, nrhs, p.ld, rhs.ld, op);
+            if (verbose())
+                std::printf("[verbose] fused hole rung %6zu B n=%4d op=%d  res=%.4e tol=%.4e\n",
+                            want, n, int(op), res, solve_tol<T>(n));
+            EXPECT_LE(res, solve_tol<T>(n))
+                << "rung " << want << " B (n=" << n << ", transA=" << int(op)
+                << ") launched but did not solve";
+            check_rhs_pad_intact(rhs, "fused/hole");
+            if (this->HasFailure()) return;
+        }
+        ++rungs_run;
+    }
+    if (rungs_over_capacity > 0) {
+        GTEST_SKIP() << rungs_over_capacity << " of 5 rungs are above this device's "
+                     << "resident-RHS capacity (" << cap << " elements); the band was crossed "
+                     << rungs_run << " times";
+    }
+    EXPECT_EQ(rungs_run, 5) << "the ladder did not cross the band from both sides";
 }
 
 // ===========================================================================
@@ -1697,10 +2101,13 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
         EXPECT_TRUE(dispatch::is_native(ri)) << "getri has no vendor-free route";
     }
 
-    // preferred() is FALSE everywhere, deliberately (WP6 ships route-neutral), so
-    // a vendor-present build must still take the vendor for every shape. This is
-    // the assertion that would catch a preferred() window landing without the
-    // measured grid that justifies it.
+    // getrf AND getri ARE STILL ROUTE-NEUTRAL. preferred() is false everywhere for
+    // both (WP6 ships them that way), so a vendor-present build must still take the
+    // vendor at every shape. This is the assertion that catches a window landing on
+    // either of them without the measured grid that justifies it -- and it is
+    // deliberately left as it was, because WP6-PERF moved getrs ALONE. If a getrf
+    // window ever lands, this is the test to rewrite, the way the getrs half below
+    // was rewritten rather than deleted.
     if constexpr (dispatch::factorization_vendor_available<B>) {
         for (auto* V : {&Vs, &Vl})
             EXPECT_TRUE(dispatch::is_vendor(
@@ -1709,6 +2116,49 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
                 << "; preferred() moved without a measurement";
         EXPECT_TRUE(dispatch::is_vendor(
             backend::getri_route<B, T>(*this->ctx, Vl, /*vendor_available=*/true)));
+    }
+
+    // ---- GETRS'S MEASURED WINDOW, ASKED OF THE REAL SHAPE BUILDER ----------
+    //
+    // route_vocabulary_tests.cc pins the same window against SYNTHETIC shapes with
+    // the two fused capacities handed in. What it cannot see -- and what made its
+    // getrs assertions blind guards until this pass -- is whether the BUILDER on
+    // THIS DEVICE reports capacities at all. A builder that returns 0 for
+    // fused_max_elems turns supports({Native, CTA}) false everywhere, and then
+    // every window assertion in the pure suite passes for a reason that has
+    // nothing to do with the window. So: the capacities first, then the window.
+    {
+        auto rhs1 = make_rhs<T>(large.n, 1, large.batch, 5151u);
+        auto V1 = view_of(rhs1);
+        const auto gs = backend::getrs_op_shape<B, T>(*this->ctx, Vl, V1,
+                                                      Transpose::NoTrans);
+        ASSERT_TRUE(gs.has_value());
+        EXPECT_GT(gs->fused_max_elems, 0)
+            << "the builder reports NO resident-RHS capacity on this device, so the "
+               "fused tier is advertised as absent and every window assertion in "
+               "route_vocabulary_tests.cc holds vacuously";
+        EXPECT_EQ(gs->fused_max_nrhs, int64_t(sycl_getrs::kGetrsFusedMaxRhs));
+        EXPECT_GE(gs->fused_max_elems, int64_t(large.n))
+            << "n=" << large.n << " at nrhs=1 must fit, or the window below is about "
+               "a route this device cannot take";
+
+        if constexpr (dispatch::factorization_vendor_available<B>) {
+            // INSIDE the window, all three transpose modes.
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans,
+                                 Transpose::ConjTrans}) {
+                const auto r = backend::getrs_route<B, T>(*this->ctx, Vl, V1, op,
+                                                          /*vendor_available=*/true);
+                EXPECT_TRUE(dispatch::is_native(r) && r.algo == dispatch::Algorithm::CTA)
+                    << "nrhs=1 with a vendor present, transA=" << int(op)
+                    << ": the measured window is nrhs<=2 for every type";
+            }
+            // OUTSIDE it -- above the widest instantiation -- the vendor.
+            auto rhsw = make_rhs<T>(large.n, int(sycl_getrs::kGetrsFusedMaxRhs) + 8,
+                                    large.batch, 5252u);
+            auto Vw2 = view_of(rhsw);
+            EXPECT_TRUE(dispatch::is_vendor(backend::getrs_route<B, T>(
+                *this->ctx, Vl, Vw2, Transpose::NoTrans, /*vendor_available=*/true)));
+        }
     }
 
     // supports() is CORRECTNESS ONLY. A non-square view has no shape at all, and
@@ -1992,6 +2442,894 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
         if (this->HasFailure()) return;
     }
 }
+
+// ===========================================================================
+// F1. THE FUSED TIER SOLVES ALL THREE transA MODES AT EVERY INSTANTIATED WIDTH.
+//
+// The permutation SIDE changes with the transpose and the two substitutions SWAP
+// ORDER, and getting either wrong is a silently wrong answer no NoTrans test can
+// see. Measured on this tier (break record at the bottom of this file): B1
+// (transposed permutation walked forwards) and B4 (transposed output permutation
+// dropped) turn ONLY Trans and ConjTrans red; B3 (NoTrans interchange walk
+// dropped) turns ONLY NoTrans red; B6 (ConjTrans stops conjugating) turns ONLY
+// ConjTrans red AND only by 1e-1, far subtler than the rest.
+//
+// EVERY nrhs THE TIER SERVES, not a sample: the accumulator width NR is a
+// COMPILE-TIME template parameter chosen by a runtime ladder (nrhs <= 1 -> 1,
+// <= 2 -> 2, <= 4 -> 4, else 8), so 1, 2, 4 and 8 are four different kernels and
+// 3 and 5 are the shapes where the `if (c < nrhs)` guards inside a WIDER
+// accumulator are the only thing keeping a lane from writing a column that does
+// not exist.
+//
+// n = 97 is 6 full nb = 16 blocks plus a FINAL BLOCK OF ONE, which is the shape
+// that exercises the jb == 1 guards in both substitutions and both kernels.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
+    using T = typename TestFixture::T;
+    const int n = 97, batch = 3;
+
+    auto p = make_dominant_permuted<T>(n, batch, 5150u);
+    this->run_blocked(p);
+    ASSERT_GE(non_diagonal_pivots(p, 0), n / 2);
+    ASSERT_FALSE(interchange_is_involution(p.expect_piv))
+        << "this matrix's permutation is SELF-INVERSE, so the transposed arm's backwards walk "
+           "is indistinguishable from a forwards one and the Trans/ConjTrans rows prove nothing";
+    check_factor(p, "fused/factor");
+    if (this->HasFailure()) return;
+
+    for (int nrhs : {1, 2, 3, 4, 5, 8}) {
+        ASSERT_LE(int64_t(nrhs), sycl_getrs::kGetrsFusedMaxRhs);
+        auto rhs = make_rhs<T>(n, nrhs, batch, 6160u + unsigned(nrhs));
+        std::vector<std::vector<T>> solutions;
+
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+            reset_rhs(rhs);
+            auto A = view_of(p);
+            auto Bv = view_of(rhs);
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
+            this->ctx->wait();
+
+            // THE ORACLE IS ||op(A) X - B|| AGAINST THE **ORIGINAL** A, in double
+            // regardless of T, and NOT the L/U-based one used by the hole ladder:
+            // only this form is sensitive to the permutation DIRECTION, because
+            // only this form knows what A was before it was factored.
+            for (int b = 0; b < batch; ++b) {
+                const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                                     rhs.buf.data() + size_t(b) * rhs.stride,
+                                                     rhs.b0.data() + size_t(b) * rhs.stride,
+                                                     n, nrhs, p.ld, rhs.ld, op);
+                if (verbose())
+                    std::printf("[verbose] fused getrs op=%d nrhs=%d b=%d  res=%.4e tol=%.4e\n",
+                                int(op), nrhs, b, res, solve_tol<T>(n));
+                EXPECT_LE(res, solve_tol<T>(n))
+                    << "fused getrs transA=" << int(op) << " nrhs=" << nrhs << " b=" << b;
+            }
+            check_rhs_pad_intact(rhs, "fused/window");
+            check_items_differ(rhs, "fused/window");
+            solutions.emplace_back(rhs.buf.begin(), rhs.buf.end());
+            if (this->HasFailure()) return;
+        }
+
+        EXPECT_NE(solutions[0], solutions[1])
+            << "nrhs=" << nrhs << ": NoTrans and Trans produced identical solutions; transA is "
+               "not being read";
+        if constexpr (test_utils::is_complex_type_v<T>) {
+            EXPECT_NE(solutions[1], solutions[2])
+                << "nrhs=" << nrhs << ": Trans and ConjTrans produced identical solutions; the "
+                   "conjugation is not being applied";
+        }
+    }
+}
+
+// ===========================================================================
+// F2. ORDERS: ONE, THE BLOCK BOUNDARIES, AND THE nb SWITCH AT 1024.
+//
+// The fused launcher's geometry is a set of thresholds and every one of them is
+// an off-by-one waiting to happen:
+//   * nb = 16 below order 1024 and 32 at or above it, then clamped to n, so
+//     1023 / 1024 / 1025 straddle a change of BOTH the block width and the
+//     resident block's leading dimension;
+//   * jb = n - j on the FINAL block, so 15 / 17 / 31 / 33 / 65 / 97 each leave a
+//     short tail, and jb == 1 disables the unit-diagonal recurrence entirely
+//     (`sgid == 0 && jb > 1`) in two of the four substitutions;
+//   * n = 1 is the whole op reduced to one division, with every trailing-update
+//     loop empty.
+//
+// ORDER 1 AND 2 SKIP THE INVOLUTION ASSERTION, and that is a statement about the
+// construction rather than an exemption: make_dominant_permuted's cyclic shift
+// is an n-cycle, and an n-cycle IS self-inverse for n <= 2. There is no
+// permutation of one or two rows that can distinguish a forwards walk from a
+// backwards one, so those two orders are testing the arithmetic and the tails,
+// not the direction.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
+    using T = typename TestFixture::T;
+    const int batch = 2;
+
+    for (int n : {1, 2, 3, 15, 16, 17, 31, 32, 33, 48, 64, 65, 128, 1023, 1024, 1025}) {
+        auto p = make_dominant_permuted<T>(n, batch, 7070u + unsigned(n));
+        this->run_blocked(p);
+        if (n > 2) {
+            ASSERT_FALSE(interchange_is_involution(p.expect_piv)) << "n=" << n;
+            ASSERT_GT(non_diagonal_pivots(p, batch - 1), 0) << "n=" << n;
+        }
+        // ||PA - LU|| is O(n^3); at 1023 and above the end-to-end solve residual
+        // against the ORIGINAL A is the oracle, which is O(n^2 nrhs).
+        if (n <= 128) {
+            check_factor(p, "fused/orders");
+            if (this->HasFailure()) return;
+        }
+
+        for (int nrhs : {1, 3}) {
+            const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(this->budget());
+            if (std::size_t(n) * std::size_t(nrhs) > cap) continue;
+            auto rhs = make_rhs<T>(n, nrhs, batch, 8080u + unsigned(n) + unsigned(nrhs));
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                reset_rhs(rhs);
+                auto A = view_of(p);
+                auto Bv = view_of(rhs);
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                    1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                    *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
+                    << "n=" << n << " nrhs=" << nrhs << " transA=" << int(op);
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b) {
+                    const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                                         rhs.buf.data() + size_t(b) * rhs.stride,
+                                                         rhs.b0.data() + size_t(b) * rhs.stride,
+                                                         n, nrhs, p.ld, rhs.ld, op);
+                    EXPECT_LE(res, solve_tol<T>(n))
+                        << "fused getrs n=" << n << " nrhs=" << nrhs << " transA=" << int(op)
+                        << " b=" << b;
+                }
+                check_rhs_pad_intact(rhs, "fused/orders");
+                if (this->HasFailure()) return;
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// F3. THE TWO CEILINGS: THE WIDTH THE BUILD INSTANTIATED, AND THE DEVICE'S
+// RESIDENT-RHS CAPACITY. BOTH MUST HAND BACK, NOT PRODUCE GARBAGE.
+//
+// They are DIFFERENT KINDS of ceiling and route_getrs.hh keeps them separate for
+// that reason: fused_max_nrhs is what this BUILD compiled (kGetrsFusedMaxRhs = 8;
+// above it no instantiation exists), fused_max_elems is what THIS DEVICE's local
+// memory holds. Both live in supports(), never in preferred(), because above
+// either of them the kernel does not launch -- and a speed threshold in
+// supports() would make a pinned `native:cta` fall through to automatic()
+// (route_resolve.hh:165 -> :175) and the test that pinned it would measure the
+// vendor and pass green.
+//
+// WHAT IS CHECKED AT EACH CEILING:
+//   * supports() says yes AT the boundary and no ONE PAST it;
+//   * the DIRECT entry point throws one past it rather than launching;
+//   * the FACADE one past it still returns the RIGHT ANSWER, from some other
+//     route, and that route is NOT {Native, CTA}.
+//
+// The capacity half uses NULL-DATA views: the entry point refuses on metadata
+// alone, before it dereferences anything, so proving that costs no allocation at
+// orders of ~3000.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
+    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+    const int maxr = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int n = 40, batch = 2;
+
+    auto p = make_dominant_permuted<T>(n, batch, 9090u);
+    this->run_blocked(p);
+    check_factor(p, "fused/ceiling");
+    if (this->HasFailure()) return;
+    auto A = view_of(p);
+
+    // ---- ceiling 1: the instantiated width --------------------------------
+    for (int nrhs : {maxr, maxr + 1}) {
+        auto rhs = make_rhs<T>(n, nrhs, batch, 1010u + unsigned(nrhs));
+        auto Bv = view_of(rhs);
+        const auto shape = backend::getrs_op_shape<B, T>(*this->ctx, A, Bv, Transpose::NoTrans);
+        ASSERT_TRUE(shape.has_value());
+        EXPECT_EQ(Tbl::supports(cta, *shape), nrhs <= maxr)
+            << "supports({Native, CTA}) at nrhs=" << nrhs << " with fused_max_nrhs="
+            << shape->fused_max_nrhs;
+
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(
+            1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, Transpose::NoTrans)));
+        if (nrhs <= maxr) {
+            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                *this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(), ws.to_span()));
+        } else {
+            EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                             *this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(),
+                             ws.to_span()),
+                         std::invalid_argument)
+                << "the direct entry point accepted nrhs=" << nrhs << " with only " << maxr
+                << " instantiated; the table would then promise a route with no kernel behind it";
+        }
+        this->ctx->wait();
+    }
+
+    // ONE PAST THE WIDTH, THROUGH THE FACADE, MUST STILL BE RIGHT. This is the
+    // half a supports() test cannot reach: the route has to fall to a tier that
+    // can serve it and the answer has to survive the handover.
+    {
+        const int nrhs = maxr + 1;
+        auto rhs = make_rhs<T>(n, nrhs, batch, 1212u);
+        auto Bv = view_of(rhs);
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+            reset_rhs(rhs);
+            const auto r = backend::getrs_route<B, T>(
+                *this->ctx, A, Bv, op, dispatch::factorization_vendor_available<B>);
+            EXPECT_FALSE(dispatch::is_native(r) && r.algo == dispatch::Algorithm::CTA)
+                << "nrhs=" << nrhs << " routed to the fused tier, which is not instantiated "
+                   "that wide";
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, getrs_buffer_size<B, T>(*this->ctx, A, Bv, op)));
+            ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
+            this->ctx->wait();
+            for (int b = 0; b < batch; ++b)
+                EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                            rhs.buf.data() + size_t(b) * rhs.stride,
+                                            rhs.b0.data() + size_t(b) * rhs.stride,
+                                            n, nrhs, p.ld, rhs.ld, op),
+                          solve_tol<T>(n))
+                    << "one width past the fused tier the facade returned a wrong answer, "
+                       "transA=" << int(op) << " b=" << b;
+        }
+    }
+
+    // ---- ceiling 2: the device's resident-RHS capacity ---------------------
+    {
+        const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(this->budget());
+        ASSERT_GT(cap, std::size_t(maxr));
+        const int nrhs = maxr;
+        // The largest order that still fits, and the first that does not.
+        const int fit  = int(cap / std::size_t(nrhs));
+        const int over = fit + 1;
+        UnifiedVector<int64_t> piv(size_t(over) * 2, int64_t(1));
+        for (int b = 0; b < 2; ++b) {
+            int* ip = reinterpret_cast<int*>(piv.data()) + size_t(b) * over;
+            for (int k = 0; k < over; ++k) ip[k] = k + 1;
+        }
+        for (int order : {fit, over}) {
+            MatrixView<T, MatrixFormat::Dense> An(nullptr, order, order, order,
+                                                  int64_t(order) * order, 2, nullptr);
+            MatrixView<T, MatrixFormat::Dense> Bn(nullptr, order, nrhs, order,
+                                                  int64_t(order) * nrhs, 2, nullptr);
+            const auto shape = backend::getrs_op_shape<B, T>(*this->ctx, An, Bn,
+                                                             Transpose::NoTrans);
+            ASSERT_TRUE(shape.has_value());
+            EXPECT_EQ(Tbl::supports(cta, *shape), order == fit)
+                << "supports({Native, CTA}) at n=" << order << " nrhs=" << nrhs
+                << " against fused_max_elems=" << shape->fused_max_elems;
+            if (order == over) {
+                UnifiedVector<std::byte> ws(1);
+                EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                                 *this->ctx, An, Bn, Transpose::NoTrans, piv.to_span(),
+                                 ws.to_span()),
+                             std::invalid_argument)
+                    << "the direct entry point accepted n*nrhs = "
+                    << std::size_t(order) * std::size_t(nrhs) << " against a capacity of " << cap;
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// F4. THE DROP-IN CONTRACT FOR THE FUSED TIER, BOTH DIRECTIONS AND BOTH
+// PRODUCERS.
+//
+// getrf and getrs carry INDEPENDENT env variables and INDEPENDENT preferred()
+// windows, so a vendor getrf feeding a native getrs is a shipped configuration
+// and not a hypothetical. The fused tier reads the pivot buffer DIRECTLY --
+// pivots.as_span<int>(), packed 1-BASED int32, an INTERCHANGE LIST -- so it is
+// the arm most exposed to a format disagreement, and it re-derives the walk in
+// its own kernel rather than delegating to the shared laswp the composed tier
+// uses.
+//
+// BOTH NATIVE PRODUCERS ARE USED, not just one: getrf's CTA tier and its blocked
+// tier write the pivot list from different code, and n = 40 is inside the CTA
+// tier's capacity on this device.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 40, nrhs = 3, batch = 3;
+    ASSERT_GE(this->cta_max_n(), n);
+
+    auto solve_and_check = [&](Lu<T>& p, const char* who) {
+        auto A = view_of(p);
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+            auto rhs = make_rhs<T>(n, nrhs, batch, 2424u + unsigned(int(op)));
+            auto Bv = view_of(rhs);
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
+            this->ctx->wait();
+            for (int b = 0; b < batch; ++b)
+                EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                            rhs.buf.data() + size_t(b) * rhs.stride,
+                                            rhs.b0.data() + size_t(b) * rhs.stride,
+                                            n, nrhs, p.ld, rhs.ld, op),
+                          solve_tol<T>(n))
+                    << "the FUSED getrs could not consume the " << who << " factor, transA="
+                    << int(op) << " b=" << b;
+            check_rhs_pad_intact(rhs, who);
+        }
+    };
+
+    {   // native getrf, BLOCKED tier
+        auto p = make_dominant_permuted<T>(n, batch, 3535u);
+        this->run_blocked(p);
+        check_factor(p, "dropin/fused/native-blocked");
+        if (this->HasFailure()) return;
+        solve_and_check(p, "NATIVE BLOCKED getrf's");
+    }
+    {   // native getrf, CTA tier
+        auto p = make_dominant_permuted<T>(n, batch, 3636u);
+        this->run_cta(p);
+        check_factor(p, "dropin/fused/native-cta");
+        if (this->HasFailure()) return;
+        solve_and_check(p, "NATIVE CTA getrf's");
+    }
+    if constexpr (dispatch::factorization_vendor_available<B>) {
+        // VENDOR getrf. Its pivot CHOICE differs from ours for complex types
+        // (cuBLAS pivots on the modulus, this library on cabs1), which is exactly
+        // why the oracle is a residual against the ORIGINAL A and never an
+        // elementwise comparison of the two factors.
+        auto p = make_dominant_permuted<T>(n, batch, 3737u);
+        {
+            auto A = view_of(p);
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, backend::getrf_vendor_buffer_size<B, T>(*this->ctx, A)));
+            ASSERT_NO_THROW((backend::getrf_vendor<B, T>(*this->ctx, A, p.piv.to_span(),
+                                                         ws.to_span(), p.info.to_span())));
+            this->ctx->wait();
+            for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
+            check_factor(p, "dropin/fused/vendor-factor", /*check_L=*/false);
+            if (this->HasFailure()) return;
+        }
+        solve_and_check(p, "VENDOR getrf's");
+
+        // AND THE OTHER DIRECTION, on the same factor: the vendor getrs must
+        // still consume it. That is what makes the pivot FORMAT -- as opposed to
+        // the pivot CHOICE -- a shared fact rather than an internal convention.
+        auto A = view_of(p);
+        auto rhs = make_rhs<T>(n, nrhs, batch, 2626u);
+        auto Bv = view_of(rhs);
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(
+            1, backend::getrs_vendor_buffer_size<B, T>(*this->ctx, A, Bv, Transpose::NoTrans)));
+        ASSERT_NO_THROW((backend::getrs_vendor<B, T>(*this->ctx, A, Bv, Transpose::NoTrans,
+                                                     p.piv.to_span(), ws.to_span())));
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b)
+            EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                        rhs.buf.data() + size_t(b) * rhs.stride,
+                                        rhs.b0.data() + size_t(b) * rhs.stride,
+                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans),
+                      solve_tol<T>(n))
+                << "the VENDOR getrs could not consume the factor the fused tier just read";
+    }
+}
+
+// ===========================================================================
+// F5. A SINGULAR AND A NEARLY-SINGULAR FACTOR.
+//
+// getrs has no info output and no singularity contract: LAPACK's ?GETRS divides
+// by U(k,k) unconditionally and the caller is expected to have looked at getrf's
+// info. What must NOT happen is the two failure modes this repository has already
+// shipped once elsewhere -- an EPSILON FLOOR that silently perturbs the answer
+// (getrf's `info_epsilon_floor` break) and a guard that SKIPS the division and
+// returns a plausible-looking wrong number.
+//
+// So the assertions are:
+//   * NEARLY singular (a diagonal scaled down by 1e-6 / 1e-12) must still be
+//     SOLVED, to a BACKWARD-error bound. The residual used here normalises by
+//     ||X||, so conditioning cancels and the bound is legitimately tight.
+//   * EXACTLY singular must PROPAGATE: the answer must contain a non-finite
+//     value. A finite answer means something floored the division.
+// Both diagonals probed are boundaries in their own right: k = 0 is the first
+// step of the back substitution's LAST block and k = n-1 is the last row of its
+// FIRST, which is where an off-by-one in the reverse loop lands.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
+    using T = typename TestFixture::T;
+    const int n = 64, nrhs = 2, batch = 2;
+    const double tiny = std::is_same_v<RealOf<T>, float> ? 1e-6 : 1e-12;
+
+    for (int kz : {0, n / 2, n - 1}) {
+        // ---- nearly singular ------------------------------------------------
+        {
+            auto p = make_dominant_permuted<T>(n, batch, 4747u + unsigned(kz));
+            this->run_blocked(p);
+            if (this->HasFailure()) return;
+            for (int b = 0; b < batch; ++b) {
+                T& d = p.buf[size_t(b) * p.stride + size_t(kz) * p.ld + kz];
+                d = scale(d, tiny);
+            }
+            auto A = view_of(p);
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans}) {
+                auto rhs = make_rhs<T>(n, nrhs, batch, 4848u + unsigned(kz) + unsigned(int(op)));
+                auto Bv = view_of(rhs);
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                    1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                    *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b) {
+                    for (int c = 0; c < nrhs; ++c)
+                        for (int i = 0; i < n; ++i)
+                            ASSERT_TRUE(hfinite(up(
+                                rhs.buf[size_t(b) * rhs.stride + size_t(c) * rhs.ld + i])))
+                                << "a NEARLY singular factor produced a non-finite answer at kz="
+                                << kz << " transA=" << int(op) << " b=" << b;
+                    const double res = fused_factor_residual<T>(
+                        p.buf.data() + size_t(b) * p.stride,
+                        reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * n,
+                        rhs.buf.data() + size_t(b) * rhs.stride,
+                        rhs.b0.data() + size_t(b) * rhs.stride, n, nrhs, p.ld, rhs.ld, op);
+                    EXPECT_LE(res, solve_tol<T>(n))
+                        << "a NEARLY singular factor was not solved to a backward-error bound "
+                           "at kz=" << kz << " transA=" << int(op) << " b=" << b
+                        << " -- an epsilon floor or a skipped division would look like this";
+                }
+                if (this->HasFailure()) return;
+            }
+        }
+        // ---- exactly singular -----------------------------------------------
+        {
+            auto p = make_dominant_permuted<T>(n, batch, 4949u + unsigned(kz));
+            this->run_blocked(p);
+            if (this->HasFailure()) return;
+            for (int b = 0; b < batch; ++b)
+                p.buf[size_t(b) * p.stride + size_t(kz) * p.ld + kz] = mk<T>(0.0, 0.0);
+            auto A = view_of(p);
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans}) {
+                auto rhs = make_rhs<T>(n, nrhs, batch, 5050u + unsigned(kz) + unsigned(int(op)));
+                auto Bv = view_of(rhs);
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                    1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
+                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                    *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
+                    << "an exactly singular factor must not make the launch throw or hang";
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b) {
+                    bool nonfinite = false;
+                    for (int c = 0; c < nrhs && !nonfinite; ++c)
+                        for (int i = 0; i < n && !nonfinite; ++i)
+                            if (!hfinite(up(rhs.buf[size_t(b) * rhs.stride +
+                                                    size_t(c) * rhs.ld + i])))
+                                nonfinite = true;
+                    EXPECT_TRUE(nonfinite)
+                        << "a factor with U(" << kz << "," << kz << ") == 0 produced an entirely "
+                           "FINITE answer at transA=" << int(op) << " b=" << b
+                        << " -- the division by the zero pivot was floored or skipped, which is "
+                           "the silently-plausible-wrong-answer failure mode";
+                }
+                check_rhs_pad_intact(rhs, "fused/singular");
+                if (this->HasFailure()) return;
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// F6. THE FACADE REACHES THE FUSED KERNEL, ASSERTED BIT-EXACTLY, AND THE
+// VENDOR-FREE DEFAULT LANDS ON IT.
+//
+// tests/potrf_tests.cc:895-908 records this repository's fifth blind guard: a
+// route-assertion-plus-residual test "stayed GREEN across all four scalar types
+// while every number in it came from cuSOLVER", because a residual bound is
+// satisfied by either implementation. So the comparison is BIT-EXACT against the
+// direct entry point, which no vendor and no other native tier can reproduce.
+//
+// The route half is what pins the ROUTING change this tier landed with:
+//   * pinned `cta`   -> {Native, CTA};
+//   * pinned `blocked` -> {Native, Blocked} and NOT CTA, which is what keeps the
+//     composed tier reachable for its own tests (route_resolve.hh:165 -> :175
+//     would otherwise hand it to automatic() and it would measure the other arm);
+//   * UNPINNED in a VENDOR-FREE build -> {Native, CTA} inside the capability and
+//     {Native, Blocked} outside it, which is native_tier_preferred's only job;
+//   * UNPINNED in a VENDOR-PRESENT build -> the VENDOR, because preferred() is
+//     still all-false and this tier did not move it.
+// ===========================================================================
+TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 64, nrhs = 3, batch = 3;
+
+    auto p = make_dominant_permuted<T>(n, batch, 6161u);
+    this->run_blocked(p);
+    check_factor(p, "facade/fused/factor");
+    if (this->HasFailure()) return;
+    auto A = view_of(p);
+
+    for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        auto r1 = make_rhs<T>(n, nrhs, batch, 7171u);
+        auto r2 = make_rhs<T>(n, nrhs, batch, 7171u);
+        auto V1 = view_of(r1);
+        auto V2 = view_of(r2);
+
+        // THE PIN IS VERIFIED, NEVER ASSUMED.
+        const auto route = backend::getrs_route<B, T>(
+            *this->ctx, A, V2, op, dispatch::factorization_vendor_available<B>);
+        ASSERT_TRUE(dispatch::is_native(route)) << "the 'cta' getrs pin did not take";
+        ASSERT_EQ(route.algo, dispatch::Algorithm::CTA)
+            << "the 'cta' getrs pin resolved to the other native tier";
+
+        UnifiedVector<std::byte> w1(std::max<std::size_t>(
+            1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, V1, op)));
+        sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, V1, op, p.piv.to_span(), w1.to_span());
+        this->ctx->wait();
+
+        UnifiedVector<std::byte> w2(std::max<std::size_t>(
+            1, getrs_buffer_size<B, T>(*this->ctx, A, V2, op)));
+        ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, V2, op, p.piv.to_span(), w2.to_span())));
+        this->ctx->wait();
+
+        for (size_t i = 0; i < r1.buf.size(); ++i)
+            ASSERT_EQ(habs(up(r1.buf[i]) - up(r2.buf[i])), 0.0)
+                << "transA=" << int(op) << ": the facade's getrs differs from the FUSED direct "
+                   "entry point at element " << i << " -- something else served this call";
+    }
+
+    // The other pin must still reach the COMPOSED tier, not be swallowed by the
+    // new route sitting ahead of it in kGetrsOrder.
+    {
+        EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
+        auto rhs = make_rhs<T>(n, nrhs, batch, 7272u);
+        auto Bv = view_of(rhs);
+        const auto route = backend::getrs_route<B, T>(
+            *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
+        ASSERT_TRUE(dispatch::is_native(route));
+        EXPECT_EQ(route.algo, dispatch::Algorithm::Blocked)
+            << "the 'blocked' getrs pin resolved to the FUSED tier; the composed arm is now "
+               "unreachable and every test that pins it measures something else";
+    }
+
+    // The AUTOMATIC route, on both sides of the fused tier's capability.
+    {
+        auto narrow = make_rhs<T>(n, 1, batch, 7373u);
+        auto wide   = make_rhs<T>(n, int(sycl_getrs::kGetrsFusedMaxRhs) + 1, batch, 7474u);
+        auto Vn = view_of(narrow);
+        auto Vw = view_of(wide);
+        const auto rn = backend::getrs_route<B, T>(*this->ctx, A, Vn, Transpose::NoTrans, false);
+        const auto rw = backend::getrs_route<B, T>(*this->ctx, A, Vw, Transpose::NoTrans, false);
+        EXPECT_TRUE(dispatch::is_native(rn));
+        EXPECT_EQ(rn.algo, dispatch::Algorithm::CTA)
+            << "a vendor-free build did not take the fused tier at nrhs=1, which is the entire "
+               "point of native_tier_preferred";
+        EXPECT_TRUE(dispatch::is_native(rw));
+        EXPECT_EQ(rw.algo, dispatch::Algorithm::Blocked)
+            << "a vendor-free build routed nrhs=" << (sycl_getrs::kGetrsFusedMaxRhs + 1)
+            << " to the fused tier, which is not instantiated that wide";
+
+        // THE VENDOR-PRESENT ROUTE, AND THIS ASSERTION IS THE INVERSE OF THE ONE
+        // IT REPLACES. It used to read is_vendor at nrhs = 1, and it was right to:
+        // preferred() was all-false, WP6 shipped route-neutral, and the assertion
+        // existed to catch a window landing without a grid. The grid landed
+        // (experiments/wp6_perf/bench/, 488 cells over six sweeps), so the window
+        // did, and the guard is rewritten around the window rather than deleted --
+        // BOTH sides of it, because an assertion that only pins the inside cannot
+        // fail when someone widens the clause.
+        if constexpr (dispatch::factorization_vendor_available<B>) {
+            const auto rv = backend::getrs_route<B, T>(
+                *this->ctx, A, Vn, Transpose::NoTrans, /*vendor_available=*/true);
+            EXPECT_TRUE(dispatch::is_native(rv) && rv.algo == dispatch::Algorithm::CTA)
+                << "nrhs=1 is INSIDE the measured window (geomean 2.26x over 111 cells, "
+                   "min 1.24x, flat across every batch ladder at seven orders) and must "
+                   "route to the fused tier even with cuBLAS present";
+
+            // OUTSIDE the window, the vendor still takes it. nrhs = 8 is inside the
+            // tier's CAPABILITY and outside its measured WINDOW, which is exactly
+            // the pair of facts a speed test in supports() would destroy.
+            auto w8 = make_rhs<T>(n, int(sycl_getrs::kGetrsFusedMaxRhs), batch, 7575u);
+            auto V8 = view_of(w8);
+            EXPECT_TRUE(dispatch::is_vendor(backend::getrs_route<B, T>(
+                *this->ctx, A, V8, Transpose::NoTrans, /*vendor_available=*/true)))
+                << "nrhs=" << sycl_getrs::kGetrsFusedMaxRhs << " is OUTSIDE the window "
+                   "(geomean 0.819x over 24 cells, 13 losses) and must take the vendor";
+
+            // ... and clause B is FLOAT ONLY. nrhs = 4 splits by type, which is the
+            // half of the window most likely to be widened by someone who reads
+            // "nrhs <= 4" and drops the type test.
+            auto w4 = make_rhs<T>(n, 4, batch, 7676u);
+            auto V4 = view_of(w4);
+            const auto r4 = backend::getrs_route<B, T>(
+                *this->ctx, A, V4, Transpose::NoTrans, /*vendor_available=*/true);
+            if constexpr (std::is_same_v<T, float>) {
+                EXPECT_TRUE(dispatch::is_native(r4) && r4.algo == dispatch::Algorithm::CTA)
+                    << "float nrhs=4 is clause B: full batch ladders at seven orders, "
+                       "every one a flat win, min 1.13x";
+            } else {
+                EXPECT_TRUE(dispatch::is_vendor(r4))
+                    << "only FLOAT is in the window at nrhs=4; double dips to 0.940x at "
+                       "n=128 batch 2048, cfloat to 0.976x at n=1024 batch 16, cdouble to "
+                       "0.577x at n=32 -- and a mid-ladder dip cannot be gated away";
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES, AND ITS
+// WORKSPACE QUERY DEREFERENCES NOTHING.
+//
+// It is reachable WITHOUT the table -- that is why it exists (potrf_native.hh:
+// 126-141) -- so every gate has to be re-applied there or a pinned-route caller
+// walks straight into an unlaunchable configuration.
+//
+// The workspace half is ZERO in every mode for this tier, and that is a
+// consequence of the design rather than a coincidence: the RHS is permuted and
+// solved in LOCAL memory and written back in place. The facade's figure is a max
+// over BOTH native tiers, and it is asserted here because the query and the call
+// resolve INDEPENDENTLY (options.hh:651 sizes, :652 calls, two getenv reads
+// inside one API call), so a lease sized for one tier is a lease the other can
+// overrun.
+// ===========================================================================
+TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 24, nrhs = 2, batch = 2;
+    auto p = make_dominant_permuted<T>(n, batch, 8181u);
+    this->run_blocked(p);
+    auto A = view_of(p);
+    auto rhs = make_rhs<T>(n, nrhs, batch, 8282u);
+    auto Bv = view_of(rhs);
+    UnifiedVector<std::byte> ws(4096);
+
+    // A non-square A.
+    {
+        UnifiedVector<T> w(size_t(24) * 32, mk<T>(1.0, 0.0));
+        UnifiedVector<T*> wp(1, nullptr);
+        MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
+        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, W, Bv, Transpose::NoTrans,
+                                                         p.piv.to_span(), ws.to_span()),
+                     std::invalid_argument);
+    }
+    // B with the wrong number of rows.
+    {
+        auto mismatched = make_rhs<T>(n + 1, nrhs, batch, 8383u);
+        auto Bm = view_of(mismatched);
+        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bm, Transpose::NoTrans,
+                                                         p.piv.to_span(), ws.to_span()),
+                     std::invalid_argument);
+    }
+    // A and B disagreeing on the batch size.
+    {
+        auto other = make_rhs<T>(n, nrhs, batch + 1, 8484u);
+        auto Bo = view_of(other);
+        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bo, Transpose::NoTrans,
+                                                         p.piv.to_span(), ws.to_span()),
+                     std::invalid_argument);
+    }
+    // A pivot span shorter than n * batch.
+    {
+        UnifiedVector<int64_t> shortpiv(size_t(n) * batch - 1, 0);
+        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bv, Transpose::NoTrans,
+                                                         shortpiv.to_span(), ws.to_span()),
+                     std::invalid_argument);
+    }
+
+    // ---- the workspace query ----------------------------------------------
+    {
+        // NULL data, exactly as a measuring pass presents it.
+        MatrixView<T, MatrixFormat::Dense> nullA(nullptr, n, n, n + 4, (n + 4) * n + 3, batch,
+                                                 nullptr);
+        MatrixView<T, MatrixFormat::Dense> nullB(nullptr, n, nrhs, n + 2,
+                                                 (n + 2) * nrhs + 5, batch, nullptr);
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+            EXPECT_NO_THROW((void)sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, nullA,
+                                                                        nullB, op));
+            EXPECT_EQ(sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, nullA, nullB, op),
+                      std::size_t(0))
+                << "the fused tier claims a workspace; it has none, and the facade's max() over "
+                   "the two native tiers is what would have to carry it";
+            EXPECT_NO_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, nullA, nullB, op)));
+        }
+    }
+    // Serve EXACTLY the facade's figure under the CTA pin. A short workspace is a
+    // silent heap overflow, not a throw.
+    {
+        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        const auto route = backend::getrs_route<B, T>(
+            *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
+        ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::CTA)
+            << "the 'cta' pin did not take, so this sizing check measures another route";
+        const std::size_t need = getrs_buffer_size<B, T>(*this->ctx, A, Bv, Transpose::NoTrans);
+        EXPECT_GE(need, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv,
+                                                               Transpose::NoTrans));
+        UnifiedVector<std::byte> exact(std::max<std::size_t>(1, need));
+        ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(),
+                                     exact.to_span())));
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b)
+            EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                        rhs.buf.data() + size_t(b) * rhs.stride,
+                                        rhs.b0.data() + size_t(b) * rhs.stride,
+                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans),
+                      solve_tol<T>(n));
+    }
+}
+
+// ===========================================================================
+// THE FUSED-GETRS BREAK RECORD (the F-series and L0b).
+//
+// SIXTEEN guarded properties, each corrupted at its source, the .so REBUILT,
+// and the whole binary re-run. FIFTEEN of the sixteen went RED; the one that did
+// not is a finding rather than a gap. Tooling:
+// experiments/wp6_getrs/tests/ (break.py, break2.py, runbreak.sh).
+//
+// COUNT THE ROWS, NOT THIS SENTENCE. An earlier version of this paragraph said
+// "fourteen ... thirteen of the fourteen" over a table that already had sixteen
+// rows and fifteen REDs, and a reader who trusted the prose would have concluded
+// that exactly one property is unguarded when in fact TWO breaks turned nothing
+// red -- `cap_band` here and `B5` (the +1 bank-conflict pad) recorded in
+// src/extensions/getrs_fused.cc, in a different file. The table below is the
+// record; this sentence is a summary of it and has been wrong once already. This
+// is the same misreading class the campaign records for WP5's "zero suites
+// closed", which was three.
+//
+// TYPE INDICES BELOW ARE THE GPU SUITES: 4 = float, 5 = double, 6 = cfloat,
+// 7 = cdouble. Suites 0-3 are the NETLIB rows and SKIP (CPU queue, gate 2).
+//
+// | break               | property corrupted                              | outcome (of 95)
+// |---------------------|-------------------------------------------------|-----------------
+// | piv_base            | ipiv read 0-based instead of 1-based            | RED, 28, 7 of 8 F-tests x 4 types
+// | rhs_ld              | the RHS write-back uses n instead of ldb        | RED, 24, 6 F-tests x 4 types
+// | unit_u              | a UNIT-DIAGONAL assumption on U, both kernels   | RED, 24, 6 F-tests x 4 types
+// | trans_perm_forward  | the transposed output permutation walked FORWARDS | RED, 20, 5 F-tests x 4 types
+// | perm_wrong_side     | the transposed permutation moved to the INPUT   | RED, 20, 5 F-tests x 4 types
+// | swap_solves         | the two NoTrans substitutions SWAPPED (U before L) | RED, 19, all 4 types
+// | last_row            | off-by-one at the LAST ROW of the trailing update | RED, 13, all 4 types
+// | conj                | ConjTrans stops conjugating                     | RED, 6, cfloat and cdouble ONLY
+// | cap_inversion       | the capacity-inversion repair reverted          | RED, 4, LaunchHole layer (a), all 4 types
+// | hole_pad            | the 48 KB pad removed from the launcher         | RED, 4, LaunchHole layer (a) ONLY
+// | reg_cap             | the register cap on the work-group width removed | RED, 1, LaunchHole, float ONLY -- a LAUNCH ABORT (RE-VERIFIED, see below)
+// | facade_arm          | the facade's CTA arm routed to the composed tier | RED, 4, FacadeReaches..., all 4 types
+// | tier_pref           | native_tier_preferred inverted                  | RED, 4, FacadeReaches..., all 4 types
+// | supports_gates      | supports() stops checking the two CTA ceilings  | RED, 8, HandsBack... + FacadeReaches..., all 4
+// | dispatch_gates      | the direct entry point stops re-checking them   | RED as a PROCESS ABORT inside HandsBack...
+// | cap_band            | the hole band dropped from the capacity query   | NOTHING RED -- see below
+//
+// ---------------------------------------------------------------------------
+// THE WP6-PERF WINDOW BREAK RECORD -- five more, run when preferred() landed.
+//
+// The window is a claim spanning TWO files (this one, on the real device, and
+// route_vocabulary_tests.cc, on synthetic shapes), so each break is reported
+// against BOTH. Same method: patch the source, rebuild the .so, re-run the whole
+// binary.
+//
+// | break     | what was corrupted                  | getrf_tests | route_vocabulary_tests
+// |-----------|-------------------------------------|-------------|----------------------
+// | W1        | clause A (nrhs <= 2) switched off    | RED, 6      | RED, 1
+// | W2        | clause B widened to EVERY type      | RED, 3      | RED, 2
+// | W3        | the COMPOSITION also made preferred | green       | RED, 2
+// | V1        | the fused capacities in route_vocabulary_tests' getrs_shape()
+// |           | helper returned to 0, i.e. the blind-guard state
+// |           |                                     | n/a         | RED, 3
+// | R1        | the register cap removed entirely   | RED, 1      | n/a
+//
+// FOUR OF THE FIVE OUTCOMES ARE THEMSELVES FINDINGS:
+//
+// * W1 LEAVES FLOAT GREEN, and that is correct rather than a hole: with clause A
+//   off, float nrhs = 1 is still inside clause B (nrhs <= 4 for float), so the
+//   float route does not move. Only double, cfloat and cdouble go red. A reader
+//   who expects "all four types" from a window break would mis-read this.
+//
+// * W3 TURNS NOTHING RED IN THIS FILE, and that is what the pure suite is for.
+//   Making the composition preferred does not change any RESOLVED route, because
+//   CTA is listed first in kGetrsOrder and automatic() returns the first route
+//   that is both supported and preferred. Only a direct assertion on preferred()
+//   itself can see it, and route_vocabulary_tests carries two.
+//
+// * V1 IS THE BLIND GUARD MADE VISIBLE. Before this pass, getrs_shape() set
+//   neither fused capacity, so supports({Native, CTA}) was false on every shape
+//   in route_vocabulary_tests and every getrs routing assertion in it held no
+//   matter what the table said -- 78/78 through the flip and through its
+//   inverse. Re-arming that (V1) turns three tests red, which is the proof that
+//   the repair is load-bearing and that the file is no longer blind here.
+//
+// * R1 REPRODUCES A HARD LAUNCH ABORT, not a wrong answer:
+//       "Exceeded the number of registers available on the hardware.
+//        The kernel uses 68 registers per work-item for a total of 1024
+//        work-items per work-group."
+//   in LuTest/4 (float) FusedGetrsLaunchHoleAt48KiB. A review of this change
+//   asserted that NO test in the suite reaches a shape where the cap can bite;
+//   it does -- the 48 KB ladder's top rung is n = 1428 at nrhs = 8 and picks
+//   wg = 1024, and it runs transA = Trans. The review had looked only at the two
+//   tests with "Width"/"Boundaries" in their names.
+//
+// ---------------------------------------------------------------------------
+// THE RESULTS THAT ARE FINDINGS RATHER THAN CONFIRMATIONS
+// ---------------------------------------------------------------------------
+//
+// 1. `cap_inversion` IS A REAL DEFECT THIS TEST FOUND, not a re-confirmation.
+//    getrs_fused_max_rhs_elems originally answered a budget with a plain floor
+//    division. getrs_hole_padded is NOT MONOTONE, so for a budget a few bytes
+//    above kGetrsHoleHi the division rounds the implied request back DOWN INTO
+//    the band, where it is then RAISED to 49,920 and no longer fits: at 49,665 B
+//    the query advertised a capacity needing 49,920 B, for all four scalar
+//    types. That is a supports() promising a route whose launch the runtime
+//    refuses -- exactly what potrf_cta.cc:445-470's `break` exists to prevent.
+//    The window is only sizeof(T) bytes wide and needs a device with 53,761 B of
+//    local memory, so it is UNREACHABLE on this box and no launch test could
+//    ever have found it; the byte-by-byte sweep of a PURE FUNCTION could, and
+//    did. Repaired in src/extensions/getrs_fused.cc; the break re-confirms the
+//    repair is load-bearing.
+//
+// 2. `cap_band` TURNED NOTHING RED, AND THAT IS CORRECT: the two mechanisms are
+//    REDUNDANT after the repair above. Clamping `admissible` to kGetrsHoleLo and
+//    re-checking the implied request against the budget close the same hole from
+//    opposite ends, so removing either one alone leaves the other doing the
+//    whole job. Verified by hand across the sweep: with the clamp gone, a budget
+//    of 49,152 B still yields 10,720 float elements, the same answer. It is a
+//    genuinely unfalsifiable-in-isolation line and is kept as the cheap common
+//    case, not as the guard.
+//
+// 3. `hole_pad` GOES RED ON LAYER (a) AND GREEN ON LAYER (b) -- the same split
+//    L0's own `hole_pad` produced for getrf, and for the same reason: the
+//    49,920 B launch this device is asked for succeeds without the pad too, so
+//    the 48 KB hole does not reproduce here for these kernels either. Note that
+//    layer (a) catches it only INDIRECTLY -- this file keeps its own restatement
+//    of the pad, so removing the library's makes the two disagree. That is still
+//    a guard, but it is a "the two copies of the rule diverged" guard rather
+//    than a device-behaviour one, and the launch half remains the layer that
+//    would fire if the hole ever reproduced.
+//
+// 4. `reg_cap` IS A LAUNCH ABORT, NOT A WRONG ANSWER, and only ONE cell in the
+//    whole binary reaches it: float, transA=Trans, nrhs=8, n=1428 -- the top
+//    rung of the 48 KB ladder, which picks wg = 1024 against a 68-register
+//    kernel for 69,632 registers per work-group against a 65,536 limit. The
+//    exception text is quoted verbatim by the runtime. Nothing else in this file
+//    is wide enough AND deep enough at once to hit it, which is worth knowing
+//    before anyone trims the ladder for runtime.
+//
+// 5. THE THREE BREAKS THAT SEPARATE THE TRANSPOSED ARM FROM THE NoTrans ONE --
+//    `trans_perm_forward`, `perm_wrong_side` and `conj` -- leave
+//    FusedGetrsHandsBackAtBothCeilings GREEN, correctly: that test asserts
+//    routing and refusals, and checks numbers only on the path that has already
+//    handed BACK to another tier.
+//
+// 6. `last_row` and `swap_solves` LEAVE FusedGetrsSolvesEveryTransposeAtEvery-
+//    InstantiatedWidth GREEN FOR FLOAT and are caught only by
+//    FusedGetrsAtBlockBoundariesAndTheNbSwitch. At n = 97 in float the dropped
+//    last row sits under 400 n eps; at the small orders it does not. The order
+//    sweep is not decoration -- for two of these breaks it is the only thing
+//    that fires on all four types.
+//
+// 7. `unit_u` LEAVES FacadeReachesTheFusedGetrsBitExactly GREEN, correctly and
+//    by construction: both sides of that comparison are the same corrupted
+//    kernel. A bit-exactness test pins WHICH CODE RAN and can never pin what
+//    that code computes -- which is why it sits beside the residual tests and
+//    not instead of them.
+//
+// 8. `dispatch_gates` IS THE ONLY BREAK IN THIS SET THAT TAKES THE PROCESS DOWN
+//    (SIGABRT, exit 134, inside FusedGetrsHandsBackAtBothCeilings on the FIRST
+//    GPU type). That is the point of the ceiling test's null-data half: with the
+//    re-check gone, the entry point launches an order of ~2900 whose resident RHS
+//    the device cannot hold, and there is no graceful failure mode left. Because
+//    it aborts, the three later types never run -- so if this break is ever
+//    repeated, run it FILTERED, once per scalar type, the way L0's break record
+//    says `short_final` and `piv_stride_nb` have to be run.
+//
+// 9. `supports_gates` TURNS **TWO** TESTS RED, AND THE SECOND ONE IS THE POINT.
+//    FusedGetrsHandsBackAtBothCeilings goes red on the supports() assertions, as
+//    designed. FacadeReachesTheFusedGetrsBitExactly ALSO goes red -- because with
+//    the ceilings gone, the nrhs = 9 shape now resolves to {Native, CTA} and the
+//    facade reaches a kernel that does not exist at that width. That is the
+//    supports()/preferred() confusion route_getrs.hh's CTA clause warns about,
+//    caught from the route side rather than the numeric side.
+// ===========================================================================
 
 // ===========================================================================
 // THE BREAK RECORD.
