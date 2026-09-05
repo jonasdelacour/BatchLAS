@@ -124,7 +124,7 @@ float, because FP64 at 1/64 rate makes the Gram product compute bound.
 ### syr2k triangular tiles
 
 One pass fusing both rank-k products into the same accumulators. Grid: float, n in 8..3072 x
-k in 4..2048 x batch in 1..1024 (`syr2k_custom_dispatch.cc:83-94`).
+k in 4..2048 x batch in 1..1024 (`syr2k_custom_dispatch.cc:83-97`).
 
 * **batch >= 2**: won *every* shape — 1.06x at n=3072, 1.12x at n=1024, 1.3–1.4x through the
   middle, up to 226x where n is small enough that the whole cost is the launch.
@@ -191,7 +191,7 @@ and `shared_dim == k` (`symm_custom_dispatch.cc:59-77`) where `hemm` does not, o
 that a full k x k expansion stops paying once k dwarfs m and n — with no bracketing cell for it
 in either source.
 
-**`trmm` deliberately does not consult this predicate.** `trmm_vendor_impl` (`cublas.cc:908-915`)
+**`trmm` deliberately does not consult this predicate.** `trmm_vendor_impl` (`cublas.cc:908-914`)
 expands wherever `expansion_fits` allows, batch 1 included, because `cublas?trmm` has a flat
 ~110 us floor whatever the shape: **49 square cells** (k in 16..1024 x batch in 1..512) at
 **1.15x–162x**, and **64 skewed cells** (k in 256..2048 against 1..128 right-hand sides) at
@@ -364,7 +364,7 @@ one that does not. Verified on the legacy impl, on `BATCHLAS_SYTRD_IMPL=device`,
 variant forced. End to end (float, ms) n=512 batch 1024 goes 263.97 -> **227.51** at nb=16 and
 248.30 -> **231.64** at nb=32, n=256 batch 2048 goes 34.347 -> **27.040** and 36.995 -> **34.028**,
 and the update alone is 3.4–3.6x. The gate stays CUDA + `float`/`complex<float>`
-(`sytrd_blocked.cc:817-822`) because in double it **inverts**: the route falls to
+(`sytrd_blocked.cc:817-820`) because in double it **inverts**: the route falls to
 `syr2k_vendor_impl`'s per-batch loop, 7.56 vs 58.52 ms at n2=256 ib=32 batch 1024, **7.7x
 slower**.
 
@@ -392,7 +392,7 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
 1. **`BATCHLAS_SYRK_ROUTE=native` produces a wrong answer.** `{Native, Auto}` passes
    `syrk_use_cuda_custom`, then fails every arm inside `syrk_cuda_custom` (`gram` requires
    `origin == Auto`; the tile arm requires `algo == TriangularTiles || origin == Auto`) and lands
-   on `syrk_cublasdx_fallback_gemm` at `syrk_custom_dispatch.cc:261-262` — the `DiagFullGemm`
+   on `syrk_cublasdx_fallback_gemm` at `syrk_custom_dispatch.cc:261` — the `DiagFullGemm`
    route, which **writes both triangles**. `WP1_LEVEL3_SPEC.md` describes this fall-through as
    landing "into raw cuBLAS"; after WP1 S2 the terminal is the public `gemm`, so the note's
    destination is stale, but the defect is unchanged and unfixed.
@@ -415,7 +415,7 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
 6. **`trmm`'s tile kernel is `Side::Left` only** — the right-side branch still expands. syev uses
    Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
 7. **ROCm has no `symm`, `hemm`, `herk` or `her2k`** — `rocblas.cc` instantiates only gemm, gemv,
-   trsm, syrk, syr2k, trmm (`entry_points/level3.cc:398-535`); wiring the trmm tile kernel there
+   trsm, syrk, syr2k, trmm (`entry_points/level3.cc:398`); wiring the trmm tile kernel there
    is where `wy_trmm_applicable` would be re-measured.
 8. **`her2k_gemm_preferred` was swept over square rank-k shapes**, but `sytrd_blocked`'s panel
    loop issues a narrow one — k = nb in {16,24,32} against n2 up to 480 — where the GEMM is near
