@@ -112,7 +112,7 @@ inline bool wy_trmm_applicable(int ib) {
     // not cosmetic: in a vendor-free build the backend is still Backend::CUDA
     // but the TU carrying the tile kernel is not compiled, so the old form
     // claimed a kernel that is not linked.
-    constexpr bool route_has_tile_kernel = dispatch::level3_tile_kernels_compiled<B>;
+    constexpr bool route_has_tile_kernel = dispatch::level3_tile_route_available<B, T>;
     constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
     return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64;
 }

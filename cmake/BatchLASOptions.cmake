@@ -106,6 +106,16 @@ option(BATCHLAS_KEEP_CUDA_INTERMEDIATES "Preserve CUDA and SYCL CUDA device comp
 option(BATCHLAS_SANITIZER_FRIENDLY_DEBUG "Use more unwind-friendly debug flags for sanitizer runs (may slow down builds/runs)" OFF)
 option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python and benchmarks)" OFF)
 
+# There is deliberately NO BATCHLAS_ENABLE_COVERAGE option.
+#
+# The per-call half of the coverage instrument (dispatch/coverage.hh) is gated
+# at runtime on $BATCHLAS_COVERAGE_OUT instead. It was a build option briefly,
+# and that could not work: the gate sits in resolve_route, an inline function
+# template, so a consumer TU compiled without the macro interposes its own
+# uninstrumented copy over the library's and recording silently stops. A
+# compile-time switch on a header template is only sound when every TU in the
+# process agrees on it, which a library cannot enforce. See coverage.hh.
+
 set(BATCHLAS_MATHDX_ROOT "" CACHE PATH "Path to an unpacked NVIDIA MathDx package root")
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
