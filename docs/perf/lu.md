@@ -24,7 +24,7 @@ Capacities are asked of the **runtime** local-memory budget, never of `device_li
 
 Four windows ship. Each is native-vs-**vendor**. `supports()` carries no speed term anywhere: a forced route bypasses `preferred()` but never `supports()`, so a speed gate there would make a pinned route fall through to cuBLAS and pass green over a kernel nothing executed.
 
-`include/batchlas/blas/dispatch/route_getrf.hh:67-512`:
+`include/batchlas/blas/dispatch/route_getrf.hh:67-74`:
 
 ```cpp
 static bool preferred(Route r, const GetrfShape& s) {
@@ -36,7 +36,7 @@ static bool preferred(Route r, const GetrfShape& s) {
 }
 ```
 
-`include/batchlas/blas/dispatch/route_getri.hh:65-354`:
+`include/batchlas/blas/dispatch/route_getri.hh:65-72`:
 
 ```cpp
 static bool preferred(Route r, const GetriShape& s) {
@@ -48,7 +48,7 @@ static bool preferred(Route r, const GetriShape& s) {
 }
 ```
 
-`include/batchlas/blas/dispatch/route_getrs.hh:79-711` -- three clauses across two arms:
+`include/batchlas/blas/dispatch/route_getrs.hh:79-98` -- three clauses across two arms:
 
 ```cpp
 if (r.algo == Algorithm::Blocked) {                      // the COMPOSITION -- clause C
@@ -65,7 +65,7 @@ return false;
 
 **Correction to the exploration notes.** `experiments/wp6_lu/README.md`, `bench/README.md` and `kernels/README.md` all state that `preferred()` is false everywhere for all three ops. That was the WP6 merge state. The shipped predicates are the four windows above; **the code wins**. All three route headers say so in the WP8-ROUTING-PASS blocks preceding the predicates (`route_getrf.hh:67`, `route_getri.hh:65`, `route_getrs.hh:79`).
 
-The stale sentence survives in more shipped sources than the exploration notes, and the list is longer than the earlier draft of this page gave: `getrf_cta.cc:7` and `:154`, `getrf_blocked.cc:38` and `:236`, `getrs_native.cc:6`, `getrs_native.hh:5`, `getri_native.hh:5`, `getri_blocked.cc:140`, and the two shape builders `src/backends/getrs_route.hh:95` and `getri_route.hh:50`. Every one of them says some form of "`preferred()` is false / all-false, so nothing routes here". None of them is true any more for `getrf`, `getrs` or `getri`. Read the predicate, not the prose above it.
+The stale sentence survives in more shipped sources than the exploration notes, and the list is longer than the earlier draft of this page gave: `getrf_cta.cc:5-6` and `:154`, `getrf_blocked.cc:38` and `:236`, `getrs_native.cc:2-3`, `getrs_native.hh:3-4`, `getri_native.hh:3-4`, `getri_blocked.cc:140`, and the two shape builders `src/backends/getrs_route.hh:95` and `getri_route.hh:50`. Every one of them says some form of "`preferred()` is false / all-false, so nothing routes here". None of them is true any more for `getrf`, `getrs` or `getri`. Read the predicate, not the prose above it.
 
 **What clauses A and B actually moved, captured rather than reasoned about** (`route_diff.sh`, before/after with `preferred()` the only difference, `ctest -LE slow` both sides, `wp6_perf/README.md`): in the cuBLAS-present build, **27 decisions** moved `vendor:auto -> native:cta` -- float x18, double x3, cfloat x3, cdouble x3 -- and **`getrs` was the only op touched**, over 3600 decisions in 4012 rows. The vendor-free build moved 14, all at `Backend::AUTO`. A window that changes nothing is the failure mode this instrument exists to catch. [The `getrf`, `getri` and clause-C flips landed in the later closure pass; no equivalent `route_diff.sh` capture for them was found under `experiments/` -- unverified.]
 
@@ -133,7 +133,7 @@ Ratio is always `vendor_med / native_med`; > 1 means native wins. The closure pa
 | cfloat | 1024 | 2.1348 | 2.1035 | -- |
 | cfloat | 2048 | 2.8017 | -- | -- |
 
-The wider 20-cell grid that the route header transcribes -- the one with a `b256` column -- is the *kernel* stage's own record on the OTHER device (`experiments/wp8_getrf/after_nv_p{1,2}.csv` against `base_v_p{1,2}.csv`, `route_getrf.hh:67-434`). It is the second source, not the first:
+The wider 20-cell grid that the route header transcribes -- the one with a `b256` column -- is the *kernel* stage's own record on the OTHER device (`experiments/wp8_getrf/after_nv_p{1,2}.csv` against `base_v_p{1,2}.csv`, `route_getrf.hh:67-74`). It is the second source, not the first:
 
 | type | n | b128 | b256 | b512 | b1024 |
 |---|---:|---:|---:|---:|---:|
@@ -290,7 +290,7 @@ The original claim "82% of DRAM peak, the ceiling is reached" holds only in the 
 
 Everything here was built or measured and then rejected. Re-deriving any of it is wasted work.
 
-1. **"Four kernels per block step versus cuBLAS's one fused kernel" is not a launch-count problem.** The blocked arm launches `5P-4` kernels -- 16 at n=128, nsys-confirmed launch for launch -- which at 5 us is 80 us against a 67.1 ms call at batch 8192: **0.12% of the call**, and ~0.2% of the native-minus-vendor gap *there*. The number that matters is the worst one, and the shipped header (`route_getrf.hh:67-394`) records it: **8.7% of the gap at the smallest saturating batch**, falling monotonically with batch from there. Even at its worst the launches are not the gap. (`VENDOR_INDEPENDENCE_PLAN.md:1813` quotes only the 0.2%; that is the batch-8192 reading, not the bound.) And the fused arm already exists and already loses: float `n <= 155` resolves `native:cta`, one kernel with no laswp, and it measures 0.77-1.00x of cuBLAS. The decomposition costs **data movement, not launches**. No fused blocked LU was attempted, correctly.
+1. **"Four kernels per block step versus cuBLAS's one fused kernel" is not a launch-count problem.** The blocked arm launches `5P-4` kernels -- 16 at n=128, nsys-confirmed launch for launch -- which at 5 us is 80 us against a 67.1 ms call at batch 8192: **0.12% of the call**, and ~0.2% of the native-minus-vendor gap *there*. The number that matters is the worst one, and the shipped header (`route_getrf.hh:67-74`) records it: **8.7% of the gap at the smallest saturating batch**, falling monotonically with batch from there. Even at its worst the launches are not the gap. (`VENDOR_INDEPENDENCE_PLAN.md:1813` quotes only the 0.2%; that is the batch-8192 reading, not the bound.) And the fused arm already exists and already loses: float `n <= 155` resolves `native:cta`, one kernel with no laswp, and it measures 0.77-1.00x of cuBLAS. The decomposition costs **data movement, not launches**. No fused blocked LU was attempted, correctly.
 2. **`getrs`'s recorded wide-`nrhs` window for the composition does not exist.** "nrhs=64 geomean 1.09x, nrhs=128 geomean 1.48x, 9 and 4 losses of 28" came from `grid_*.csv`, which carries exactly one saturating batch per order and no ladder on the batch axis at any width >= 16. Built properly -- 464 paired cells over 7 batches -- the composition's advantage falls **monotonically with batch**, because below saturation neither arm is measuring its own speed (at float n=128 nrhs=128 the composition costs 9.96 / 2.80 / 1.90 / 1.76 us per item at batch 32 / 128 / 256 / 512 and cuBLAS 38.2 / 10.2 / 5.59 / 3.31). Read at saturation, the walk's best candidate (float nrhs >= 128, 11 cells, geomean 1.761, zero losses) has **minimum 1.0436 and fails GATE-C**. The window that shipped is the *gather's*, not the walk's.
 3. **A pure re-schedule refutes its own prediction.** Deferring the interchange while *keeping* the per-column walk moves byte-for-byte identical traffic (the column-visit sums are the same arithmetic series read from either end) and was predicted at 1.00x "by construction". Measured over 11 cells: geomean 1.055x with **three cells losing**, spread 0.707x-1.315x (float n=512 batch 128 is 0.707x, float n=1024 batch 128 is 0.916x, float n=512 batch 1024 is 1.281x). The mechanism is the **work-item count**: `batch*ib` items walking `n-j0` steps instead of `batch*j0` items walking `ib` is 15x less parallelism at n=512. That is also why the gather wins more than its 7.9x traffic saving alone predicts -- it puts the parallelism back too.
 4. **The packed sub-group `getrf` arm, prototyped and refuted.** One sub-group per matrix, shuffle argmax, no work-group barriers. `pivman_ms / pivsg_ms`: float 1.38 / 1.25 / 1.13 at n=16/24/32, then 0.79 / 0.64 / 0.39 / 0.31 at n=48/64/96/128; double and cdouble lose at every order. It wins only for 32-bit types at `n <= 32` -- **and changes no routing decision even there**, because the shipped native `getrf` is 0.551x of cuBLAS at float n=32 and 0.584x at n=16, so the best cell in the table lands at **0.81x of cuBLAS**. Also established, closing the obvious next idea: the shipped small-n `getrf` is *already* one fused kernel (nsys shows a single `GetrfPanelResidentKernel<float>` and nothing else), so there is no launch-count win available at small n.

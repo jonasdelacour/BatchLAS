@@ -62,6 +62,12 @@ which is the tree as it stood at the end of WP8. They were removed from the work
 because they were 179k lines against 50k lines of actual change, and no build or test reads
 them.
 
+**Every `experiments/...` path in these pages is an archive path, not a working-tree path.**
+That includes the harnesses and guards the measurement rules name — `experiments/gpu_guard.sh`
+among them — and the two surveys the source comments still cite
+(`experiments/GEMM_TO_LEVEL3_SURVEY.md`, `experiments/TRMM_SYRK_BATCHED_KERNELS.md`). None of
+them resolve against a checkout; all of them resolve against the tag.
+
 Each page's final section maps its claims to the paths that hold their raw data. Retrieve one
 with:
 

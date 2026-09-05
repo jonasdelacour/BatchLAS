@@ -8,34 +8,34 @@ DGEMM must never exceed ~1.45 TFLOP/s, since a 4090 is 1/64 FP64.
 
 ### The route arms
 
-`kGemmOrder` (`include/batchlas/blas/dispatch/route_gemm.hh:12-51`) has exactly two arms:
+`kGemmOrder` (`include/batchlas/blas/dispatch/route_gemm.hh:12-15`) has exactly two arms:
 
 | Origin | Algorithm | notes |
 |---|---|---|
 | `Native` | `RegisterTiled` | the SYCL kernel family in `src/sycl/gemm/`; `Algorithm::Auto` is also accepted by `supports()` |
 | `Vendor` | `Auto` | cuBLAS / rocBLAS / MKL; `supports()` is unconditionally true |
 
-`supports()` (`route_gemm.hh:19-81`) is **correctness only**: `precision == Default`, `m,n,k > 0`. Since WP2 C2 a heterogeneous batch is
+`supports()` (`route_gemm.hh:19-32`) is **correctness only**: `precision == Default`, `m,n,k > 0`. Since WP2 C2 a heterogeneous batch is
 *supported* natively — the facade walks the batch (`src/backends/gemm_heterogeneous.hh`), each member homogeneous by construction — and is
-refused by `preferred()` instead. Conflating correctness with speed is the trap the split at `route_gemm.hh:6-37` prevents: a window inside
+refused by `preferred()` instead. Conflating correctness with speed is the trap the split at `route_gemm.hh:3-5` prevents: a window inside
 `supports()` leaves a 1024³ float GEMM at batch 256 with no route at all vendor-free.
 
-The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:88-148`). GEMM used to be the one op defaulting to a *forced*
+The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:88-91`). GEMM used to be the one op defaulting to a *forced*
 Vendor; WP2 E6 removed that asymmetry.
 
 ### The preferred window as implemented
 
-Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:34-211`, in order of evaluation:
+Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:34-67`, in order of evaluation:
 
 ```
-r.origin == Native, supports(r,s), s.is_gpu, !s.heterogeneous_batch      :91-99
-complex<float>, complex<double>              -> false                    :113-114
-s.batch < 64                                 -> false                    :122
-float :  s.m == s.n && s.n == s.k                                        :125
-         transA == NoTrans && transB == NoTrans                          :144
-         max_dim <= 32                       -> true, else false         :149,167
-double:  s.k >= 2                            -> the whole predicate      :206
-anything else                                -> false                    :208
+r.origin == Native, supports(r,s), s.is_gpu, !s.heterogeneous_batch      :35-40
+complex<float>, complex<double>              -> false                    :43-44
+s.batch < 64                                 -> false                    :48
+float :  s.m == s.n && s.n == s.k                                        :51
+         transA == NoTrans && transB == NoTrans                          :54
+         max_dim <= 32                       -> true, else false         :57,58
+double:  s.k >= 2                            -> the whole predicate      :62
+anything else                                -> false                    :64
 ```
 
 Read plainly: **native is preferred only for `double` (any shape, any transpose form, `k >= 2`, `batch >= 64`, GPU, homogeneous) and for `float`
@@ -50,7 +50,7 @@ debts](#open-debts).
 
 ### The kernel selector is the second gate
 
-`preferred()` picks an *Origin*; `select_kernel_variant` (`src/sycl/gemm_kernels.cc:450-729`) picks the kernel, and it is the gate that decides
+`preferred()` picks an *Origin*; `select_kernel_variant` (`src/sycl/gemm_kernels.cc:450-557`) picks the kernel, and it is the gate that decides
 throughput. Its whole register ladder for float sits inside `if constexpr (is_same_v<T,float>)`. Reachable exits:
 
 | condition | variant | line |
@@ -157,7 +157,7 @@ kernel, traced and confirmed. The transposed register family plateaus near 15–
 
 ### Complex is refused
 
-`preferred()` returns false for complex at every shape (`route_gemm.hh:43-114`). The reason is the selector: the only complex register arm is
+`preferred()` returns false for complex at every shape (`route_gemm.hh:43-45`). The reason is the selector: the only complex register arm is
 `Tiled64x64RegisterK16Wide`, reachable at `min_dim >= 256` + aligned NN or through the CTA gate below; everything else falls to `Tiled16`,
 measured 3.2–7.1× slower than cuBLAS (cdouble 0.386–0.392 vs 1.238–1.246 TFLOP/s; cfloat 6.6–6.9 vs 45–49 TFLOP/s). The route equivalence test
 asserts complex never moves under the flip.
@@ -254,7 +254,7 @@ relaxation rescues it: zero calls are blocked by the k floor alone.**
 
 ### The CTA count gate for complex
 
-`gemm_kernels.cc:539-703` admits complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`, with `kMinCtas` 64 for `complex<float>`
+`gemm_kernels.cc:539-548` admits complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`, with `kMinCtas` 64 for `complex<float>`
 and 128 for `complex<double>`, where `ctas = ceil(m/64)*ceil(n/64)*batch`.
 
 Forced-wide vs the route it replaces, at saturation, both betas, geomean over 116 refused cells: **cfloat 3.98×, cdouble 2.90×**, null controls
